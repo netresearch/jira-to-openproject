@@ -22,11 +22,6 @@ from src.display import ProgressTracker, console
 # Get logger from config
 logger = config.logger
 
-# Conditional import for type checking to avoid circular dependencies
-if TYPE_CHECKING:
-    from ..clients.openproject_rails_client import OpenProjectRailsClient
-
-
 class AccountMigration:
     """
     Handles the migration of accounts from Tempo timesheet to OpenProject.
@@ -64,7 +59,7 @@ class AccountMigration:
         """
         self.jira_client = jira_client or JiraClient()
         self.op_client = op_client or OpenProjectClient()
-        self.op_rails_client = op_rails_client or OpenProjectRailsClient(session_name="rails_console")
+        self.op_rails_client = op_rails_client or OpenProjectRailsClient()
         self.tempo_accounts = []
         self.op_projects = []
         self.company_mapping = {}

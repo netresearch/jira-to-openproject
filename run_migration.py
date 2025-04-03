@@ -221,7 +221,7 @@ def run_migration(dry_run: bool = True, components: List[str] | None = None, bac
         logger.info("Initializing OpenProject Rails Client for direct migration tasks...")
         try:
             # Initialize without the unsupported connection_timeout argument
-            rails_client = OpenProjectRailsClient(session_name="rails_console")
+            rails_client = OpenProjectRailsClient()
             if not rails_client.connected:
                 logger.warning("Failed to connect to Rails console during initial check. Direct migration might fail.")
             # We don't necessarily need to fail the whole migration here

@@ -34,10 +34,6 @@ logger = config.logger
 # Create rich console instance
 console = console
 
-# Conditional import for type checking to avoid circular dependencies
-if TYPE_CHECKING:
-    from ..clients.openproject_rails_client import OpenProjectRailsClient
-
 
 class CustomFieldMigration(BaseMigration):
     """
@@ -584,12 +580,11 @@ class CustomFieldMigration(BaseMigration):
 
         return result
 
-    def migrate_custom_fields_via_rails(self, session_name: str = "rails_console", window: int = 0, pane: int = 0) -> bool:
+    def migrate_custom_fields_via_rails(self, window: int = 0, pane: int = 0) -> bool:
         """
         Migrate custom fields directly via the Rails console.
 
         Args:
-            session_name: tmux session name containing the Rails console (default: "rails_console")
             window: tmux window number (default: 0)
             pane: tmux pane number (default: 0)
 

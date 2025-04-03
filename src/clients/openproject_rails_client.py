@@ -13,15 +13,28 @@ import re
 import json
 import logging
 from typing import Dict, List, Any, Union, Optional, Tuple
+from .. import config
 
 logger = logging.getLogger(__name__)
 
 class OpenProjectRailsClient:
-    """Client for interacting with OpenProject Rails console via tmux."""
+    """
+    Client for interacting with OpenProject Rails console via tmux.
+    Implemented as a singleton to ensure only one instance exists.
+    """
+
+    # Singleton instance
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        """Create a singleton instance of the OpenProjectRailsClient."""
+        if cls._instance is None:
+            cls._instance = super(OpenProjectRailsClient, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
 
     def __init__(
             self,
-            session_name: str = "rails_console",
             window: int = 0,
             pane: int = 0,
             marker_prefix: str = "RAILSCMD_",
@@ -31,13 +44,18 @@ class OpenProjectRailsClient:
         Initialize the Rails client.
 
         Args:
-            session_name: tmux session name containing the Rails console (default: "rails_console")
             window: tmux window number (default: 0)
             pane: tmux pane number (default: 0)
             marker_prefix: prefix for output markers (default: "RAILSCMD_")
             debug: whether to enable debug logging (default: False)
         """
-        self.session_name = session_name
+        # Skip initialization if already initialized
+        if self._initialized:
+            return
+
+        self.session_name = config.openproject_config.get("tmux_session_name", "rails_console")
+        logger.debug(f"Using tmux session name from config: {self.session_name}")
+
         self.window = window
         self.pane = pane
         self.marker_prefix = marker_prefix
@@ -50,14 +68,24 @@ class OpenProjectRailsClient:
             subprocess.run(["tmux", "-V"], check=True, capture_output=True)
             self._is_connected = self._session_exists()
         except (subprocess.SubprocessError, FileNotFoundError):
+            logger.error("tmux is not installed or not available in PATH")
             raise RuntimeError("tmux is not installed or not available in PATH")
 
         # Check if specified tmux session exists
         if not self._is_connected:
-            raise ValueError(f"tmux session '{session_name}' does not exist")
+            logger.error(f"tmux session '{self.session_name}' does not exist")
+            raise ValueError(f"tmux session '{self.session_name}' does not exist")
+        else:
+            logger.success(f"Successfully connected to tmux session '{self.session_name}'")
 
-        # Directly disable the pager during initialization to prevent hanging
-        self._disable_pager_direct()
+        # Directly configure IRB settings during initialization
+        try:
+            self._configure_irb_settings()
+        except Exception as e:
+            logger.warning(f"Could not configure IRB settings: {str(e)}")
+
+        # Mark as initialized
+        self._initialized = True
 
     def _session_exists(self) -> bool:
         """Check if the specified tmux session exists."""
@@ -578,14 +606,16 @@ class OpenProjectRailsClient:
         """
         return self._is_connected
 
-    def _disable_pager_direct(self):
-        """Configure IRB settings for better machine parsing directly using tmux send-keys."""
+    def _configure_irb_settings(self):
+        """Configure IRB settings for better machine parsing using a single tmux command batch."""
         if self.debug:
             logger.debug("Configuring IRB for machine interaction...")
 
         try:
             # Use direct tmux command to configure IRB settings
             target = self._get_target()
+
+            # Combine all configuration commands into a single string
             config_commands = [
                 "require 'irb'",                    # Ensure IRB module is loaded
                 "IRB.conf[:USE_PAGER] = false",     # Disable pager
@@ -602,15 +632,12 @@ class OpenProjectRailsClient:
                 "IRB.conf[:TERM_LENGTH] = 130"      # Set larger terminal width to avoid wrapping
             ]
 
-            # Send each configuration command
-            for cmd in config_commands:
-                disable_cmd = ["tmux", "send-keys", "-t", target, cmd, "Enter"]
-                subprocess.run(disable_cmd, check=True)
-                # Small delay between commands
-                time.sleep(0.2)
+            # Join all commands with semicolons for a single batch execution
+            batch_command = "; ".join(config_commands)
 
-            # Give it a moment to take effect
-            time.sleep(0.5)
+            # Send the entire batch at once
+            disable_cmd = ["tmux", "send-keys", "-t", target, batch_command, "Enter"]
+            subprocess.run(disable_cmd, check=True)
 
             logger.debug("IRB configuration commands sent successfully")
         except Exception as e:
@@ -622,7 +649,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
     # Usage examples
-    client = OpenProjectRailsClient(session_name="rails_console", debug=True)
+    client = OpenProjectRailsClient(debug=True)
 
     # Count users
     user_count = client.count_records("User")
