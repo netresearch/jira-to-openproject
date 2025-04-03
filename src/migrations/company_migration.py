@@ -52,6 +52,7 @@ class CompanyMigration:
         self.op_projects = []
         self.company_mapping = {}
         self.dry_run = dry_run
+        self._created_companies = 0  # Track the actual number of created companies
 
         # Use the centralized config for var directories
         self.data_dir = config.get_path("data")
@@ -282,6 +283,8 @@ class CompanyMigration:
             )
 
             if project:
+                if was_created:
+                    self._created_companies += 1
                 return project
             else:
                 # For company projects, if we get a "identifier taken" error,
@@ -349,10 +352,34 @@ class CompanyMigration:
             logger.warning(f"No companies found to migrate")
             return self.company_mapping
 
+        # Reset the created companies counter before migration
+        self._created_companies = 0
+
         # Process companies with our centralized progress tracker
         def process_company(company, context):
             tempo_id = str(company.get("id"))
             tempo_name = company.get("name")
+
+            # Check if this company already exists before attempting to create it
+            identifier = None
+            if company.get("key"):
+                base_identifier = "customer_" + re.sub(r'[^a-z0-9_-]', '_', company.get("key").lower())
+                identifier = base_identifier[:100]
+
+            if identifier:
+                existing = self.op_client.get_project_by_identifier(identifier)
+                if existing:
+                    # Project already exists, update mapping but don't increment created counter
+                    self.company_mapping[tempo_id] = {
+                        "tempo_id": tempo_id,
+                        "tempo_key": company.get("key"),
+                        "tempo_name": tempo_name,
+                        "openproject_id": existing.get("id"),
+                        "openproject_identifier": existing.get("identifier"),
+                        "openproject_name": existing.get("name"),
+                        "matched_by": "existing", # Mark as existing rather than created
+                    }
+                    return tempo_name
 
             # Create the company as a top-level project in OpenProject
             op_project = self.create_company_project_in_openproject(company)
@@ -427,11 +454,17 @@ class CompanyMigration:
                 for company in self.company_mapping.values()
                 if company["matched_by"] == "created"
             ),
+            "matched_by_existing": sum(
+                1
+                for company in self.company_mapping.values()
+                if company["matched_by"] == "existing"
+            ),
             "unmatched_companies": sum(
                 1
                 for company in self.company_mapping.values()
                 if company["matched_by"] == "none"
             ),
+            "actually_created": self._created_companies,  # Use the tracked count
             "unmatched_details": [
                 {
                     "tempo_id": company["tempo_id"],
@@ -460,7 +493,8 @@ class CompanyMigration:
             f"Matched companies: {analysis['matched_companies']} ({analysis['match_percentage']:.1f}%)"
         )
         logger.info(f"- Matched by name: {analysis['matched_by_name']}")
-        logger.info(f"- Created in OpenProject: {analysis['matched_by_creation']}")
+        logger.info(f"- Created in OpenProject: {analysis['actually_created']}")
+        logger.info(f"- Already existing in OpenProject: {analysis['matched_by_existing']}")
         logger.info(f"Unmatched companies: {analysis['unmatched_companies']}")
 
         return analysis
@@ -502,12 +536,12 @@ def run_company_migration(dry_run: bool = False, force: bool = False):
 
     migration.create_company_mapping()
 
-    # If force is True, mark all companies as unmatched to force migration
-    if force:
-        logger.info("Force parameter is set - marking all companies for migration")
-        for company_id in migration.company_mapping:
-            migration.company_mapping[company_id]["matched_by"] = "none"
+    # Don't mark companies for migration if they already exist, even with force flag
+    # This ensures we don't report companies as newly created on repeated runs
+    # Instead, we'll detect their existence in the process_company function
+    # and mark them as 'existing' rather than 'created'
 
+    # Run the migration, which will detect and handle existing projects
     migration.migrate_companies()
 
     # Analyze company mapping

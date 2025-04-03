@@ -64,6 +64,10 @@ class JiraClient:
 
     def connect(self):
         """Connect to the Jira API and set the connected status."""
+        # Check if we're already connected to avoid duplicate messages
+        if self.connected:
+            return True
+
         self.connected = False # Assume failure initially
         try:
             # Try to connect using token auth (Jira Cloud and Server PAT)
