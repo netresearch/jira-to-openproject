@@ -220,7 +220,7 @@ class CustomFieldMigration(BaseMigration):
 
             if fields and isinstance(fields, list):
                 self.op_custom_fields = fields
-                logger.info(f"Successfully retrieved {len(fields)} custom fields from OpenProject")
+                logger.success(f"Successfully retrieved {len(fields)} custom fields from OpenProject")
             else:
                 logger.error("Could not retrieve custom fields or received unexpected data format.")
                 raise RuntimeError("Failed to retrieve custom fields from OpenProject.")

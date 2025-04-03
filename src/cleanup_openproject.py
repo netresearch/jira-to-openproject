@@ -196,7 +196,7 @@ class OpenProjectCleaner:
         result = self.rails_client.execute(command)
 
         if result['status'] == 'success':
-            logger.info(f"Successfully deleted custom field {custom_field_id}", extra={"markup": True})
+            logger.success(f"Successfully deleted custom field {custom_field_id}", extra={"markup": True})
             return True
         else:
             # Error during command execution itself (e.g., tmux issue)
