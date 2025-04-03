@@ -744,7 +744,7 @@ class OpenProjectClient:
                                 type_ids.add(type_id)
 
                         if types:
-                            logger.info(f"Successfully retrieved {len(types)} relation types")
+                            logger.success(f"Successfully retrieved {len(types)} relation types")
                             return types
             except Exception as e:
                 logger.debug(f"Could not access relations endpoint: {str(e)}")
@@ -976,7 +976,7 @@ class OpenProjectClient:
                             logger.warning(f"Company identifier '{identifier}' already taken, trying to retrieve existing company")
                             existing_company = self.get_company_by_identifier(identifier)
                             if existing_company:
-                                logger.info(f"Successfully found existing company with identifier '{identifier}'")
+                                logger.success(f"Successfully found existing company with identifier '{identifier}'")
                                 return (existing_company, False)
                             else:
                                 # Only log error if we couldn't find the existing company
@@ -1000,7 +1000,7 @@ class OpenProjectClient:
                             logger.warning(f"Company identifier '{identifier}' already taken, trying to retrieve existing company")
                             existing_company = self.get_company_by_identifier(identifier)
                             if existing_company:
-                                logger.info(f"Successfully found existing company with identifier '{identifier}'")
+                                logger.success(f"Successfully found existing company with identifier '{identifier}'")
                                 return (existing_company, False)
                             else:
                                 # Only log error if we couldn't find the existing company

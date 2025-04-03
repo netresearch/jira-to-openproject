@@ -335,11 +335,11 @@ class CompanyMigration:
         # Log some debug information about the Tempo companies and mapping
         logger.info(f"Total Tempo companies: {len(self.tempo_companies)}")
         tempo_company_ids = [str(company.get("id")) for company in self.tempo_companies]
-        logger.info(f"First few Tempo company IDs: {tempo_company_ids[:5]}")
+        logger.debug(f"Tempo company IDs: {tempo_company_ids[:5]}...")
 
         mapping_keys = list(self.company_mapping.keys())
-        logger.info(f"Total keys in mapping: {len(mapping_keys)}")
-        logger.info(f"First few mapping keys: {mapping_keys[:5]}")
+        logger.debug(f"Total keys in mapping: {len(mapping_keys)}")
+        logger.debug(f"Mapping keys sample: {mapping_keys[:5]}...")
 
         # Instead of filtering, let's just use all Tempo companies directly
         # This bypasses any issues with ID mapping
