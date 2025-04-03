@@ -38,48 +38,133 @@ def strtobool(val):
 # Set up logger
 logger = logging.getLogger("migration.openproject_client")
 
-# Conditional import for type checking to avoid circular dependencies
-if TYPE_CHECKING:
-    from src.clients.openproject_rails_client import OpenProjectRailsClient
+from src.clients.openproject_rails_client import OpenProjectRailsClient
 
 class OpenProjectClient:
-    """Client for interacting with the OpenProject API."""
+    """
+    Client for interacting with the OpenProject API.
+    Implemented as a singleton to ensure only one instance exists.
+    """
+
+    # Singleton instance
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        """Create a singleton instance of the OpenProjectClient."""
+        if cls._instance is None:
+            cls._instance = super(OpenProjectClient, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
 
     def __init__(
         self,
         rails_client: Optional['OpenProjectRailsClient'] = None
     ) -> None:
-        """Initialize the OpenProject client."""
-        self.config = config.openproject_config
-        self.api_url = self.config.get("url", "")
-        self.api_key = self.config.get("api_key", "")
-        self.ssl_verify = config.migration_config.get("ssl_verify", True)
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "Authorization": f"Basic {self._get_auth_token()}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
-        )
-        self.connected = False
-        self.request_count = 0
-        self.rate_limit_period = timedelta(seconds=self.config.get("rate_limit_period_seconds", 1))
-        self.rate_limit_requests = self.config.get("rate_limit_requests", 5)
-        self.request_timestamps = deque()
+        """Initialize the OpenProject client.
+
+        Args:
+            rails_client: Optional OpenProjectRailsClient for operations not supported by the API
+        """
+        # Skip initialization if already initialized
+        if self._initialized:
+            if rails_client is not None:
+                # Update rails client reference if provided
+                logger.debug("Updating Rails client reference in OpenProjectClient")
+                self.rails_client = rails_client
+            return
+
+        # Get OpenProject configuration from central config
+        self.op_config = config.openproject_config
+
+        # Get migration configuration
+        self.migration_config = config.migration_config
+
+        # Store Rails client if provided
         self.rails_client = rails_client
 
+        # Try to initialize Rails client if tmux session is configured but not provided
+        if self.rails_client is None and self.op_config.get("tmux_session_name"):
+            try:
+                # This will use the existing singleton or create one if needed
+                self.rails_client = OpenProjectRailsClient()
+                logger.info("Initialized Rails client with tmux session from config")
+            except Exception as e:
+                logger.warning(f"Could not initialize Rails client: {str(e)}")
+                self.rails_client = None
+
+        # OpenProject API credentials
+        self.url = self.op_config.get("url", "").rstrip("/")
+        self.username = self.op_config.get("username", "")
+        self.password = self.op_config.get("password", "")
+
+        # Support both 'api_token' and 'api_key' in config for backward compatibility
+        self.api_token = self.op_config.get("api_token", "") or self.op_config.get("api_key", "")
+
+        self.api_version = self.op_config.get("api_version", "v3")
+
+        # SSL verification is in the migration_config section, not op_config
+        ssl_verify = self.migration_config.get("ssl_verify", True)
+        if isinstance(ssl_verify, str):
+            self.verify_ssl = strtobool(ssl_verify)
+        else:
+            self.verify_ssl = bool(ssl_verify)
+
+        # Log the SSL verification setting
+        logger.info(f"OpenProject SSL verification: {self.verify_ssl}")
+
+        # Set up base API URL
+        self.api_url = f"{self.url}/api/{self.api_version}"
+
+        # Set up authentication
+        self.token = None
+        self.auth_type = None
+
+        # Rate limiting settings
+        self.rate_limit = float(self.op_config.get("rate_limit", 1))  # requests per second
+        self.last_request_time = 0
+
+        # Cache for commonly accessed data
+        # We don't need frequent refreshes since we're the only ones changing the data
+        self._projects_cache = []
+        self._users_cache = []
+        self._custom_fields_cache = []
+        self._statuses_cache = []
+        self._work_package_types_cache = []
+
+        # Mark as initialized
+        self._initialized = True
+        self.connected = False
+
+        # Connect to validate configuration
         self.connect()
 
     def connect(self) -> None:
         """Verify the connection to the OpenProject API."""
-        if not self.api_url or not self.api_key:
-            logger.error("OpenProject URL or API Key is missing. Cannot connect.")
+        # Check for required configuration
+        if not self.url:
+            logger.error("OpenProject URL is missing. Cannot connect.")
             self.connected = False
             return
 
+        # Check authentication method availability
+        has_token_auth = bool(self.api_token)
+        has_basic_auth = bool(self.username and self.password)
+
+        if not (has_token_auth or has_basic_auth):
+            logger.error("OpenProject authentication credentials missing. Need either API token or username/password.")
+            self.connected = False
+            return
+
+        # Set up authentication method
+        if has_token_auth:
+            logger.info("Using API token authentication for OpenProject")
+            self.auth_type = "token"
+        else:
+            logger.info("Using basic authentication for OpenProject")
+            self.auth_type = "basic"
+
         try:
-            logger.info(f"Connecting to OpenProject at {self.api_url}...")
+            logger.info(f"Connecting to OpenProject at {self.url}...")
             # Use _request to handle rate limiting and error raising
             response = self._request("GET", "/users/me")
             # Check if the response has the expected structure for a user object
@@ -88,7 +173,7 @@ class OpenProjectClient:
                 logger.success(f"Successfully connected to OpenProject as user: {user_name}")
                 self.connected = True
             else:
-                logger.error("Connected to OpenProject, but failed to verify user. Check API Key permissions.")
+                logger.error("Connected to OpenProject, but failed to verify user. Check credentials.")
                 logger.debug(f"Unexpected response for /users/me: {response}")
                 self.connected = False
         except requests.exceptions.RequestException as e:
@@ -99,32 +184,20 @@ class OpenProjectClient:
             self.connected = False
 
     def _get_auth_token(self) -> str:
-        """Encode the API key for Basic Authentication."""
-        # For OpenProject, the API key is used as the password with 'apikey' as the username
-        if not self.api_key:
-            raise ValueError("OpenProject API Key is not set")
-        return base64.b64encode(f"apikey:{self.api_key}".encode()).decode()
+        """
+        Encode the API key for Basic Authentication.
 
-    def _rate_limit(self):
-        """Implement rate limiting for API requests using a deque of timestamps."""
-        now = time.monotonic() # Use monotonic clock for interval measurements
-
-        # Remove timestamps older than the rate limit period
-        while self.request_timestamps and self.request_timestamps[0] <= now - self.rate_limit_period.total_seconds():
-            self.request_timestamps.popleft()
-
-        # Check if we have exceeded the limit
-        if len(self.request_timestamps) >= self.rate_limit_requests:
-            # Calculate sleep time based on the oldest timestamp in the window
-            time_to_wait = self.request_timestamps[0] + self.rate_limit_period.total_seconds() - now
-            if time_to_wait > 0:
-                logger.debug(f"Rate limit reached ({self.rate_limit_requests}/{self.rate_limit_period.total_seconds()}s). Sleeping for {time_to_wait:.3f} seconds.")
-                time.sleep(time_to_wait)
-                # Re-check now time after sleeping
-                now = time.monotonic()
-
-        # Add the current request timestamp (or the time after potential sleep)
-        self.request_timestamps.append(now)
+        For API token authentication, use the format 'apikey:{token}'.
+        For basic authentication, use the format 'username:password'.
+        """
+        if self.auth_type == "token":
+            if not self.api_token:
+                raise ValueError("OpenProject API Token is not set")
+            return base64.b64encode(f"apikey:{self.api_token}".encode()).decode()
+        else:
+            if not self.username or not self.password:
+                raise ValueError("OpenProject username or password is not set")
+            return base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
 
     def _request(self, method, endpoint, data=None, params=None):
         """
@@ -140,19 +213,35 @@ class OpenProjectClient:
             Response data as a dictionary
         """
         endpoint = endpoint.lstrip("/")  # Remove leading slash if present
-        url = f"{self.api_url}/api/v3/{endpoint}"
+        url = f"{self.api_url}/{endpoint}"
 
         try:
-            self._rate_limit()
+            # Apply rate limiting
+            current_time = time.time()
+            if current_time - self.last_request_time < (1.0 / self.rate_limit):
+                wait_time = (1.0 / self.rate_limit) - (current_time - self.last_request_time)
+                logger.debug(f"Rate limiting: waiting {wait_time:.3f}s")
+                time.sleep(wait_time)
+
+            # Set up headers with authentication
+            headers = {
+                "Authorization": f"Basic {self._get_auth_token()}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+
+            # Make the request
             response = requests.request(
                 method,
                 url,
                 json=data,
                 params=params,
-                headers=self.session.headers,
-                verify=self.ssl_verify,  # Use the SSL verification setting from environment
+                headers=headers,
+                verify=self.verify_ssl
             )
-            self.request_count += 1
+
+            # Update last request time
+            self.last_request_time = time.time()
 
             # If the response indicates an error, raise HTTPError with the response attached
             try:
@@ -171,8 +260,20 @@ class OpenProjectClient:
             logger.error(f"Error making {method} request to {url}: {str(e)}")
             raise
 
-    def get_projects(self) -> List[Dict[str, Any]]:
-        """Get all projects from OpenProject."""
+    def get_projects(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Get all projects from OpenProject.
+
+        Args:
+            force_refresh: If True, ignore cache and fetch fresh data
+
+        Returns:
+            List of projects
+        """
+        # Return cached projects if available and not forced to refresh
+        if not force_refresh and self._projects_cache:
+            logger.debug(f"Using cached projects ({len(self._projects_cache)} projects)")
+            return self._projects_cache
+
         try:
             all_projects = []
             page = 1
@@ -196,10 +297,13 @@ class OpenProjectClient:
                 page += 1
 
             logger.info(f"Retrieved a total of {len(all_projects)} projects from OpenProject")
+
+            # Update cache
+            self._projects_cache = all_projects
             return all_projects
         except Exception as e:
             logger.error(f"Failed to get projects: {str(e)}")
-            return []
+            return self._projects_cache if self._projects_cache else []
 
     def get_project_by_identifier(self, identifier: str) -> Optional[Dict[str, Any]]:
         """Get a project by its identifier.
@@ -211,8 +315,7 @@ class OpenProjectClient:
             The project dictionary or None if not found
         """
         try:
-            # Get all projects and filter manually instead of using the filters parameter
-            # which is causing 400 Bad Request errors
+            # Get projects from cache or API
             all_projects = self.get_projects()
 
             # Find the project with matching identifier
@@ -225,42 +328,6 @@ class OpenProjectClient:
             return None
         except Exception as e:
             logger.debug(f"Failed to get project by identifier '{identifier}': {str(e)}")
-            return None
-
-    def update_project(
-        self, project_id: int, name: str = None, description: str = None
-    ) -> Optional[Dict[str, Any]]:
-        """Update an existing project in OpenProject.
-
-        Args:
-            project_id: The ID of the project to update
-            name: The new name for the project
-            description: The new description for the project
-
-        Returns:
-            The updated project or None if update failed
-        """
-        try:
-            data = {}
-            if name:
-                data["name"] = name
-            if description:
-                data["description"] = {"raw": description}
-
-            if not data:  # Nothing to update
-                return None
-
-            logger.debug(f"Updating project {project_id} with data: {json.dumps(data)}")
-            return self._request("PATCH", f"/projects/{project_id}", data=data)
-        except Exception as e:
-            if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_details = e.response.json()
-                    logger.error(f"Server response for project update {project_id}: {json.dumps(error_details)}")
-                except Exception:
-                    logger.error(f"Server response text: {e.response.text}")
-
-            logger.error(f"Failed to update project {project_id}: {str(e)}")
             return None
 
     def create_project(
@@ -312,6 +379,7 @@ class OpenProjectClient:
             logger.debug(f"Creating project with data: {json.dumps(data)}")
 
             created_project = self._request("POST", "/projects", data=data)
+
             return (created_project, True)  # Project was created
 
         except Exception as e:
@@ -340,10 +408,17 @@ class OpenProjectClient:
                             logger.warning(f"Could not find existing project with identifier '{identifier}' after 422 error")
 
                             # Try an alternative lookup by name as a fallback
-                            projects = self.get_projects()
-                            for project in projects:
+                            # First check the cache
+                            for project in self._projects_cache:
                                 if project.get("name") == name:
                                     logger.notice(f"Found existing project with name '{name}' instead")
+                                    return (project, False)
+
+                            # If not found in cache, try a fresh lookup
+                            projects = self.get_projects(force_refresh=True)
+                            for project in projects:
+                                if project.get("name") == name:
+                                    logger.notice(f"Found existing project with name '{name}' after refresh")
                                     return (project, False)
 
                             logger.debug(f"Server response for project {name}: {json.dumps(error_details)}")
@@ -361,6 +436,142 @@ class OpenProjectClient:
 
             logger.error(f"Failed to create project {name}: {str(e)}")
             return (None, False)
+
+    def get_work_package_types(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Get all work package types from OpenProject."""
+        if not force_refresh and self._work_package_types_cache:
+            return self._work_package_types_cache
+
+        try:
+            response = self._request("GET", "/types")
+            types = response.get("_embedded", {}).get("elements", [])
+            self._work_package_types_cache = types
+            return types
+        except Exception as e:
+            logger.error(f"Failed to get work package types: {str(e)}")
+            return self._work_package_types_cache if self._work_package_types_cache else []
+
+    def get_statuses(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Get all statuses from OpenProject."""
+        if not force_refresh and self._statuses_cache:
+            return self._statuses_cache
+
+        try:
+            response = self._request("GET", "/statuses")
+            statuses = response.get("_embedded", {}).get("elements", [])
+            self._statuses_cache = statuses
+            return statuses
+        except Exception as e:
+            logger.error(f"Failed to get statuses: {str(e)}")
+            return self._statuses_cache if self._statuses_cache else []
+
+    def get_users(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Get all users from OpenProject."""
+        if not force_refresh and self._users_cache:
+            return self._users_cache
+
+        try:
+            all_users = []
+            page_size = 100  # Use a consistent page size
+
+            logger.info(f"Fetching all OpenProject users with page size {page_size}")
+
+            # Start by getting the first page
+            params = {"pageSize": page_size}
+            current_url = "/users"
+
+            while True:
+                logger.info(f"Fetching users with URL: {current_url}")
+                response = self._request("GET", current_url, params=params)
+
+                # Extract users from current page
+                users = response.get("_embedded", {}).get("elements", [])
+                users_count = len(users)
+                all_users.extend(users)
+
+                # Get total count from response
+                total = response.get("total", 0)
+                logger.info(f"Page returned {users_count} users (total fetched: {len(all_users)}/{total})")
+
+                # Look for next page link in the response
+                next_url = None
+                if "_links" in response and "nextByOffset" in response.get("_links", {}):
+                    next_url = response.get("_links", {}).get("nextByOffset", {}).get("href")
+                    if next_url:
+                        # Extract the relative path from the full URL
+                        logger.debug(f"Found next page URL: {next_url}")
+                        # The API returns a full URL, but we need to extract just the path portion
+                        if "api/v3" in next_url:
+                            # Extract the part after /api/v3
+                            current_url = next_url.split(f"/api/v3")[1]
+                            params = None  # Don't send params when using full URL path
+                        else:
+                            # If the URL doesn't have the expected format, use it as is
+                            current_url = next_url
+                            params = None
+
+                # If there's no next URL or we've fetched all users, we're done
+                if not next_url or len(all_users) >= total:
+                    logger.info(f"No more pages to fetch. Retrieved {len(all_users)}/{total} users")
+                    break
+
+                # Safety check to prevent infinite loops
+                if len(all_users) >= 10000:
+                    logger.warning("Stopping pagination after 10000 users - possible infinite loop")
+                    break
+
+            logger.info(f"Retrieved a total of {len(all_users)} users from OpenProject (total reported: {total})")
+
+            self._users_cache = all_users
+            return all_users
+        except Exception as e:
+            logger.error(f"Failed to get users: {str(e)}")
+            return self._users_cache if self._users_cache else []
+
+    def clear_cache(self):
+        """Clear all cached data to force fresh retrieval."""
+        self._projects_cache = []
+        self._users_cache = []
+        self._custom_fields_cache = []
+        self._statuses_cache = []
+        self._work_package_types_cache = []
+        logger.debug("All caches have been cleared.")
+
+    def update_project(
+        self, project_id: int, name: str = None, description: str = None
+    ) -> Optional[Dict[str, Any]]:
+        """Update an existing project in OpenProject.
+
+        Args:
+            project_id: The ID of the project to update
+            name: The new name for the project
+            description: The new description for the project
+
+        Returns:
+            The updated project or None if update failed
+        """
+        try:
+            data = {}
+            if name:
+                data["name"] = name
+            if description:
+                data["description"] = {"raw": description}
+
+            if not data:  # Nothing to update
+                return None
+
+            logger.debug(f"Updating project {project_id} with data: {json.dumps(data)}")
+            return self._request("PATCH", f"/projects/{project_id}", data=data)
+        except Exception as e:
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_details = e.response.json()
+                    logger.error(f"Server response for project update {project_id}: {json.dumps(error_details)}")
+                except Exception:
+                    logger.error(f"Server response text: {e.response.text}")
+
+            logger.error(f"Failed to update project {project_id}: {str(e)}")
+            return None
 
     def get_work_package_types(self) -> List[Dict[str, Any]]:
         """Get all work package types from OpenProject."""
@@ -503,274 +714,6 @@ class OpenProjectClient:
         except Exception as e:
             logger.error(f"Failed to create work package {subject}: {str(e)}")
             return None
-
-    def get_statuses(self) -> List[Dict[str, Any]]:
-        """Get all statuses from OpenProject."""
-        try:
-            response = self._request("GET", "/statuses")
-            return response.get("_embedded", {}).get("elements", [])
-        except Exception as e:
-            logger.error(f"Failed to get statuses: {str(e)}")
-            return []
-
-    def get_users(self) -> List[Dict[str, Any]]:
-        """Get all users from OpenProject."""
-        try:
-            response = self._request("GET", "/users")
-            return response.get("_embedded", {}).get("elements", [])
-        except Exception as e:
-            logger.error(f"Failed to get users: {str(e)}")
-            return []
-
-    def configure_ldap(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Configure LDAP integration in OpenProject.
-
-        Args:
-            config: LDAP configuration dictionary
-
-        Returns:
-            Dictionary with the result of the configuration
-        """
-        try:
-            # OpenProject API doesn't expose LDAP configuration endpoints directly
-            # This would typically be done through the UI or by direct database access
-            # For the API-based migration, we'll return a message suggesting this
-            logger.warning(
-                "LDAP configuration via API is not directly supported by OpenProject"
-            )
-            logger.warning(
-                "Please configure LDAP through the OpenProject web interface"
-            )
-
-            return {
-                "success": False,
-                "message": "LDAP configuration needs to be done through the OpenProject web interface",
-                "config": config,
-            }
-        except Exception as e:
-            logger.error(f"Failed to configure LDAP: {str(e)}")
-            return {"success": False, "message": str(e), "config": config}
-
-    def add_attachment_to_work_package(
-        self,
-        work_package_id: int,
-        filename: str,
-        content_type: str,
-        file_content: bytes,
-    ) -> Optional[Dict[str, Any]]:
-        """Add an attachment to a work package."""
-        try:
-            # First, we need to prepare the upload
-            prepare_data = {"fileName": filename, "contentType": content_type}
-            prepare_response = self._request(
-                "POST",
-                f"/work_packages/{work_package_id}/attachments",
-                data=prepare_data,
-            )
-
-            upload_url = prepare_response.get("_links", {}).get("addAttachment", {}).get(
-                "href"
-            )
-            if not upload_url:
-                logger.error(
-                    f"Failed to get upload URL for work package {work_package_id}"
-                )
-                return None
-
-            # Upload the file content
-            headers = self.session.headers.copy()
-            headers["Content-Type"] = content_type
-
-            self._rate_limit()
-            upload_response = requests.put(
-                upload_url,
-                data=file_content,
-                headers=headers,
-                verify=self.ssl_verify,  # Use the SSL verification setting from environment
-            )
-            self.request_count += 1
-
-            upload_response.raise_for_status()
-            return upload_response.json()
-        except Exception as e:
-            logger.error(
-                f"Failed to add attachment {filename} to work package {work_package_id}: {str(e)}"
-            )
-            return None
-
-    def add_comment_to_work_package(
-        self, work_package_id: int, comment: str
-    ) -> Optional[Dict[str, Any]]:
-        """Add a comment to a work package."""
-        try:
-            data = {"comment": {"raw": comment}}
-
-            return self._request(
-                "POST", f"/work_packages/{work_package_id}/activities", data=data
-            )
-        except Exception as e:
-            logger.error(
-                f"Failed to add comment to work package {work_package_id}: {str(e)}"
-            )
-            return None
-
-    def get_custom_fields(self) -> List[Dict[str, Any]]:
-        """
-        Get all custom fields from OpenProject using Rails console.
-
-        This method uses the Rails console to retrieve custom fields directly from the database,
-        writing them to a temporary file and then reading that file.
-
-        Returns:
-            List of custom field dictionaries
-        """
-        # Try to get custom fields using the Rails console approach first, if available
-        if self.rails_client:
-            logger.info("Attempting to retrieve custom fields using provided Rails client...")
-            if not self.rails_client.connected:
-                logger.warning("Provided Rails client is not connected. Cannot use it to fetch custom fields.")
-            else:
-                try:
-                    # Define the path for the temporary file inside the container
-                    temp_file_path = "/tmp/op_custom_fields.json"
-
-                    # Use a command that outputs JSON to a file
-                    command = f"""
-                    begin
-                        # Get the fields as a JSON string
-                        fields = CustomField.all.map do |cf|
-                        {{
-                            id: cf.id,
-                            name: cf.name,
-                            field_format: cf.field_format,
-                            type: cf.type,
-                            is_required: cf.is_required,
-                            is_for_all: cf.is_for_all,
-                            # Include possible values for list types if possible
-                            possible_values: (cf.possible_values if cf.field_format == 'list' rescue nil)
-                        }}
-                        end
-
-                        # Write the fields as JSON to a temporary file
-                        File.write("{temp_file_path}", fields.to_json)
-                        puts "===JSON_WRITE_SUCCESS===" # Marker for success
-                        nil # Ensure last expression is nil to avoid unwanted output
-                    rescue => e
-                        # Ensure error message is printed clearly for capture
-                        puts "RAILS_EXEC_ERROR: #{{e.message}} \\n #{{e.backtrace.join("\n")}}"
-                        nil # Ensure last expression is nil
-                    end
-                    """
-
-                    # Execute the command to write the file using the provided rails client
-                    logger.info("Executing Rails command to write custom fields to file...")
-                    write_result = self.rails_client.execute(command)
-
-                    # Check for explicit error marker in the output
-                    if write_result.get('status') == 'success' and write_result.get('output') and "RAILS_EXEC_ERROR:" in write_result['output']:
-                        logger.error(f"Rails command reported an error during execution: {write_result['output']}")
-                        raise RuntimeError(f"Rails command error: {write_result['output']}")
-                    elif write_result.get('status') != 'success':
-                        error_msg = write_result.get('error', 'Unknown error executing Rails command for file write')
-                        logger.error(f"Failed to execute Rails command to write JSON file: {error_msg}")
-                        raise RuntimeError(f"Rails command failed: {error_msg}")
-
-                    logger.info("Rails command executed successfully. Checking existence of file...")
-                    time.sleep(0.5)
-
-                    container_name = config.openproject_config.get('container')
-                    op_server = config.openproject_config.get('server')
-                    if not op_server:
-                        raise RuntimeError("OpenProject server hostname not configured")
-
-                    ssh_base_cmd = ["ssh", op_server, "--"]
-                    docker_base_cmd = ["docker", "exec", container_name]
-                    ls_command = ssh_base_cmd + docker_base_cmd + ["ls", temp_file_path]
-
-                    try:
-                        ls_result = subprocess.run(ls_command, capture_output=True, text=True, check=False)
-                        if ls_result.returncode != 0:
-                            error_details = ls_result.stderr.strip()
-                            raise RuntimeError(f"File check failed: {error_details}")
-                        logger.info(f"File {temp_file_path} confirmed to exist.")
-                    except subprocess.SubprocessError as e:
-                        raise RuntimeError(f"Docker exec ls error: {str(e)}")
-
-                    cat_command = ssh_base_cmd + docker_base_cmd + ["cat", temp_file_path]
-                    read_result = subprocess.run(cat_command, capture_output=True, text=True, check=False)
-                    if read_result.returncode != 0:
-                        raise RuntimeError(f"Failed to read file via docker exec: {read_result.stderr}")
-
-                    json_content = read_result.stdout.strip()
-                    try:
-                        fields = json.loads(json_content)
-                        logger.info(f"Successfully parsed {len(fields)} custom fields from file via Rails")
-                        try:
-                            rm_command = ssh_base_cmd + docker_base_cmd + ["rm", "-f", temp_file_path]
-                            subprocess.run(rm_command, check=False, capture_output=True, timeout=10)
-                        except Exception as rm_error:
-                            logger.warning(f"Failed to remove temp file {temp_file_path}: {rm_error}")
-                        return fields
-                    except json.JSONDecodeError as e:
-                        raise RuntimeError(f"JSON parse error from Rails output: {e}")
-
-                except Exception as e:
-                    logger.warning(f"Failed to get custom fields using Rails client: {str(e)}.")
-
-
-    def create_custom_field(
-        self, name: str, field_format: str, options: Dict[str, Any] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Create a new custom field in OpenProject.
-
-        Args:
-            name: The name of the custom field
-            field_format: The format of the custom field (text, integer, float, date, list, etc.)
-            options: Additional options for the custom field (e.g., possible values for list fields)
-
-        Returns:
-            Dictionary with the created custom field or None if failed
-        """
-        try:
-            # First check if custom field already exists
-            existing_fields = self.get_custom_fields()
-            for existing_field in existing_fields:
-                if existing_field.get("name") == name:
-                    logger.info(
-                        f"Custom field '{name}' already exists, skipping creation"
-                    )
-                    return {
-                        "success": True,
-                        "message": f"Custom field '{name}' already exists",
-                        "id": existing_field.get("id"),
-                        "data": existing_field,
-                    }
-
-            # Note: Creating custom fields in OpenProject typically requires admin privileges
-            # and may not be supported through the API in all versions.
-            # Instead, we'll provide a simulated response for dry run and log a warning
-
-            logger.warning(
-                "Creating custom fields via API may not be supported in OpenProject"
-            )
-            logger.info(f"Would create custom field: {name} (Format: {field_format})")
-
-            # Simulate a response for compatibility
-            return {
-                "success": True,
-                "message": f"Simulated creation of custom field: {name}",
-                "id": f"customField{int(time.time())}",
-                "data": {
-                    "name": name,
-                    "field_format": field_format,
-                    "type": "WorkPackageCustomField",
-                },
-            }
-        except Exception as e:
-            logger.error(f"Failed to create custom field {name}: {str(e)}")
-            return {"success": False, "message": str(e)}
 
     def get_relation_types(self) -> List[Dict[str, Any]]:
         """Get all relation types from OpenProject using the /relations endpoint."""

@@ -23,16 +23,7 @@ from src.models.mapping import JiraToOPMapping
 from src import config
 from src.display import ProgressTracker, process_with_progress, console
 
-# Import RailsConsolePexpect conditionally to handle direct Rails console execution
-try:
-    from src.clients.openproject_rails_client import OpenProjectRailsClient
-    HAS_RAILS_CLIENT = True
-except ImportError:
-    HAS_RAILS_CLIENT = False
-
-# Conditional import for type checking to avoid circular dependencies
-if TYPE_CHECKING:
-    from ..clients.openproject_rails_client import OpenProjectRailsClient
+from src.clients.openproject_rails_client import OpenProjectRailsClient
 
 # Get logger from config
 logger = config.logger
@@ -357,21 +348,17 @@ class IssueTypeMigration:
             "is_default": is_default
         }
 
-    def connect_to_rails_console(self, session_name: str = "rails_console", window: int = 0, pane: int = 0) -> bool:
+    def connect_to_rails_console(self, window: int = 0, pane: int = 0) -> bool:
         """
         Connect to the Rails console via tmux.
 
         Args:
-            session_name: tmux session name containing the Rails console (default: "rails_console")
             window: tmux window number (default: 0)
             pane: tmux pane number (default: 0)
 
         Returns:
             bool: True if connection was successful, False otherwise
         """
-        if not HAS_RAILS_CLIENT:
-            logger.error("OpenProjectRailsClient is not available.")
-            return False
 
         if self.rails_console:
             logger.info("Already connected to Rails console.")
@@ -380,9 +367,8 @@ class IssueTypeMigration:
         logger.info("Connecting to Rails console...")
 
         try:
-            with ProgressTracker(description=f"Connecting to tmux session {session_name}", total=1) as tracker:
+            with ProgressTracker(description=f"Connecting to tmux session", total=1) as tracker:
                 self.rails_console = OpenProjectRailsClient(
-                    session_name=session_name,
                     window=window,
                     pane=pane,
                     debug=False  # Set to True for debugging
@@ -598,28 +584,23 @@ class IssueTypeMigration:
 
         return result
 
-    def migrate_issue_types_via_rails(self, session_name: str = "rails_console", window: int = 0, pane: int = 0) -> bool:
+    def migrate_issue_types_via_rails(self, window: int = 0, pane: int = 0) -> bool:
         """
         Migrate issue types directly via the Rails console.
 
         Args:
-            session_name: tmux session name containing the Rails console (default: "rails_console")
             window: tmux window number (default: 0)
             pane: tmux pane number (default: 0)
 
         Returns:
             bool: True if migration was successful, False otherwise
         """
-        if not HAS_RAILS_CLIENT:
-            logger.error("OpenProjectRailsClient is not available.")
-            return False
-
         # Make sure we have the mapping
         if not self.issue_type_mapping:
             self.create_issue_type_mapping()
 
         # Connect to Rails console
-        if not self.connect_to_rails_console(session_name, window, pane):
+        if not self.connect_to_rails_console(window, pane):
             return False
 
         # Check existing work package types
@@ -1009,7 +990,6 @@ def run_issue_type_migration(
     dry_run: bool = False,
     generate_ruby: bool = False,
     direct_migration: bool = False,
-    session_name: str = "rails_console",
     window: int = 0,
     pane: int = 0,
     force: bool = False
@@ -1021,7 +1001,6 @@ def run_issue_type_migration(
         dry_run: If True, don't make any changes to OpenProject
         generate_ruby: If True, generate a Ruby script for manual execution
         direct_migration: If True, execute the migration directly via Rails console
-        session_name: tmux session name containing the Rails console
         window: tmux window number
         pane: tmux pane number
         force: If True, force extraction and mapping creation even if files exist
@@ -1046,18 +1025,6 @@ def run_issue_type_migration(
         migration.generate_ruby_script(work_package_types)
         logger.info("Ruby script generation complete")
     elif direct_migration:
-        # Use direct Rails console execution for migration
-        if not HAS_RAILS_CLIENT:
-            logger.error("OpenProjectRailsClient is required for direct migration.")
-            return
-
-        # Check if we have the Rails console client module
-        try:
-            from src.clients.openproject_rails_client import OpenProjectRailsClient
-        except ImportError:
-            logger.error("OpenProjectRailsClient module not found. Cannot proceed with direct migration.")
-            return
-
         # Extract data if forced
         if force:
             migration.extract_jira_issue_types(force=True)
@@ -1065,7 +1032,7 @@ def run_issue_type_migration(
 
         # Create mapping and migrate directly
         migration.create_issue_type_mapping(force=force)
-        success = migration.migrate_issue_types_via_rails(session_name, window, pane)
+        success = migration.migrate_issue_types_via_rails(window, pane)
         if success:
             logger.info("Direct issue type migration completed successfully")
         else:
@@ -1137,7 +1104,6 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         generate_ruby=args.generate_ruby,
         direct_migration=args.direct_migration,
-        session_name=args.session_name,
         window=args.window,
         pane=args.pane,
         force=args.force

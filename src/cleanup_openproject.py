@@ -25,10 +25,6 @@ from src.display import ProgressTracker, console
 # Set up logger
 logger = config.logger
 
-# Conditional import for type checking to avoid circular dependencies
-if TYPE_CHECKING:
-    from src.clients.openproject_rails_client import OpenProjectRailsClient
-
 class OpenProjectCleaner:
     """
     Class to clean up an OpenProject instance by removing specified entities.
@@ -203,7 +199,7 @@ class OpenProjectCleaner:
             logger.info(f"Successfully deleted custom field {custom_field_id}", extra={"markup": True})
             return True
         else:
-            # Error during command execution itself (e.g., tmux/ssh issue)
+            # Error during command execution itself (e.g., tmux issue)
             error_msg = result.get('error', 'Unknown execution error')
             logger.error(f"Error executing Rails command for custom field {custom_field_id}: {error_msg}", extra={"markup": True})
             return False

@@ -8,6 +8,8 @@ import sys
 import json
 import pandas as pd
 from typing import Dict, List, Any, Optional
+import requests
+import re
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -57,13 +59,11 @@ class UserMigration:
         """
         logger.info("Extracting users from Jira...", extra={"markup": True})
 
-        # Connect to Jira
-        if not self.jira_client.connect():
-            logger.error("Failed to connect to Jira", extra={"markup": True})
-            return []
-
-        # Get all users from Jira
         self.jira_users = self.jira_client.get_users()
+
+        if not self.jira_users:
+            logger.error("Failed to extract users from Jira", extra={"markup": True})
+            return []
 
         # Log the number of users found
         logger.info(f"Extracted {len(self.jira_users)} users from Jira", extra={"markup": True})

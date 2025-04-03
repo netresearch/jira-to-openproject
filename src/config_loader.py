@@ -98,6 +98,10 @@ class ConfigLoader:
                     self.config["openproject"][key] = self._convert_value(env_value)
                     config_logger.info(f"Applied OpenProject config: {key}={env_value}")
 
+                    # Special handling for tmux_session_name
+                    if key == "tmux_session_name":
+                        config_logger.info(f"Configured OpenProject tmux session name: {env_value}")
+
                 case ["J2O", "LOG", "LEVEL"]:
                     # Make sure log level is valid - our custom levels are handled by display.py
                     valid_levels = ["DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "SUCCESS"]

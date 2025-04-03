@@ -17,8 +17,24 @@ logger = config.logger
 class JiraClient:
     """Client for interacting with the Jira API."""
 
+    # Singleton instance
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        """Implement singleton pattern."""
+        if cls._instance is None:
+            logger.debug("Creating new JiraClient instance")
+            cls._instance = super(JiraClient, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
         """Initialize the Jira client."""
+        # Only initialize once
+        if getattr(self, "_initialized", False):
+            logger.debug("Using existing JiraClient instance")
+            return
+
         # Get configuration
         self.jira_config = config.jira_config
         self.migration_config = config.migration_config
@@ -43,6 +59,9 @@ class JiraClient:
         # Attempt to connect immediately upon initialization
         self.connect()
 
+        # Mark as initialized
+        self._initialized = True
+
     def connect(self):
         """Connect to the Jira API and set the connected status."""
         self.connected = False # Assume failure initially
@@ -54,7 +73,7 @@ class JiraClient:
             server_info = self.jira.server_info()
             logger.success(f"Successfully connected to Jira server: {server_info.get('baseUrl')} ({server_info.get('version')})")
             self.connected = True
-            return # Success
+            return True # Success - return True
         except Exception as e:
             logger.warning(f"Token authentication failed: {str(e)}")
 
@@ -67,13 +86,13 @@ class JiraClient:
             server_info = self.jira.server_info()
             logger.success(f"Successfully connected to Jira server: {server_info.get('baseUrl')} ({server_info.get('version')})")
             self.connected = True
-            return # Success
+            return True # Success - return True
         except Exception as e2:
             logger.warning(f"Basic authentication failed: {str(e2)}")
 
         # If all methods failed
         logger.error(f"All authentication methods failed for Jira connection to {self.jira_url}")
-        # Note: Removed third attempt as it was identical to basic auth fallback
+        return False # Failure - return False
 
     def _rate_limit(self):
         """Implement rate limiting for API requests."""
@@ -239,7 +258,7 @@ class JiraClient:
         self._rate_limit()
         try:
             # Ensure we're connected before trying to access users
-            if not self.jira:
+            if not self.connected or not self.jira:
                 if not self.connect():
                     logger.error("Failed to connect to Jira")
                     return []

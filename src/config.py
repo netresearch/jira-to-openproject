@@ -108,7 +108,7 @@ def validate_config() -> bool:
     # Use pattern matching to process different config sections
     for section, required_keys in [
         ("jira", ["url", "username", "api_token"]),
-        ("openproject", ["url", "api_token"]),
+        ("openproject", ["url"]),  # Allow either api_token or api_key for OpenProject
     ]:
         match section:
             case "jira":
@@ -117,6 +117,10 @@ def validate_config() -> bool:
             case "openproject":
                 config_section = openproject_config
                 prefix = "J2O_OPENPROJECT_"
+                # Special handling for OpenProject authentication
+                if not (config_section.get("api_token") or config_section.get("api_key")):
+                    missing_vars.append(f"{prefix}API_TOKEN or {prefix}API_KEY")
+                continue
             case _:
                 continue
 
