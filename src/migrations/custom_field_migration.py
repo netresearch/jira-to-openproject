@@ -582,11 +582,11 @@ class CustomFieldMigration(BaseMigration):
 
     def migrate_custom_fields_via_rails(self, window: int = 0, pane: int = 0) -> bool:
         """
-        Migrate custom fields directly via the Rails console.
+        Migrate custom fields to OpenProject using the Rails console.
 
         Args:
-            window: tmux window number (default: 0)
-            pane: tmux pane number (default: 0)
+            window: The tmux window to use (default: 0)
+            pane: The tmux pane to use (default: 0)
 
         Returns:
             bool: True if migration was successful, False otherwise
@@ -600,6 +600,7 @@ class CustomFieldMigration(BaseMigration):
             logger.error("Failed to retrieve existing custom fields from OpenProject. Defaulting to empty list.")
             existing_fields = []
         existing_names = [field.get('name') for field in existing_fields]
+        existing_name_to_field = {field.get('name'): field for field in existing_fields}
 
         # Prepare to track results
         results = []
@@ -628,13 +629,36 @@ class CustomFieldMigration(BaseMigration):
         # Migrate fields that need to be created
         fields_to_create = [field for field in self.mapping.values() if field["matched_by"] == "create"]
 
+        # First update the mapping for any fields that already exist
+        # This ensures our analysis will be correct
+        updated_count = 0
+        for field in list(fields_to_create):
+            field_name = field.get('openproject_name', field.get('jira_name', 'Unknown field'))
+            if field_name in existing_names:
+                # Update the field's mapping to reflect it's already matched
+                field_id = field.get('jira_id')
+                if field_id in self.mapping:
+                    self.mapping[field_id]["matched_by"] = "name"
+                    self.mapping[field_id]["openproject_id"] = existing_name_to_field.get(field_name, {}).get('id')
+                    updated_count += 1
+
+        if updated_count > 0:
+            logger.info(f"Updated mapping for {updated_count} fields that already exist in OpenProject")
+            # Reload the fields_to_create list after updating mappings
+            fields_to_create = [field for field in self.mapping.values() if field["matched_by"] == "create"]
+
         logger.info(f"Found {len(fields_to_create)} custom fields to create")
 
         with ProgressTracker(
             description="Migrating custom fields",
-            total=len(fields_to_create),
+            total=len(fields_to_create) + updated_count,  # Include already matched fields in total
             log_title="Custom Fields Migration Results"
         ) as tracker:
+            # First, log the fields we already matched
+            for i in range(updated_count):
+                tracker.increment()
+
+            # Then process fields that still need creation
             for field in fields_to_create:
                 field_name = field.get('openproject_name', field.get('jira_name', 'Unknown field'))
                 tracker.update_description(f"Migrating field: {field_name[:20]}")
@@ -643,6 +667,13 @@ class CustomFieldMigration(BaseMigration):
                 if field_name in existing_names:
                     tracker.add_log_item(f"{field_name}: Skipped (already exists)")
                     skipped_count += 1
+
+                    # Update the mapping to reflect that this field is matched by name
+                    field_id = field.get('jira_id')
+                    if field_id in self.mapping:
+                        self.mapping[field_id]["matched_by"] = "name"
+                        self.mapping[field_id]["openproject_id"] = existing_name_to_field.get(field_name, {}).get('id')
+
                     tracker.increment()
                     results.append({
                         'name': field_name,
@@ -672,10 +703,18 @@ class CustomFieldMigration(BaseMigration):
                 if result['status'] == 'success':
                     tracker.add_log_item(f"{field_name}: Created successfully")
                     success_count += 1
+
+                    # Update the mapping to reflect that this field was created
+                    field_id = field.get('jira_id')
+                    if field_id in self.mapping:
+                        self.mapping[field_id]["matched_by"] = "created"
+                        self.mapping[field_id]["openproject_id"] = result.get('id')
+
                     results.append({
                         'name': field_name,
                         'status': 'success',
-                        'message': 'Created successfully'
+                        'message': 'Created successfully',
+                        'id': result.get('id')
                     })
                 else:
                     # Get detailed error information
@@ -696,11 +735,14 @@ class CustomFieldMigration(BaseMigration):
 
                 tracker.increment()
 
+        # Save the updated mapping to disk
+        self._save_to_json(self.mapping, "custom_field_mapping.json")
+
         # Show summary
         logger.info("\nCustom Fields Rails Migration Summary:")
-        logger.info(f"Total fields processed: {len(fields_to_create)}")
+        logger.info(f"Total fields processed: {len(fields_to_create) + updated_count}")
         logger.info(f"Successfully created: {success_count}")
-        logger.info(f"Skipped (already exists): {skipped_count}")
+        logger.info(f"Skipped (already exists): {skipped_count + updated_count}")
         logger.info(f"Fixed before migration: {fixed_count}")
         logger.info(f"Failed: {error_count}")
 
@@ -761,8 +803,9 @@ class CustomFieldMigration(BaseMigration):
         # Provide a summary of the custom field migration
         total_fields = len(self.mapping)
         needs_creation = sum(1 for field in self.mapping.values() if field["matched_by"] == "create")
+        already_matched = sum(1 for field in self.mapping.values() if field["matched_by"] != "create")
 
-        logger.info(f"Custom field migration complete - {total_fields} fields processed, {needs_creation} need creation")
+        logger.info(f"Custom field migration complete - {total_fields} fields processed, {needs_creation} need creation, {already_matched} already exist")
 
         if self.dry_run:
             logger.info("DRY RUN: No custom fields were actually created in OpenProject")
