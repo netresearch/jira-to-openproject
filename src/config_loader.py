@@ -88,46 +88,46 @@ class ConfigLoader:
                 continue
 
             match env_var.split("_"):
-                case ["J2O", "JIRA", *rest] if rest:
-                    key = "_".join(rest).lower()
-                    self.config["jira"][key] = self._convert_value(env_value)
-                    config_logger.info(f"Applied Jira config: {key}={env_value}")
-
-                case ["J2O", "OPENPROJECT", *rest] if rest:
-                    key = "_".join(rest).lower()
-                    self.config["openproject"][key] = self._convert_value(env_value)
-                    config_logger.info(f"Applied OpenProject config: {key}={env_value}")
-
-                    # Special handling for tmux_session_name
-                    if key == "tmux_session_name":
-                        config_logger.info(f"Configured OpenProject tmux session name: {env_value}")
-
                 case ["J2O", "LOG", "LEVEL"]:
                     # Make sure log level is valid - our custom levels are handled by display.py
                     valid_levels = ["DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "SUCCESS"]
                     if env_value.upper() in valid_levels:
                         self.config["migration"]["log_level"] = env_value.upper()
-                        config_logger.info(f"Applied log level: {env_value.upper()}")
+                        config_logger.debug(f"Applied log level: {env_value.upper()}")
                     else:
                         config_logger.warning(f"Invalid log level: {env_value}. Using INFO instead.")
                         self.config["migration"]["log_level"] = "INFO"
 
+                case ["J2O", "JIRA", *rest] if rest:
+                    key = "_".join(rest).lower()
+                    self.config["jira"][key] = self._convert_value(env_value)
+                    config_logger.debug(f"Applied Jira config: {key}={env_value}")
+
+                case ["J2O", "OPENPROJECT", *rest] if rest:
+                    key = "_".join(rest).lower()
+                    self.config["openproject"][key] = self._convert_value(env_value)
+                    config_logger.debug(f"Applied OpenProject config: {key}={env_value}")
+
+                    # Special handling for tmux_session_name
+                    if key == "tmux_session_name":
+                        config_logger.debug(f"Configured OpenProject tmux session name: {env_value}")
+
                 case ["J2O", "BATCH", "SIZE"]:
                     self.config["migration"]["batch_size"] = int(env_value)
-                    config_logger.info(f"Applied batch size: {env_value=}")
+                    config_logger.debug(f"Applied batch size: {env_value=}")
 
                 case ["J2O", "RATE", "LIMIT", "REQUESTS"]:
                     self.config["migration"]["rate_limit_requests"] = int(env_value)
-                    config_logger.info(f"Applied rate limit requests: {env_value=}")
+                    config_logger.debug(f"Applied rate limit requests: {env_value=}")
 
                 case ["J2O", "RATE", "LIMIT", "PERIOD"]:
                     self.config["migration"]["rate_limit_period"] = int(env_value)
-                    config_logger.info(f"Applied rate limit period: {env_value=}")
+                    config_logger.debug(f"Applied rate limit period: {env_value=}")
 
                 case ["J2O", "SSL", "VERIFY"]:
                     ssl_verify = env_value.lower() not in ("false", "0", "no", "n", "f")
                     self.config["migration"]["ssl_verify"] = ssl_verify
-                    config_logger.info(f"Applied SSL verify: {ssl_verify=}")
+                    config_logger.debug(f"Applied SSL verify: {ssl_verify=}")
 
     def _convert_value(self, value: str) -> ConfigValue:
         """Convert string value to appropriate type"""
