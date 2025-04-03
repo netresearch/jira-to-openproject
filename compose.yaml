@@ -1,0 +1,79 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app:delegated
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - .env
+      - .env.local
+    command: bash -c "tail -f /dev/null"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - j2o-network
+
+  openproject:
+    image: openproject/openproject:15
+    ports:
+      - "8080:80"
+    environment:
+      - OPENPROJECT_HOST__NAME=localhost:8080
+      - OPENPROJECT_HTTPS=false
+      - OPENPROJECT_DEFAULT__LANGUAGE=en
+      - OPENPROJECT_EMAIL__DELIVERY__METHOD=null
+      - OPENPROJECT_DATABASE__HOST=db
+      - OPENPROJECT_DATABASE__PORT=5432
+      - OPENPROJECT_DATABASE__NAME=openproject
+      - OPENPROJECT_DATABASE__USER=openproject
+      - OPENPROJECT_DATABASE__PASSWORD=openproject
+    volumes:
+      - openproject-assets:/var/openproject/assets:delegated
+      - openproject-files:/var/openproject/files:delegated
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - j2o-network
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=openproject
+      - POSTGRES_PASSWORD=openproject
+      - POSTGRES_DB=openproject
+    volumes:
+      - postgres-data:/var/lib/postgresql/data:delegated
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openproject"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - j2o-network
+
+networks:
+  j2o-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+    driver: local
+  openproject-assets:
+    driver: local
+  openproject-files:
+    driver: local

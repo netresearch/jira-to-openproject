@@ -1,0 +1,9 @@
+---
+description: Version Control Guidelines
+globs: ["**/*"]
+alwaysApply: true
+---
+- Commit messages must be clear and descriptive
+- One logical change per commit
+- No credentials or sensitive data in version control
+- Use .env.local for local settings (not versioned)

@@ -1,0 +1,57 @@
+repomix-output.txt
+
+
+# Environment variables - only ignore local overrides
+# .env  - we keep this in version control with default values
+.env.local
+
+# Python virtual environment
+venv/
+env/
+.venv/
+.python-version
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Logs
+var/logs/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Output and temporary data files
+var/output/
+var/data/
+!var/data/*.example.json
+var/temp/
+
+# Testing
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Local development
+*.sqlite3
+*.db
+
+# OS specific files
+Thumbs.db
+
+# Migration specific
+id_mapping.json
+
+# Ignore all files in the backups directory
+var/backups/*

@@ -1,0 +1,20 @@
+---
+description: Documentation Rules
+globs: ["**/*"]
+alwaysApply: true
+---
+- Refer to README.md for specific technical requirements
+
+- Keep README.md as source of truth for:
+  - Project overview and setup
+  - Technical requirements
+  - Architecture decisions
+- Use PROGRESS.md only for:
+  - Current development status
+  - Upcoming tasks
+  - Implementation notes
+
+For implementation details and setup, refer to:
+- Technical stack: README.md#technical-requirements
+- Docker setup: README.md#docker-setup
+- Environment: README.md#environment-configuration

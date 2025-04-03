@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+
+# Python environments
+venv/
+.venv/
+ENV/
+env/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data and logs
+var/
+logs/
+*.log
+
+# Docker files (no need to copy these into the image)
+Dockerfile
+compose.yaml
+.dockerignore
+
+# Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Environment variables (sensitive data)
+.env.local
+
+# Build artifacts
+*.egg-info/
+dist/
+build/

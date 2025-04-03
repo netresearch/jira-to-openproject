@@ -1,0 +1,11 @@
+---
+description: OMDE Development Guidelines
+globs: ["**/*"]
+alwaysApply: true
+---
+- No project version migrations or backwards compatibility needed
+- No need to document what's changed in the code
+- Focus on current/future functionality only
+- Direct changes without legacy consideration
+- No need for backwards compatibility
+- Document only current functionality

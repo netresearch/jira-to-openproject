@@ -1,0 +1,58 @@
+# Jira to OpenProject Migration Configuration
+
+# Jira API settings
+jira:
+  # Base URL of your Jira instance
+  url: "https://your-jira-instance.example.com"
+  # Authentication credentials
+  username: ""  # Set via J2O_JIRA_USERNAME
+  api_token: ""  # Set via J2O_JIRA_API_TOKEN
+  # Projects to migrate (leave empty to migrate all)
+  projects:
+    - "PROJECT1"
+    - "PROJECT2"
+  # API request settings
+  batch_size: 100
+  # Fields to retrieve from Jira
+  fields: "summary,description,issuetype,status,priority,assignee,reporter,created,updated,labels,components,fixVersions,versions,comment,attachment,worklog,customfield_*"
+
+# OpenProject API settings
+openproject:
+  # Base URL of your OpenProject instance
+  url: "https://localhost/"
+  # Authentication credentials
+  api_token: ""  # Set via J2O_OPENPROJECT_API_KEY
+  # API request settings
+  batch_size: 50
+
+# Migration process settings
+migration:
+  # Component migration order
+  component_order:
+    - users
+    - custom_fields
+    - projects
+    - versions
+    - issues
+    - relations
+    - worklogs
+    - attachments
+    - comments
+
+  # Data storage
+  mapping_file: "data/id_mapping.json"
+  attachment_path: "data/attachments"
+
+  # Performance settings
+  batch_size: 1000
+  rate_limit_requests: 1000
+  rate_limit_period: 60
+
+  # Behavior settings
+  skip_existing: true
+
+  # Security settings
+  ssl_verify: true
+
+  # Logging
+  log_level: "INFO"
