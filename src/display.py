@@ -304,21 +304,3 @@ def process_with_progress(
             tracker.increment()
 
     return results
-
-
-# Print functions for direct console output
-def print_info(message: str):
-    """Print an info message with rich formatting."""
-    logger.info(message, extra={"markup": True})
-
-def print_warning(message: str):
-    """Print a warning message with rich formatting."""
-    logger.warning(message, extra={"markup": True})
-
-def print_error(message: str):
-    """Print an error message with rich formatting."""
-    logger.error(message, extra={"markup": True})
-
-def print_success(message: str):
-    """Print a success message with rich formatting."""
-    logger.success(message, extra={"markup": True})

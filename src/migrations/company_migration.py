@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src import config
-from src.display import ProgressTracker, process_with_progress, console, print_info
+from src.display import ProgressTracker, process_with_progress, console
 
 # Get logger from config
 logger = config.logger
