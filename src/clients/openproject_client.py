@@ -322,7 +322,7 @@ class OpenProjectClient:
             # Find the project with matching identifier
             for project in all_projects:
                 if project.get("identifier") == identifier:
-                    logger.notice(f"Found existing project with identifier '{identifier}'")
+                    logger.debug(f"Found existing project with identifier '{identifier}'")
                     return project
 
             logger.debug(f"No project found with identifier '{identifier}'")
@@ -352,7 +352,7 @@ class OpenProjectClient:
 
             if existing_project:
                 project_id = existing_project.get("id")
-                logger.info(f"Project with identifier '{identifier}' already exists (ID: {project_id})")
+                logger.debug(f"Project with identifier '{identifier}' already exists (ID: {project_id})")
 
                 # Update the project if needed
                 if name != existing_project.get("name") or description != existing_project.get("description", {}).get("raw", ""):
@@ -397,12 +397,12 @@ class OpenProjectClient:
                         and "already been taken" in error_details.get("message", "")
                     ):
                         # Log as info instead of warning for this expected case
-                        logger.notice(f"Project identifier '{identifier}' already exists, retrieving existing project")
+                        logger.debug(f"Project identifier '{identifier}' already exists, retrieving existing project")
 
                         # Try to get the project again - it might have been created in a race condition
                         existing_project = self.get_project_by_identifier(identifier)
                         if existing_project:
-                            logger.notice(f"Successfully found existing project with identifier '{identifier}'")
+                            logger.debug(f"Successfully found existing project with identifier '{identifier}'")
                             return (existing_project, False)
                         else:
                             # Only log as warning if we couldn't find the existing project
@@ -412,14 +412,14 @@ class OpenProjectClient:
                             # First check the cache
                             for project in self._projects_cache:
                                 if project.get("name") == name:
-                                    logger.notice(f"Found existing project with name '{name}' instead")
+                                    logger.debug(f"Found existing project with name '{name}' instead")
                                     return (project, False)
 
                             # If not found in cache, try a fresh lookup
                             projects = self.get_projects(force_refresh=True)
                             for project in projects:
                                 if project.get("name") == name:
-                                    logger.notice(f"Found existing project with name '{name}' after refresh")
+                                    logger.debug(f"Found existing project with name '{name}' after refresh")
                                     return (project, False)
 
                             logger.debug(f"Server response for project {name}: {json.dumps(error_details)}")
