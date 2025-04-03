@@ -326,7 +326,7 @@ def run_migration(dry_run: bool = True, components: List[str] | None = None, bac
                 run_func(dry_run=dry_run, force=force, direct_migration=direct_migration)
             elif name == "accounts":
                 # TODO: Update run_account_migration similarly
-                run_func(dry_run=dry_run, force=force) # Keep original call for now until refactored
+                run_func(dry_run=dry_run) # Keep original call for now until refactored
             elif name == "companies":
                 # TODO: Update run_company_migration if needed
                 run_func(dry_run=dry_run, force=force)
