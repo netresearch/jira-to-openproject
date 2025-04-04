@@ -22,6 +22,7 @@ from src.clients.openproject_client import OpenProjectClient
 from src.models.mapping import JiraToOPMapping
 from src import config
 from src.display import ProgressTracker, process_with_progress, console
+from src.migrations.base_migration import BaseMigration
 
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 
@@ -29,7 +30,7 @@ from src.clients.openproject_rails_client import OpenProjectRailsClient
 logger = config.logger
 
 
-class IssueTypeMigration:
+class IssueTypeMigration(BaseMigration):
     """
     Handles the migration of issue types from Jira to work package types in OpenProject.
 
@@ -58,18 +59,14 @@ class IssueTypeMigration:
             dry_run: If True, simulate migration without making changes
             force: If True, force re-extraction of data
         """
-        self.jira_client = jira_client or JiraClient()
-        self.op_client = op_client or OpenProjectClient()
+        # Call the BaseMigration constructor
+        super().__init__(jira_client, op_client, data_dir, dry_run, force)
+
         self.jira_issue_types: List[Dict] = []
         self.op_work_package_types: List[Dict] = []
         self.issue_type_mapping: Dict[str, Dict] = {}
         self.issue_type_id_mapping: Dict[str, int] = {}
-        self.dry_run = dry_run
         self.rails_console = rails_console
-
-        # Use the centralized config for var directories
-        self.data_dir = data_dir or config.get_path("data")
-        self.output_dir = config.get_path("output")
 
         # Define default mappings for common issue types
         self.default_mappings = {
@@ -973,26 +970,16 @@ class IssueTypeMigration:
 
         return script_file
 
-    def _save_to_json(self, data: Any, filename: str):
-        """
-        Save data to a JSON file in the data directory.
-
-        Args:
-            data: The data to save
-            filename: The name of the file to save to
-        """
-        filepath = os.path.join(self.data_dir, filename)
-        with open(filepath, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.debug(f"Saved data to {filepath}")
-
 def run_issue_type_migration(
     dry_run: bool = False,
     generate_ruby: bool = False,
     direct_migration: bool = False,
     window: int = 0,
     pane: int = 0,
-    force: bool = False
+    force: bool = False,
+    jira_client: Optional[JiraClient] = None,
+    op_client: Optional[OpenProjectClient] = None,
+    rails_console: Optional[OpenProjectRailsClient] = None
 ):
     """
     Run the issue type migration process.
@@ -1004,11 +991,20 @@ def run_issue_type_migration(
         window: tmux window number
         pane: tmux pane number
         force: If True, force extraction and mapping creation even if files exist
+        jira_client: Optional initialized Jira client
+        op_client: Optional initialized OpenProject client
+        rails_console: Optional initialized Rails console client
     """
     logger.info("Starting issue type migration")
 
     # Create migration instance
-    migration = IssueTypeMigration(dry_run=dry_run)
+    migration = IssueTypeMigration(
+        jira_client=jira_client,
+        op_client=op_client,
+        rails_console=rails_console,
+        dry_run=dry_run,
+        force=force
+    )
 
     # First extract data from both sides
     migration.extract_jira_issue_types(force=force)
@@ -1091,14 +1087,30 @@ if __name__ == "__main__":
     parser.add_argument(
         "--window",
         type=int,
+        default=0,
         help="tmux window number",
     )
     parser.add_argument(
         "--pane",
         type=int,
+        default=0,
         help="tmux pane number",
     )
     args = parser.parse_args()
+
+    # Initialize Rails console client if direct migration is requested
+    rails_console = None
+    if args.direct_migration:
+        try:
+            from src.clients.openproject_rails_client import OpenProjectRailsClient
+            rails_console = OpenProjectRailsClient(
+                window=args.window,
+                pane=args.pane,
+                debug=False
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize Rails console client: {e}")
+            sys.exit(1)
 
     run_issue_type_migration(
         dry_run=args.dry_run,
@@ -1106,5 +1118,6 @@ if __name__ == "__main__":
         direct_migration=args.direct_migration,
         window=args.window,
         pane=args.pane,
-        force=args.force
+        force=args.force,
+        rails_console=rails_console
     )

@@ -89,8 +89,22 @@ class OpenProjectClient:
                 # This will use the existing singleton or create one if needed
                 self.rails_client = OpenProjectRailsClient()
                 logger.info("Initialized Rails client with tmux session from config")
+            except ValueError as e:
+                # This is the error raised when the tmux session doesn't exist
+                logger.warning(f"Could not initialize Rails client: {str(e)}")
+                logger.warning("The tmux session specified in the configuration doesn't exist.")
+                logger.warning("To use direct Rails console features, please start the tmux session first.")
+                logger.warning("You can continue with API-only operations, but direct Rails console functions will not be available.")
+                self.rails_client = None
+            except RuntimeError as e:
+                # This is the error raised when tmux is not installed
+                logger.warning(f"Could not initialize Rails client: {str(e)}")
+                logger.warning("Make sure tmux is installed and available in your PATH.")
+                logger.warning("You can continue with API-only operations, but direct Rails console functions will not be available.")
+                self.rails_client = None
             except Exception as e:
                 logger.warning(f"Could not initialize Rails client: {str(e)}")
+                logger.warning("You can continue with API-only operations, but direct Rails console functions will not be available.")
                 self.rails_client = None
 
         # OpenProject API credentials
@@ -693,28 +707,69 @@ class OpenProjectClient:
         assigned_to_id: int = None,
     ) -> Optional[Dict[str, Any]]:
         """Create a new work package in OpenProject."""
+        data = {
+            "_links": {
+                "project": {"href": f"/api/v3/projects/{project_id}"},
+                "type": {"href": f"/api/v3/types/{type_id}"},
+            },
+            "subject": subject,
+        }
+
+        if description:
+            data["description"] = {"raw": description}
+
+        if status_id:
+            data["_links"]["status"] = {"href": f"/api/v3/statuses/{status_id}"}
+
+        if assigned_to_id:
+            data["_links"]["assignee"] = {"href": f"/api/v3/users/{assigned_to_id}"}
+
         try:
-            data = {
-                "_links": {
-                    "project": {"href": f"/api/v3/projects/{project_id}"},
-                    "type": {"href": f"/api/v3/types/{type_id}"},
-                },
-                "subject": subject,
-            }
-
-            if description:
-                data["description"] = {"raw": description}
-
-            if status_id:
-                data["_links"]["status"] = {"href": f"/api/v3/statuses/{status_id}"}
-
-            if assigned_to_id:
-                data["_links"]["assignee"] = {"href": f"/api/v3/users/{assigned_to_id}"}
-
             return self._request("POST", "/work_packages", data=data)
+        except requests.exceptions.HTTPError as e:
+            # Log details of the request that failed
+            logger.debug(f"Failed work package creation request data for {subject}: {json.dumps(data)}")
+
+            # Extract detailed error message from OpenProject
+            error_message = str(e)
+            error_details = {}
+            validation_errors = []
+
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_details = e.response.json()
+                    error_message = error_details.get("message", str(e))
+
+                    # Log specific validation errors
+                    if "_embedded" in error_details and "errors" in error_details["_embedded"]:
+                        for error in error_details["_embedded"]["errors"]:
+                            error_msg = error.get("message", "Unknown error")
+                            validation_errors.append(error_msg)
+                            logger.warning(f"Validation error for work package '{subject}': {error_msg}")
+
+                    # If there's no embedded errors structure, log the whole error message
+                    if not validation_errors:
+                        logger.warning(f"Error creating work package '{subject}': {error_message}")
+
+                except json.JSONDecodeError:
+                    # If we can't parse the response as JSON, just log the text
+                    if e.response.text:
+                        logger.error(f"Server response text: {e.response.text}")
+
+            # Return error information for the caller to handle
+            return {
+                "error": True,
+                "status_code": e.response.status_code if hasattr(e, 'response') else None,
+                "message": error_message,
+                "validation_errors": validation_errors,
+                "details": error_details
+            }
         except Exception as e:
             logger.error(f"Failed to create work package {subject}: {str(e)}")
-            return None
+            return {
+                "error": True,
+                "message": str(e)
+            }
 
     def get_relation_types(self) -> List[Dict[str, Any]]:
         """Get all relation types from OpenProject using the /relations endpoint."""
