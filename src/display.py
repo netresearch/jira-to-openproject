@@ -43,7 +43,8 @@ rich_handler = RichHandler(
     markup=True,
     show_time=True,
     show_level=True,
-    enable_link_path=True
+    enable_link_path=True,
+    log_time_format="[%X.%f]"
 )
 
 def configure_logging(level: str = "INFO", log_file: Optional[str] = None) -> logging.Logger:
@@ -84,7 +85,7 @@ def configure_logging(level: str = "INFO", log_file: Optional[str] = None) -> lo
 
         # Create a file handler with a more detailed format for the log file
         file_format = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s"
         )
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(file_format)
@@ -95,7 +96,7 @@ def configure_logging(level: str = "INFO", log_file: Optional[str] = None) -> lo
     logging.basicConfig(
         level=numeric_level,
         format="%(message)s",
-        datefmt="[%X]",
+        datefmt="[%X.%f]",
         handlers=handlers,
         force=True  # Ensure we can reconfigure logging if needed
     )
