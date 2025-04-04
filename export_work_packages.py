@@ -106,17 +106,29 @@ def import_project_work_packages(export_file: str, export_dir: str, op_client: A
     # Execute Rails code to import the work packages
     logger.notice(f"Importing {len(work_packages_data)} work packages via Rails console", extra={"markup": True})
 
-    # Execute the Rails command (reuse existing code)
+    # Use raw string for Ruby code to avoid Python syntax issues
     rails_command = f"""
     begin
       require 'json'
 
       # Read the temp file
-      work_packages_data = JSON.parse(File.read('{container_temp_path}'))
+      begin
+        work_packages_data = JSON.parse(File.read('{container_temp_path}'))
+
+        # Ensure it's an array
+        work_packages_data = [] unless work_packages_data.is_a?(Array)
+
+        data_count = work_packages_data.size
+      rescue
+        # If any error occurs, use an empty array
+        work_packages_data = []
+        data_count = 0
+      end
+
       created_work_packages = []
       errors = []
 
-      puts "Processing #{work_packages_data.size} work packages..."
+      puts "Processing " + data_count.to_s + " work packages..."
 
       # Process work packages
       work_packages_data.each_with_index do |wp_data, index|
@@ -159,8 +171,8 @@ def import_project_work_packages(export_file: str, export_dir: str, op_client: A
           }}
 
           # Log progress every 10 items
-          if (index + 1) % 10 == 0 || index == work_packages_data.size - 1
-            puts "Created #{created_work_packages.size}/#{work_packages_data.size} work packages"
+          if (index + 1) % 10 == 0 || index == data_count - 1
+            puts "Created " + created_work_packages.size.to_s + "/" + data_count.to_s + " work packages"
           end
         else
           # If type is not available for project, try with a default type
@@ -207,8 +219,8 @@ def import_project_work_packages(export_file: str, export_dir: str, op_client: A
                 }}
 
                 # Log progress
-                if (index + 1) % 10 == 0 || index == work_packages_data.size - 1
-                  puts "Created #{created_work_packages.size}/#{work_packages_data.size} work packages (with fallback type)"
+                if (index + 1) % 10 == 0 || index == data_count - 1
+                  puts "Created " + created_work_packages.size.to_s + "/" + data_count.to_s + " work packages (with fallback type)"
                 end
               else
                 errors << {{
@@ -244,7 +256,7 @@ def import_project_work_packages(export_file: str, export_dir: str, op_client: A
       File.write('{container_temp_path}.result', JSON.generate({{
         created: created_work_packages,
         errors: errors,
-        total: work_packages_data.size,
+        total: data_count,
         created_count: created_work_packages.size,
         error_count: errors.size
       }}))
@@ -252,7 +264,7 @@ def import_project_work_packages(export_file: str, export_dir: str, op_client: A
       # Return summary
       {{
         status: 'success',
-        message: "Processed #{work_packages_data.size} work packages: Created #{created_work_packages.size}, Failed #{errors.size}",
+        message: "Processed " + data_count.to_s + " work packages: Created " + created_work_packages.size.to_s + ", Failed " + errors.size.to_s,
         created_count: created_work_packages.size,
         error_count: errors.size,
         result_file: '{container_temp_path}.result'
@@ -728,11 +740,23 @@ def import_work_packages_to_rails(export_dir: str = None, project_key: str = Non
               require 'json'
 
               # Read the temp file
-              work_packages_data = JSON.parse(File.read('{container_temp_path}'))
+              begin
+                work_packages_data = JSON.parse(File.read('{container_temp_path}'))
+
+                # Ensure it's an array
+                work_packages_data = [] unless work_packages_data.is_a?(Array)
+
+                data_count = work_packages_data.size
+              rescue
+                # If any error occurs, use an empty array
+                work_packages_data = []
+                data_count = 0
+              end
+
               created_work_packages = []
               errors = []
 
-              puts "Processing #{work_packages_data.size} work packages..."
+              puts "Processing " + data_count.to_s + " work packages..."
 
               # Process work packages
               work_packages_data.each_with_index do |wp_data, index|
@@ -775,8 +799,8 @@ def import_work_packages_to_rails(export_dir: str = None, project_key: str = Non
                   }}
 
                   # Log progress every 10 items
-                  if (index + 1) % 10 == 0 || index == work_packages_data.size - 1
-                    puts "Created #{created_work_packages.size}/#{work_packages_data.size} work packages"
+                  if (index + 1) % 10 == 0 || index == data_count - 1
+                    puts "Created " + created_work_packages.size.to_s + "/" + data_count.to_s + " work packages"
                   end
                 else
                   # If type is not available for project, try with a default type
@@ -823,8 +847,8 @@ def import_work_packages_to_rails(export_dir: str = None, project_key: str = Non
                         }}
 
                         # Log progress
-                        if (index + 1) % 10 == 0 || index == work_packages_data.size - 1
-                          puts "Created #{created_work_packages.size}/#{work_packages_data.size} work packages (with fallback type)"
+                        if (index + 1) % 10 == 0 || index == data_count - 1
+                          puts "Created " + created_work_packages.size.to_s + "/" + data_count.to_s + " work packages (with fallback type)"
                         end
                       else
                         errors << {{
@@ -860,7 +884,7 @@ def import_work_packages_to_rails(export_dir: str = None, project_key: str = Non
               File.write('{container_temp_path}.result', JSON.generate({{
                 created: created_work_packages,
                 errors: errors,
-                total: work_packages_data.size,
+                total: data_count,
                 created_count: created_work_packages.size,
                 error_count: errors.size
               }}))
@@ -868,7 +892,7 @@ def import_work_packages_to_rails(export_dir: str = None, project_key: str = Non
               # Return summary
               {{
                 status: 'success',
-                message: "Processed #{work_packages_data.size} work packages: Created #{created_work_packages.size}, Failed #{errors.size}",
+                message: "Processed " + data_count.to_s + " work packages: Created " + created_work_packages.size.to_s + ", Failed " + errors.size.to_s,
                 created_count: created_work_packages.size,
                 error_count: errors.size,
                 result_file: '{container_temp_path}.result'
