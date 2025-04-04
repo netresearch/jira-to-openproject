@@ -153,11 +153,10 @@ class OpenProjectRailsClient:
             """
 
             # Clear any existing output in the pane before executing
-            self._clear_pane()
+            #self._clear_pane()
 
             # Send the command to the tmux session
             target = self._get_target()
-            wrapped_command = wrapped_command.replace("'", "\"")  # Replace single quotes with double quotes for tmux
 
             logger.debug(f"Sending command to tmux (wrapped): {wrapped_command[:100]}...")
 
