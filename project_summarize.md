@@ -68,10 +68,16 @@ The primary objective of this project is to migrate business data from a Jira Se
 * **Documentation**:
   * Maintain `README.md` as the primary source for stable project information.
   * Use `PROGRESS.md` for dynamic status updates and task tracking.
-* **Project Scope (OMDE)**:
-  * Focus development on current and future migration functionality.
-  * No need to maintain backward compatibility for the migration tool itself.
-  * Document only the current functionality.
+* **Project Developemnt modell/pattern/ethos/philosophy**:
+  * Known as "Immutable Now", "YOLO Development", "Ephemeral Software" or "Rolling Release Model"
+  * No need to maintain backward compatibility.
+  * Document only the current functionality, refering only to the current state.
+  * No versioning
+  * No changelogs
+  * No deprecation strategy
+  * “We only care about now.”
+  * Past versions are irrelevant or discarded.
+  * APIs or interfaces can change at any time.
 
 ## 7. AI Agent Interaction Notes
 

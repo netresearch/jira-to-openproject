@@ -43,9 +43,6 @@ class AccountMigration(BaseMigration):
         jira_client: Optional[JiraClient] = None,
         op_client: Optional[OpenProjectClient] = None,
         op_rails_client: Optional['OpenProjectRailsClient'] = None,
-        data_dir: str | None = None,
-        dry_run: bool = True,
-        force: bool = False,  # Added force parameter
     ) -> None:
         """
         Initialize the account migration process.
@@ -54,14 +51,9 @@ class AccountMigration(BaseMigration):
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
             op_rails_client: Initialized OpenProjectRailsClient instance
-            data_dir: Directory for storing migration data
-            dry_run: If True, simulate migration without making changes
-            force: If True, force re-extraction of data
         """
-        # Initialize base migration
-        super().__init__(jira_client, op_client, data_dir, dry_run, force)
+        super().__init__(jira_client, op_client)
 
-        # Initialize AccountMigration specific components
         self.op_rails_client = op_rails_client or OpenProjectRailsClient()
         self.tempo_accounts = []
         self.op_projects = []
@@ -72,14 +64,12 @@ class AccountMigration(BaseMigration):
         # Base Tempo API URL - typically {JIRA_URL}/rest/tempo-accounts/1 for Server
         self.tempo_api_base = f"{self.jira_client.jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
 
-        # Setup auth for Tempo API
         self.tempo_auth_headers = {
             "Authorization": f"Bearer {self.jira_client.jira_config.get('api_token', '')}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
 
-        # Load existing data
         self._load_data()
 
     def _load_data(self) -> None:
@@ -88,8 +78,7 @@ class AccountMigration(BaseMigration):
         self.op_projects = self._load_from_json("openproject_projects.json", [])
         self.company_mapping = self._load_from_json("company_mapping.json", {})
         self.account_mapping = self._load_from_json("account_mapping.json", {})
-        # Attempt to load the custom field ID if it was saved previously
-        # This might be in a dedicated file or within the mapping analysis
+
         analysis_data = self._load_from_json("account_mapping_analysis.json", {})
         self.account_custom_field_id = analysis_data.get("custom_field_id")
 
@@ -127,7 +116,6 @@ class AccountMigration(BaseMigration):
         """
         self.logger.info("Extracting accounts from Tempo timesheet...", extra={"markup": True})
 
-        # Connect to Jira
         if not self.jira_client.connect():
             self.logger.error("Failed to connect to Jira", extra={"markup": True})
             return []
@@ -179,12 +167,9 @@ class AccountMigration(BaseMigration):
                     f"Failed to get Tempo accounts. Status code: {response.status_code}, Response: {response.text}",
                     extra={"markup": True}
                 )
-
                 return []
-
         except Exception as e:
             self.logger.error(f"Failed to extract Tempo accounts: {str(e)}", extra={"markup": True})
-
             return []
 
     def extract_openproject_projects(self) -> List[Dict[str, Any]]:
@@ -196,7 +181,6 @@ class AccountMigration(BaseMigration):
         """
         self.logger.info("Extracting projects from OpenProject...", extra={"markup": True})
 
-        # Get projects from OpenProject
         try:
             self.op_projects = self.op_client.get_projects()
         except Exception as e:
@@ -204,10 +188,8 @@ class AccountMigration(BaseMigration):
             self.logger.warning("Using an empty list of projects for OpenProject", extra={"markup": True})
             self.op_projects = []
 
-        # Log the number of projects found
         self.logger.info(f"Extracted {len(self.op_projects)} projects from OpenProject", extra={"markup": True})
 
-        # Save projects to file for later reference
         self._save_to_json(self.op_projects, "openproject_projects.json")
 
         return self.op_projects
@@ -216,26 +198,21 @@ class AccountMigration(BaseMigration):
         """
         Create a mapping between Tempo accounts and OpenProject sub-projects.
 
-        This method creates a mapping based on account names and default projects.
-
         Returns:
             Dictionary mapping Tempo account IDs to OpenProject project IDs
         """
         self.logger.info("Creating account mapping...", extra={"markup": True})
 
-        # Make sure we have accounts and projects from both systems
         if not self.tempo_accounts:
             self.extract_tempo_accounts()
 
         if not self.op_projects:
             self.extract_openproject_projects()
 
-        # Create a lookup dictionary for OpenProject projects by name
         op_projects_by_name = {
             project.get("name", "").lower(): project for project in self.op_projects
         }
 
-        # Create a lookup for Jira projects already migrated to OpenProject
         jira_project_mapping = self._load_from_json("jira_project_mapping.json", {})
 
         mapping = {}
@@ -248,15 +225,12 @@ class AccountMigration(BaseMigration):
             default_project = tempo_account.get("default_project", {})
             default_project_key = default_project.get("key")
 
-            # Match strategy 1: Try to match by name first
             op_project = op_projects_by_name.get(tempo_name_lower, None)
             match_method = "name" if op_project else "none"
 
-            # Match strategy 2: If no match by name but has default project, try to find via project mapping
             if not op_project and default_project_key and default_project_key in jira_project_mapping:
                 op_project_id = jira_project_mapping[default_project_key].get("openproject_id")
                 if op_project_id:
-                    # Find the project in our op_projects list
                     op_project = next((p for p in self.op_projects if str(p.get("id")) == str(op_project_id)), None)
                     match_method = "default_project"
 
@@ -275,7 +249,6 @@ class AccountMigration(BaseMigration):
                     "matched_by": match_method,
                 }
             else:
-                # No match found, add to mapping with empty OpenProject data
                 mapping[tempo_id] = {
                     "tempo_id": tempo_id,
                     "tempo_key": tempo_key,
@@ -289,11 +262,9 @@ class AccountMigration(BaseMigration):
                     "matched_by": "none",
                 }
 
-        # Save mapping to file
         self.account_mapping = mapping
         self._save_to_json(mapping, "account_mapping.json")
 
-        # Log statistics
         total_accounts = len(mapping)
         matched_accounts = sum(
             1 for account in mapping.values() if account["matched_by"] != "none"
@@ -334,38 +305,30 @@ class AccountMigration(BaseMigration):
         """
         self.logger.info("Ensuring 'Tempo Account' custom field exists in OpenProject...")
 
-        # Check if we already have the ID from loading data
         if self.account_custom_field_id is not None:
             self.logger.info(f"Using pre-loaded custom field ID: {self.account_custom_field_id}")
-            # Optionally, verify it still exists via Rails?
             return self.account_custom_field_id
 
-        if self.dry_run:
+        if config.migration_config.get("dry_run", False):
             self.logger.info("DRY RUN: Would check/create custom field for Tempo accounts")
             self.account_custom_field_id = 9999  # Dummy ID for dry run
             return self.account_custom_field_id
 
         try:
-            # Check if the custom field already exists using Rails client
             self.logger.info("Checking if 'Tempo Account' custom field exists via Rails...")
             existing_id = self.op_rails_client.get_custom_field_id_by_name('Tempo Account') # type: ignore
 
             if existing_id is not None:
                 self.logger.info(f"Custom field 'Tempo Account' already exists with ID: {existing_id}")
                 self.account_custom_field_id = existing_id
-                # Save the found ID for future runs
                 self._save_custom_field_id(existing_id)
                 return existing_id
 
-            # Create the custom field using Rails client
             self.logger.info("Creating 'Tempo Account' custom field via Rails client...")
-            # Ensure accounts are loaded before accessing names
             if not self.tempo_accounts:
                 self.extract_tempo_accounts()
-            # Filter out None values or empty strings if they occur
             possible_values = [acc.get("name") for acc in self.tempo_accounts if acc.get("name")]
 
-            # Prepare Rails command to create custom field
             create_command = f"""
             cf = CustomField.new(
               name: 'Tempo Account',
@@ -382,7 +345,6 @@ class AccountMigration(BaseMigration):
             cf.id
             """
 
-            # We know op_rails_client is not None here
             result = self.op_rails_client.execute(create_command) # type: ignore
 
             if result['status'] == 'success' and result['output'] is not None:
@@ -390,7 +352,6 @@ class AccountMigration(BaseMigration):
                 self.logger.success(f"Successfully created 'Tempo Account' custom field with ID: {new_id}", extra={"markup": True})
                 self.account_custom_field_id = new_id
 
-                # Make the custom field available for all work package types
                 self.logger.info("Making custom field available for all work package types...", extra={"markup": True})
                 activate_command = f"""
                 cf = CustomField.find({new_id})
@@ -403,7 +364,6 @@ class AccountMigration(BaseMigration):
                 true
                 """
 
-                # We know op_rails_client is not None here
                 activate_result = self.op_rails_client.execute(activate_command) # type: ignore
                 if activate_result['status'] == 'success':
                     self.logger.success("Custom field activated for all work package types", extra={"markup": True})
@@ -428,19 +388,15 @@ class AccountMigration(BaseMigration):
         """
         self.logger.info("Starting account migration...", extra={"markup": True})
 
-        # Make sure we have accounts from Tempo
         if not self.tempo_accounts:
             self.extract_tempo_accounts()
 
-        # Create or get the custom field in OpenProject
         if not self.account_custom_field_id:
             self.create_account_custom_field()
 
-        # Make sure we have mapping between accounts
         if not self.account_mapping:
             self.create_account_mapping()
 
-        # For each account, we'll update the mapping with the custom field info
         accounts_to_process = list(self.account_mapping.values())
         total_accounts = len(accounts_to_process)
         matched_accounts = 0
@@ -450,14 +406,11 @@ class AccountMigration(BaseMigration):
                 tempo_name = account["tempo_name"]
                 tracker.update_description(f"Processing account: {tempo_name}")
 
-                # Update the mapping with custom field ID
-                # Ensure it's properly sanitized by converting to integer if possible
                 if isinstance(self.account_custom_field_id, str) and self.account_custom_field_id.strip().isdigit():
                     self.account_custom_field_id = int(self.account_custom_field_id.strip())
 
                 account["custom_field_id"] = self.account_custom_field_id
 
-                # Only for accounts that were matched to projects
                 if account["openproject_id"] is not None:
                     matched_accounts += 1
                     tracker.add_log_item(f"Matched: {tempo_name} to project ID {account['openproject_id']}")
@@ -466,10 +419,8 @@ class AccountMigration(BaseMigration):
 
                 tracker.increment()
 
-        # Update the mapping file
         self._save_to_json(self.account_mapping, "account_mapping.json")
 
-        # Update the log messages to be more descriptive
         self.logger.info(f"Account migration complete: {total_accounts} accounts added to custom field", extra={"markup": True})
         self.logger.info(
             f"Found matches for {matched_accounts} accounts ({matched_accounts / total_accounts * 100:.1f}% of total)",
@@ -480,7 +431,7 @@ class AccountMigration(BaseMigration):
             extra={"markup": True}
         )
 
-        if self.dry_run:
+        if config.migration_config.get("dry_run", False):
             self.logger.info("DRY RUN: No custom fields were actually created or updated in OpenProject", extra={"markup": True})
 
         return self.account_mapping
@@ -504,7 +455,6 @@ class AccountMigration(BaseMigration):
                 )
                 return {}
 
-        # Analyze the mapping
         analysis = {
             "total_accounts": len(self.account_mapping),
             "matched_accounts": sum(
@@ -531,21 +481,18 @@ class AccountMigration(BaseMigration):
             ],
         }
 
-        # Analyze matching methods
         analysis["match_methods"] = {
             "name": sum(1 for account in self.account_mapping.values() if account.get("matched_by") == "name"),
             "default_project": sum(1 for account in self.account_mapping.values() if account.get("matched_by") == "default_project"),
             "none": sum(1 for account in self.account_mapping.values() if account.get("matched_by") == "none")
         }
 
-        # Calculate percentages
         total = analysis["total_accounts"]
         if total > 0:
             analysis["match_percentage"] = (analysis["matched_accounts"] / total) * 100
         else:
             analysis["match_percentage"] = 0
 
-        # Add a clear summary section to the analysis
         analysis["summary"] = {
             "total_tempo_accounts": len(self.tempo_accounts),
             "total_openproject_projects": len(self.op_projects),
@@ -555,10 +502,8 @@ class AccountMigration(BaseMigration):
             "custom_field_id": self.account_custom_field_id
         }
 
-        # Save analysis to file
         self._save_to_json(analysis, "account_mapping_analysis.json")
 
-        # Print a clear summary table
         self.logger.info("=== Account Migration Summary ===", extra={"markup": True})
         self.logger.info(f"Total Tempo accounts processed: {analysis['summary']['total_tempo_accounts']}", extra={"markup": True})
         self.logger.info(f"OpenProject projects available: {analysis['summary']['total_openproject_projects']}", extra={"markup": True})
@@ -579,55 +524,3 @@ class AccountMigration(BaseMigration):
         analysis_data["custom_field_id"] = cf_id
         self._save_to_json(analysis_data, "account_mapping_analysis.json")
         self.logger.debug(f"Saved account custom field ID ({cf_id}) to analysis file.")
-
-
-def run_account_migration(dry_run: bool = False):
-    """
-    Run the account migration as a standalone script.
-
-    Args:
-        dry_run: If True, no changes will be made to OpenProject
-    """
-    logger.info("Starting account migration", extra={"markup": True})
-    migration = AccountMigration(dry_run=dry_run)
-
-    # Extract accounts from both systems
-    migration.extract_tempo_accounts()
-    migration.extract_openproject_projects()
-
-    # Load company mapping
-    migration.load_company_mapping()
-
-    # Create mapping and migrate accounts
-    migration.create_account_mapping()
-    migration.migrate_accounts()
-
-    # Analyze account mapping
-    migration.analyze_account_mapping()
-
-    logger.info("Account migration complete", extra={"markup": True})
-
-
-if __name__ == "__main__":
-    import argparse
-    import traceback
-
-    parser = argparse.ArgumentParser(
-        description="Migrate Tempo account information from Jira to OpenProject"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run in dry-run mode (no changes to OpenProject)",
-    )
-    args = parser.parse_args()
-
-    try:
-        logger.info("===== Tempo Account Migration =====", extra={"markup": True})
-
-        run_account_migration(dry_run=args.dry_run)
-
-        logger.success("Migration completed successfully!", extra={"markup": True})
-    except Exception as e:
-        logger.error(f"Migration failed: {str(e)}", extra={"markup": True})
-        traceback.print_exc()
