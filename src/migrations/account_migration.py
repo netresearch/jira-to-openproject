@@ -121,8 +121,8 @@ class AccountMigration(BaseMigration):
             return []
 
         try:
-            # Call the Tempo API to get all accounts
-            accounts_endpoint = f"{self.tempo_api_base}/account"
+            # Use expand=true to get linked projects in the same request
+            accounts_endpoint = f"{self.tempo_api_base}/account?expand=true"
 
             response = requests.get(
                 accounts_endpoint,
@@ -132,32 +132,12 @@ class AccountMigration(BaseMigration):
 
             if response.status_code == 200:
                 accounts = response.json()
-                self.logger.info(f"Retrieved {len(accounts)} Tempo accounts", extra={"markup": True})
+                self.logger.info(f"Retrieved {len(accounts)} Tempo accounts with expanded links", extra={"markup": True})
 
-                # Additionally, fetch and include default project information for each account
                 for account in accounts:
-                    try:
-                        # Endpoint to get projects linked to this account
-                        account_id = account.get("id")
-                        projects_endpoint = f"{self.tempo_api_base}/account/{account_id}/projects"
+                    account_links = account.get("links", [])
+                    account["linked_projects"] = account_links
 
-                        projects_response = requests.get(
-                            projects_endpoint,
-                            headers=self.tempo_auth_headers,
-                            verify=config.migration_config.get("ssl_verify", True),
-                        )
-
-                        if projects_response.status_code == 200:
-                            projects = projects_response.json()
-                            if projects:
-                                # Store the default project information
-                                account["default_project"] = projects[0]  # Assume first project is default
-                                account["linked_projects"] = projects
-                                self.logger.debug(f"Found default project {projects[0].get('key')} for account {account.get('name')}")
-                    except Exception as e:
-                        self.logger.warning(f"Could not fetch projects for account {account.get('name')}: {e}", extra={"markup": True})
-
-                # Save the accounts to a file
                 self.tempo_accounts = accounts
                 self._save_to_json(accounts, "tempo_accounts.json")
 
