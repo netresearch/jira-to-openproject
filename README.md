@@ -71,7 +71,11 @@ This project leverages modern Python 3.13 features:
 
 ### API Limitations
 
-OpenProject has certain API limitations that require special handling:
+#### OpenProject has certain API limitations that require special handling
+
+- Allowed or dissallowed chars in username is not documented
+- You can not set all fields for workpackages, like author/creator, creation date aso., which are improtant for a full migration.
+- no custom relation types
 
 1. Custom Fields: Cannot be created via API
    - Integrated into the main migration framework
@@ -86,11 +90,19 @@ OpenProject has certain API limitations that require special handling:
    - Or use standalone: `python -m src.migrations.issue_type_migration --direct-migration`
 
 Both approaches provide:
+
 - Automatic extraction of data from Jira and OpenProject
 - Smart mapping between systems
 - Direct execution on Rails console via SSH/Docker
 - Detailed progress tracking with rich console interface
 - Option to generate Ruby scripts for manual execution
+
+#### Jira has much more API limitations
+
+expand is not controllable on all Server editions/versions.
+
+- Limiting the fields retrieved is a way to reduce payload
+- Using ScriptRunner to define your own REST API Endpoints
 
 ### Technology Stack
 

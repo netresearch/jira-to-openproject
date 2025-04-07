@@ -156,10 +156,15 @@ class JiraClient:
         """Get issues for a specific project with pagination."""
         self._rate_limit()
         try:
+            # Using empty string for expand parameter explicitly tells the Jira API
+            # not to expand any fields, which significantly improves performance
+            # while still retrieving all fields needed for migration
+            # It is just not supported by all Jira server versions/editions
             issues = self.jira.search_issues(
                 f"project={project_key} ORDER BY created ASC",
                 startAt=start_at,
                 maxResults=max_results,
+                expand=''  # Explicitly disable field expansion
             )
             self.request_count += 1
             return [
@@ -304,8 +309,14 @@ class JiraClient:
             # Use JQL to count issues in the project
             jql = f"project={project_key}"
 
-            # Start with a minimal query - we only need the count
-            issues = self.jira.search_issues(jql, maxResults=1, fields="key")
+            # Using fields="key" and expand='' minimizes data transfer
+            # when we only need to get the total count
+            issues = self.jira.search_issues(
+                jql,
+                maxResults=1,
+                fields="key",
+                expand=''  # Explicitly disable field expansion for faster retrieval
+            )
             self.request_count += 1
 
             # Get total from the response
