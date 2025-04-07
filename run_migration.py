@@ -18,15 +18,15 @@ from typing import Dict, List, Any, Literal, TypedDict, NotRequired, Optional
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
 from src.config import logger, get_path, ensure_subdir, migration_config
-from src.display import console
-from src.migrations.user_migration import run_user_migration
-from src.migrations.company_migration import run_company_migration
-from src.migrations.account_migration import run_account_migration
-from src.migrations.project_migration import run_project_migration
-from src.migrations.custom_field_migration import run_custom_field_migration
-from src.migrations.workflow_migration import run_workflow_migration
-from src.migrations.link_type_migration import run_link_type_migration
-from src.migrations.issue_type_migration import run_issue_type_migration
+from src.display import console, ProgressTracker, process_with_progress
+from src.migrations.user_migration import UserMigration
+from src.migrations.company_migration import CompanyMigration
+from src.migrations.account_migration import AccountMigration
+from src.migrations.project_migration import ProjectMigration
+from src.migrations.custom_field_migration import CustomFieldMigration
+from src.migrations.workflow_migration import WorkflowMigration
+from src.migrations.link_type_migration import LinkTypeMigration
+from src.migrations.issue_type_migration import IssueTypeMigration
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.jira_client import JiraClient
 
@@ -251,13 +251,17 @@ def run_migration(
     logger.info("5. Migrate work packages with proper type assignments", extra={"markup": True})
     logger.info("This approach handles the many-to-many relationship between accounts and projects", extra={"markup": True})
 
-    # Check Rails console availability if direct migration is requested
+    # Initialize clients
+    jira_client = JiraClient()
+    op_client = OpenProjectClient()
+    rails_client = None
+
+    # Initialize Rails console client if direct migration is requested
     if direct_migration:
         if not HAS_RAILS_CLIENT:
             logger.warning("Direct migration was requested but OpenProjectRailsClient is not available.", extra={"markup": True})
             logger.warning("Some operations may not work correctly in direct migration mode.", extra={"markup": True})
         else:
-            # Initialize a client to test connection
             try:
                 rails_client = OpenProjectRailsClient()
                 logger.info("Rails console is available for direct migration.", extra={"markup": True})
@@ -268,66 +272,154 @@ def run_migration(
 
     # Run the migration components
     results = {}
-    for component in components_to_run:
-        if component in available_components:
-            # Get the function for this component
-            migration_component = {
-                "users": run_user_migration,
-                "custom_fields": run_custom_field_migration,
-                "companies": run_company_migration,
-                "accounts": run_account_migration,
-                "projects": run_project_migration,
-                "link_types": run_link_type_migration,
-                "issue_types": run_issue_type_migration,
-            }.get(component)
-            if migration_component:
-                try:
-                    logger.info(f"Running migration component: name='{component}'", extra={"markup": True})
+    for component_name in components_to_run:
+        if component_name == "work_packages":
+            continue # Handled separately after other components
 
-                    # Based on function signatures, only pass parameters that each function accepts
-                    if component == "users":
-                        component_result = migration_component(dry_run=dry_run)
-                    elif component == "custom_fields":
-                        component_result = migration_component(
-                            dry_run=dry_run,
-                            force=force,
-                            direct_migration=direct_migration
-                        )
-                    elif component == "companies":
-                        component_result = migration_component(
-                            dry_run=dry_run,
-                            force=force
-                        )
-                    elif component == "accounts":
-                        component_result = migration_component(dry_run=dry_run)
-                    elif component == "projects":
-                        component_result = migration_component(dry_run=dry_run)
-                    elif component == "link_types":
-                        component_result = migration_component(dry_run=dry_run)
-                    elif component == "issue_types":
-                        component_result = migration_component(
-                            dry_run=dry_run,
-                            force=force,
-                            direct_migration=direct_migration
-                        )
-                    else:
-                        # Default case, trying with all parameters
-                        component_result = migration_component(
-                            dry_run=dry_run,
-                            force=force,
-                            direct_migration=direct_migration
-                        )
+        # Map component name to the Class
+        MigrationClass = {
+            "users": UserMigration,
+            "custom_fields": CustomFieldMigration,
+            "companies": CompanyMigration,
+            "accounts": AccountMigration,
+            "projects": ProjectMigration,
+            "link_types": LinkTypeMigration,
+            "issue_types": IssueTypeMigration,
+            "workflow": WorkflowMigration
+        }.get(component_name)
 
-                    results[component] = component_result
-                except Exception as e:
-                    logger.error(f"Error running component {component}: {str(e)}", extra={"markup": True})
-                    results[component] = {"status": "error", "message": str(e)}
-            else:
-                # Only show error for components other than work_packages since it's handled separately
-                if component != "work_packages":
-                    logger.error(f"Invalid component: {component}", extra={"markup": True})
+        if MigrationClass:
+            try:
+                print_component_header(component_name.replace("_", " ").title())
+                logger.info(f"Running migration component: name='{component_name}'", extra={"markup": True})
 
-    # Handle work_packages component separately with our new approach
+                # --- Instantiate and Run Component --- #
+                component_result = { "status": "error", "message": "Execution logic incomplete" } # Default
+
+                # Instantiate the class, passing required clients.
+                # Config flags (dry_run, force) are accessed via migration_config within methods.
+                if component_name == "users":
+                    migration_instance = MigrationClass(
+                        jira_client=jira_client,
+                        op_client=op_client
+                    )
+                    # Call methods on the instance
+                    migration_instance.extract_jira_users()
+                    migration_instance.extract_openproject_users()
+                    migration_instance.create_user_mapping()
+                    if not migration_config.get("dry_run", False):
+                        migration_instance.create_missing_users()
+                    component_result = migration_instance.analyze_user_mapping()
+
+                elif component_name == "companies":
+                    migration_instance = MigrationClass(
+                        jira_client=jira_client,
+                        op_client=op_client
+                    )
+                    migration_instance.extract_tempo_companies()
+                    migration_instance.extract_openproject_projects()
+                    migration_instance.create_company_mapping()
+                    migration_instance.migrate_companies()
+                    component_result = migration_instance.analyze_company_mapping()
+
+                elif component_name == "accounts":
+                    migration_instance = MigrationClass(
+                        jira_client=jira_client,
+                        op_client=op_client,
+                        op_rails_client=rails_client # Pass rails_client
+                        # data_dir is handled by BaseMigration reading config
+                    )
+                    migration_instance.extract_tempo_accounts()
+                    migration_instance.extract_openproject_projects()
+                    migration_instance.load_company_mapping()
+                    migration_instance.create_account_mapping()
+                    migration_instance.migrate_accounts()
+                    component_result = migration_instance.analyze_account_mapping()
+
+                elif component_name == "projects":
+                    migration_instance = MigrationClass(
+                        jira_client=jira_client,
+                        op_client=op_client
+                    )
+                    migration_instance.extract_jira_projects()
+                    migration_instance.extract_openproject_projects()
+                    migration_instance.load_account_mapping()
+                    migration_instance.extract_project_account_mapping()
+                    migration_instance.migrate_projects()
+                    component_result = migration_instance.analyze_project_mapping()
+
+                elif component_name == "custom_fields":
+                    migration_instance = MigrationClass(
+                        jira_client=jira_client,
+                        op_client=op_client,
+                        rails_console=rails_client # Pass rails_client
+                    )
+                    # The migrate method needs the direct_migration flag from config
+                    migration_instance.migrate_custom_fields(direct_migration=migration_config.get("direct_migration", False))
+                    component_result = migration_instance.analyze_custom_field_mapping()
+
+                elif component_name == "link_types":
+                    migration_instance = MigrationClass(
+                        jira_client=jira_client,
+                        op_client=op_client
+                    )
+                    migration_instance.extract_jira_link_types()
+                    migration_instance.extract_openproject_relation_types()
+                    migration_instance.create_link_type_mapping()
+                    migration_instance.migrate_link_types()
+                    component_result = migration_instance.analyze_link_type_mapping()
+
+                elif component_name == "issue_types":
+                     migration_instance = MigrationClass(
+                         jira_client=jira_client,
+                         op_client=op_client,
+                         rails_console=rails_client # Pass rails_client
+                     )
+                     migration_instance.extract_jira_issue_types()
+                     migration_instance.extract_openproject_work_package_types()
+                     mapping = migration_instance.create_issue_type_mapping()
+                     if migration_config.get("direct_migration", False):
+                          # Assuming migrate_issue_types_via_rails takes window/pane if needed
+                          migration_instance.migrate_issue_types_via_rails(window=0, pane=0)
+                     elif not migration_config.get("dry_run", False):
+                         types_to_create = {n: d for n, d in mapping.items() if d.get("openproject_id") is None}
+                         if types_to_create:
+                             logger.warning(f"IMPORTANT: {len(types_to_create)} work package types need to be created.")
+                             try:
+                                 script_path = migration_instance.generate_ruby_script(types_to_create)
+                                 logger.warning(f"Run the generated script in Rails console: {script_path}")
+                             except AttributeError:
+                                 logger.warning("IssueTypeMigration missing generate_ruby_script method? Manual creation required or use --direct-migration.")
+                     component_result = migration_instance.analyze_issue_type_mapping()
+
+                elif component_name == "workflow":
+                     migration_instance = MigrationClass(
+                         jira_client=jira_client,
+                         op_client=op_client
+                     )
+                     migration_instance.extract_jira_workflows()
+                     migration_instance.extract_jira_statuses()
+                     migration_instance.extract_openproject_statuses()
+                     migration_instance.create_status_mapping()
+                     migration_instance.migrate_statuses()
+                     migration_instance.create_workflow_configuration()
+                     component_result = migration_instance.analyze_status_mapping()
+
+                else:
+                    # Fallback logic removed as all components should be handled explicitly now
+                    logger.error(f"Execution logic for component '{component_name}' is not defined.")
+                    component_result = {"status": "error", "message": f"Unknown component: {component_name}"}
+
+                results[component_name] = component_result
+
+            except Exception as e:
+                logger.error(f"Error running component {component_name}: {str(e)}", extra={"markup": True})
+                logger.exception(f"Component {component_name} failed")
+                results[component_name] = {"status": "error", "message": str(e)}
+        else:
+             logger.error(f"Invalid component specified or class not found: {component_name}", extra={"markup": True})
+
+    # Handle work_packages component separately
     if "work_packages" in components_to_run:
         try:
             print_component_header("Work Packages")

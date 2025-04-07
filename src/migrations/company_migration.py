@@ -39,30 +39,28 @@ class CompanyMigration:
     - Jira Project → OpenProject project with account information stored in custom fields
     """
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient):
         """
         Initialize the company migration tools.
 
         Args:
-            dry_run: If True, no changes will be made to OpenProject
+            jira_client: Initialized Jira client instance.
+            op_client: Initialized OpenProject client instance.
         """
-        self.jira_client = JiraClient()
-        self.op_client = OpenProjectClient()
+        self.jira_client = jira_client
+        self.op_client = op_client
         self.tempo_companies = []
         self.op_projects = []
         self.company_mapping = {}
-        self.dry_run = dry_run
-        self._created_companies = 0  # Track the actual number of created companies
+        self._created_companies = 0
 
-        # Use the centralized config for var directories
         self.data_dir = config.get_path("data")
 
         # Base Tempo API URL - typically {JIRA_URL}/rest/tempo-accounts/1 for Server
         self.tempo_api_base = f"{config.jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
 
-        # Setup auth for Tempo API
         self.tempo_auth_headers = {
-            "Authorization": f"Bearer {config.jira_config.get('api_token', '')}",
+            "Authorization": f"Bearer {self.jira_client.jira_config.get('api_token', '')}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -76,13 +74,11 @@ class CompanyMigration:
         """
         logger.info("Extracting companies from Tempo timesheet...")
 
-        # Connect to Jira
         if not self.jira_client.connect():
             logger.error("Failed to connect to Jira")
             return []
 
         try:
-            # Call the Tempo API to get all companies
             customers_endpoint = f"{self.tempo_api_base}/customer"
 
             response = requests.get(
@@ -95,7 +91,6 @@ class CompanyMigration:
                 companies = response.json()
                 logger.info(f"Retrieved {len(companies)} Tempo companies")
 
-                # Save the companies to a file
                 self.tempo_companies = companies
                 self._save_to_json(companies, "tempo_companies.json")
 
@@ -104,12 +99,9 @@ class CompanyMigration:
                 logger.error(
                     f"Failed to get Tempo companies. Status code: {response.status_code}, Response: {response.text}"
                 )
-
                 return []
-
         except Exception as e:
             logger.error(f"Failed to extract Tempo companies: {str(e)}")
-
             return []
 
     def extract_openproject_projects(self) -> List[Dict[str, Any]]:
@@ -121,7 +113,6 @@ class CompanyMigration:
         """
         logger.info("Extracting projects from OpenProject...")
 
-        # Get projects from OpenProject
         try:
             self.op_projects = self.op_client.get_projects()
         except Exception as e:
@@ -129,10 +120,8 @@ class CompanyMigration:
             logger.warning("Using an empty list of projects for OpenProject")
             self.op_projects = []
 
-        # Log the number of projects found
         logger.info(f"Extracted {len(self.op_projects)} projects from OpenProject")
 
-        # Save projects to file for later reference
         self._save_to_json(self.op_projects, "openproject_projects.json")
 
         return self.op_projects
@@ -141,28 +130,23 @@ class CompanyMigration:
         """
         Create a mapping between Tempo companies and OpenProject top-level projects.
 
-        This method creates a mapping based on company names.
-
         Returns:
             Dictionary mapping Tempo company IDs to OpenProject project IDs
         """
         logger.info("Creating company mapping...")
 
-        # Make sure we have companies and projects from both systems
         if not self.tempo_companies:
             self.extract_tempo_companies()
 
         if not self.op_projects:
             self.extract_openproject_projects()
 
-        # Filter out only top-level projects from OpenProject
         top_level_projects = [
             project
             for project in self.op_projects
             if project.get("_links", {}).get("parent", {}).get("href") is None
         ]
 
-        # Create a lookup dictionary for OpenProject top-level projects by name
         op_projects_by_name = {
             project.get("name", "").lower(): project for project in top_level_projects
         }
@@ -174,7 +158,6 @@ class CompanyMigration:
             tempo_name = tempo_company.get("name", "")
             tempo_name_lower = tempo_name.lower()
 
-            # Try to find a corresponding OpenProject top-level project by name
             op_project = op_projects_by_name.get(tempo_name_lower, None)
 
             if op_project:
@@ -188,7 +171,6 @@ class CompanyMigration:
                     "matched_by": "name",
                 }
             else:
-                # No match found, add to mapping with empty OpenProject data
                 mapping[tempo_id] = {
                     "tempo_id": tempo_id,
                     "tempo_key": tempo_key,
@@ -199,11 +181,9 @@ class CompanyMigration:
                     "matched_by": "none",
                 }
 
-        # Save mapping to file
         self.company_mapping = mapping
         self._save_to_json(mapping, "company_mapping.json")
 
-        # Log statistics
         total_companies = len(mapping)
         matched_companies = sum(
             1 for company in mapping.values() if company["matched_by"] != "none"
@@ -235,39 +215,24 @@ class CompanyMigration:
         key = tempo_company.get("key", "")
         lead = tempo_company.get("lead", "")
 
-        # Create a description from the Tempo company data
         description = f"Migrated from Tempo company: {key}\n"
         if lead:
             description += f"Company Lead: {lead}\n"
 
-        # Create a valid OpenProject identifier from the company key
-        # OpenProject identifiers must follow these rules:
-        # - Length between 1 and 100 characters
-        # - Only lowercase letters (a-z), numbers, dashes and underscores
-        # - Must start with a lowercase letter
-
-        # For Tempo company projects, add the 'customer_' prefix
         base_identifier = "customer_"
 
         if key:
-            # Use the Tempo key, converted to lowercase and sanitized
             raw_id = key.lower()
-            # Replace any invalid characters with underscores
             sanitized_id = re.sub(r'[^a-z0-9_-]', '_', raw_id)
             base_identifier += sanitized_id
         else:
-            # Fall back to sanitized name
             raw_id = name.lower()
-            # Replace any invalid characters with underscores
             sanitized_id = re.sub(r'[^a-z0-9_-]', '_', raw_id)
             base_identifier += sanitized_id
 
-        # Ensure maximum length respects the 100 char limit
         identifier = base_identifier[:100]
 
-        # Since we're using a progress bar, minimize logging
-        if self.dry_run:
-            # Return a placeholder for dry run
+        if config.migration_config.get('dry_run'):
             return {
                 "id": None,
                 "name": name,
@@ -276,7 +241,6 @@ class CompanyMigration:
                 "_links": {"parent": {"href": None}},
             }
 
-        # Create the top-level project in OpenProject
         try:
             project, was_created = self.op_client.create_project(
                 name=name, identifier=identifier, description=description
@@ -287,28 +251,24 @@ class CompanyMigration:
                     self._created_companies += 1
                 return project
             else:
-                # For company projects, if we get a "identifier taken" error,
-                # treat it as success since we just need the container to exist
                 return {
-                    "id": None,  # We'll use a placeholder ID
+                    "id": None,
                     "name": name,
                     "identifier": identifier,
                     "description": {"raw": description},
                     "_links": {"parent": {"href": None}},
-                    "_placeholder": True  # Mark as placeholder
+                    "_placeholder": True
                 }
         except Exception as e:
             error_msg = str(e)
-            # If this is an "identifier already taken" error, treat it as success
             if "422" in error_msg and "taken" in error_msg:
-                # Return a placeholder project that can be used for mapping
                 return {
-                    "id": None,  # We'll use a placeholder ID
+                    "id": None,
                     "name": name,
                     "identifier": identifier,
                     "description": {"raw": description},
                     "_links": {"parent": {"href": None}},
-                    "_placeholder": True  # Mark as placeholder
+                    "_placeholder": True
                 }
             else:
                 logger.error(f"Error creating company project {name}: {str(e)}")
@@ -323,44 +283,27 @@ class CompanyMigration:
         """
         logger.info("Starting company migration...")
 
-        # Make sure we have companies from Tempo
         if not self.tempo_companies:
             self.extract_tempo_companies()
 
-        # Make sure we have projects from OpenProject
         if not self.op_projects:
             self.extract_openproject_projects()
 
-        # Create a mapping between Tempo companies and OpenProject projects
         if not self.company_mapping:
             self.create_company_mapping()
 
-        # Log some debug information about the Tempo companies and mapping
-        logger.info(f"Total Tempo companies: {len(self.tempo_companies)}")
-        tempo_company_ids = [str(company.get("id")) for company in self.tempo_companies]
-        logger.debug(f"Tempo company IDs: {tempo_company_ids[:5]}...")
-
-        mapping_keys = list(self.company_mapping.keys())
-        logger.debug(f"Total keys in mapping: {len(mapping_keys)}")
-        logger.debug(f"Mapping keys sample: {mapping_keys[:5]}...")
-
-        # Instead of filtering, let's just use all Tempo companies directly
-        # This bypasses any issues with ID mapping
         companies_to_migrate = self.tempo_companies
 
         if not companies_to_migrate:
             logger.warning(f"No companies found to migrate")
             return self.company_mapping
 
-        # Reset the created companies counter before migration
         self._created_companies = 0
 
-        # Process companies with our centralized progress tracker
         def process_company(company, context):
             tempo_id = str(company.get("id"))
             tempo_name = company.get("name")
 
-            # Check if this company already exists before attempting to create it
             identifier = None
             if company.get("key"):
                 base_identifier = "customer_" + re.sub(r'[^a-z0-9_-]', '_', company.get("key").lower())
@@ -369,7 +312,6 @@ class CompanyMigration:
             if identifier:
                 existing = self.op_client.get_project_by_identifier(identifier)
                 if existing:
-                    # Project already exists, update mapping but don't increment created counter
                     self.company_mapping[tempo_id] = {
                         "tempo_id": tempo_id,
                         "tempo_key": company.get("key"),
@@ -377,15 +319,13 @@ class CompanyMigration:
                         "openproject_id": existing.get("id"),
                         "openproject_identifier": existing.get("identifier"),
                         "openproject_name": existing.get("name"),
-                        "matched_by": "existing", # Mark as existing rather than created
+                        "matched_by": "existing",
                     }
                     return tempo_name
 
-            # Create the company as a top-level project in OpenProject
             op_project = self.create_company_project_in_openproject(company)
 
             if op_project:
-                # Update the mapping with the created project
                 self.company_mapping[tempo_id] = {
                     "tempo_id": tempo_id,
                     "tempo_key": company.get("key"),
@@ -396,9 +336,8 @@ class CompanyMigration:
                     "matched_by": "created",
                 }
 
-            return tempo_name  # Return the company name for the log
+            return tempo_name
 
-        # Use our centralized utility to process companies with progress tracking
         logger.info(f"Migrating {len(companies_to_migrate)} companies to OpenProject")
         process_with_progress(
             items=companies_to_migrate,
@@ -408,10 +347,9 @@ class CompanyMigration:
             item_name_func=lambda company: company.get("name", "Unknown")
         )
 
-        # Save updated mapping to file
         self._save_to_json(self.company_mapping, "company_mapping.json")
 
-        if self.dry_run:
+        if config.migration_config.get('dry_run'):
             logger.info(
                 "DRY RUN: No company projects were actually created in OpenProject"
             )
@@ -436,7 +374,6 @@ class CompanyMigration:
                 )
                 return {}
 
-        # Analyze the mapping
         analysis = {
             "total_companies": len(self.company_mapping),
             "matched_companies": sum(
@@ -464,7 +401,7 @@ class CompanyMigration:
                 for company in self.company_mapping.values()
                 if company["matched_by"] == "none"
             ),
-            "actually_created": self._created_companies,  # Use the tracked count
+            "actually_created": self._created_companies,
             "unmatched_details": [
                 {
                     "tempo_id": company["tempo_id"],
@@ -476,17 +413,14 @@ class CompanyMigration:
             ],
         }
 
-        # Calculate percentages
         total = analysis["total_companies"]
         if total > 0:
             analysis["match_percentage"] = (analysis["matched_companies"] / total) * 100
         else:
             analysis["match_percentage"] = 0
 
-        # Save analysis to file
         self._save_to_json(analysis, "company_mapping_analysis.json")
 
-        # Log analysis summary
         logger.info(f"Company mapping analysis complete")
         logger.info(f"Total companies: {analysis['total_companies']}")
         logger.info(
@@ -511,61 +445,3 @@ class CompanyMigration:
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
         logger.info(f"Saved data to {filepath}")
-
-
-def run_company_migration(dry_run: bool = False, force: bool = False):
-    """
-    Run the company migration as a standalone script.
-
-    Args:
-        dry_run: If True, no changes will be made to OpenProject
-        force: If True, force extraction and re-creation of mappings even if they exist
-    """
-    logger.info("Starting company migration")
-    migration = CompanyMigration(dry_run=dry_run)
-
-    # Extract companies from both systems
-    migration.extract_tempo_companies()
-    migration.extract_openproject_projects()
-
-    # Create mapping and migrate companies
-    # If force is True, clear the company mapping to force re-creation
-    if force and os.path.exists(os.path.join(migration.data_dir, "company_mapping.json")):
-        logger.info("Forcing re-creation of company mapping")
-        migration.company_mapping = {}
-
-    migration.create_company_mapping()
-
-    # Don't mark companies for migration if they already exist, even with force flag
-    # This ensures we don't report companies as newly created on repeated runs
-    # Instead, we'll detect their existence in the process_company function
-    # and mark them as 'existing' rather than 'created'
-
-    # Run the migration, which will detect and handle existing projects
-    migration.migrate_companies()
-
-    # Analyze company mapping
-    migration.analyze_company_mapping()
-
-    logger.info("Company migration complete")
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Migrate Tempo companies from Jira to OpenProject as top-level projects"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run in dry-run mode (no changes to OpenProject)",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Force re-creation of company mapping and marking all companies for migration",
-    )
-    args = parser.parse_args()
-
-    run_company_migration(dry_run=args.dry_run, force=args.force)

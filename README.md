@@ -79,23 +79,20 @@ This project leverages modern Python 3.13 features:
 
 1. Custom Fields: Cannot be created via API
    - Integrated into the main migration framework
-   - Supports direct execution via Rails console or script generation
-   - Use `python run_migration.py --components custom_fields` for full migration
-   - Or use standalone: `python -m src.migrations.custom_field_migration --direct-migration`
+   - Supports direct execution via Rails console (`--direct-migration` flag with `run_migration.py`)
+   - Use `python run_migration.py --components custom_fields [--direct-migration]`
 
 2. Issue Types/Work Package Types: Cannot be created via API
    - Integrated into the main migration framework
-   - Supports direct execution via Rails console or script generation
-   - Use `python run_migration.py --components issue_types` for full migration
-   - Or use standalone: `python -m src.migrations.issue_type_migration --direct-migration`
+   - Supports direct execution via Rails console (`--direct-migration` flag with `run_migration.py`)
+   - Use `python run_migration.py --components issue_types [--direct-migration]`
 
-Both approaches provide:
-
+Both components provide:
 - Automatic extraction of data from Jira and OpenProject
 - Smart mapping between systems
-- Direct execution on Rails console via SSH/Docker
+- Direct execution on Rails console via SSH/Docker (when using `--direct-migration`)
 - Detailed progress tracking with rich console interface
-- Option to generate Ruby scripts for manual execution
+- Option to generate Ruby scripts for manual execution (if direct migration fails or is not used)
 
 #### Jira has much more API limitations
 
@@ -119,30 +116,12 @@ expand is not controllable on all Server editions/versions.
 
 For implementation details and current status, refer to [PROGRESS.md](./PROGRESS.md).
 
-## Standalone Migration
-
-If you want to run only specific migration components, you can use the following commands:
-
-```bash
-./run_migration.py --components [component]
-```
-
-Components are:
-
-- companies
-- accounts
-- projects
-- work_packages
-- issue_types
-- custom_fields
-- link_types
-
 ## Rails Console Integration
 
 For components that cannot be migrated directly via the API (custom fields and work package types), the migration tool can either:
 
-1. Generate Ruby scripts to be run manually in the OpenProject Rails console
-2. Execute the migration commands directly on the Rails console using SSH and Docker
+1. Execute the migration commands directly on the Rails console using SSH and Docker (via the `--direct-migration` flag).
+2. Generate Ruby scripts to be run manually in the OpenProject Rails console (if direct migration fails or is not used).
 
 ### Test Rails Console Connection
 
@@ -166,29 +145,11 @@ python scripts/test_rails_connection.py --debug
 
 ### Custom Mapping
 
-To use a custom mapping file for custom fields:
-
-```bash
-python -m src.migrations.custom_field_migration --mapping my_fields_mapping.json
-```
-
-To use a custom mapping file for work package types:
-
-```bash
-python -m src.migrations.issue_type_migration --mapping my_types_mapping.json
-```
+Custom mapping files (e.g., for users, projects, custom fields, issue types) are typically loaded automatically from the `var/data/` directory if they exist. You can pre-populate or modify these JSON files to influence the migration mapping.
 
 ### Sample Data
 
-To run with sample data (for testing):
-
-```bash
-python -m src.migrations.custom_field_migration --sample
-```
-
-```bash
-python -m src.migrations.issue_type_migration --sample
-```
+Support for running with sample data is not currently implemented via the main `run_migration.py` script.
 
 ## License
 

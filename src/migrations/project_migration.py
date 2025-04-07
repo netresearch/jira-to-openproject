@@ -39,15 +39,16 @@ class ProjectMigration:
     - Projects with account information stored in custom fields
     """
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient):
         """
         Initialize the project migration tools.
 
         Args:
-            dry_run: If True, no changes will be made to OpenProject
+            jira_client: Initialized Jira client instance.
+            op_client: Initialized OpenProject client instance.
         """
-        self.jira_client = JiraClient()
-        self.op_client = OpenProjectClient()
+        self.jira_client = jira_client
+        self.op_client = op_client
         self.jira_projects = []
         self.op_projects = []
         self.project_mapping = {}
@@ -55,16 +56,13 @@ class ProjectMigration:
         self.project_account_mapping = {}
         self.account_custom_field_id = None
 
-        # Use the centralized config for var directories
         self.data_dir = config.get_path("data")
-        self.dry_run = dry_run
 
         # Base Tempo API URL - typically {JIRA_URL}/rest/tempo-accounts/1 for Server
-        self.tempo_api_base = f"{config.jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
+        self.tempo_api_base = f"{self.jira_client.jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
 
-        # Setup auth for Tempo API
         self.tempo_auth_headers = {
-            "Authorization": f"Bearer {config.jira_config.get('api_token', '')}",
+            "Authorization": f"Bearer {self.jira_client.jira_config.get('api_token', '')}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -78,18 +76,14 @@ class ProjectMigration:
         """
         logger.info("Extracting projects from Jira...")
 
-        # Connect to Jira
         if not self.jira_client.connect():
             logger.error("Failed to connect to Jira")
             return []
 
-        # Get all projects from Jira
         self.jira_projects = self.jira_client.get_projects()
 
-        # Log the number of projects found
         logger.info(f"Extracted {len(self.jira_projects)} projects from Jira")
 
-        # Save projects to file for later reference
         self._save_to_json(self.jira_projects, "jira_projects.json")
 
         return self.jira_projects
@@ -103,13 +97,10 @@ class ProjectMigration:
         """
         logger.info("Extracting projects from OpenProject...")
 
-        # Get all projects from OpenProject
         self.op_projects = self.op_client.get_projects()
 
-        # Log the number of projects found
         logger.info(f"Extracted {len(self.op_projects)} projects from OpenProject")
 
-        # Save projects to file for later reference
         self._save_to_json(self.op_projects, "openproject_projects.json")
 
         return self.op_projects
@@ -127,16 +118,13 @@ class ProjectMigration:
             with open(mapping_path, "r") as f:
                 self.account_mapping = json.load(f)
 
-            # Extract the custom field ID from the mapping
             for account in self.account_mapping.values():
                 if account.get("custom_field_id"):
                     self.account_custom_field_id = account.get("custom_field_id")
                     break
 
             logger.info(f"Loaded account mapping with {len(self.account_mapping)} entries")
-            # Clean any potential console output from the custom_field_id
             if self.account_custom_field_id and isinstance(self.account_custom_field_id, str):
-                # Remove any console output that might be in the string
                 self.account_custom_field_id = self.account_custom_field_id.split()[0] if ' ' in self.account_custom_field_id else self.account_custom_field_id
             logger.info(f"Account custom field ID: {self.account_custom_field_id}")
             return self.account_mapping
@@ -148,8 +136,6 @@ class ProjectMigration:
         """
         Extract mapping between Jira projects and Tempo accounts.
 
-        This method uses the Tempo API to find the default account for each project.
-
         Returns:
             Dictionary mapping Jira project keys to Tempo account IDs
         """
@@ -158,14 +144,12 @@ class ProjectMigration:
         if not self.jira_projects:
             self.extract_jira_projects()
 
-        # Create a lookup dictionary for Jira project IDs to keys
         jira_projects_by_id = {
             project.get("id"): project.get("key")
             for project in self.jira_projects
         }
 
         try:
-            # Call the Tempo API to get project-account associations
             account_endpoint = f"{self.tempo_api_base}/account"
 
             response = requests.get(
@@ -178,26 +162,20 @@ class ProjectMigration:
                 accounts = response.json()
                 logger.info(f"Retrieved {len(accounts)} accounts from Tempo")
 
-                # Create mapping from project key to default account ID
-                # In Tempo, each project can have multiple accounts, but one is designated as the default
                 mapping = {}
                 for account in accounts:
-                    # Each account may have multiple associated projects
                     projects = account.get("projects", [])
                     account_id = account.get("id")
 
                     for project in projects:
                         project_id = project.get("projectId")
-                        # Check if this is a default project-account association
                         is_default = project.get("default", False)
 
                         if project_id in jira_projects_by_id and account_id:
                             project_key = jira_projects_by_id[project_id]
-                            # If this is the default account or we haven't found any account yet
                             if is_default or project_key not in mapping:
                                 mapping[project_key] = account_id
 
-                # Save to file
                 self.project_account_mapping = mapping
                 self._save_to_json(mapping, "project_account_mapping.json")
 
@@ -207,9 +185,7 @@ class ProjectMigration:
                 logger.error(
                     f"Failed to get accounts. Status code: {response.status_code}, Response: {response.text}"
                 )
-
                 return {}
-
         except Exception as e:
             logger.error(f"Failed to extract project-account mapping: {str(e)}")
             return {}
@@ -227,26 +203,20 @@ class ProjectMigration:
         Returns:
             OpenProject project data or None if creation failed
         """
-        # Extract project information from Jira project
         jira_key = jira_project.get("key", "")
         jira_name = jira_project.get("name", "")
         jira_description = jira_project.get("description", "")
 
-        # Create a valid OpenProject identifier from the Jira key
-        # OpenProject identifiers must be lowercase alphanumeric with dashes only
         identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
-        # Ensure it starts with a letter and limit to 100 chars
         if not identifier[0].isalpha():
             identifier = "p-" + identifier
         identifier = identifier[:100]
 
-        # Get account information if available
         account_name = None
         if account_id and str(account_id) in self.account_mapping:
             account_name = self.account_mapping[str(account_id)].get("tempo_name")
 
-        # Since we're now using a progress bar, we'll avoid excessive logging
-        if self.dry_run:
+        if config.migration_config.get("dry_run", False):
             return {
                 "id": None,
                 "name": jira_name,
@@ -255,9 +225,7 @@ class ProjectMigration:
                 "account_name": account_name,
             }
 
-        # Create the project in OpenProject
         try:
-            # First create the project - unpack the tuple to get the project object and creation status
             project_result, was_created = self.op_client.create_project(
                 name=jira_name,
                 identifier=identifier,
@@ -268,22 +236,18 @@ class ProjectMigration:
                 logger.error(f"Failed to create project: {jira_name}")
                 return None
 
-            # Log appropriate message based on whether project was created or found
             if was_created:
                 logger.info(f"Created new project: {jira_name} with identifier {identifier}")
             else:
                 logger.info(f"Using existing project: {jira_name} with identifier {identifier}")
 
-            # If we have account information and a custom field, update the project with account data
             if account_name and self.account_custom_field_id:
-                # Set the account custom field for this project
                 cf_success = self.op_client.set_project_custom_field(
                     project_id=project_result.get("id"),
                     custom_field_id=self.account_custom_field_id,
                     value=account_name
                 )
 
-            # Add the account name to the result for reference
             if account_name:
                 project_result["account_name"] = account_name
 
@@ -305,23 +269,18 @@ class ProjectMigration:
         """
         logger.info("Starting project migration...")
 
-        # Make sure we have Jira projects
         if not self.jira_projects:
             self.extract_jira_projects()
 
-        # Get existing OpenProject projects to avoid duplicates
         if not self.op_projects:
             self.extract_openproject_projects()
 
-        # Load account mapping to get the custom field ID and account data
         if not self.account_mapping:
             self.load_account_mapping()
 
-        # Load project-account mapping to associate projects with accounts
         if not self.project_account_mapping:
             self.extract_project_account_mapping()
 
-        # Create lookup dictionaries for OpenProject projects
         op_projects_by_name = {
             project.get("name", "").lower(): project for project in self.op_projects
         }
@@ -330,37 +289,30 @@ class ProjectMigration:
             for project in self.op_projects
         }
 
-        # Initialize the mapping dictionary
         mapping = {}
 
-        # Define the function to process each project
         def process_project(jira_project, context):
             jira_key = jira_project.get("key")
             jira_name = jira_project.get("name", "")
 
-            # Create a potential identifier for checking if project already exists
             potential_identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
             if not potential_identifier[0].isalpha():
                 potential_identifier = "p-" + potential_identifier
             potential_identifier = potential_identifier[:100]
 
-            # Check if project already exists in OpenProject
             op_project = None
             if jira_name.lower() in op_projects_by_name:
                 op_project = op_projects_by_name[jira_name.lower()]
             elif potential_identifier in op_projects_by_identifier:
                 op_project = op_projects_by_identifier[potential_identifier]
             else:
-                # Check if this project has an account association
                 account_id = None
                 if jira_key in self.project_account_mapping:
                     account_id = self.project_account_mapping[jira_key]
 
-                # Create the project in OpenProject
                 op_project = self.create_project_in_openproject(jira_project, account_id)
 
             if op_project:
-                # Add to mapping
                 mapping[jira_key] = {
                     "jira_key": jira_key,
                     "jira_name": jira_project.get("name"),
@@ -373,11 +325,9 @@ class ProjectMigration:
                     not in [p.get("id") for p in self.op_projects],
                 }
 
-                # Return the project name if it was newly created
                 if op_project.get("id") not in [p.get("id") for p in self.op_projects]:
                     return jira_name
             else:
-                # Add to mapping as failed
                 mapping[jira_key] = {
                     "jira_key": jira_key,
                     "jira_name": jira_project.get("name"),
@@ -390,9 +340,8 @@ class ProjectMigration:
                     "failed": True,
                 }
 
-            return None  # Return None if not a newly created project
+            return None
 
-        # Process all projects with progress tracking
         process_with_progress(
             items=self.jira_projects,
             process_func=process_project,
@@ -401,14 +350,12 @@ class ProjectMigration:
             item_name_func=lambda project: project.get("name", "Unknown")
         )
 
-        # Save mapping to file
         self.project_mapping = mapping
         self._save_to_json(mapping, "project_mapping.json")
 
-        # Analyze the mapping
         analysis = self.analyze_project_mapping()
 
-        if self.dry_run:
+        if config.migration_config.get("dry_run", False):
             logger.info("DRY RUN: No projects were actually created in OpenProject")
 
         return mapping
@@ -430,7 +377,6 @@ class ProjectMigration:
                 logger.error("No project mapping found. Run migrate_projects() first.")
                 return {}
 
-        # Analyze the mapping
         analysis = {
             "total_projects": len(self.project_mapping),
             "migrated_projects": sum(
@@ -462,7 +408,6 @@ class ProjectMigration:
             ],
         }
 
-        # Calculate percentage
         total = analysis["total_projects"]
         if total > 0:
             analysis["migration_percentage"] = (
@@ -471,10 +416,8 @@ class ProjectMigration:
         else:
             analysis["migration_percentage"] = 0
 
-        # Save analysis to file
         self._save_to_json(analysis, "project_mapping_analysis.json")
 
-        # Log analysis summary
         logger.info(f"Project mapping analysis complete")
         logger.info(f"Total projects: {analysis['total_projects']}")
         logger.info(
@@ -499,44 +442,3 @@ class ProjectMigration:
         with open(file_path, "w") as f:
             json.dump(data, f, indent=2)
         logger.info(f"Saved data to {file_path}")
-
-
-def run_project_migration(dry_run: bool = False):
-    """
-    Run the project migration as a standalone script.
-
-    Args:
-        dry_run: If True, no changes will be made to OpenProject
-    """
-    logger.info("Starting project migration")
-    migration = ProjectMigration(dry_run=dry_run)
-
-    # Extract projects from both systems
-    migration.extract_jira_projects()
-    migration.extract_openproject_projects()
-
-    # Load account mapping and create project-account mapping
-    migration.load_account_mapping()
-    migration.extract_project_account_mapping()
-
-    # Migrate and analyze the projects
-    migration.migrate_projects()
-    migration.analyze_project_mapping()
-
-    logger.info("Project migration complete")
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Migrate projects from Jira to OpenProject"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run in dry-run mode (no changes to OpenProject)",
-    )
-    args = parser.parse_args()
-
-    run_project_migration(dry_run=args.dry_run)

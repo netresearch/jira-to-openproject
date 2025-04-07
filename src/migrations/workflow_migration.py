@@ -32,23 +32,22 @@ class WorkflowMigration:
     4. Setting up workflow configurations in OpenProject
     """
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient):
         """
         Initialize the workflow migration tools.
 
         Args:
-            dry_run: If True, no changes will be made to OpenProject
+            jira_client: Initialized Jira client instance.
+            op_client: Initialized OpenProject client instance.
         """
-        self.jira_client = JiraClient()
-        self.op_client = OpenProjectClient()
+        self.jira_client = jira_client
+        self.op_client = op_client
         self.jira_statuses = []
         self.jira_workflows = []
         self.op_statuses = []
         self.status_mapping = {}
         self.workflow_mapping = {}
-        self.dry_run = dry_run
 
-        # Use the centralized config for var directories
         self.data_dir = config.get_path("data")
 
     def extract_jira_workflows(self) -> List[Dict[str, Any]]:
@@ -60,18 +59,14 @@ class WorkflowMigration:
         """
         logger.info("Extracting workflows from Jira...", extra={"markup": True})
 
-        # Connect to Jira
         if not self.jira_client.connect():
             logger.error("Failed to connect to Jira")
             return []
 
-        # Get workflows from Jira
         self.jira_workflows = self._get_jira_workflows()
 
-        # Log the number of workflows found
         logger.info(f"Extracted {len(self.jira_workflows)} workflows from Jira", extra={"markup": True})
 
-        # Save workflows to file for later reference
         self._save_to_json(self.jira_workflows, "jira_workflows.json")
 
         return self.jira_workflows
@@ -80,21 +75,16 @@ class WorkflowMigration:
         """
         Get workflow definitions from Jira.
 
-        This method retrieves workflow definitions and their transitions.
-
         Returns:
             List of workflow definitions
         """
         try:
-            # Get all workflows
             url = f"{self.jira_client.base_url}/rest/api/2/workflow"
             response = self.jira_client.jira._session.get(url)
             response.raise_for_status()
             workflows = response.json()
 
-            # Enhance workflow data with additional information about transitions
             for workflow in workflows:
-                # Get detailed workflow information with transitions
                 workflow_name = workflow.get("name", "")
                 url = f"{self.jira_client.base_url}/rest/api/2/workflow/{workflow_name}/transitions"
 
@@ -124,22 +114,18 @@ class WorkflowMigration:
         """
         logger.info("Extracting statuses from Jira...", extra={"markup": True})
 
-        # Connect to Jira
         if not self.jira_client.connect():
             logger.error("Failed to connect to Jira")
             return []
 
         try:
-            # Get all statuses
             url = f"{self.jira_client.base_url}/rest/api/2/status"
             response = self.jira_client.jira._session.get(url)
             response.raise_for_status()
             statuses = response.json()
 
-            # Log the number of statuses found
             logger.info(f"Extracted {len(statuses)} statuses from Jira", extra={"markup": True})
 
-            # Save statuses to file for later reference
             self.jira_statuses = statuses
             self._save_to_json(statuses, "jira_statuses.json")
 
@@ -157,7 +143,6 @@ class WorkflowMigration:
         """
         logger.info("Extracting statuses from OpenProject...", extra={"markup": True})
 
-        # Get statuses from OpenProject
         try:
             self.op_statuses = self.op_client.get_statuses()
         except Exception as e:
@@ -165,10 +150,8 @@ class WorkflowMigration:
             logger.warning("Using an empty list of statuses for OpenProject", extra={"markup": True})
             self.op_statuses = []
 
-        # Log the number of statuses found
         logger.info(f"Extracted {len(self.op_statuses)} statuses from OpenProject", extra={"markup": True})
 
-        # Save statuses to file for later reference
         self._save_to_json(self.op_statuses, "openproject_statuses.json")
 
         return self.op_statuses
@@ -177,21 +160,17 @@ class WorkflowMigration:
         """
         Create a mapping between Jira statuses and OpenProject statuses.
 
-        This method creates a mapping based on the status names.
-
         Returns:
             Dictionary mapping Jira status IDs to OpenProject status data
         """
         logger.info("Creating status mapping...", extra={"markup": True})
 
-        # Make sure we have statuses from both systems
         if not self.jira_statuses:
             self.extract_jira_statuses()
 
         if not self.op_statuses:
             self.extract_openproject_statuses()
 
-        # Create lookup dictionary for OpenProject statuses by name
         op_statuses_by_name = {
             status.get("name", "").lower(): status for status in self.op_statuses
         }
@@ -206,7 +185,6 @@ class WorkflowMigration:
 
                 tracker.update_description(f"Mapping status: {jira_name}")
 
-                # Try to find a corresponding OpenProject status by name
                 op_status = op_statuses_by_name.get(jira_name_lower, None)
 
                 if op_status:
@@ -220,8 +198,6 @@ class WorkflowMigration:
                     }
                     tracker.add_log_item(f"Matched by name: {jira_name} → {op_status.get('name')}")
                 else:
-                    # Try to find a similar name by simple normalization
-                    # (e.g. "In Progress" vs "In progress")
                     match_found = False
                     for op_name, op_status in op_statuses_by_name.items():
                         if op_name.replace(" ", "").lower() == jira_name_lower.replace(
@@ -240,7 +216,6 @@ class WorkflowMigration:
                             break
 
                     if not match_found:
-                        # No match found, add to mapping with empty OpenProject data
                         mapping[jira_id] = {
                             "jira_id": jira_id,
                             "jira_name": jira_name,
@@ -253,11 +228,9 @@ class WorkflowMigration:
 
                 tracker.increment()
 
-        # Save mapping to file
         self.status_mapping = mapping
         self._save_to_json(mapping, "status_mapping.json")
 
-        # Log statistics
         total_statuses = len(mapping)
         matched_statuses = sum(
             1 for status in mapping.values() if status["matched_by"] != "none"
@@ -288,22 +261,14 @@ class WorkflowMigration:
         """
         name = jira_status.get("name")
 
-        # Get the status category to determine if it's closed
         status_category = jira_status.get("statusCategory", {})
         category_key = status_category.get("key", "undefined")
         is_closed = category_key.lower() == "done"
 
-        # Get the color from the status category or use default
         color = status_category.get("colorName", "#1F75D3")
 
         logger.info(f"Creating status in OpenProject: {name} (Closed: {is_closed})", extra={"markup": True})
 
-        if self.dry_run:
-            logger.info(f"DRY RUN: Would create status: {name} (Closed: {is_closed})", extra={"markup": True})
-            # Return a placeholder for dry run
-            return {"id": None, "name": name, "isClosed": is_closed, "color": color}
-
-        # Create the status in OpenProject
         try:
             result = self.op_client.create_status(
                 name=name, color=color, is_closed=is_closed
@@ -326,26 +291,20 @@ class WorkflowMigration:
         """
         Migrate statuses from Jira to OpenProject.
 
-        This method creates statuses in OpenProject based on
-        Jira status definitions and updates the mapping.
-
         Returns:
             Updated mapping between Jira statuses and OpenProject statuses
         """
         logger.info("Starting status migration...", extra={"markup": True})
 
-        # Make sure we have statuses from both systems
         if not self.jira_statuses:
             self.extract_jira_statuses()
 
         if not self.op_statuses:
             self.extract_openproject_statuses()
 
-        # Create an initial mapping if it doesn't exist
         if not self.status_mapping:
             self.create_status_mapping()
 
-        # Find statuses that need to be created
         statuses_to_create = [
             (jira_id, mapping)
             for jira_id, mapping in self.status_mapping.items()
@@ -354,10 +313,8 @@ class WorkflowMigration:
 
         logger.info(f"Found {len(statuses_to_create)} statuses that need to be created in OpenProject", extra={"markup": True})
 
-        # Iterate through the mapping and create missing statuses
         with ProgressTracker("Migrating statuses", len(statuses_to_create), "Recent Statuses") as tracker:
             for i, (jira_id, mapping) in enumerate(statuses_to_create):
-                # Find the Jira status definition
                 jira_status = next(
                     (s for s in self.jira_statuses if s.get("id") == jira_id), None
                 )
@@ -371,11 +328,9 @@ class WorkflowMigration:
                 status_name = jira_status.get("name", "Unknown")
                 tracker.update_description(f"Creating status: {status_name}")
 
-                # Create the status in OpenProject
                 op_status = self.create_status_in_openproject(jira_status)
 
                 if op_status:
-                    # Update the mapping
                     mapping["openproject_id"] = op_status.get("id")
                     mapping["openproject_name"] = op_status.get("name")
                     mapping["is_closed"] = op_status.get("isClosed", False)
@@ -386,10 +341,8 @@ class WorkflowMigration:
 
                 tracker.increment()
 
-        # Save updated mapping to file
         self._save_to_json(self.status_mapping, "status_mapping.json")
 
-        # Log statistics
         total_statuses = len(self.status_mapping)
         matched_statuses = sum(
             1
@@ -416,36 +369,17 @@ class WorkflowMigration:
         """
         Create workflow configuration in OpenProject.
 
-        This configures which statuses are available for which work package types
-        based on Jira's workflow configurations.
-
         Returns:
             Result of the workflow configuration
         """
         logger.info("Creating workflow configuration in OpenProject...", extra={"markup": True})
 
-        if self.dry_run:
-            logger.info("DRY RUN: Would configure workflows in OpenProject", extra={"markup": True})
+        result = {
+            "success": True,
+            "message": "Workflow configuration handled automatically by OpenProject",
+            "details": "OpenProject automatically makes all statuses available for all work package types by default.",
+        }
 
-            # For dry run, we'll just return a placeholder
-            result = {
-                "success": True,
-                "message": "DRY RUN: Workflow configuration simulated",
-                "details": "In dry run mode, no actual changes are made to OpenProject workflows.",
-            }
-        else:
-            # In a real implementation, this would configure which statuses
-            # are available for which work package types, based on Jira's workflows
-
-            # For now, we'll just create a placeholder
-            # OpenProject automatically makes all statuses available for all types
-            result = {
-                "success": True,
-                "message": "Workflow configuration handled automatically by OpenProject",
-                "details": "OpenProject automatically makes all statuses available for all work package types by default.",
-            }
-
-        # Save result
         self._save_to_json(result, "workflow_configuration.json")
 
         return result
@@ -469,7 +403,6 @@ class WorkflowMigration:
                 )
                 return {}
 
-        # Analyze the mapping
         analysis = {
             "total_statuses": len(self.status_mapping),
             "matched_statuses": sum(
@@ -509,17 +442,14 @@ class WorkflowMigration:
             ],
         }
 
-        # Calculate percentages
         total = analysis["total_statuses"]
         if total > 0:
             analysis["match_percentage"] = (analysis["matched_statuses"] / total) * 100
         else:
             analysis["match_percentage"] = 0
 
-        # Save analysis to file
         self._save_to_json(analysis, "status_mapping_analysis.json")
 
-        # Log analysis summary
         logger.info(f"Status mapping analysis complete", extra={"markup": True})
         logger.info(f"Total statuses: {analysis['total_statuses']}", extra={"markup": True})
         logger.info(
@@ -549,47 +479,3 @@ class WorkflowMigration:
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
         logger.info(f"Saved data to {filepath}", extra={"markup": True})
-
-
-def run_workflow_migration(dry_run: bool = False):
-    """
-    Run the workflow migration as a standalone script.
-
-    Args:
-        dry_run: If True, no changes will be made to OpenProject
-    """
-    logger.info("Starting workflow migration", extra={"markup": True})
-    migration = WorkflowMigration(dry_run=dry_run)
-
-    # Extract workflows and statuses from both systems
-    migration.extract_jira_workflows()
-    migration.extract_jira_statuses()
-    migration.extract_openproject_statuses()
-
-    # Create mappings and migrate statuses
-    migration.create_status_mapping()
-    migration.migrate_statuses()
-
-    # Create workflow configuration
-    migration.create_workflow_configuration()
-
-    # Analyze status mapping
-    migration.analyze_status_mapping()
-
-    logger.info("Workflow migration complete", extra={"markup": True})
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Migrate workflows from Jira to OpenProject"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run in dry-run mode (no changes to OpenProject)",
-    )
-    args = parser.parse_args()
-
-    run_workflow_migration(dry_run=args.dry_run)

@@ -16,33 +16,44 @@ The migration is organized into component modules in the `migrations/` directory
 - **user_migration.py**: Handles user account migration
 - **project_migration.py**: Handles project structure migration
 - **company_migration.py**: Handles company data migration
-- **tempo_account_migration.py**: Handles Tempo Timesheet accounts
-- **custom_field_migration.py**: Handles custom field mapping and Ruby script generation
+- **account_migration.py**: Handles Tempo Timesheet accounts (as custom fields)
+- **custom_field_migration.py**: Handles custom field mapping and potential Ruby script generation
 - **workflow_migration.py**: Handles workflow states and transitions
 - **link_type_migration.py**: Handles issue link types
+- **work_package_migration.py**: Handles issue/work package data (managed via export_work_packages.py)
 
-Each module follows a similar pattern:
-1. A class that implements the migration logic
-2. Functions to run the migration as standalone scripts
-3. Command-line argument handling for direct invocation
+Each module typically contains a class implementing the core logic for that component, invoked by the main `run_migration.py` script.
 
 ## Special-Purpose Utilities
 
-The custom field migration has a special capability due to OpenProject API limitations:
+Due to OpenProject API limitations, some components might require manual steps or alternative approaches:
 
-```bash
-python -m src.migrations.custom_field_migration --generate-ruby
-```
-
-This generates a Ruby script for importing custom fields via Rails console, as OpenProject's API does not support custom field creation.
+*   **Custom Field Creation:** The API doesn't support this. The migration attempts direct creation via the Rails console (`--direct-migration`). If this fails, a Ruby script can be generated (`--generate-ruby` option, although direct migration is preferred) for manual execution in the Rails console.
+*   **Work Package Type Creation:** Similar to custom fields, this often requires direct Rails console interaction, handled by the `--direct-migration` flag.
 
 ## Development
 
 When developing new migration components:
 
-1. Create a new module in the `migrations/` directory
-2. Implement the core functionality in a class
-3. Add a runner function (e.g., `run_component_migration()`)
-4. Update `run_migration.py` to include the new component
+1. Create a new module in the `migrations/` directory.
+2. Implement the core functionality in a class inheriting from `BaseMigration`.
+3. Update `run_migration.py` to import and call the new component's migration class or function within the main loop, passing necessary arguments like `dry_run`, `force`, etc.
+4. Ensure the component logic is integrated into the overall workflow orchestrated by `run_migration.py`.
 
 The master script (`run_migration.py` at the project root) coordinates the execution of all migration components.
+
+### Example Component Execution:
+
+```bash
+# Run only the user migration
+python run_migration.py --components users
+
+# Run custom fields and issue types using direct Rails execution
+python run_migration.py --components custom_fields issue_types --direct-migration
+
+# Run the work package migration (uses direct migration implicitly if available)
+python run_migration.py --components work_packages
+
+# Run specific components together
+python run_migration.py --components users projects work_packages
+```
