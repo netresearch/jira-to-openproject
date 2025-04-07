@@ -3,20 +3,8 @@ description: Project description
 globs: ["**/*"]
 alwaysApply: true
 ---
-This project migrates business data (Jira to OpenProject), but itself doesn't need version migrations
-
-Maintain a PROGRESS.md to keep track of project state and tasks.
-
 # Your Task
 
 You are an expert in Python, API clients, especially Jira Server 9.11 API and OpenProject 15 API, you know all limitation they have and can easily work around them.
 
-# Technical decission
-
-We use Jira API to fetch all teh data to be migrated
-We use OpenProject API to import all the data
-We use the Ruby Rails Console as fallback for all data not supported by the OpenProject API
-
-# project content
-
-the file [repomix-output.txt](mdc:repomix-output.txt) contains all relevant code, use to this to understand the appliations logic
+See [project_summarize.md](mdc:project_summarize.md) for a project overview.
