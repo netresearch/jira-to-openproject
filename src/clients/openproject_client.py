@@ -3,20 +3,22 @@ OpenProject API client for the migration project.
 Provides access to OpenProject resources through the API.
 """
 
+import os
+import sys
+import json
 import requests
 import time
-import json
 import base64
 import urllib3
-import os
 import logging
 import math
-import subprocess
-import re
-from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
-from .. import config
-from collections import deque
-from datetime import timedelta
+
+from typing import Dict, List, Any, Optional
+
+# Add the src directory to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+from src import config
 
 # Disable SSL warnings - only use this in development environments
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -135,7 +137,7 @@ class OpenProjectClient:
         self.auth_type = None
 
         # Rate limiting settings
-        self.rate_limit = float(self.op_config.get("rate_limit", 1))  # requests per second
+        self.rate_limit = float(self.op_config.get("rate_limit", 100))  # requests per second
         self.last_request_time = 0
 
         # Cache for commonly accessed data
@@ -1135,8 +1137,7 @@ class OpenProjectClient:
         """
         Get all custom fields from OpenProject using Rails console.
 
-        This method uses the Rails console to retrieve custom fields and writes
-        them to a temporary file which we then retrieve via Docker.
+        This method uses the Rails console to retrieve custom fields directly.
 
         Args:
             force_refresh: If True, ignore cache and fetch fresh data
@@ -1149,20 +1150,15 @@ class OpenProjectClient:
             logger.debug(f"Using cached custom fields ({len(self._custom_fields_cache)} fields)")
             return self._custom_fields_cache
 
+        # Check if Rails client is available
+        if not self.rails_client:
+            logger.error("Rails client is required to get custom fields but is not available")
+            return []
+
         try:
-            # Define the path for the temporary file inside the container
-            temp_file_path = "/tmp/openproject_custom_fields.json"
-
-            # Get container and server info from config
-            container_name = self.op_config.get("container")
-            op_server = self.op_config.get("server")
-
-            logger.info(f"Retrieving custom fields from Rails console in session: {self.rails_client.session_name}")
-
-            # Create the Ruby command to get custom fields and write to file
+            # Create the Ruby command to get custom fields directly as JSON string
             command = """
             begin
-                # Get the fields as a JSON string
                 fields = CustomField.all.map do |cf|
                     {
                         id: cf.id,
@@ -1175,14 +1171,10 @@ class OpenProjectClient:
                     }
                 end
 
-                # Write to temp file
-                File.write('""" + temp_file_path + """', fields.to_json)
-                puts "===SUCCESS: Wrote #{fields.size} custom fields to """ + temp_file_path + """==="
-                nil
+                # Return the fields directly as JSON
+                fields.to_json
             rescue => e
-                puts "===ERROR: #{e.message}==="
-                puts e.backtrace.join("\\n")
-                nil
+                "ERROR: #{e.message}"
             end
             """
 
@@ -1190,62 +1182,35 @@ class OpenProjectClient:
             result = self.rails_client.execute(command)
 
             if result['status'] != 'success':
-                logger.error(f"Failed to execute Rails command: {result.get('error', 'Unknown error')}")
+                logger.error(f"Failed to execute Rails command to get custom fields: {result.get('error', 'Unknown error')}")
                 return []
 
-            # Check if the command successfully wrote the file
-            output = result.get('raw_output', '')
-            if "===SUCCESS:" not in output:
-                logger.error(f"Rails command did not successfully write the file. Output: {output}")
+            # Get the output which should be the JSON string with custom fields
+            output = result.get('output', '')
+
+            if not output or output.startswith('ERROR:'):
+                error_message = output[6:] if output.startswith('ERROR:') else 'No output returned'
+                logger.error(f"Failed to get custom fields: {error_message}")
                 return []
 
-            # Extract the number of fields written from the success message
-            match = re.search(r"===SUCCESS: Wrote (\d+) custom fields", output)
-            field_count = int(match.group(1)) if match else 0
-            logger.info(f"Rails console reports {field_count} custom fields written to file")
-
-            # Now retrieve the file from the Docker container
             try:
-                if op_server:
-                    # If we have a server, use SSH + Docker exec
-                    logger.debug(f"Using SSH to retrieve file from {op_server} container {container_name}")
-                    cmd = ["ssh", op_server, "docker", "exec", container_name, "cat", temp_file_path]
-                else:
-                    # Direct local Docker exec
-                    logger.debug(f"Using local Docker to retrieve file from container {container_name}")
-                    cmd = ["docker", "exec", container_name, "cat", temp_file_path]
+                # Parse the JSON output directly
+                custom_fields = json.loads(output)
 
-                cat_result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-                json_data = cat_result.stdout
-
-                # Parse the JSON
-                if json_data:
-                    custom_fields = json.loads(json_data)
-
-                    # Cache the results
-                    self._custom_fields_cache = custom_fields
-
-                    logger.info(f"Successfully retrieved {len(custom_fields)} custom fields")
-
-                    # Clean up the temp file (best effort, ignore errors)
-                    try:
-                        cleanup_command = f"File.delete('{temp_file_path}') rescue nil"
-                        self.rails_client.execute(cleanup_command)
-                    except Exception as e:
-                        logger.debug(f"Error cleaning up temp file: {str(e)}")
-
-                    return custom_fields
-                else:
-                    logger.error("Empty JSON data returned from file")
+                if not isinstance(custom_fields, list):
+                    logger.error(f"Unexpected response format: expected list, got {type(custom_fields).__name__}")
                     return []
-            except subprocess.SubprocessError as e:
-                logger.error(f"Error retrieving file from Docker container: {str(e)}")
-                return []
+
+                # Cache the results
+                self._custom_fields_cache = custom_fields
+
+                logger.info(f"Successfully retrieved {len(custom_fields)} custom fields")
+                return custom_fields
             except json.JSONDecodeError as e:
-                logger.error(f"Error parsing JSON from file: {str(e)}")
-                logger.debug(f"Raw JSON data: {json_data[:200]}...")
+                logger.error(f"Error parsing custom fields JSON: {str(e)}")
+                logger.debug(f"Invalid JSON data (first 200 chars): {output[:200]}...")
                 return []
 
         except Exception as e:
             logger.error(f"Failed to get custom fields: {str(e)}")
-            return self._custom_fields_cache if self._custom_fields_cache else []
+            return []

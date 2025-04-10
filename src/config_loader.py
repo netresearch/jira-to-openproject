@@ -100,8 +100,21 @@ class ConfigLoader:
 
                 case ["J2O", "JIRA", *rest] if rest:
                     key = "_".join(rest).lower()
-                    self.config["jira"][key] = self._convert_value(env_value)
-                    config_logger.debug(f"Applied Jira config: {key}={env_value}")
+
+                    # Handle ScriptRunner configuration separately
+                    if key.startswith("scriptrunner_"):
+                        # Initialize scriptrunner config if not present
+                        if "scriptrunner" not in self.config["jira"]:
+                            self.config["jira"]["scriptrunner"] = {}
+
+                        # Extract the specific scriptrunner config key
+                        sr_key = key[len("scriptrunner_"):]
+                        self.config["jira"]["scriptrunner"][sr_key] = self._convert_value(env_value)
+                        config_logger.debug(f"Applied Jira ScriptRunner config: {sr_key}={env_value}")
+                    else:
+                        # Regular Jira config
+                        self.config["jira"][key] = self._convert_value(env_value)
+                        config_logger.debug(f"Applied Jira config: {key}={env_value}")
 
                 case ["J2O", "OPENPROJECT", *rest] if rest:
                     key = "_".join(rest).lower()
@@ -115,14 +128,6 @@ class ConfigLoader:
                 case ["J2O", "BATCH", "SIZE"]:
                     self.config["migration"]["batch_size"] = int(env_value)
                     config_logger.debug(f"Applied batch size: {env_value=}")
-
-                case ["J2O", "RATE", "LIMIT", "REQUESTS"]:
-                    self.config["migration"]["rate_limit_requests"] = int(env_value)
-                    config_logger.debug(f"Applied rate limit requests: {env_value=}")
-
-                case ["J2O", "RATE", "LIMIT", "PERIOD"]:
-                    self.config["migration"]["rate_limit_period"] = int(env_value)
-                    config_logger.debug(f"Applied rate limit period: {env_value=}")
 
                 case ["J2O", "SSL", "VERIFY"]:
                     ssl_verify = env_value.lower() not in ("false", "0", "no", "n", "f")

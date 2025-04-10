@@ -123,7 +123,33 @@ The migration tool handles this by:
 
 Alternatives for more efficient custom field option retrieval:
 
-1. Using ScriptRunner to create a custom REST endpoint that exports all field options at once
+1. Using ScriptRunner to create a custom REST endpoint that exports all field options at once:
+
+   - Install ScriptRunner for Jira if not already installed
+   - Navigate to Jira Administration > Manage apps > ScriptRunner > REST Endpoints
+   - Click "Add new endpoint" and create a new REST service
+   - Name it "Custom Field Options Exporter" (or similar)
+   - Set the endpoint path to something like "/getAllCustomFieldsWithOptions"
+   - Paste the Groovy script from `scripts/scriptrunner_api_endpoint_field.groovy` in this repository
+   - Save the endpoint
+   - The endpoint will be available at: `https://your-jira-instance.com/rest/scriptrunner/latest/custom/getAllCustomFieldsWithOptions`
+   - Configure this endpoint in your migration configuration file:
+
+     ```yaml
+     # In config.yaml
+     jira:
+       # Other Jira configuration...
+       scriptrunner:
+         enabled: true
+         custom_field_options_endpoint: "https://your-jira-instance.com/rest/scriptrunner/latest/custom/getAllCustomFieldsWithOptions"
+     ```
+
+   - The migration tool will automatically use this endpoint to retrieve custom field options when running:
+
+     ```bash
+     python run_migration.py --components custom_fields
+     ```
+
 2. Manually exporting field options via the Jira admin interface and importing the data
 3. Using the Jira database directly (if you have access) to query field options
 

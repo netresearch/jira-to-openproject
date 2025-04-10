@@ -39,7 +39,7 @@ console = Console(theme=LOGGING_THEME)
 rich_handler = RichHandler(
     console=console,
     rich_tracebacks=True,
-    tracebacks_show_locals=True,
+    tracebacks_show_locals=False,
     markup=True,
     show_time=True,
     show_level=True,

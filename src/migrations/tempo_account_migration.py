@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src import config
-from src.display import ProgressTracker, console
+from src.display import ProgressTracker
 
 # Get logger from config
 logger = config.logger
@@ -74,11 +74,6 @@ class TempoAccountMigration:
             List of Tempo account dictionaries
         """
         logger.info("Extracting Tempo accounts from Jira...", extra={"markup": True})
-
-        # Connect to Jira
-        if not self.jira_client.connect():
-            logger.error("Failed to connect to Jira", extra={"markup": True})
-            return []
 
         try:
             # Call the Tempo API to get all accounts
@@ -470,19 +465,3 @@ def run_tempo_account_migration(dry_run: bool = False):
     migration.analyze_account_mapping()
 
     logger.info("Tempo account migration complete", extra={"markup": True})
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Migrate Tempo accounts from Jira to OpenProject"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run in dry-run mode (no changes to OpenProject)",
-    )
-    args = parser.parse_args()
-
-    run_tempo_account_migration(dry_run=args.dry_run)
