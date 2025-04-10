@@ -7,23 +7,19 @@ Handles the migration of issue types from Jira to OpenProject work package types
 import os
 import sys
 import json
-import re
-import argparse
 import time
 import subprocess
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union, TYPE_CHECKING
+from typing import Dict, List, Any, Optional
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.models.mapping import JiraToOPMapping
 from src import config
-from src.display import ProgressTracker, process_with_progress, console
+from src.display import ProgressTracker, console
 from src.migrations.base_migration import BaseMigration
-
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 
 # Get logger from config
@@ -116,10 +112,6 @@ class IssueTypeMigration(BaseMigration):
             return self.jira_issue_types
 
         logger.info("Extracting issue types from Jira...")
-
-        if not self.jira_client.connect():
-            logger.error("Failed to connect to Jira")
-            return []
 
         try:
             issue_types = self.jira_client.get_issue_types()
@@ -850,55 +842,3 @@ class IssueTypeMigration(BaseMigration):
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
         logger.debug(f"Saved data to {filepath}")
-
-# Standalone execution for testing or isolated runs
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Migrate issue types from Jira to OpenProject.")
-    parser.add_argument("--config", default="config.yaml", help="Path to the configuration file.")
-    parser.add_argument("--direct", action="store_true", help="Attempt direct migration via Rails console (requires tmux, pexpect).")
-    parser.add_argument("--generate-ruby", action="store_true", help="Generate a Ruby script for manual migration.")
-    parser.add_argument("--force", action="store_true", help="Force re-extraction or re-creation of data.")
-    parser.add_argument("--log-level", default="INFO", help="Set logging level (DEBUG, INFO, WARNING, ERROR)")
-    parser.add_argument("--window", type=int, default=0, help="tmux window for Rails console")
-    parser.add_argument("--pane", type=int, default=0, help="tmux pane for Rails console")
-
-    args = parser.parse_args()
-
-    # Load configuration
-    config.load_config(args.config)
-    config.setup_logging(level=args.log_level)
-
-    # Initialize clients
-    jira_client = JiraClient()
-    op_client = OpenProjectClient()
-    rails_console = None
-    if args.direct:
-        # Initialize Rails console client only if needed
-        rails_console = OpenProjectRailsClient(window=args.window, pane=args.pane)
-
-    # Initialize migration class
-    migration = IssueTypeMigration(
-        jira_client=jira_client,
-        op_client=op_client,
-        rails_console=rails_console
-    )
-
-    # Execute the migration steps
-    migration.create_issue_type_mapping(force=args.force)
-
-    if args.direct:
-        migration.migrate_issue_types_via_rails(window=args.window, pane=args.pane)
-    elif args.generate_ruby:
-        types_to_create = {
-            name: mapping for name, mapping in migration.issue_type_mapping.items()
-            if mapping.get("openproject_id") is None
-        }
-        if types_to_create:
-            migration.generate_ruby_script(types_to_create)
-        else:
-            logger.info("No new work package types require a Ruby script.")
-
-    # Always analyze the final mapping
-    migration.analyze_issue_type_mapping()
-
-    logger.info("Issue type migration process finished.")

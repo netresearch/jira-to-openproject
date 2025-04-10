@@ -6,9 +6,7 @@ Handles the migration of Tempo timesheet accounts as custom fields in OpenProjec
 import os
 import sys
 import json
-import re
-import requests
-from typing import Dict, List, Any, Optional, TYPE_CHECKING
+from typing import Dict, List, Any, Optional
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -17,11 +15,14 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src import config
-from src.display import ProgressTracker, console
+from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration
 
-# Get logger from config
-logger = config.logger
+# Constants for filenames
+ACCOUNT_MAPPING_FILE = "account_mapping.json"
+TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
+OP_PROJECTS_FILE = "openproject_projects.json"
+COMPANY_MAPPING_FILE = "company_mapping.json"
 
 class AccountMigration(BaseMigration):
     """
@@ -40,44 +41,38 @@ class AccountMigration(BaseMigration):
 
     def __init__(
         self,
-        jira_client: Optional[JiraClient] = None,
-        op_client: Optional[OpenProjectClient] = None,
+        jira_client: 'JiraClient',
+        op_client: 'OpenProjectClient',
         op_rails_client: Optional['OpenProjectRailsClient'] = None,
-    ) -> None:
+    ):
         """
-        Initialize the account migration process.
+        Initialize the account migration tools.
 
         Args:
-            jira_client: Initialized Jira client
-            op_client: Initialized OpenProject client
-            op_rails_client: Initialized OpenProjectRailsClient instance
+            jira_client: Initialized Jira client instance.
+            op_client: Initialized OpenProject client instance.
+            op_rails_client: Optional instance of OpenProjectRailsClient for direct migration.
         """
-        super().__init__(jira_client, op_client)
-
-        self.op_rails_client = op_rails_client or OpenProjectRailsClient()
+        super().__init__(jira_client, op_client, op_rails_client)
         self.tempo_accounts = []
         self.op_projects = []
-        self.company_mapping = {}
         self.account_mapping = {}
+        self.company_mapping = {}
+        self._created_accounts = 0
+
         self.account_custom_field_id = None
 
-        # Base Tempo API URL - typically {JIRA_URL}/rest/tempo-accounts/1 for Server
-        self.tempo_api_base = f"{self.jira_client.jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
-
-        self.tempo_auth_headers = {
-            "Authorization": f"Bearer {self.jira_client.jira_config.get('api_token', '')}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-
-        self._load_data()
+        # Load existing data if available
+        self.tempo_accounts = self._load_from_json(TEMPO_ACCOUNTS_FILE) or []
+        self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or []
+        self.account_mapping = self._load_from_json(ACCOUNT_MAPPING_FILE) or {}
 
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
-        self.tempo_accounts = self._load_from_json("tempo_accounts.json", [])
-        self.op_projects = self._load_from_json("openproject_projects.json", [])
-        self.company_mapping = self._load_from_json("company_mapping.json", {})
-        self.account_mapping = self._load_from_json("account_mapping.json", {})
+        self.tempo_accounts = self._load_from_json(TEMPO_ACCOUNTS_FILE) or []
+        self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or []
+        self.company_mapping = self._load_from_json(COMPANY_MAPPING_FILE) or {}
+        self.account_mapping = self._load_from_json(ACCOUNT_MAPPING_FILE) or {}
 
         analysis_data = self._load_from_json("account_mapping_analysis.json", {})
         self.account_custom_field_id = analysis_data.get("custom_field_id")
@@ -96,7 +91,7 @@ class AccountMigration(BaseMigration):
         Returns:
             Dictionary mapping Tempo company IDs to OpenProject project IDs
         """
-        mapping_path = os.path.join(self.data_dir, "company_mapping.json")
+        mapping_path = os.path.join(self.data_dir, COMPANY_MAPPING_FILE)
 
         if os.path.exists(mapping_path):
             with open(mapping_path, "r") as f:
@@ -107,49 +102,37 @@ class AccountMigration(BaseMigration):
             self.logger.warning("No company mapping found. Accounts will be created as top-level projects.", extra={"markup": True})
             return {}
 
-    def extract_tempo_accounts(self) -> List[Dict[str, Any]]:
+    def extract_tempo_accounts(self, force: bool = False) -> List[Dict[str, Any]]:
         """
-        Extract account information from Tempo timesheet in Jira.
+        Extracts Tempo accounts using the JiraClient.
+
+        Args:
+            force: If True, re-extract data even if it exists locally.
 
         Returns:
-            List of Tempo account dictionaries
+            List of Tempo account dictionaries.
         """
-        self.logger.info("Extracting accounts from Tempo timesheet...", extra={"markup": True})
+        if self.tempo_accounts and not force and not config.migration_config.get("force", False):
+            self.logger.info(f"Using cached Tempo accounts from {TEMPO_ACCOUNTS_FILE}")
+            return self.tempo_accounts
 
-        if not self.jira_client.connect():
-            self.logger.error("Failed to connect to Jira", extra={"markup": True})
-            return []
+        self.logger.info("Extracting Tempo accounts...")
 
         try:
-            # Use expand=true to get linked projects in the same request
-            accounts_endpoint = f"{self.tempo_api_base}/account?expand=true"
+            # Get accounts from Tempo API
+            accounts = self.jira_client.get_tempo_accounts(expand=True)
 
-            response = requests.get(
-                accounts_endpoint,
-                headers=self.tempo_auth_headers,
-                verify=config.migration_config.get("ssl_verify", True),
-            )
-
-            if response.status_code == 200:
-                accounts = response.json()
-                self.logger.info(f"Retrieved {len(accounts)} Tempo accounts with expanded links", extra={"markup": True})
-
-                for account in accounts:
-                    account_links = account.get("links", [])
-                    account["linked_projects"] = account_links
-
+            if accounts is not None:
+                self.logger.info(f"Retrieved {len(accounts)} Tempo accounts")
                 self.tempo_accounts = accounts
-                self._save_to_json(accounts, "tempo_accounts.json")
-
+                self._save_to_json(accounts, TEMPO_ACCOUNTS_FILE)
                 return accounts
             else:
-                self.logger.error(
-                    f"Failed to get Tempo accounts. Status code: {response.status_code}, Response: {response.text}",
-                    extra={"markup": True}
-                )
+                self.logger.error("Failed to retrieve Tempo accounts using JiraClient.")
                 return []
+
         except Exception as e:
-            self.logger.error(f"Failed to extract Tempo accounts: {str(e)}", extra={"markup": True})
+            self.logger.error(f"Failed to extract Tempo accounts: {str(e)}", exc_info=True)
             return []
 
     def extract_openproject_projects(self) -> List[Dict[str, Any]]:
@@ -170,7 +153,7 @@ class AccountMigration(BaseMigration):
 
         self.logger.info(f"Extracted {len(self.op_projects)} projects from OpenProject", extra={"markup": True})
 
-        self._save_to_json(self.op_projects, "openproject_projects.json")
+        self._save_to_json(self.op_projects, OP_PROJECTS_FILE)
 
         return self.op_projects
 
@@ -243,7 +226,7 @@ class AccountMigration(BaseMigration):
                 }
 
         self.account_mapping = mapping
-        self._save_to_json(mapping, "account_mapping.json")
+        self._save_to_json(mapping, ACCOUNT_MAPPING_FILE)
 
         total_accounts = len(mapping)
         matched_accounts = sum(
@@ -399,7 +382,7 @@ class AccountMigration(BaseMigration):
 
                 tracker.increment()
 
-        self._save_to_json(self.account_mapping, "account_mapping.json")
+        self._save_to_json(self.account_mapping, ACCOUNT_MAPPING_FILE)
 
         self.logger.info(f"Account migration complete: {total_accounts} accounts added to custom field", extra={"markup": True})
         self.logger.info(
@@ -424,7 +407,7 @@ class AccountMigration(BaseMigration):
             Dictionary with analysis results
         """
         if not self.account_mapping:
-            mapping_path = os.path.join(self.data_dir, "account_mapping.json")
+            mapping_path = os.path.join(self.data_dir, ACCOUNT_MAPPING_FILE)
             if os.path.exists(mapping_path):
                 with open(mapping_path, "r") as f:
                     self.account_mapping = json.load(f)

@@ -15,6 +15,11 @@ jira:
   batch_size: 100
   # Fields to retrieve from Jira
   fields: "summary,description,issuetype,status,priority,assignee,reporter,created,updated,labels,components,fixVersions,versions,comment,attachment,worklog,customfield_*"
+  # ScriptRunner integration
+  scriptrunner:
+    enabled: false  # Set via J2O_JIRA_SCRIPTRUNNER_ENABLED
+    # Path relative to Jira URL (do not include https://your-jira-instance.example.com)
+    custom_field_options_endpoint: "/rest/scriptrunner/latest/custom/getAllCustomFieldsWithOptions"  # Set via J2O_JIRA_SCRIPTRUNNER_CUSTOM_FIELD_OPTIONS_ENDPOINT
 
 # OpenProject API settings
 openproject:
@@ -45,8 +50,6 @@ migration:
 
   # Performance settings
   batch_size: 1000
-  rate_limit_requests: 1000
-  rate_limit_period: 60
 
   # Behavior settings
   skip_existing: true

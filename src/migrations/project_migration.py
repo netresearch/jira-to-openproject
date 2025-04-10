@@ -7,24 +7,31 @@ import os
 import sys
 import json
 import re
-import requests
-import time
 from typing import Dict, List, Any, Optional
-from collections import deque
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
+from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src import config
-from src.display import ProgressTracker, process_with_progress, console
+from src.display import process_with_progress
+from src.migrations.base_migration import BaseMigration
 
 # Get logger from config
 logger = config.logger
 
+# Constants for filenames
+PROJECT_MAPPING_FILE = "project_mapping.json"
+JIRA_PROJECTS_FILE = "jira_projects.json"
+OP_PROJECTS_FILE = "openproject_projects.json"
+ACCOUNT_MAPPING_FILE = "account_mapping.json"
+PROJECT_ACCOUNT_MAPPING_FILE = "project_account_mapping.json"
+TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
 
-class ProjectMigration:
+
+class ProjectMigration(BaseMigration):
     """
     Handles the migration of projects from Jira to OpenProject.
 
@@ -39,69 +46,80 @@ class ProjectMigration:
     - Projects with account information stored in custom fields
     """
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient):
+    def __init__(
+        self,
+        jira_client: 'JiraClient',
+        op_client: 'OpenProjectClient',
+        op_rails_client: Optional['OpenProjectRailsClient'] = None,
+    ):
         """
         Initialize the project migration tools.
 
         Args:
             jira_client: Initialized Jira client instance.
             op_client: Initialized OpenProject client instance.
+            op_rails_client: Optional instance of OpenProjectRailsClient for direct migration.
         """
-        self.jira_client = jira_client
-        self.op_client = op_client
+        super().__init__(jira_client, op_client, op_rails_client)
         self.jira_projects = []
         self.op_projects = []
         self.project_mapping = {}
         self.account_mapping = {}
         self.project_account_mapping = {}
+        self._created_projects = 0
+
         self.account_custom_field_id = None
 
-        self.data_dir = config.get_path("data")
+        # Load existing data if available
+        self.jira_projects = self._load_from_json(JIRA_PROJECTS_FILE) or []
+        self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or []
+        self.project_mapping = self._load_from_json(PROJECT_MAPPING_FILE) or {}
 
-        # Base Tempo API URL - typically {JIRA_URL}/rest/tempo-accounts/1 for Server
-        self.tempo_api_base = f"{self.jira_client.jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
-
-        self.tempo_auth_headers = {
-            "Authorization": f"Bearer {self.jira_client.jira_config.get('api_token', '')}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-
-    def extract_jira_projects(self) -> List[Dict[str, Any]]:
+    def extract_jira_projects(self, force: bool = False) -> List[Dict[str, Any]]:
         """
         Extract projects from Jira.
 
         Returns:
             List of Jira projects
         """
-        logger.info("Extracting projects from Jira...")
+        if not force and not config.migration_config.get("force", False):
+             cached_projects = self._load_from_json(JIRA_PROJECTS_FILE, default=None)
+             if cached_projects:
+                 logger.info(f"Using cached Jira projects from {JIRA_PROJECTS_FILE}")
+                 self.jira_projects = cached_projects
+                 return self.jira_projects
 
-        if not self.jira_client.connect():
-            logger.error("Failed to connect to Jira")
-            return []
+        logger.info("Extracting projects from Jira...")
 
         self.jira_projects = self.jira_client.get_projects()
 
         logger.info(f"Extracted {len(self.jira_projects)} projects from Jira")
 
-        self._save_to_json(self.jira_projects, "jira_projects.json")
+        self._save_to_json(self.jira_projects, JIRA_PROJECTS_FILE)
 
         return self.jira_projects
 
-    def extract_openproject_projects(self) -> List[Dict[str, Any]]:
+    def extract_openproject_projects(self, force: bool = False) -> List[Dict[str, Any]]:
         """
         Extract projects from OpenProject.
 
         Returns:
             List of OpenProject project dictionaries
         """
+        if not force and not config.migration_config.get("force", False):
+            cached_projects = self._load_from_json(OP_PROJECTS_FILE, default=None)
+            if cached_projects:
+                 logger.info(f"Using cached OpenProject projects from {OP_PROJECTS_FILE}")
+                 self.op_projects = cached_projects
+                 return self.op_projects
+
         logger.info("Extracting projects from OpenProject...")
 
         self.op_projects = self.op_client.get_projects()
 
         logger.info(f"Extracted {len(self.op_projects)} projects from OpenProject")
 
-        self._save_to_json(self.op_projects, "openproject_projects.json")
+        self._save_to_json(self.op_projects, OP_PROJECTS_FILE)
 
         return self.op_projects
 
@@ -112,82 +130,87 @@ class ProjectMigration:
         Returns:
             Dictionary mapping Tempo account IDs to OpenProject custom field data
         """
-        mapping_path = os.path.join(self.data_dir, "account_mapping.json")
-
-        if os.path.exists(mapping_path):
-            with open(mapping_path, "r") as f:
-                self.account_mapping = json.load(f)
-
+        self.account_mapping = self._load_from_json(ACCOUNT_MAPPING_FILE, default={})
+        if self.account_mapping:
+            logger.info(f"Loaded account mapping with {len(self.account_mapping)} entries.")
             for account in self.account_mapping.values():
                 if account.get("custom_field_id"):
                     self.account_custom_field_id = account.get("custom_field_id")
                     break
 
-            logger.info(f"Loaded account mapping with {len(self.account_mapping)} entries")
-            if self.account_custom_field_id and isinstance(self.account_custom_field_id, str):
-                self.account_custom_field_id = self.account_custom_field_id.split()[0] if ' ' in self.account_custom_field_id else self.account_custom_field_id
             logger.info(f"Account custom field ID: {self.account_custom_field_id}")
             return self.account_mapping
         else:
             logger.warning("No account mapping found. Account information won't be migrated.")
             return {}
 
-    def extract_project_account_mapping(self) -> Dict[str, Any]:
+    def extract_project_account_mapping(self, force: bool = False) -> Dict[str, Any]:
         """
-        Extract mapping between Jira projects and Tempo accounts.
+        Extract the mapping between Jira projects and Tempo accounts.
+
+        Args:
+            force: If True, re-extract data even if it exists locally.
 
         Returns:
-            Dictionary mapping Jira project keys to Tempo account IDs
+            Dictionary mapping project keys to account IDs.
         """
-        logger.info("Extracting project-account mapping from Tempo...")
+        # Load existing data unless forced to refresh
+        if self.project_account_mapping and not force and not config.migration_config.get("force", False):
+            logger.info(f"Using cached project-account mapping from {PROJECT_ACCOUNT_MAPPING_FILE}")
+            return self.project_account_mapping
+
+        logger.info("Extracting project-account mapping...")
+
+        # Load account mapping data
+        self.load_account_mapping()
 
         if not self.jira_projects:
-            self.extract_jira_projects()
+            logger.warning("No Jira projects found - extract Jira projects first")
+            return {}
 
-        jira_projects_by_id = {
-            project.get("id"): project.get("key")
-            for project in self.jira_projects
-        }
+        # Get accounts for each project
+        mapping = {}
 
         try:
-            account_endpoint = f"{self.tempo_api_base}/account"
+            # Use expanded accounts data to get richer information
+            accounts = self.jira_client.get_tempo_accounts(expand=True)
 
-            response = requests.get(
-                account_endpoint,
-                headers=self.tempo_auth_headers,
-                verify=config.migration_config.get("ssl_verify", True),
-            )
-
-            if response.status_code == 200:
-                accounts = response.json()
-                logger.info(f"Retrieved {len(accounts)} accounts from Tempo")
-
-                mapping = {}
-                for account in accounts:
-                    projects = account.get("projects", [])
-                    account_id = account.get("id")
-
-                    for project in projects:
-                        project_id = project.get("projectId")
-                        is_default = project.get("default", False)
-
-                        if project_id in jira_projects_by_id and account_id:
-                            project_key = jira_projects_by_id[project_id]
-                            if is_default or project_key not in mapping:
-                                mapping[project_key] = account_id
-
-                self.project_account_mapping = mapping
-                self._save_to_json(mapping, "project_account_mapping.json")
-
-                logger.info(f"Created project-account mapping with {len(mapping)} entries")
-                return mapping
-            else:
-                logger.error(
-                    f"Failed to get accounts. Status code: {response.status_code}, Response: {response.text}"
-                )
+            if not accounts:
+                logger.warning("No Tempo accounts found while creating project-account mapping")
                 return {}
+
+            # Build project-to-account mapping from account data
+            for account in accounts:
+                if "projects" not in account or not account["projects"]:
+                    continue
+
+                for project_item in account["projects"]:
+                    project_key = project_item.get("key")
+
+                    if not project_key:
+                        continue
+
+                    if project_key not in mapping:
+                        mapping[project_key] = []
+
+                    # Add this account to the project's list
+                    account_data = {
+                        "id": str(account.get("id")),
+                        "key": account.get("key"),
+                        "name": account.get("name"),
+                    }
+                    mapping[project_key].append(account_data)
+
+            logger.info(f"Mapped {len(mapping)} projects to Tempo accounts")
+
+            # Save the mapping
+            self.project_account_mapping = mapping
+            self._save_to_json(mapping, PROJECT_ACCOUNT_MAPPING_FILE)
+
+            return mapping
+
         except Exception as e:
-            logger.error(f"Failed to extract project-account mapping: {str(e)}")
+            logger.error(f"Error extracting project-account mapping: {str(e)}", exc_info=True)
             return {}
 
     def create_project_in_openproject(
@@ -351,7 +374,7 @@ class ProjectMigration:
         )
 
         self.project_mapping = mapping
-        self._save_to_json(mapping, "project_mapping.json")
+        self._save_to_json(mapping, PROJECT_MAPPING_FILE)
 
         analysis = self.analyze_project_mapping()
 
@@ -368,9 +391,9 @@ class ProjectMigration:
             Dictionary with analysis results
         """
         if not self.project_mapping:
-            if os.path.exists(os.path.join(self.data_dir, "project_mapping.json")):
+            if os.path.exists(os.path.join(self.data_dir, PROJECT_MAPPING_FILE)):
                 with open(
-                    os.path.join(self.data_dir, "project_mapping.json"), "r"
+                    os.path.join(self.data_dir, PROJECT_MAPPING_FILE), "r"
                 ) as f:
                     self.project_mapping = json.load(f)
             else:
@@ -429,16 +452,3 @@ class ProjectMigration:
         logger.info(f"Failed projects: {analysis['failed_projects']}")
 
         return analysis
-
-    def _save_to_json(self, data: Any, filename: str):
-        """
-        Save data to a JSON file in the data directory.
-
-        Args:
-            data: Data to save
-            filename: Name of the file to save to
-        """
-        file_path = os.path.join(self.data_dir, filename)
-        with open(file_path, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.info(f"Saved data to {file_path}")

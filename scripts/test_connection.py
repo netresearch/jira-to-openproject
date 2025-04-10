@@ -49,17 +49,15 @@ def main():
         logger.error("Jira configuration is incomplete. Please check your .env file.")
     else:
         jira_client = JiraClient()
-        if jira_client.connect():
-            logger.info("Jira connection successful!")
-            # List projects
-            projects = jira_client.get_projects()
-            logger.info(f"Found {len(projects)} projects in Jira")
-            for project in projects[:5]:  # Show first 5 projects
-                logger.info(f" - {project['key']}: {project['name']}")
-            if len(projects) > 5:
-                logger.info(f" - ... and {len(projects) - 5} more")
-        else:
-            logger.error("Failed to connect to Jira")
+        logger.info("Jira connection successful!")
+        # List projects
+        projects = jira_client.get_projects()
+        logger.info(f"Found {len(projects)} projects in Jira")
+        for project in projects[:5]:  # Show first 5 projects
+            logger.info(f" - {project['key']}: {project['name']}")
+        if len(projects) > 5:
+            logger.info(f" - ... and {len(projects) - 5} more")
+
 
     # Test OpenProject connection
     logger.info("Testing OpenProject connection...")

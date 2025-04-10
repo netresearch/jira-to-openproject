@@ -6,7 +6,6 @@ Handles the migration of workflow states and their transitions from Jira to Open
 import os
 import sys
 import json
-import re
 from typing import Dict, List, Any, Optional
 
 # Add the src directory to the Python path
@@ -59,10 +58,6 @@ class WorkflowMigration:
         """
         logger.info("Extracting workflows from Jira...", extra={"markup": True})
 
-        if not self.jira_client.connect():
-            logger.error("Failed to connect to Jira")
-            return []
-
         self.jira_workflows = self._get_jira_workflows()
 
         logger.info(f"Extracted {len(self.jira_workflows)} workflows from Jira", extra={"markup": True})
@@ -113,10 +108,6 @@ class WorkflowMigration:
             List of Jira status definitions
         """
         logger.info("Extracting statuses from Jira...", extra={"markup": True})
-
-        if not self.jira_client.connect():
-            logger.error("Failed to connect to Jira")
-            return []
 
         try:
             url = f"{self.jira_client.base_url}/rest/api/2/status"

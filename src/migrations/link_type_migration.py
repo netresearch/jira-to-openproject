@@ -6,10 +6,7 @@ Handles the migration of issue link types from Jira to OpenProject.
 import os
 import sys
 import json
-import re
-import time
 from typing import Dict, List, Any, Optional
-from collections import deque
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -17,7 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src import config
-from src.display import ProgressTracker, process_with_progress, console
+from src.display import ProgressTracker, console
 
 # Get logger from config
 logger = config.logger
@@ -59,10 +56,6 @@ class LinkTypeMigration:
             List of Jira link type definitions
         """
         logger.info("Extracting link types from Jira...")
-
-        if not self.jira_client.connect():
-            logger.error("Failed to connect to Jira")
-            return []
 
         try:
             url = f"{self.jira_client.base_url}/rest/api/2/issueLinkType"

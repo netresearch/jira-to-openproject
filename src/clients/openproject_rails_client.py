@@ -7,15 +7,20 @@ This allows for executing Rails commands in an existing tmux session
 with an already running Rails console.
 """
 
+import os
+import sys
+import json
 import subprocess
 import time
 import re
-import json
-import logging
 from typing import Dict, List, Any, Union, Optional, Tuple
-from .. import config
 
-logger = logging.getLogger(__name__)
+# Add the src directory to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+from src import config
+
+logger = config.logger
 
 class OpenProjectRailsClient:
     """
@@ -103,71 +108,162 @@ class OpenProjectRailsClient:
         """Get the tmux target string for the session, window, and pane."""
         return f"{self.session_name}:{self.window}.{self.pane}"
 
-    def execute(self, command: str, timeout: int = 180) -> Dict[str, Any]:
+    def execute(self, command: str, timeout: int = 60) -> Dict[str, Any]:
         """
-        Execute a Rails command in the tmux session and capture the output.
+        Execute a command in the Rails console and wait for it to complete.
 
         Args:
-            command: The Ruby/Rails command to execute
-            timeout: Maximum time to wait for command to complete in seconds (default 180s)
+            command: The Ruby command to execute
+            timeout: Maximum time to wait for command completion (seconds)
 
         Returns:
-            Dict with keys 'status', 'output', 'raw_output'
+            Dictionary with status ('success' or 'error') and output or error message
         """
-        if not command:
+        if not self._is_connected:
             return {
                 'status': 'error',
-                'error': 'Empty command',
-                'output': None,
-                'raw_output': None
+                'error': 'Not connected to tmux session'
             }
 
+        target = self._get_target()
+        marker_id = str(int(time.time()))
+        start_marker = f"RAILSCMD_{marker_id}_START"
+        end_marker = f"RAILSCMD_{marker_id}_END"
+
+        # Create a file-based output command wrapper for large outputs
+        output_file = f"/tmp/rails_output_{marker_id}.json"
+
+        # Wrap the original command with code to write results to a file
+        file_based_command = f"""
+        begin
+          puts "{start_marker}"
+          result = nil
+          begin
+            # Execute the original command and capture the result
+            result = (
+              {command}
+            )
+
+            # Write the result to a file to handle large outputs
+            File.write('{output_file}', {{
+              status: 'success',
+              output: result.inspect
+            }}.to_json)
+
+            # Print a short confirmation to stdout
+            puts "Command executed, results written to {output_file}"
+          rescue => e
+            # Write error information to the file
+            File.write('{output_file}', {{
+              status: 'error',
+              error: e.message,
+              backtrace: e.backtrace
+            }}.to_json)
+            puts "ERROR: #{{e.class.name}}: #{{e.message}}"
+          end
+          puts "{end_marker}"
+          nil
+        end
+        """
+
+        # Send the command to the tmux session
+        result = self._send_command(file_based_command, start_marker, end_marker, timeout)
+
+        if result is None:
+            logger.error("Command timed out or markers not found")
+            return {
+                'status': 'error',
+                'error': 'Command timed out or markers not found'
+            }
+
+        # Check if the command execution finished successfully
+        if end_marker not in result:
+            logger.error(f"End marker not found in result: {result}")
+            return {
+                'status': 'error',
+                'error': 'Command did not complete (end marker not found)'
+            }
+
+        # Check for error messages in the result
+        # ERROR must be start of line
+        if result.startswith("ERROR: "):
+            error_line = next((line for line in result.splitlines() if "ERROR:" in line), "Unknown error")
+            logger.error(f"Error executing command: {error_line}")
+            return {
+                'status': 'error',
+                'error': error_line
+            }
+
+        # Now, transfer the output file from the container to local machine
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as temp_file:
+            local_output_path = temp_file.name
+
+        if self.transfer_file_from_container(output_file, local_output_path):
+            try:
+                # Read and parse the JSON output file
+                with open(local_output_path, 'r') as f:
+                    result_data = json.load(f)
+
+                # Delete the temporary file
+                os.unlink(local_output_path)
+
+                # Return the parsed results
+                if result_data.get('status') == 'success':
+                    return {
+                        'status': 'success',
+                        'output': result_data.get('output')
+                    }
+                else:
+                    return {
+                        'status': 'error',
+                        'error': result_data.get('error', 'Unknown error')
+                    }
+            except json.JSONDecodeError as e:
+                return {
+                    'status': 'error',
+                    'error': f'Error parsing JSON output file: {e}'
+                }
+            except Exception as e:
+                return {
+                    'status': 'error',
+                    'error': f'Error reading result file: {str(e)}'
+                }
+        else:
+            # If we couldn't retrieve the file, return as much from stdout as we have
+            logger.warning("Couldn't retrieve output file, returning stdout output")
+            return {
+                'status': 'success',
+                'output': result
+            }
+
+    def _send_command(self, command: str, start_marker: str, end_marker: str, timeout: int) -> Optional[str]:
+        """
+        Send a command to the tmux session and wait for completion.
+
+        Args:
+            command: The command to execute
+            start_marker: The marker to identify start of output
+            end_marker: The marker to identify end of output
+            timeout: Maximum time to wait for completion in seconds
+
+        Returns:
+            String containing the captured output, or None if timed out
+        """
+        if not command:
+            logger.error("Empty command")
+            return None
+
         try:
-            # Create unique markers for this command execution
-            cmd_id = f"{self.marker_prefix}{int(time.time())}_{self.command_counter}"
-            start_marker = f"{cmd_id}_START"
-            end_marker = f"{cmd_id}_END"
-            self.command_counter += 1
-
-            logger.debug(f"Executing command with markers: start='{start_marker}', end='{end_marker}'")
-
-            # Format the command with markers for clear output identification
-            # Use explicit nil return to prevent additional output
-            wrapped_command = f"""
-            begin
-              puts "{start_marker}"
-              result = nil
-              begin
-                # Log before execution for potentially long-running commands
-                puts "Starting command execution..."
-                result = {command}
-                puts "Command execution completed"
-              rescue => e
-                puts "ERROR: #{{e.class.name}}: #{{e.message}}"
-                result = nil
-              end
-              puts result.inspect
-              puts "{end_marker}"
-              nil
-            end
-            """
-
-            # Clear any existing output in the pane before executing
-            #self._clear_pane()
-
             # Send the command to the tmux session
             target = self._get_target()
 
-            logger.debug(f"Sending command to tmux (wrapped): {wrapped_command[:100]}...")
+            logger.debug(f"Sending command to tmux (wrapped): {command[:100]}...")
 
-            send_cmd = ["tmux", "send-keys", "-t", target, wrapped_command, "Enter"]
+            send_cmd = ["tmux", "send-keys", "-t", target, command, "Enter"]
             subprocess.run(send_cmd, check=True)
 
-            # Log that we're waiting for completion
-            logger.debug(f"Waiting for markers: start='{start_marker}', end='{end_marker}'")
-
             # Wait for the command to complete (look for end marker in output)
-            output = ""
             start_time = time.time()
             found_start = False
             found_end = False
@@ -210,8 +306,7 @@ class OpenProjectRailsClient:
                 if found_start and end_marker in pane_content:
                     logger.debug(f"Found end marker after {int(time.time()-start_time)}s")
                     found_end = True
-                    output = pane_content
-                    break
+                    return pane_content
 
                 # Recovery strategy for potentially hanging commands
                 elapsed_time = current_time - start_time
@@ -235,15 +330,9 @@ class OpenProjectRailsClient:
                     # Send Ctrl+C to interrupt any running process
                     ctrlc_cmd = ["tmux", "send-keys", "-t", target, "C-c"]
                     subprocess.run(ctrlc_cmd, check=True)
-
                     # Return partial result
                     logger.warning("Returning partial result due to long-running command")
-                    return {
-                        'status': 'error',
-                        'error': 'Command execution interrupted after 30s',
-                        'output': None,
-                        'raw_output': pane_content
-                    }
+                    return pane_content
 
                 # After a while, press Enter to try to recover if stuck
                 if not found_end and attempts % 50 == 0:  # Periodically try to recover
@@ -258,96 +347,15 @@ class OpenProjectRailsClient:
                 # Wait before checking again
                 time.sleep(check_interval)
 
-            if not found_start or not found_end:
-                logger.warning(f"Command timeout after {int(time.time()-start_time)}s: start_found={found_start}, end_found={found_end}")
-                return {
-                    'status': 'error',
-                    'error': 'Command execution timeout',
-                    'output': None,
-                    'raw_output': pane_content if 'pane_content' in locals() else None
-                }
-
-            # Extract the result from between the markers
-            result_value = "No output captured"
-            raw_output = output
-
-            # Get text between start and end markers
-            if start_marker in output and end_marker in output:
-                start_idx = output.find(start_marker) + len(start_marker)
-                end_idx = output.find(end_marker)
-                if start_idx < end_idx:
-                    extracted_output = output[start_idx:end_idx].strip()
-                    lines = [line.strip() for line in extracted_output.splitlines() if line.strip()]
-                    if lines:
-                        # The last line before the end marker should be the result.inspect output
-                        result_value = lines[-1]
-
-                        # If result is an error message, return an error status
-                        if any(line.startswith("ERROR:") for line in lines):
-                            error_line = next(line for line in lines if line.startswith("ERROR:"))
-                            return {
-                                'status': 'error',
-                                'error': error_line[6:].strip(),  # Remove "ERROR: " prefix
-                                'output': None,
-                                'raw_output': raw_output
-                            }
-
-            logger.debug(f"Command completed successfully in {int(time.time()-start_time)}s")
-
-            # Handle Ruby nil value
-            if result_value == "nil":
-                result_value = None
-
-            # Handle Ruby string values (remove quotes)
-            elif result_value.startswith('"') and result_value.endswith('"'):
-                result_value = result_value[1:-1]
-
-            # Handle Ruby numeric values - with improved parsing to extract numeric values from console output
-            elif re.search(r'\b\d+\b', result_value):
-                # Try to find and extract just the numeric part
-                match = re.search(r'\b(\d+)\b', result_value)
-                if match:
-                    result_value = int(match.group(1))
-                elif result_value.isdigit():  # Fallback for simple numeric strings
-                    result_value = int(result_value)
-
-            # Handle Ruby float values with improved parsing
-            elif re.search(r'\b\d+\.\d+\b', result_value):
-                match = re.search(r'\b(\d+\.\d+)\b', result_value)
-                if match:
-                    result_value = float(match.group(1))
-                # Old pattern as fallback
-                elif re.match(r'^-?\d+\.\d+$', result_value):
-                    result_value = float(result_value)
-
-            # Handle Ruby true/false values
-            elif result_value == "true":
-                result_value = True
-            elif result_value == "false":
-                result_value = False
-
-            return {
-                'status': 'success',
-                'output': result_value,
-                'raw_output': raw_output
-            }
+            logger.warning(f"Command timeout after {int(time.time()-start_time)}s: start_found={found_start}, end_found={found_end}")
+            return None
 
         except subprocess.SubprocessError as e:
-            logger.exception("Error executing command")
-            return {
-                'status': 'error',
-                'error': str(e),
-                'output': None,
-                'raw_output': None
-            }
+            logger.exception(f"Error sending command: {str(e)}")
+            return None
         except Exception as e:
-            logger.exception("Unexpected error executing command")
-            return {
-                'status': 'error',
-                'error': f"{type(e).__name__}: {str(e)}",
-                'output': None,
-                'raw_output': None
-            }
+            logger.exception(f"Unexpected error sending command: {type(e).__name__}: {str(e)}")
+            return None
 
     def _clear_pane(self):
         """Clear the tmux pane to prepare for command output."""
@@ -606,60 +614,378 @@ class OpenProjectRailsClient:
         return self._is_connected
 
     def _configure_irb_settings(self):
-        """Configure IRB settings for better machine parsing using a single tmux command batch."""
-        if self.debug:
-            logger.debug("Configuring IRB for machine interaction...")
+        """Configure IRB settings for better output and interaction."""
+        # Disable color output and ensure large objects can be displayed
+        config_cmd = """
+        IRB.conf[:USE_COLORIZE] = false
+        IRB.conf[:INSPECT_MODE] = :to_s
+        puts "IRB configuration commands sent successfully"
+        """
+
+        # Send the command to the tmux session
+        target = self._get_target()
+        send_cmd = ["tmux", "send-keys", "-t", target, config_cmd, "Enter"]
 
         try:
-            # Use direct tmux command to configure IRB settings
-            target = self._get_target()
-
-            # Combine all configuration commands into a single string
-            config_commands = [
-                "require 'irb'",                    # Ensure IRB module is loaded
-                "IRB.conf[:USE_PAGER] = false",     # Disable pager
-                "IRB.conf[:USE_COLORIZE] = false",  # Disable color
-                "IRB.conf[:INSPECT_MODE] = false",  # Simpler object inspection
-                "IRB.conf[:PROMPT_MODE] = :SIMPLE", # Use simpler prompt
-                "IRB.conf[:AUTO_INDENT] = false",   # Disable auto-indentation
-                "IRB.conf[:SAVE_HISTORY] = nil",    # Disable history saving
-                "IRB.conf[:USE_READLINE] = false",  # Disable readline
-                "IRB.conf[:USE_TRACER] = false",    # Disable tracing
-                "IRB.conf[:ECHO] = false",          # Disable echoing
-                "IRB.conf[:VERBOSE] = false",       # Disable verbose output
-                "IRB.conf[:ECHO_ON_ASSIGNMENT] = false", # Disable echo on assignment
-                "IRB.conf[:TERM_LENGTH] = 130"      # Set larger terminal width to avoid wrapping
-            ]
-
-            # Join all commands with semicolons for a single batch execution
-            batch_command = "; ".join(config_commands)
-
-            # Send the entire batch at once
-            disable_cmd = ["tmux", "send-keys", "-t", target, batch_command, "Enter"]
-            subprocess.run(disable_cmd, check=True)
-
+            subprocess.run(send_cmd, check=True, capture_output=True)
             logger.debug("IRB configuration commands sent successfully")
+        except subprocess.SubprocessError as e:
+            logger.error(f"Failed to configure IRB settings: {str(e)}")
+            raise
+
+    # Utility methods for file transfer and script execution
+    def transfer_file_to_container(self, local_path: str, remote_path: str) -> bool:
+        """
+        Transfer a file from the local machine to the OpenProject container.
+
+        Args:
+            local_path: Path to the file on the local machine
+            remote_path: Path where the file should be placed in the container
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Get container and server info from config
+            container_name = config.openproject_config.get("container")
+            op_server = config.openproject_config.get("server")
+
+            if not container_name or not op_server:
+                logger.error("Missing container or server configuration")
+                return False
+
+            logger.info(f"Transferring file to {op_server} container {container_name}")
+
+            # First, copy to server using SCP
+            logger.info(f"Copying file to server {op_server}")
+            scp_cmd = ["scp", local_path, f"{op_server}:/tmp/{os.path.basename(remote_path)}"]
+            logger.debug(f"Running command: {' '.join(scp_cmd)}")
+
+            subprocess.run(scp_cmd, check=True)
+
+            # Then copy from server to container
+            logger.info(f"Copying file from server to container {container_name}")
+            docker_cp_cmd = ["ssh", op_server, "docker", "cp",
+                          f"/tmp/{os.path.basename(remote_path)}",
+                          f"{container_name}:{remote_path}"]
+            logger.debug(f"Running command: {' '.join(docker_cp_cmd)}")
+
+            subprocess.run(docker_cp_cmd, check=True)
+
+            # Change permissions to make file readable by all
+            logger.info(f"Setting file permissions to allow reading by all users")
+            chmod_cmd = ["ssh", op_server, "docker", "exec", "-u", "root", container_name,
+                       "chmod", "644", remote_path]
+            logger.debug(f"Running command: {' '.join(chmod_cmd)}")
+
+            subprocess.run(chmod_cmd, check=True)
+
+            logger.success(f"Successfully copied file to container: {remote_path}")
+            return True
+        except subprocess.SubprocessError as e:
+            logger.error(f"Error transferring file to container: {e}")
+            return False
         except Exception as e:
-            logger.warning(f"Failed to configure IRB settings: {str(e)}")
+            logger.error(f"Unexpected error during file transfer: {e}")
+            return False
 
-# --- Example usage --- #
+    def transfer_file_from_container(self, remote_path: str, local_path: str) -> bool:
+        """
+        Transfer a file from the OpenProject container to the local machine.
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+        Args:
+            remote_path: Path to the file in the container
+            local_path: Path where the file should be placed on the local machine
 
-    # Usage examples
-    client = OpenProjectRailsClient(debug=True)
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Get container and server info from config
+            container_name = config.openproject_config.get("container")
+            op_server = config.openproject_config.get("server")
 
-    # Count users
-    user_count = client.count_records("User")
-    print(f"User count: {user_count}")
+            if not container_name or not op_server:
+                logger.error("Missing container or server configuration")
+                return False
 
-    # Get a project
-    project = client.find_record("Project", 1)
-    if project:
-        print(f"Found project: {project.get('name')}")
+            # First check if the file exists in the container
+            logger.info(f"Checking if file exists in container: {remote_path}")
+            check_cmd = ["ssh", op_server, "docker", "exec", container_name,
+                       "bash", "-c", f"ls -la {remote_path} || echo 'File not found'"]
 
-    # Execute a custom query
-    result = client.execute("Project.all.pluck(:name).take(3)")
-    if result['status'] == 'success':
-        print(f"Project names: {result['output']}")
+            result = subprocess.run(check_cmd, capture_output=True, text=True)
+            output = result.stdout.strip()
+
+            if "File not found" in output:
+                logger.error(f"File not found in container: {remote_path}")
+                return False
+
+            # Copy from container to server
+            logger.info(f"Copying file from container to server")
+            docker_cp_cmd = ["ssh", op_server, "docker", "cp",
+                          f"{container_name}:{remote_path}", "/tmp/"]
+
+            subprocess.run(docker_cp_cmd, check=True)
+
+            # Copy from server to local
+            logger.info(f"Copying file from server to local")
+            scp_cmd = ["scp", f"{op_server}:/tmp/{os.path.basename(remote_path)}",
+                     local_path]
+
+            subprocess.run(scp_cmd, check=True)
+
+            logger.success(f"Successfully copied file from container to local: {local_path}")
+            return True
+        except subprocess.SubprocessError as e:
+            logger.error(f"Error transferring file from container: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error during file transfer: {e}")
+            return False
+
+    def read_json_from_container(self, remote_path: str) -> Optional[Any]:
+        """
+        Read JSON data directly from a file in the container.
+
+        Args:
+            remote_path: Path to the JSON file in the container
+
+        Returns:
+            The parsed JSON data or None if it failed
+        """
+        try:
+            # Get container and server info from config
+            container_name = config.openproject_config.get("container")
+            op_server = config.openproject_config.get("server")
+
+            if not container_name or not op_server:
+                logger.error("Missing container or server configuration")
+                return None
+
+            # Read the file content directly with cat
+            logger.info(f"Reading JSON from container file: {remote_path}")
+            cat_cmd = ["ssh", op_server, "docker", "exec", container_name,
+                     "cat", remote_path]
+
+            result = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
+            content = result.stdout.strip()
+
+            if not content:
+                logger.error(f"Empty content from file: {remote_path}")
+                return None
+
+            # Parse the JSON content
+            try:
+                data = json.loads(content)
+                logger.info(f"Successfully parsed JSON data from container file")
+                return data
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing JSON from container file: {e}")
+                return None
+
+        except subprocess.SubprocessError as e:
+            logger.error(f"Error reading JSON from container: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error reading JSON from container: {e}")
+            return None
+
+    def execute_ruby_script(self, script_path: str, in_container: bool = True, output_as_json: bool = True) -> Dict[str, Any]:
+        """
+        Execute a Ruby script in the Rails console and optionally capture structured output.
+
+        Args:
+            script_path: Path to the Ruby script file
+            in_container: Whether the path is inside the container or local
+            output_as_json: Whether to expect and parse JSON output from the script
+
+        Returns:
+            Dictionary with execution results
+        """
+        try:
+            # Read the content of the script file regardless of location
+            if not in_container:
+                # For local files, read the content directly
+                try:
+                    with open(script_path, 'r') as f:
+                        script_content = f.read()
+                except Exception as e:
+                    logger.error(f"Error reading script file: {e}")
+                    return {
+                        'status': 'error',
+                        'message': f'Failed to read script file: {str(e)}'
+                    }
+            else:
+                # For container files, use docker exec to get content
+                container_name = config.openproject_config.get("container")
+                op_server = config.openproject_config.get("server")
+
+                if not container_name or not op_server:
+                    logger.error("Missing container or server configuration")
+                    return {
+                        'status': 'error',
+                        'message': 'Missing container or server configuration'
+                    }
+
+                try:
+                    cat_cmd = ["ssh", op_server, "docker", "exec", container_name, "cat", script_path]
+                    result = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
+                    script_content = result.stdout
+                except subprocess.SubprocessError as e:
+                    logger.error(f"Error reading script file from container: {e}")
+                    return {
+                        'status': 'error',
+                        'message': f'Failed to read script from container: {str(e)}'
+                    }
+
+            # Now execute the script content directly
+            logger.info(f"Executing Ruby script content directly in Rails console")
+
+            # Format for JSON output if needed
+            if output_as_json:
+                command = f"""
+                begin
+                  require 'json'
+                  puts "JSON_OUTPUT_START"
+                  # Execute the script content directly
+                  result = (
+                    {script_content}
+                  )
+                  # Convert result to JSON if it's not already a string
+                  if result.is_a?(String)
+                    puts result
+                  else
+                    puts result.to_json
+                  end
+                  puts "JSON_OUTPUT_END"
+                rescue => e
+                  puts "ERROR: #{{e.class.name}}: #{{e.message}}"
+                  puts e.backtrace.join("\\n")
+                  puts "JSON_OUTPUT_START"
+                  puts {{ "error": e.message, "backtrace": e.backtrace }}.to_json
+                  puts "JSON_OUTPUT_END"
+                end
+                """
+            else:
+                command = f"""
+                begin
+                  # Execute the script content directly
+                  {script_content}
+                rescue => e
+                  puts "ERROR: #{{e.class.name}}: #{{e.message}}"
+                  puts e.backtrace.join("\\n")
+                end
+                """
+
+            # Execute the command in the Rails console
+            result = self.execute(command)
+
+            if result['status'] != 'success':
+                return {
+                    'status': 'error',
+                    'message': result.get('error', 'Unknown error')
+                }
+
+            # Process JSON output if needed
+            if output_as_json:
+                output = result.get('output', '')
+                start_marker = "JSON_OUTPUT_START"
+                end_marker = "JSON_OUTPUT_END"
+
+                start_idx = output.find(start_marker)
+                end_idx = output.find(end_marker)
+
+                if start_idx != -1 and end_idx != -1:
+                    json_content = output[start_idx + len(start_marker):end_idx].strip()
+
+                    try:
+                        data = json.loads(json_content)
+                        return {
+                            'status': 'success',
+                            'data': data
+                        }
+                    except json.JSONDecodeError as e:
+                        return {
+                            'status': 'error',
+                            'message': f'Error parsing JSON output: {e}',
+                            'content': json_content
+                        }
+                else:
+                    return {
+                        'status': 'error',
+                        'message': 'JSON output markers not found in response',
+                        'output': output
+                    }
+            else:
+                return {
+                    'status': 'success',
+                    'output': result.get('output', '')
+                }
+
+        except Exception as e:
+            logger.error(f"Error executing Ruby script: {e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+
+    def execute_script_with_data(self, script_content: str, data: Any = None, output_as_json: bool = True) -> Dict[str, Any]:
+        """
+        Execute a Ruby script with provided data and capture the results.
+
+        Args:
+            script_content: Content of the Ruby script to execute
+            data: Data to pass to the script (will be converted to JSON)
+            output_as_json: Whether to expect and parse JSON output
+
+        Returns:
+            Dictionary with execution results
+        """
+        try:
+            # Create a temporary script file
+            import tempfile
+            import os
+
+            script_path = None
+            data_path = None
+
+            # If data is provided, write it to a separate JSON file
+            if data is not None:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as data_file:
+                    json.dump(data, data_file)
+                    data_path = data_file.name
+
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
+                # If data is provided, add code to load it from the JSON file
+                if data is not None:
+                    f.write(f'# Load data from separate JSON file\nrequire "json"\ninput_data = JSON.parse(File.read("{data_path.replace("\\\\", "/")}"))\n\n')
+
+                # Add the script content
+                f.write(script_content)
+                script_path = f.name
+
+            # Execute the script
+            result = self.execute_ruby_script(script_path, in_container=False, output_as_json=output_as_json)
+
+            # Clean up the temporary files
+            try:
+                if script_path:
+                    os.unlink(script_path)
+                if data_path:
+                    os.unlink(data_path)
+            except Exception as e:
+                logger.debug(f"Error cleaning up temporary files: {e}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error executing script with data: {e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }

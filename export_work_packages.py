@@ -11,7 +11,7 @@ import sys
 import json
 import argparse
 import subprocess
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "./")))
@@ -20,6 +20,11 @@ from src.migrations.work_package_migration import WorkPackageMigration
 from src.clients.openproject_client import OpenProjectClient
 from src import config
 from src.display import ProgressTracker, console
+from src.config import logger, migration_config, get_path
+from src.clients.jira_client import JiraClient
+from src.clients.openproject_rails_client import OpenProjectRailsClient
+from src.utils import load_json_file, save_json_file, sanitize_for_filename
+from src.mappings.mappings import Mappings
 
 # Get logger from config
 logger = config.logger
@@ -362,29 +367,39 @@ def import_project_work_packages(export_file: str, export_dir: str, op_client: A
             "error_count": len(work_packages_data)
         }
 
-def export_work_packages(dry_run: bool = False, force: bool = False) -> Dict[str, Any]:
+def export_work_packages(
+    jira_client: JiraClient,
+    op_client: OpenProjectClient,
+    op_rails_client: Optional[OpenProjectRailsClient],
+    dry_run: bool = False,
+    force: bool = False,
+    project_keys: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
-    Export work packages from Jira to JSON files for direct import into OpenProject.
+    Exports work packages (issues) from Jira projects and imports them into OpenProject.
 
     Args:
-        dry_run: If True, no changes will be made to OpenProject
-        force: If True, force extraction of data even if files exist
+        jira_client: The JiraClient instance.
+        op_client: The OpenProjectClient instance.
+        op_rails_client: The optional OpenProjectRailsClient instance.
+        dry_run: If True, performs extraction but no import/creation.
+        force: If True, re-extracts Jira issues even if JSON files exist.
+        project_keys: Optional list of project keys to process.
 
     Returns:
         Dictionary with export results
     """
     logger.info(f"Starting work package export (dry_run={dry_run}, force={force})", extra={"markup": True})
 
-    # Initialize the migration class but we'll only use it for extraction
-    migration = WorkPackageMigration(dry_run=dry_run)
-
-    # Load mappings
-    if not migration.load_mappings():
-        logger.error("Failed to load required mappings. Cannot continue.", extra={"markup": True})
-        return {"status": "error", "message": "Failed to load mappings"}
+    # Load mappings (ensure paths are correct)
+    mappings = Mappings(
+        data_dir=get_path("data"),
+        jira_client=jira_client,
+        op_client=op_client
+    )
 
     # Get list of Jira projects to process
-    jira_projects = list(set(entry.get("jira_key") for entry in migration.project_mapping.values() if entry.get("jira_key")))
+    jira_projects = list(set(entry.get("jira_key") for entry in mappings.project_mapping.values() if entry.get("jira_key")))
 
     if not jira_projects:
         logger.warning("No Jira projects found in mapping, nothing to export", extra={"markup": True})
@@ -393,7 +408,7 @@ def export_work_packages(dry_run: bool = False, force: bool = False) -> Dict[str
     logger.info(f"Found {len(jira_projects)} Jira projects to process", extra={"markup": True})
 
     # Create export directory
-    export_dir = os.path.join(migration.data_dir, "exports")
+    export_dir = os.path.join(mappings.data_dir, "exports")
     os.makedirs(export_dir, exist_ok=True)
 
     # Initialize counters
@@ -435,11 +450,11 @@ def export_work_packages(dry_run: bool = False, force: bool = False) -> Dict[str
     with ProgressTracker("Exporting projects", len(jira_projects), "Recent Projects") as project_tracker:
         for project_key in jira_projects:
             project_tracker.update_description(f"Processing project {project_key}")
-            logger.notice(f"Processing project {project_key}", extra={"markup": True})
+            logger.info(f"Processing project {project_key}", extra={"markup": True})
 
             # Find corresponding OpenProject project ID
             project_mapping_entry = None
-            for key, entry in migration.project_mapping.items():
+            for key, entry in mappings.project_mapping.items():
                 if entry.get("jira_key") == project_key and entry.get("openproject_id"):
                     project_mapping_entry = entry
                     break
@@ -453,7 +468,7 @@ def export_work_packages(dry_run: bool = False, force: bool = False) -> Dict[str
             op_project_id = project_mapping_entry["openproject_id"]
 
             # Extract issues for this project
-            issues = migration.extract_jira_issues(project_key, project_tracker=project_tracker)
+            issues = mappings.extract_jira_issues(project_key, project_tracker=project_tracker)
             total_issues += len(issues)
 
             if not issues:
@@ -466,102 +481,96 @@ def export_work_packages(dry_run: bool = False, force: bool = False) -> Dict[str
             work_packages_data = []
             logger.notice(f"Preparing {len(issues)} work packages for project {project_key}", extra={"markup": True})
 
+            # Initialize counters for the current project
+            exported_count_in_project = 0
+            error_count_in_project = 0
+
             for i, issue in enumerate(issues):
-                issue_key = issue.get("key", "Unknown")
+                # Use attribute access for jira.Issue object
+                try:
+                    issue_key = issue.key
+                except AttributeError:
+                    logger.warning(f"Skipping issue: Missing key attribute. Issue data: {issue}")
+                    continue # Skip this issue if it doesn't have a key
+
                 if i % 10 == 0 or i == len(issues) - 1:  # Log progress every 10 issues
-                    project_tracker.update_description(f"Preparing issue {issue_key} ({i+1}/{len(issues)})")
+                    project_tracker.update_description(f"Preparing issue {issue_key} ({i+1}/{len(issues)}) for export")
 
+                # Use the function's dry_run argument, not self.dry_run
                 if dry_run:
-                    logger.notice(f"DRY RUN: Would export work package for {issue_key}", extra={"markup": True})
-                    continue
+                    logger.notice(f"DRY RUN: Would prepare work package data for {issue_key}", extra={"markup": True})
+                    # Add a placeholder to mapping for dry runs if necessary for other logic,
+                    # but the main goal here is the JSON export file.
+                    # Example placeholder if needed later:
+                    # work_package_mapping_placeholder[issue.id] = {
+                    #     "jira_id": issue.id,
+                    #     "jira_key": issue.key,
+                    #     "openproject_id": None,
+                    #     "subject": getattr(issue.fields, 'summary', 'N/A'),
+                    #     "dry_run": True
+                    # }
+                    exported_count_in_project += 1 # Count as processed for summary
+                    continue # Don't add to work_packages_data in dry run
 
-                # Prepare work package data
-                wp_data = migration.prepare_work_package(issue, op_project_id)
+                # Prepare work package data using the mappings object
+                # The mappings.prepare_work_package method already handles jira.Issue objects
+                wp_data = mappings.prepare_work_package(issue, op_project_id)
                 if wp_data:
                     work_packages_data.append(wp_data)
+                    exported_count_in_project += 1
+                else:
+                    # Log if prepare_work_package failed (it logs internally too)
+                    logger.warning(f"Failed to prepare work package data for {issue_key}. Skipping.")
+                    error_count_in_project += 1
 
-            if dry_run:
-                project_tracker.add_log_item(f"DRY RUN: Would export {len(issues)} work packages for {project_key}")
-                project_tracker.increment()
-                continue
+            # --- After loop for the project ---
+            total_exported += exported_count_in_project
+            total_errors += error_count_in_project
 
-            if not work_packages_data:
-                logger.warning(f"No work package data prepared for project {project_key}, skipping", extra={"markup": True})
-                project_tracker.add_log_item(f"Skipped: {project_key} (no work packages prepared)")
-                project_tracker.increment()
-                continue
+            if not dry_run and work_packages_data:
+                # Save work packages data to export file
+                export_file_path = os.path.join(export_dir, f"work_packages_{project_key}.json")
+                logger.info(f"Saving {len(work_packages_data)} prepared work packages to {export_file_path}", extra={"markup": True})
+                if save_json_file(work_packages_data, export_file_path): # Use util function
+                     project_tracker.add_log_item(f"Exported {len(work_packages_data)} WPs for {project_key} to JSON")
+                else:
+                     project_tracker.add_log_item(f"[ERROR] Failed to save export file for {project_key}")
+                     total_errors += 1 # Count save failure as an error
 
-            # Save work packages data to export file
-            export_file = os.path.join(export_dir, f"work_packages_{project_key}.json")
-            logger.info(f"Saving {len(work_packages_data)} work packages to {export_file}", extra={"markup": True})
+            elif dry_run:
+                 project_tracker.add_log_item(f"[DRY RUN] Would export {exported_count_in_project} WPs for {project_key}")
+            else: # Not dry run, but no data prepared
+                 project_tracker.add_log_item(f"Skipped export for {project_key} (no data prepared/errors occurred)")
 
-            with open(export_file, "w") as f:
-                json.dump(work_packages_data, f, indent=2)
-
-            total_exported += len(work_packages_data)
-
-            # Immediately import the project if we have a valid client
-            if op_client and container_name:
-                try:
-                    # Add a visual separator between export and import
-                    logger.notice(f"✅ Export completed for {project_key}. Starting import...", extra={"markup": True})
-
-                    import_result = import_project_work_packages(
-                        export_file=export_file,
-                        export_dir=export_dir,
-                        op_client=op_client,
-                        container_name=container_name,
-                        op_server=op_server
-                    )
-
-                    # Update counters
-                    created_count = import_result.get('created_count', 0)
-                    error_count = import_result.get('error_count', 0)
-                    total_created += created_count
-                    total_errors += error_count
-
-                    # Update results
-                    results[project_key] = {
-                        "issues_count": len(issues),
-                        "exported_count": len(work_packages_data),
-                        "export_file": export_file,
-                        "created_count": created_count,
-                        "error_count": error_count,
-                        "import_status": import_result.get('status')
-                    }
-
-                    # Update progress tracker with color-coded result
-                    success_percent = (created_count / len(work_packages_data)) * 100 if len(work_packages_data) > 0 else 0
-                    if success_percent >= 95:
-                        status_icon = "✅"
-                    elif success_percent >= 80:
-                        status_icon = "✓"
-                    elif success_percent >= 60:
-                        status_icon = "⚠️"
-                    else:
-                        status_icon = "❗"
-
-                    project_tracker.add_log_item(f"{status_icon} {project_key}: Exported & Imported {created_count}/{len(work_packages_data)} work packages (Errors: {error_count})")
-                except Exception as e:
-                    logger.error(f"Error importing work packages for {project_key}: {str(e)}", extra={"markup": True})
-                    results[project_key] = {
-                        "issues_count": len(issues),
-                        "exported_count": len(work_packages_data),
-                        "export_file": export_file,
-                        "import_status": "error",
-                        "import_error": str(e)
-                    }
-                    project_tracker.add_log_item(f"❌ {project_key}: Export OK but import FAILED - {str(e)}")
-            else:
-                # Just export without import
-                results[project_key] = {
-                    "issues_count": len(issues),
-                    "exported_count": len(work_packages_data),
-                    "export_file": export_file
-                }
-                project_tracker.add_log_item(f"📄 {project_key}: Exported {len(work_packages_data)} issues (No import)")
+            # --- Direct Import Logic (Conditional) ---
+            # This part seems separate from the primary JSON export goal of this script.
+            # It should likely only run if a specific flag (like direct_work_package_creation)
+            # is set, and it needs its own error handling.
+            # Assuming direct creation is tied to the `direct_migration` flag for now.
+            if config.migration_config.get("direct_work_package_creation", False):
+                 logger.notice(f"Attempting direct import for {project_key}...", extra={"markup": True})
+                 # Instantiate WorkPackageMigration for this specific project
+                 wp_migration = WorkPackageMigration(
+                    jira_client=jira_client,
+                    op_client=op_client,
+                    op_rails_client=op_rails_client,
+                    mappings=mappings,
+                    project_key=project_key,
+                    op_project_id=op_project_id,
+                    data_dir=get_path("data"), # Use config to get data dir
+                    tracker=project_tracker, # Pass the existing tracker
+                    dry_run=dry_run
+                 )
+                 # Call the direct import method, passing the list of jira.Issue objects
+                 import_summary = wp_migration.import_work_packages_direct(issues) # Pass the original list
+                 # Accumulate direct import counts
+                 created_count_direct = import_summary.get("created_count", 0)
+                 error_count_direct = import_summary.get("error_count", 0)
+            # --- End Direct Import Logic ---
 
             project_tracker.increment()
+
+    # Final Summary (combine export and direct import results)
 
     # Save summary of exports
     summary_file = os.path.join(export_dir, "export_summary.json")
@@ -662,7 +671,7 @@ def import_work_packages_to_rails(export_dir: str = None, project_key: str = Non
             current_project_key = file_name.replace("work_packages_", "").replace(".json", "")
 
             import_tracker.update_description(f"Processing project {current_project_key}")
-            logger.notice(f"Processing project {current_project_key}", extra={"markup": True})
+            logger.info(f"Processing project {current_project_key}", extra={"markup": True})
 
             # Read export file
             try:

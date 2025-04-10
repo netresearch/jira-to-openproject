@@ -6,8 +6,7 @@ Handles the migration of users and their accounts from Jira to OpenProject.
 import os
 import sys
 import json
-import pandas as pd
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import requests
 import re
 
@@ -17,7 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src import config
-from src.display import ProgressTracker, console
+from src.display import ProgressTracker
 
 # Get logger from config
 logger = config.logger
