@@ -49,6 +49,7 @@ This project uses a configuration system combining environment variables and YAM
 For detailed configuration information, see [Configuration Guide](./docs/configuration.md).
 
 Key configuration points:
+
 - Environment variables use the `J2O_` prefix
 - `.env` contains version-controlled defaults
 - `.env.local` contains non-versioned custom settings (for sensitive data)
@@ -88,6 +89,7 @@ This project leverages modern Python 3.13 features:
    - Use `python run_migration.py --components issue_types [--direct-migration]`
 
 Both components provide:
+
 - Automatic extraction of data from Jira and OpenProject
 - Smart mapping between systems
 - Direct execution on Rails console via SSH/Docker (when using `--direct-migration`)
@@ -96,10 +98,36 @@ Both components provide:
 
 #### Jira has much more API limitations
 
-expand is not controllable on all Server editions/versions.
+### Jira API Expansion and Field Retrieval Limitations
 
-- Limiting the fields retrieved is a way to reduce payload
-- Using ScriptRunner to define your own REST API Endpoints
+- The `expand` parameter is not consistently supported across all Jira Server editions/versions
+- Field selection is inconsistently implemented in different API endpoints
+- Limiting the fields retrieved is crucial for performance and reducing payload size
+- Some endpoints ignore field selection parameters entirely
+- Rate limiting can be triggered by large response payloads
+- Workarounds include:
+  - Using ScriptRunner to define custom REST API endpoints with precise field control
+  - Using the `/rest/api/2/search` endpoint with explicit field selection where possible
+
+### Custom Field Options
+
+In Jira (9.11+), retrieving custom field options requires accessing the createmeta endpoint for each combination of custom field, issue type, and project. This approach has several limitations:
+
+- Requires multiple API calls (one per combination)
+- May trigger rate limiting or CAPTCHA challenges
+- Not all field options may be visible in every project/issue type context
+
+The migration tool handles this by:
+
+- Caching field metadata to reduce API calls
+
+Alternatives for more efficient custom field option retrieval:
+
+1. Using ScriptRunner to create a custom REST endpoint that exports all field options at once
+2. Manually exporting field options via the Jira admin interface and importing the data
+3. Using the Jira database directly (if you have access) to query field options
+
+For large Jira instances with many custom fields, consider using one of these alternatives to improve migration performance and reliability.
 
 ### Technology Stack
 
@@ -132,6 +160,7 @@ python scripts/test_rails_connection.py --host your-op-server.example.com
 ```
 
 This script verifies:
+
 - SSH connectivity to the server
 - Access to the Docker container
 - Ability to launch the Rails console
