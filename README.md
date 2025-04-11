@@ -12,6 +12,7 @@ This project provides a toolset for migrating project management data from Jira 
 *   **Source Code Overview:** [src/README.md](src/README.md)
 *   **Scripts Overview:** [scripts/README.md](scripts/README.md)
 *   **Tests Overview:** [tests/README.md](tests/README.md)
+*   **Status Migration:** [docs/status_migration.md](docs/status_migration.md)
 
 ## Introduction
 
@@ -99,6 +100,11 @@ python export_work_packages.py --projects PROJECT1 PROJECT2
 *   **Rails Console Integration:** For creating Custom Fields and Work Package Types in OpenProject (which lack API support), the tool can:
     *   Directly execute commands on the Rails console via SSH/Docker (`--direct-migration`). Requires proper configuration in `.env.local`.
     *   Generate Ruby scripts (`--generate-ruby` option for relevant components) that you can manually run on the OpenProject server's Rails console.
+*   **Status Migration:** The migration of Jira statuses to OpenProject includes:
+    *   Automatic status extraction and mapping between Jira and OpenProject
+    *   Rails console integration for creating new statuses in OpenProject
+    *   Detailed documentation in [docs/status_migration.md](docs/status_migration.md)
+    *   Testing and validation to ensure status mapping correctness
 *   **Dry Run:** The `--dry-run` flag prevents the tool from making any creating/updating calls to the OpenProject API or Rails console.
 *   **Configuration:** See [docs/configuration.md](docs/configuration.md).
 *   **Data Directory:** The `var/` directory stores extracted data, logs, generated scripts, and mapping files. It's crucial for the migration process.
