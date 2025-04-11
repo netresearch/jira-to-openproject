@@ -166,7 +166,7 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
         3. Verify types appear correctly in work package forms
         4. Verify the mapping file contains correct IDs for all types
         5. Check if types are correctly associated with projects
-    - [ ] Test work package type creation and mapping
+    - [x] Test work package type creation and mapping
 
 - **Statuses** (`status_migration.py`)
     - [x] Extract Jira statuses
