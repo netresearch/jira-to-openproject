@@ -123,9 +123,9 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
         - [x] Handle parent project relationships (if applicable)
     - [x] Map Jira projects to OpenProject projects (`var/data/project_mapping.json`)
     - [x] Create/Update projects in OpenProject via API
-    - [ ] Define testing steps for project migration
-    - [ ] Test project creation and attribute mapping
-    - [ ] Test project hierarchy mapping
+    - [x] Define testing steps for project migration
+    - [x] Test project creation and attribute mapping
+    - [x] Test project hierarchy mapping
 
 - **Link Types (Relations)** (`link_type_migration.py`)
     - [x] Extract Jira issue link types
@@ -133,9 +133,9 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
     - [x] Define Link Type Mapping Strategy (Jira Link -> OP Relation)
     - [x] Map Jira link types to OpenProject relation types (`var/data/link_type_mapping.json`)
     - [x] Create/Update relation types in OpenProject via API (if needed, based on mapping)
-    - [ ] Define testing steps for link type/relation migration
-    - [ ] Test relation type creation/mapping
-    - [ ] Test relation usage in work package migration
+    - [x] Define testing steps for link type/relation migration
+    - [x] Test relation type creation/mapping
+    - [x] Test relation usage in work package migration
 
 - **Issue Types (Work Package Types)** (`issue_type_migration.py`)
     - [x] Extract Jira issue types
