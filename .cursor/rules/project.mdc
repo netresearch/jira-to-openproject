@@ -14,6 +14,7 @@ See [PROJECT_GOALS.md](mdc:PROJECT_GOALS.md)
 
 - use Jira API and OpenProject API and OpenProject rails console
 - use Python venv ".venv"
+- when writing ruby code in python, split up the ruby code into a head section using f-string where you assign python variables, and main section not using f-string. To separate the Python variable interpolation from the Ruby code logic.
 
 # Project Tasks
 
@@ -29,4 +30,4 @@ See [repomix-output.txt](mdc:repomix-output.txt) for a project overview.
 
 # Version Control System
 
-Use git to make commits with comprehensive and semantic messages.
+Use git to make commits with semantic and comprehensive commit messages.
