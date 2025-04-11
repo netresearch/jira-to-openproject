@@ -1,6 +1,13 @@
 """
 Status migration module for Jira to OpenProject migration.
 Handles the migration of Jira statuses to OpenProject statuses.
+
+Implementation is now complete, including:
+- Status extraction from Jira and OpenProject
+- Status mapping creation
+- Status creation in OpenProject via Rails
+- Automated and manual processes documented in docs/status_migration.md
+- Test validation in tests/test_status_migration.py
 """
 
 import os

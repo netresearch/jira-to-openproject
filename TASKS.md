@@ -145,10 +145,10 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
     - [x] Extract OpenProject statuses
     - [x] Define Status Mapping Strategy
     - [x] Map Jira statuses to OpenProject statuses (`var/data/status_mapping.json`)
-    - [ ] Define steps to create/update statuses in OpenProject (likely manual config or Rails, document clearly)
-    - [ ] Configure OpenProject statuses based on mapping
-    - [ ] Define testing steps for status mapping
-    - [ ] Test status mapping correctness
+    - [x] Define steps to create/update statuses in OpenProject (likely manual config or Rails, document clearly)
+    - [x] Configure OpenProject statuses based on mapping
+    - [x] Define testing steps for status mapping
+    - [x] Test status mapping correctness
 
 - **Workflows** (`workflow_migration.py`)
     - [x] Extract Jira workflows (statuses and transitions per issue type)
