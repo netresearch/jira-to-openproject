@@ -939,20 +939,36 @@ class WorkPackageMigration:
         safe_subject = (wp_payload.get('subject', '') or '').replace("'", "\\'")
         safe_description = (wp_payload.get('description', '') or '').replace("'", "\\'").replace("\n", "\\n")
 
-        # Create a simpler Ruby command that avoids complex f-string issues
-        command = """
+        # Header section with Python f-string variables
+        header_script = f"""
+        # Work Package configuration variables
+        project_id_var = {str(project_id)}
+        type_id_var = {str(type_id)}
+        subject_var = '{safe_subject}'
+        description_var = '{safe_description}'
+        status_id_var = {str(status_id or 2083761)}
+        """
+
+        # Add assignee if available
+        if wp_payload.get('assigned_to_id'):
+            header_script += f"""
+        assignee_id_var = {str(wp_payload.get('assigned_to_id'))}
+            """
+
+        # Main Ruby section without f-strings
+        main_script = """
         begin
-          puts \"Starting command execution...\"
-          project = Project.find(""" + str(project_id) + """)
-          type_id = """ + str(type_id) + """
+          puts "Starting command execution..."
+          project = Project.find(project_id_var)
+          type_id = type_id_var
 
           # Check if the type is enabled for the project, if not use the first available type
           unless project.types.map(&:id).include?(type_id)
-            puts \"Type \#{type_id} not available in project, using the first available type\"
+            puts "Type #{type_id} not available in project, using the first available type"
             if project.types.any?
               type_id = project.types.first.id
             else
-              puts \"No types available for project, using system default\"
+              puts "No types available for project, using system default"
               type_id = Type.first.id
             end
           end
@@ -961,43 +977,46 @@ class WorkPackageMigration:
           wp = WorkPackage.new(
             project_id: project.id,
             type_id: type_id,
-            subject: '""" + safe_subject + """',
-            description: '""" + safe_description + """',
-            status_id: """ + str(status_id or 2083761) + """,
+            subject: subject_var,
+            description: description_var,
+            status_id: status_id_var,
             author_id: (User.find_by(admin: true)&.id || User.find_by(id: 1)&.id || User.first&.id),
             priority_id: (IssuePriority.default&.id || IssuePriority.find_by(is_default: true)&.id || IssuePriority.first&.id)
           )
-          """
+        """
 
-        # Add assignee if available
+        # Add assignee to main script if available
         if wp_payload.get('assigned_to_id'):
-            command += """
-          wp.assigned_to_id = """ + str(wp_payload.get('assigned_to_id')) + """
+            main_script += """
+          wp.assigned_to_id = assignee_id_var
             """
 
-        # Add completion and debug logic
-        command += """
+        # Complete the main script
+        main_script += """
           if wp.save
-            puts \"SUCCESS: Work package created with ID: \#{wp.id}\"
+            puts "SUCCESS: Work package created with ID: #{wp.id}"
             wp
           else
-            puts \"ERROR: Failed to save work package. Validation errors:\"
+            puts "ERROR: Failed to save work package. Validation errors:"
             wp.errors.full_messages.each do |msg|
-              puts \"  - \#{msg}\"
+              puts "  - #{msg}"
             end
-            puts \"Trying to debug missing associations:\"
-            puts \"  - Project exists? \#{Project.exists?(wp.project_id)}\"
-            puts \"  - Type exists? \#{Type.exists?(wp.type_id)}\"
-            puts \"  - Type available in project? \#{Project.find_by(id: wp.project_id)&.types&.map(&:id)&.include?(wp.type_id)}\"
-            puts \"  - Status? \#{wp.status_id || 'nil'}\"
-            puts \"  - Priority? \#{wp.priority_id || 'nil'}\"
+            puts "Trying to debug missing associations:"
+            puts "  - Project exists? #{Project.exists?(wp.project_id)}"
+            puts "  - Type exists? #{Type.exists?(wp.type_id)}"
+            puts "  - Type available in project? #{Project.find_by(id: wp.project_id)&.types&.map(&:id)&.include?(wp.type_id)}"
+            puts "  - Status? #{wp.status_id || 'nil'}"
+            puts "  - Priority? #{wp.priority_id || 'nil'}"
             nil
           end
         rescue => e
-          puts \"EXCEPTION: \#{e.class.name}: \#{e.message}\"
+          puts "EXCEPTION: #{e.class.name}: #{e.message}"
           nil
         end
         """
+
+        # Combine the scripts
+        command = header_script + main_script
 
         try:
             # Corrected method name: execute
