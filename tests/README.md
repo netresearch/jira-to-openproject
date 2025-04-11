@@ -1,64 +1,79 @@
-# Tests (`tests/`)
+# Tests Directory (`tests/`)
 
-This directory contains automated tests for the Jira to OpenProject migration tool.
+This directory contains test modules for the Jira to OpenProject migration tool.
 
-## Current Status
+## Testing Strategy
 
-The test suite is currently **minimal** and requires significant expansion to ensure the reliability and correctness of the migration tool.
+The testing approach for this project combines unit tests, integration tests, and manual validation:
+
+1. **Unit Tests**: Test individual components in isolation using mocks for external dependencies
+2. **Integration Tests**: Test the interaction between components and with actual APIs in test environments
+3. **Manual Validation**: Perform data validation and quality checks by comparing data between systems
+
+## Test Modules
+
+- **`test_environment.py`**: Verifies that the Python environment is correctly set up with all required dependencies.
+- **`test_user_migration.py`**: Tests the user migration component (`src/migrations/user_migration.py`), validating the extraction, mapping, and creation of users.
+
+## Test Coverage Roadmap
+
+The following test modules should be implemented to achieve comprehensive test coverage:
+
+- **API Clients**:
+  - Test Jira client connection and data retrieval
+  - Test OpenProject client connection and entity creation
+  - Test Rails client connection and command execution
+
+- **Migration Components**:
+  - Test each migration component (similar to `test_user_migration.py`)
+  - Test custom field mapping and creation
+  - Test work package type mapping and creation
+  - Test status and workflow mapping
+  - Test work package migration with attachment and comment handling
+
+- **Configuration & Utils**:
+  - Test configuration loading mechanism
+  - Test utility functions
 
 ## Running Tests
 
-Tests are executed using `pytest` from within the Docker development environment.
+You can run tests using the provided test runner script:
 
-1.  **Ensure the Docker container is running:**
-    ```bash
-    docker compose up -d
-    ```
+```bash
+# Run all tests
+python scripts/run_tests.py
 
-2.  **Execute tests within the container:**
-    ```bash
-    # Run all tests
-    docker exec -it j2o-app pytest
+# Run a specific test file
+python scripts/run_tests.py --pattern test_user_migration.py
 
-    # Run tests with verbose output
-    docker exec -it j2o-app pytest -v
+# Run tests with verbose output
+python scripts/run_tests.py --verbose
+```
 
-    # Run tests in a specific file
-    docker exec -it j2o-app pytest tests/test_environment.py
+### Running Individual Tests
 
-    # Run a specific test function
-    docker exec -it j2o-app pytest tests/test_environment.py::test_python_version
-    ```
+To run a specific test case or test method:
 
-## Test Structure
+```bash
+# Run a specific test method
+python scripts/run_tests.py --pattern tests/test_user_migration.py:TestUserMigration.test_extract_data
+```
 
-*(Proposed structure - to be implemented)*
+## Test Configuration
 
-*   **Unit Tests:** Focus on testing individual functions, methods, or classes in isolation. Examples:
-    *   Testing parsing logic in `utils.py`.
-    *   Testing configuration loading in `config_loader.py`.
-    *   Testing mapping functions.
-    *   Mocking API clients to test migration component logic without external calls.
-*   **Integration Tests:** Test the interaction between different components. Examples:
-    *   Testing the connection logic in API clients (`test_connection.py`).
-    *   Testing the Rails console client connection (`test_rails_connection.py`).
-    *   Testing a migration component with mocked API responses.
-*   **End-to-End (E2E) Tests:** Simulate a real migration scenario, potentially requiring live (but separate test instances) of Jira and OpenProject. These are more complex to set up and maintain.
-    *   Could involve running `run_migration.py` with specific components and validating the results in the test OpenProject instance.
-    *   Might use `src/cleanup_openproject.py` to reset the state between test runs.
+Tests use a mock configuration for testing purposes. No real API calls are made during unit testing, as external dependencies are mocked.
 
-## Key Areas for Test Expansion
+## Adding New Tests
 
-*   **Migration Components (`src/migrations/`)**: Each component needs tests covering:
-    *   Extraction logic (mocking Jira API).
-    *   Mapping logic (various scenarios, edge cases).
-    *   Loading logic (mocking OpenProject API/Rails client).
-    *   Handling of different data variations (e.g., missing fields, different custom field types).
-*   **API Clients (`src/clients/`)**: More robust connection tests, error handling tests, and tests for specific API call parsing.
-*   **Rails Client (`src/clients/openproject_rails_client.py`)**: Tests for different command execution scenarios, prompt detection, and error handling.
-*   **Configuration Loading (`src/config_loader.py`)**: Tests for priority rules, environment variable overrides, and handling of missing files/variables.
-*   **Mapping Logic (`src/mappings/`)**: Tests for loading/saving mapping files and applying different mapping strategies.
+When adding new tests:
 
-## Contributing Tests
+1. Create a new test file following the naming convention `test_*.py`
+2. Implement test cases using the `unittest` framework
+3. Use mocks (`unittest.mock`) to isolate the component being tested
+4. Add appropriate assertions to validate expected behavior
+5. Update the TASKS.md file to mark testing tasks as completed
+6. Update this README file to document the new test module
 
-Please refer to the [Development Guide](../docs/development.md) for contribution guidelines. Adding tests, especially for existing untested functionality, is highly encouraged.
+## Test Data
+
+Test fixtures and sample data are defined within each test module as needed.

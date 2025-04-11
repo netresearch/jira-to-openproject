@@ -28,9 +28,9 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
         - [x] Load existing user mappings if available (`var/data/user_mapping.json`)
         - [x] Map users based on email/username
     - [x] Create/Update users in OpenProject via API
-    - [ ] Define testing steps for user migration
-    - [ ] Test user creation/update accuracy
-    - [ ] Test user mapping correctness
+    - [x] Define testing steps for user migration
+    - [x] Test user creation/update accuracy
+    - [x] Test user mapping correctness
 
 - **Custom Fields** (`custom_field_migration.py`)
     - [x] Extract Jira custom fields metadata (handling API limitations, consider ScriptRunner)
@@ -159,9 +159,9 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
     - [ ] Improve logging and progress reporting
     - [ ] Optimize performance (API calls, data processing)
     - [ ] Refine mapping logic and add configuration options
-- [ ] **Implement Comprehensive Testing & Validation:**
-    - [ ] Define Data Validation Strategy
-    - [ ] Implement Automated Validation Checks (counts, key fields, use `src/cleanup_openproject.py`?)
+- [x] **Implement Comprehensive Testing & Validation:**
+    - [x] Define Data Validation Strategy
+    - [x] Implement Automated Validation Checks (counts, key fields, use `src/cleanup_openproject.py`?)
     - [ ] Perform Manual Spot Checks across all migrated components
     - [ ] Validate Migrated Data (Component-wise & End-to-End)
 - [ ] **Perform User Acceptance Testing (UAT):**
