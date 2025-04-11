@@ -175,6 +175,73 @@ This document summarizes the testing status of key migration components and prov
    - Sub-task issue types
    - Milestone issue types
 
+### Workflow Migration
+
+**Status**: ✅ Implementation and Unit Tests Complete
+
+**Unit Tests**:
+- `test_extract_jira_statuses`: Tests extraction of status data from Jira
+- `test_extract_openproject_statuses`: Tests extraction of status data from OpenProject
+- `test_create_status_mapping`: Tests the mapping between Jira and OpenProject statuses
+- `test_create_status_in_openproject`: Tests creation of statuses in OpenProject
+- `test_migrate_statuses`: Tests the migration of statuses from Jira to OpenProject
+- `test_create_workflow_configuration`: Tests the generation of workflow configuration documentation
+- `test_analyze_status_mapping`: Tests the analysis of status mapping
+- `test_extract_jira_workflows`: Tests extraction of workflow data from Jira
+
+**Manual Testing Steps**:
+1. Verify status extraction from Jira:
+   - Check that all Jira statuses are extracted correctly
+   - Verify key attributes (name, category, color)
+
+2. Verify status extraction from OpenProject:
+   - Check that existing OpenProject statuses are identified
+   - Verify key attributes (name, color, closed flag)
+
+3. Test status mapping creation:
+   - Check that exact matches by name are correctly mapped
+   - Verify the mapping file is created with correct information
+
+4. Test status creation in OpenProject:
+   - Identify Jira statuses that have no match in OpenProject
+   - Run the migration for these statuses
+   - Verify statuses are created in OpenProject with correct attributes
+
+5. Test the complete status migration process:
+   - Run the migrate_statuses method
+   - Verify that unmatched statuses are created in OpenProject
+   - Check that the mapping file is updated correctly
+
+6. Verify workflow configuration in OpenProject:
+   - Check that workflow configuration instructions are generated
+   - Understand that OpenProject automatically makes all statuses available
+     for all work package types by default
+   - Verify that any custom workflow configurations are documented
+
+7. Manual configuration of workflows:
+   - Using the Admin interface in OpenProject, navigate to:
+     Administration > Work packages > Types
+   - For each work package type, verify the available statuses
+   - Configure any specific workflow rules needed based on the mapping
+   - Test transitions between statuses for each work package type
+
+8. Test the workflow analysis functionality:
+   - Run the analyze_status_mapping method
+   - Verify it correctly reports on the status of mappings
+
+9. Test workflow usage in work package migration:
+   - Create test issues in Jira with different statuses
+   - Run the work package migration
+   - Verify the work packages are created with correct statuses in OpenProject
+   - Test status transitions for migrated work packages
+
+10. Verify status configuration in real projects:
+    - Check status transitions in real project contexts
+    - Verify that status workflows match the original Jira configuration
+      as closely as possible
+
+**Documentation**: See [workflow_configuration.md](workflow_configuration.md) for detailed steps on configuring workflows in OpenProject.
+
 ## Running the Tests
 
 ### Automated Tests
