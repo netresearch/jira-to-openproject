@@ -72,8 +72,13 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
     - [x] Extract existing OpenProject projects (for matching)
     - [x] Map Jira company data to OpenProject project structure
     - [x] Create/Update top-level projects (Companies) in OpenProject via API
-    - [ ] Define testing steps for company migration
-    - [ ] Test company creation and mapping
+    - [x] Define testing steps for company migration
+        1. Verify company extraction from Tempo API
+        2. Verify correct mapping between Tempo companies and OpenProject projects
+        3. Verify company creation in OpenProject with correct attributes
+        4. Test the migration process for creating unmatched companies
+        5. Test the analysis functionality for reporting on mapping status
+    - [x] Test company creation and mapping
 
 - **Accounts (Tempo)** (`account_migration.py` - may need rename/refactor)
     - [x] Define Account Mapping Strategy (Tempo Account -> OP Custom Field 'Tempo Account')
