@@ -51,21 +51,43 @@ It leverages Python 3.13, Docker for environment consistency, and direct integra
 Run commands inside the Docker container:
 
 ```bash
-# Perform a dry run (simulates migration, no changes made)
-docker exec -it j2o-app python run_migration.py --dry-run
+# Install the tool (development mode)
+pip install -e .
+
+# The tool can be run using the 'j2o' command:
+
+# Perform a dry run migration (simulates migration, no changes made)
+j2o migrate --dry-run
 
 # Run migration for specific components (e.g., users and projects)
-docker exec -it j2o-app python run_migration.py --components users projects
+j2o migrate --components users projects
 
 # Run migration including components requiring Rails console access
 # (Ensure SSH/Docker access is configured in .env.local)
-docker exec -it j2o-app python run_migration.py --components custom_fields issue_types --direct-migration
+j2o migrate --components custom_fields issue_types --direct-migration
 
 # Run the full migration (use with caution!)
-docker exec -it j2o-app python run_migration.py
+j2o migrate
 
 # Force re-extraction of data from Jira/OpenProject
-docker exec -it j2o-app python run_migration.py --force --components users
+j2o migrate --force --components users
+
+# Export work packages for bulk import
+j2o export --projects PROJECT1 PROJECT2
+
+# Import work packages from exported JSON files
+j2o import --project PROJECT1
+```
+
+**Alternatively, you can run the scripts directly:**
+
+```bash
+# Using the main entry point
+python -m src.main migrate --dry-run
+
+# Using the legacy scripts
+python run_migration.py --dry-run
+python export_work_packages.py --projects PROJECT1 PROJECT2
 ```
 
 **Important:** Always perform a `--dry-run` and test thoroughly in a staging environment before running a full migration on production data.
