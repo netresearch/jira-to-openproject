@@ -39,7 +39,9 @@ src/
 
 ## Key Modules & Classes
 
-*   **`run_migration.py` (in root):** The main entry point for the application. Parses command-line arguments and orchestrates the execution of migration components.
+*   **`src/main.py`:** The new unified entry point for the application. Provides a single command-line interface with subcommands for different operations (migrate, export, import).
+*   **`run_migration.py` (in root):** The legacy main entry point for migration functionality. Still usable directly but now integrated into the `src/main.py` interface.
+*   **`export_work_packages.py` (in root):** The legacy entry point for work package export functionality. Still usable directly but now integrated into the `src/main.py` interface.
 *   **`src/config_loader.py:ConfigLoader`:** Responsible for loading configuration from `config.yaml`, `.env`, `.env.local`, and environment variables.
 *   **`src/config.py`:** Provides a global access point (`config` object) to the loaded configuration.
 *   **`src/clients/jira_client.py:JiraClient`:** Interacts with the Jira API to fetch data.
