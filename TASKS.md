@@ -85,12 +85,35 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
     - [x] Extract Tempo accounts from Jira via API
     - [x] Define 'Tempo Account' list custom field structure in OpenProject
     - [x] Implement Rails script generation/API call/direct execution for 'Tempo Account' custom field creation
-    - [ ] Define execution steps for 'Tempo Account' CF creation
-    - [ ] Execute custom field creation for 'Tempo Account' in test environment
-    - [x] Implement mapping of Tempo accounts to custom field list values
-    - [ ] Define testing steps for account custom field
-    - [ ] Test account custom field creation
-    - [ ] Test population of account values in the custom field
+    - [x] Define execution steps for 'Tempo Account' CF creation
+        - Option 1: Direct Migration (Automated):
+          1. Ensure OpenProject container is running and Rails console is accessible
+          2. Run `python src/main.py --components accounts --direct-migration`
+          3. The script will:
+             - Connect to the Rails console directly
+             - Check if 'Tempo Account' custom field already exists
+             - Create the custom field if it doesn't exist
+             - Populate it with all Tempo account names as possible values
+             - Make the custom field available to all work package types
+             - Update mapping file with the custom field ID automatically
+        - Option 2: Manual Configuration (Semi-Automated):
+          1. Run `python src/main.py --components accounts`
+          2. Manually create a 'Tempo Account' list custom field in OpenProject admin interface
+          3. Add all Tempo account names as possible values for the list
+          4. Make the custom field available to all work package types
+          5. Update the analysis file with the custom field ID: `python src/migrations/account_migration.py --analyze`
+    - [x] Execute custom field creation for 'Tempo Account' in test environment
+    - [x] Define testing steps for account custom field
+        1. Verify the 'Tempo Account' custom field exists in OpenProject admin interface
+        2. Verify the custom field is of type 'List' with correct possible values
+        3. Verify all Tempo account names are available as options in the list
+        4. Verify the field is available for all work package types
+        5. Create a test work package and ensure the 'Tempo Account' field can be set
+        6. Verify the mapping contains the correct custom field ID
+        7. Verify the account_mapping_analysis.json file has been created with correct data
+        8. Verify account mapping contains connections between Tempo accounts and OpenProject projects
+    - [x] Test account custom field creation
+    - [x] Test population of account values in the custom field
 
 - **Projects** (`project_migration.py`)
     - [x] Extract Jira projects metadata (key, name, description, etc.)

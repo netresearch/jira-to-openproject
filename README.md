@@ -104,6 +104,11 @@ python src/main.py export --projects PROJECT1 PROJECT2
     *   Rails console integration for creating new statuses in OpenProject
     *   Detailed documentation in [docs/status_migration.md](docs/status_migration.md)
     *   Testing and validation to ensure status mapping correctness
+*   **Tempo Account Migration:** The migration of Tempo timesheet accounts includes:
+    *   Extraction of Tempo accounts from Jira and creation of a dedicated custom field in OpenProject
+    *   Mapping of accounts to OpenProject projects when possible by name or default project
+    *   Rails console integration for creating the custom field with all account values
+    *   Comprehensive testing to validate proper account mapping and custom field creation
 *   **Dry Run:** The `--dry-run` flag prevents the tool from making any creating/updating calls to the OpenProject API or Rails console.
 *   **Configuration:** See [docs/configuration.md](docs/configuration.md).
 *   **Data Directory:** The `var/` directory stores extracted data, logs, generated scripts, and mapping files. It's crucial for the migration process.
