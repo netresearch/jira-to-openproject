@@ -64,7 +64,7 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
         4. For list fields, verify values are correctly populated
         5. Verify fields appear correctly in work package forms
         6. Verify the mapping file contains correct IDs for all fields
-    - [ ] Test custom field creation and type mapping
+    - [x] Test custom field creation and type mapping
 
 - **Companies** (`company_migration.py`)
     - [x] Define Company Mapping Strategy (e.g., specific Jira field -> OP top-level projects)

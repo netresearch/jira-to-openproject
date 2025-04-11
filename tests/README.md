@@ -1,94 +1,67 @@
-# Tests Directory (`tests/`)
+# Test Suite Documentation
 
-This directory contains test modules for the Jira to OpenProject migration tool.
+This directory contains tests for the Jira to OpenProject migration tool.
 
-## Testing Strategy
+## Overview
 
-The testing approach for this project combines unit tests, integration tests, and manual validation:
+The test suite uses Python's built-in `unittest` framework and covers:
 
-1. **Unit Tests**: Test individual components in isolation using mocks for external dependencies
-2. **Integration Tests**: Test the interaction between components and with actual APIs in test environments
-3. **Manual Validation**: Perform data validation and quality checks by comparing data between systems
+1. Environment and configuration validation
+2. Individual migration component functionality
+3. Core utilities and client operations
+4. End-to-end migration processes
 
-## Test Modules
+## Key Test Files
 
-- **`test_environment.py`**: Verifies that the Python environment is correctly set up with all required dependencies.
-- **`test_user_migration.py`**: Tests the user migration component (`src/migrations/user_migration.py`), validating the extraction, mapping, and creation of users.
-
-## Test Coverage Roadmap
-
-The following test modules should be implemented to achieve comprehensive test coverage:
-
-- **API Clients**:
-  - Test Jira client connection and data retrieval
-  - Test OpenProject client connection and entity creation
-  - Test Rails client connection and command execution
-
-- **Migration Components**:
-  - Test each migration component (similar to `test_user_migration.py`)
-  - Test custom field mapping and creation
-  - Test work package type mapping and creation
-  - Test status and workflow mapping
-  - Test work package migration with attachment and comment handling
-
-- **Configuration & Utils**:
-  - Test configuration loading mechanism
-  - Test utility functions
+- `test_environment.py`: Basic tests to ensure the environment is properly set up
+- `test_main.py`: Tests for the main CLI interface
+- `test_user_migration.py`: Tests for user migration functionality
+- `test_custom_field_migration.py`: Tests for custom field extraction, mapping, and migration via Rails console
 
 ## Running Tests
 
-You can run tests using the provided test runner script:
+To run all tests:
 
 ```bash
-# Run all tests (logs are suppressed by default)
-python scripts/run_tests.py
-
-# Run a specific test file
-python scripts/run_tests.py --pattern test_user_migration.py
-
-# Run tests with verbose output
-python scripts/run_tests.py --verbose
-
-# Run tests with log messages (for debugging)
-python scripts/run_tests.py --show-logs
+python -m unittest discover tests
 ```
 
-### Running Individual Tests
-
-To run a specific test case or test method:
+To run a specific test file:
 
 ```bash
-# Run a specific test method
-python scripts/run_tests.py --pattern tests/test_user_migration.py:TestUserMigration.test_extract_jira_users
+python -m unittest tests/test_custom_field_migration.py
+```
+
+To run a specific test case:
+
+```bash
+python -m unittest tests.test_custom_field_migration.TestCustomFieldMigration.test_extract_jira_custom_fields
 ```
 
 ## Test Environment
 
-The tests use a dedicated test environment configured in `.env.test`. This file contains:
+Tests use mocking to avoid making actual API calls to Jira or OpenProject. The `unittest.mock` module is used extensively to patch external dependencies and simulate API responses.
 
-- `J2O_TEST_SHOW_LOGS`: Controls log visibility during tests (default is 0/off)
-- `J2O_DATA_DIR`: Sets the data directory for tests (`:memory:` for in-memory testing)
-- Test configuration for Jira and OpenProject instances
-- `J2O_USE_MOCK_APIS`: Enables mock APIs instead of real connections
-- `J2O_LOG_LEVEL`: Sets the log level for tests
+## Code Coverage
 
-You can override these settings either by modifying the `.env.test` file or by setting environment variables in your shell.
-
-## Test Configuration
-
-Tests use a mock configuration for testing purposes. No real API calls are made during unit testing, as external dependencies are mocked.
+Code coverage is not currently measured automatically. Consider adding a coverage tool if needed.
 
 ## Adding New Tests
 
 When adding new tests:
 
-1. Create a new test file following the naming convention `test_*.py`
-2. Implement test cases using the `unittest` framework
-3. Use mocks (`unittest.mock`) to isolate the component being tested
-4. Add appropriate assertions to validate expected behavior
-5. Update the TASKS.md file to mark testing tasks as completed
-6. Update this README file to document the new test module
+1. Follow the existing pattern of test files and classes
+2. Use descriptive names for test methods (e.g., `test_extract_jira_custom_fields`)
+3. Mock external dependencies to avoid actual API calls
+4. Include assertions that verify both the functionality and error handling
 
-## Test Data
+## Testing Custom Field Migration
 
-Test fixtures and sample data are defined within each test module as needed.
+The `test_custom_field_migration.py` file tests the following aspects of custom field migration:
+
+1. **Extraction:** Tests extracting custom fields from Jira and OpenProject
+2. **Mapping:** Tests mapping Jira field types to OpenProject field formats
+3. **Rails Migration:** Tests the direct Rails console migration process
+4. **Script Generation:** Tests generating Ruby scripts for custom field creation
+
+These tests ensure that custom fields are properly identified, mapped to appropriate OpenProject field types, and correctly created in the target system.
