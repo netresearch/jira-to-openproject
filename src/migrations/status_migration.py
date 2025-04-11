@@ -221,12 +221,25 @@ class StatusMigration(BaseMigration):
         # Escape single quotes in name
         safe_name = name.replace("'", "\\'")
 
-        command = """
+        # Header section with Python f-string variables
+        header_script = f"""
+        # Status configuration variables
+        status_name = '{safe_name}'
+        is_closed_flag = {str(is_closed).lower()}
+        is_default_flag = {str(is_default).lower()}
+        """
+
+        # Add color to header if provided
+        if color:
+            header_script += f"status_color = '{color}'\n"
+
+        # Main Ruby section without f-strings
+        main_script = """
         begin
           puts "Starting command execution..."
 
           # Check if status already exists
-          existing_status = Status.find_by(name: '""" + safe_name + """')
+          existing_status = Status.find_by(name: status_name)
 
           if existing_status
             puts "Status already exists with ID: #{existing_status.id}"
@@ -234,35 +247,42 @@ class StatusMigration(BaseMigration):
           else
             # Create new status
             new_status = Status.new(
-              name: '""" + safe_name + """',
-              is_closed: """ + str(is_closed).lower() + """,
-              is_default: """ + str(is_default).lower() + """
+              name: status_name,
+              is_closed: is_closed_flag,
+              is_default: is_default_flag
             )
 
             # Set position as the highest existing position + 1
             new_status.position = Status.maximum(:position).to_i + 1
+        """
 
-            """ + (f"""
+        # Add color handling to main script if color was provided
+        if color:
+            main_script += """
             # Set color
-            new_status.color = '{color}'
-            """ if color else "") + """
+            new_status.color = status_color
+            """
 
+        main_script += """
             if new_status.save
-              puts "SUCCESS: Status created with ID: #{{new_status.id}}"
+              puts "SUCCESS: Status created with ID: #{new_status.id}"
               new_status
             else
               puts "ERROR: Failed to save status. Validation errors:"
               new_status.errors.full_messages.each do |msg|
-                puts "  - #{{msg}}"
+                puts "  - #{msg}"
               end
               nil
             end
           end
         rescue => e
-          puts "EXCEPTION: #{{e.class.name}}: #{{e.message}}"
+          puts "EXCEPTION: #{e.class.name}: #{e.message}"
           nil
         end
         """
+
+        # Combine the scripts
+        command = header_script + main_script
 
         try:
             result = self.op_rails_client.execute(command, timeout=60)
