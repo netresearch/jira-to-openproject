@@ -25,6 +25,8 @@ This directory contains various utility scripts to support the migration process
     *   Usage: `python scripts/list_jira_data.py [--list <projects|issue_types|statuses|priorities|custom_fields|all>]`
 *   **`openproject_run_rails_script.sh`**: A shell script designed to copy a local Ruby script (`.rb`) into the configured OpenProject Docker container and execute it using the Rails runner. Primarily used for manually running generated migration scripts.
     *   Usage: `./scripts/openproject_run_rails_script.sh [path/to/script.rb]` (uses latest `.rb` in `output/` if no path given)
+*   **`run_tests.py`**: A test runner script that discovers and runs unit tests in the 'tests' directory. Supports patterns for running specific tests.
+    *   Usage: `python scripts/run_tests.py [--pattern <test_pattern>] [--verbose]`
 *   **`scriptrunner_api_endpoint_field.groovy`**: A Groovy script for the Jira ScriptRunner Add-On. Creates a custom REST API endpoint in Jira (`/rest/scriptrunner/latest/custom/getAllCustomFieldsWithOptions`) that efficiently returns all custom fields and their options, overcoming limitations of the standard Jira API.
 *   **`setup_var_dirs.py`**: Creates the necessary directory structure within `var/` (`data`, `logs`, `scripts`) if it doesn't exist.
     *   Usage: `python scripts/setup_var_dirs.py`
