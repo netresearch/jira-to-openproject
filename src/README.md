@@ -1,59 +1,61 @@
-# Source Code Organization
+# Source Code (`src/`)
 
-This directory contains the source code for the Jira to OpenProject migration tool.
+This directory contains the core Python source code for the Jira to OpenProject migration tool.
 
 ## Directory Structure
 
-- **clients/**: API client implementations for Jira and OpenProject
-- **migrations/**: Core migration modules for each component
-- **models/**: Data models and mapping definitions
-- **config.py**: Configuration loader and logging setup
-
-## Module Organization
-
-The migration is organized into component modules in the `migrations/` directory:
-
-- **user_migration.py**: Handles user account migration
-- **project_migration.py**: Handles project structure migration
-- **company_migration.py**: Handles company data migration
-- **account_migration.py**: Handles Tempo Timesheet accounts (as custom fields)
-- **custom_field_migration.py**: Handles custom field mapping and potential Ruby script generation
-- **workflow_migration.py**: Handles workflow states and transitions
-- **link_type_migration.py**: Handles issue link types
-- **work_package_migration.py**: Handles issue/work package data (managed via export_work_packages.py)
-
-Each module typically contains a class implementing the core logic for that component, invoked by the main `run_migration.py` script.
-
-## Special-Purpose Utilities
-
-Due to OpenProject API limitations, some components might require manual steps or alternative approaches:
-
-*   **Custom Field Creation:** The API doesn't support this. The migration attempts direct creation via the Rails console (`--direct-migration`). If this fails, a Ruby script can be generated (`--generate-ruby` option, although direct migration is preferred) for manual execution in the Rails console.
-*   **Work Package Type Creation:** Similar to custom fields, this often requires direct Rails console interaction, handled by the `--direct-migration` flag.
-
-## Development
-
-When developing new migration components:
-
-1. Create a new module in the `migrations/` directory.
-2. Implement the core functionality in a class inheriting from `BaseMigration`.
-3. Update `run_migration.py` to import and call the new component's migration class or function within the main loop, passing necessary arguments like `dry_run`, `force`, etc.
-4. Ensure the component logic is integrated into the overall workflow orchestrated by `run_migration.py`.
-
-The master script (`run_migration.py` at the project root) coordinates the execution of all migration components.
-
-### Example Component Execution:
-
-```bash
-# Run only the user migration
-python run_migration.py --components users
-
-# Run custom fields and issue types using direct Rails execution
-python run_migration.py --components custom_fields issue_types --direct-migration
-
-# Run the work package migration (uses direct migration implicitly if available)
-python run_migration.py --components work_packages
-
-# Run specific components together
-python run_migration.py --components users projects work_packages
 ```
+src/
+├── __init__.py
+├── clients/                 # API clients for interacting with Jira and OpenProject
+│   ├── __init__.py
+│   ├── jira_client.py         # Handles communication with the Jira REST API
+│   ├── openproject_client.py  # Handles communication with the OpenProject REST API
+│   └── openproject_rails_client.py # Handles interaction with OpenProject Rails console via SSH/Docker
+├── config.py                # Provides centralized access to configuration settings
+├── config_loader.py         # Loads and merges configuration from YAML and environment variables
+├── display.py               # Utilities for displaying progress and information (using Rich library)
+├── mappings/                # Logic related to mapping entities between systems
+│   └── mappings.py          # (Potential location for mapping helper functions/classes)
+├── migrations/              # Core migration logic for each data type (component)
+│   ├── __init__.py
+│   ├── base_migration.py    # Abstract base class for all migration components
+│   ├── account_migration.py # Migrates Tempo Accounts (needs review/refactor?)
+│   ├── company_migration.py # Migrates Companies (based on defined strategy)
+│   ├── custom_field_migration.py # Migrates Custom Fields (uses Rails Client)
+│   ├── issue_type_migration.py   # Migrates Issue Types / WP Types (uses Rails Client)
+│   ├── link_type_migration.py    # Migrates Issue Link Types / Relations
+│   ├── project_migration.py    # Migrates Projects
+│   ├── status_migration.py     # Migrates Statuses
+│   ├── user_migration.py       # Migrates Users
+│   ├── work_package_migration.py # Migrates Issues / Work Packages (including details)
+│   └── workflow_migration.py   # Analyzes Workflows for manual configuration mapping
+├── models/                  # Data models or dataclasses (if needed, currently minimal)
+│   └── __init__.py
+│   └── mapping.py           # Defines mapping data structures
+├── utils.py                 # General utility functions used across the application
+└── cleanup_openproject.py   # Script/module to help clean up migrated data in OpenProject (for testing)
+```
+
+## Key Modules & Classes
+
+*   **`run_migration.py` (in root):** The main entry point for the application. Parses command-line arguments and orchestrates the execution of migration components.
+*   **`src/config_loader.py:ConfigLoader`:** Responsible for loading configuration from `config.yaml`, `.env`, `.env.local`, and environment variables.
+*   **`src/config.py`:** Provides a global access point (`config` object) to the loaded configuration.
+*   **`src/clients/jira_client.py:JiraClient`:** Interacts with the Jira API to fetch data.
+*   **`src/clients/openproject_client.py:OpenProjectClient`:** Interacts with the OpenProject API v3 to create/update data.
+*   **`src/clients/openproject_rails_client.py:OpenProjectRailsClient`:** Connects via SSH to the OpenProject server, enters the Docker container, and executes commands/scripts within the Rails console. Used for operations not supported by the API.
+*   **`src/migrations/base_migration.py:BaseMigration`:** Abstract base class defining the interface for all migration components (`run`, `_extract`, `_map`, `_load`, `_test`).
+*   **`src/migrations/*_migration.py`:** Concrete implementations of `BaseMigration` for each specific data type (e.g., `UserMigration`, `ProjectMigration`). Each handles the Extract-Map-Load process for its component.
+*   **`src/display.py`:** Contains functions for user-friendly console output using the `rich` library (e.g., progress bars, tables, formatted logs).
+*   **`src/mappings/mappings.py`:** (Currently minimal) Intended for helper functions related to loading, saving, and applying mapping files (`var/data/*_mapping.json`).
+*   **`src/models/mapping.py`:** Defines dataclasses or structures used for storing mapping information.
+*   **`src/utils.py`:** Holds common helper functions (e.g., file handling, date parsing, sanitization) used by multiple modules.
+*   **`src/cleanup_openproject.py`:** Provides functionality to remove data created by the migration tool in an OpenProject instance, primarily useful during testing and development.
+
+## Development Notes
+
+*   Code should follow standards outlined in [docs/development.md](../docs/development.md).
+*   New migration components should inherit from `BaseMigration`.
+*   API interactions should be encapsulated within the `clients/` modules.
+*   Configuration should always be accessed via `src.config`.
