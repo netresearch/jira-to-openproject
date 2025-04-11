@@ -1350,3 +1350,67 @@ end
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
         self.logger.debug(f"Saved data to {filepath}")
+
+    def update_mapping_file(self, force: bool = False) -> bool:
+        """
+        Update the custom field mapping file with IDs from OpenProject.
+
+        This method is useful when custom fields were created manually via a Ruby script
+        execution and the mapping file needs to be updated with the created field IDs.
+
+        Args:
+            force: If True, force refresh of OpenProject custom fields
+
+        Returns:
+            True if mapping was updated successfully, False otherwise
+        """
+        self.logger.info("Updating custom field mapping file with IDs from OpenProject...")
+
+        # Get all custom fields from OpenProject
+        op_fields = self.op_client.get_custom_fields(force_refresh=force)
+        if not op_fields:
+            self.logger.error("Failed to retrieve custom fields from OpenProject")
+            return False
+
+        # Create a dictionary of name to field mapping for easy lookup
+        op_fields_by_name = {field.get('name'): field for field in op_fields}
+
+        # Count the mapping updates
+        updated_count = 0
+        already_mapped_count = 0
+        missing_count = 0
+
+        # Update mapping for each field that was supposed to be created
+        for jira_id, field in self.mapping.items():
+            op_name = field.get('openproject_name', '')
+
+            # Skip if already mapped
+            if field.get('openproject_id') and field.get('matched_by') != 'create':
+                already_mapped_count += 1
+                continue
+
+            # Find by name in OpenProject fields
+            if op_name in op_fields_by_name:
+                op_field = op_fields_by_name[op_name]
+                op_id = op_field.get('id')
+
+                # Update the mapping
+                self.logger.info(f"Found custom field '{op_name}' with ID {op_id}")
+                self.mapping[jira_id]['openproject_id'] = op_id
+                self.mapping[jira_id]['matched_by'] = 'created' if field.get('matched_by') == 'create' else 'name'
+                updated_count += 1
+            else:
+                self.logger.warning(f"Custom field '{op_name}' not found in OpenProject")
+                missing_count += 1
+
+        # Save the updated mapping
+        if updated_count > 0:
+            self._save_to_json(self.mapping, "custom_field_mapping.json")
+            self.logger.success(f"Updated mapping for {updated_count} custom fields")
+        else:
+            self.logger.info("No mapping updates needed")
+
+        # Print summary
+        self.logger.info(f"Summary: Updated {updated_count}, Already mapped {already_mapped_count}, Missing {missing_count}")
+
+        return updated_count > 0 or already_mapped_count > 0

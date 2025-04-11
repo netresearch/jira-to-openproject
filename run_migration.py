@@ -573,6 +573,11 @@ def parse_args():
         action="store_true",
         help="Create and setup a tmux session for Rails console use",
     )
+    parser.add_argument(
+        "--update-mapping",
+        action="store_true",
+        help="Update custom field mapping after manual Ruby script execution",
+    )
     return parser.parse_args()
 
 def setup_tmux_session():
@@ -657,6 +662,38 @@ def main():
             restore_backup(args.backup_dir)
             return
 
+        # Handle update mapping if requested
+        if args.update_mapping:
+            jira_client = JiraClient()
+            op_client = OpenProjectClient()
+
+            # Ask the user which mapping to update
+            print("\nWhich mapping would you like to update?")
+            print("1. Custom Fields")
+            print("2. Issue Types (Work Package Types)")
+
+            try:
+                choice = input("Enter choice (1 or 2): ")
+                if choice == "1":
+                    custom_field_migration = CustomFieldMigration(jira_client, op_client)
+                    result = custom_field_migration.update_mapping_file(force=args.force)
+                    if result:
+                        logger.success("Custom field mapping updated successfully.")
+                    else:
+                        logger.warning("No updates were made to custom field mapping.")
+                elif choice == "2":
+                    issue_type_migration = IssueTypeMigration(jira_client, op_client)
+                    result = issue_type_migration.update_mapping_file(force=args.force)
+                    if result:
+                        logger.success("Issue type mapping updated successfully.")
+                    else:
+                        logger.warning("No updates were made to issue type mapping.")
+                else:
+                    logger.error("Invalid choice. Please enter 1 or 2.")
+            except KeyboardInterrupt:
+                logger.warning("Operation cancelled by user.")
+
+            return
 
         # dump args
         logger.debug(f"Args: {args}", extra={"markup": True})
