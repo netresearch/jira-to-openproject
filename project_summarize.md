@@ -42,7 +42,7 @@ The primary objective of this project is to migrate business data from a Jira Se
 
 * `README.md`: **Source of Truth** for project overview, setup instructions, technical requirements, and architecture decisions.
 * `PROGRESS.md`: Tracks current development status, upcoming tasks, and implementation notes.
-* `run_migration.py`: The main script to execute the migration process.
+* `src/main.py`: The main script to execute the migration process.
 * `compose.yaml`: Defines Docker services and configurations.
 * `Dockerfile`: Defines the application's Docker image.
 * `requirements.txt`: Lists Python dependencies.
@@ -75,7 +75,7 @@ The primary objective of this project is to migrate business data from a Jira Se
   * No versioning
   * No changelogs
   * No deprecation strategy
-  * “We only care about now.”
+  * "We only care about now."
   * Past versions are irrelevant or discarded.
   * APIs or interfaces can change at any time.
 

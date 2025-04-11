@@ -15,7 +15,7 @@ This document tracks the detailed tasks required for the Jira to OpenProject mig
 - [x] Setup Project Structure (Python, Docker, Git)
 - [x] Implement Configuration Loading
 - [x] Implement basic API Clients (Jira, OpenProject)
-- [x] Implement Core Migration Runner (`run_migration.py`)
+- [x] Implement Core Migration Runner (now in `src/migration.py` with `src/main.py` entry point)
 
 ## Phase 2: Component Implementation & Migration
 
@@ -43,18 +43,18 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
     - [x] Define execution steps for Rails script/direct execution
         - Option 1: Direct Migration (Automated):
           1. Ensure OpenProject container is running and Rails console is accessible
-          2. Run `python run_migration.py --components custom_fields --direct-migration`
+          2. Run `python src/main.py --components custom_fields --direct-migration`
           3. The script will:
              - Connect to the Rails console directly
              - Create custom fields one by one
              - Update mapping file with new IDs automatically
         - Option 2: Ruby Script (Semi-Automated):
-          1. Run `python run_migration.py --components custom_fields`
+          1. Run `python src/main.py --components custom_fields`
           2. Review the generated Ruby script in the `output` directory
           3. Execute via Docker: `docker exec -it CONTAINER_NAME rails runner path/to/script.rb`
-          4. Run `python run_migration.py --update-mapping` to update mapping file
+          4. Run `python src/main.py --update-mapping` to update mapping file
     - [x] Execute Rails script/direct command for custom field creation in test environment
-        - Example: `python run_migration.py --components custom_fields --direct-migration`
+        - Example: `python src/main.py --components custom_fields --direct-migration`
         - Alternatively: Generate Ruby script and execute manually, then update mapping
     - [x] Implement logic to update mapping file (`var/data/custom_field_mapping.json`) with new custom field IDs
     - [x] Define testing steps for custom field creation
@@ -118,18 +118,18 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
     - [x] Define execution steps for Rails script/direct execution
         - Option 1: Direct Migration (Automated):
           1. Ensure OpenProject container is running and Rails console is accessible
-          2. Run `python run_migration.py --components issue_types --direct-migration`
+          2. Run `python src/main.py --components issue_types --direct-migration`
           3. The script will:
              - Connect to the Rails console directly
              - Create work package types one by one
              - Update mapping file with new IDs automatically
         - Option 2: Ruby Script (Semi-Automated):
-          1. Run `python run_migration.py --components issue_types`
+          1. Run `python src/main.py --components issue_types`
           2. Review the generated Ruby script in the `output` directory
           3. Execute via Docker: `docker exec -it CONTAINER_NAME rails runner path/to/script.rb`
-          4. Run `python run_migration.py --update-mapping` to update mapping file
+          4. Run `python src/main.py --update-mapping` to update mapping file
     - [x] Execute Rails script/direct command for work package type creation in test environment
-        - Example: `python run_migration.py --components issue_types --direct-migration`
+        - Example: `python src/main.py --components issue_types --direct-migration`
         - Alternatively: Generate Ruby script and execute manually, then update mapping
     - [x] Implement logic to update mapping file with new work package type IDs
     - [x] Define testing steps for work package type creation
@@ -227,7 +227,7 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
     - [ ] Prepare Communication Plan
 - [ ] **Execute Production Migration:**
     - [ ] Perform final dry run
-    - [ ] Execute migration during scheduled window (`python run_migration.py`)
+    - [ ] Execute migration during scheduled window (`python src/main.py`)
     - [ ] Monitor progress closely
 - [ ] **Post-Migration:**
     - [ ] Perform post-migration verification checks in production

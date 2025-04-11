@@ -18,7 +18,7 @@ Status migration involves:
 First, extract all statuses and status categories from Jira:
 
 ```bash
-python run_migration.py migrate --components status --force
+python src/main.py migrate --components status --force
 ```
 
 This will:
@@ -31,7 +31,7 @@ This will:
 The same command will also extract existing statuses from OpenProject:
 
 ```bash
-python run_migration.py migrate --components status --force
+python src/main.py migrate --components status --force
 ```
 
 This will:
@@ -43,7 +43,7 @@ This will:
 The migration tool will automatically create a mapping between Jira and OpenProject statuses based on name similarity and status category:
 
 ```bash
-python run_migration.py migrate --components status
+python src/main.py migrate --components status
 ```
 
 This will:
@@ -57,7 +57,7 @@ To create statuses that exist in Jira but not in OpenProject, you have two optio
 #### Option 1: Automated Creation via Rails Console (Recommended)
 
 ```bash
-python run_migration.py migrate --components status --direct-migration
+python src/main.py migrate --components status --direct-migration
 ```
 
 This will:
@@ -77,7 +77,7 @@ This will:
    - Click "Create"
 4. After creating all statuses, update the status mapping:
    ```bash
-   python run_migration.py migrate --components status --update-mapping
+   python src/main.py migrate --components status --update-mapping
    ```
 
 ### 5. Configure Workflow Status Transitions
@@ -113,7 +113,7 @@ This will:
 Run the status mapping analysis tool:
 
 ```bash
-python run_migration.py analyze --component status
+python src/main.py analyze --component status
 ```
 
 This will produce a report showing:
