@@ -183,10 +183,10 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
     - [x] Analyze OpenProject workflow capabilities (status transitions per type)
     - [x] Define Workflow Mapping Strategy (preserving basic lifecycle)
     - [x] Map Jira workflow transitions/statuses to OpenProject equivalents per Type (`var/data/workflow_mapping.json`)
-    - [ ] Define steps for configuring OpenProject workflows (manual config or Rails, document clearly)
-    - [ ] Configure OpenProject workflows based on mapping
-    - [ ] Define testing steps for workflow migration
-    - [ ] Test workflow state transitions for different work package types
+    - [x] Define steps for configuring OpenProject workflows (manual config or Rails, document clearly)
+    - [x] Configure OpenProject workflows based on mapping
+    - [x] Define testing steps for workflow migration
+    - [x] Test workflow state transitions for different work package types
 
 - **Work Packages (Issues)** (`work_package_migration.py`)
     - [x] Implement extraction of Jira issues (including sub-tasks, epics)
