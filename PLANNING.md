@@ -19,7 +19,7 @@ This document outlines the initial plan followed during the development of the J
     *   Implement basic OpenProject API client (`src/clients/openproject_client.py`) for core operations (creating/fetching projects, users, work packages).
 4.  **Core Migration Framework:**
     *   Design base migration class (`src/migrations/base_migration.py`).
-    *   Develop main runner script (`run_migration.py`) to orchestrate migrations, handle command-line arguments (e.g., `--components`, `--dry-run`).
+    *   Develop main runner script (`src/main.py`) to orchestrate migrations, handle command-line arguments (e.g., `--components`, `--dry-run`).
     *   Implement basic logging and display utilities (`src/display.py`).
 5.  **Initial Migrations (Proof of Concept):**
     *   Implement User migration (`user_migration.py`).

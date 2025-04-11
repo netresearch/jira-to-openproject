@@ -45,7 +45,7 @@ Docker is the **required** development environment to ensure consistency and sim
         ```
     *   **Running Commands:** Execute commands directly:
         ```bash
-        docker exec -it j2o-app python run_migration.py --help
+        docker exec -it j2o-app python src/main.py --help
         ```
     *   **VS Code Dev Container:** If using VS Code, open the command palette (Ctrl+Shift+P) and select "Remote-Containers: Reopen in Container". This will automatically build/start the container and connect your editor.
 

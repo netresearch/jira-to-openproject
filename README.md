@@ -84,11 +84,10 @@ j2o import --project PROJECT1
 
 ```bash
 # Using the main entry point
-python -m src.main migrate --dry-run
+python src/main.py --dry-run
 
 # Using the legacy scripts
-python run_migration.py --dry-run
-python export_work_packages.py --projects PROJECT1 PROJECT2
+python src/main.py export --projects PROJECT1 PROJECT2
 ```
 
 **Important:** Always perform a `--dry-run` and test thoroughly in a staging environment before running a full migration on production data.

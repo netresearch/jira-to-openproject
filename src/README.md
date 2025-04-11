@@ -39,8 +39,7 @@ src/
 
 ## Key Modules & Classes
 
-*   **`src/main.py`:** The new unified entry point for the application. Provides a single command-line interface with subcommands for different operations (migrate, export, import).
-*   **`run_migration.py` (in root):** The legacy main entry point for migration functionality. Still usable directly but now integrated into the `src/main.py` interface.
+*   **`src/main.py`:** The main entry point for all application functionality, replacing the legacy `run_migration.py`.
 *   **`export_work_packages.py` (in root):** The legacy entry point for work package export functionality. Still usable directly but now integrated into the `src/main.py` interface.
 *   **`src/config_loader.py:ConfigLoader`:** Responsible for loading configuration from `config.yaml`, `.env`, `.env.local`, and environment variables.
 *   **`src/config.py`:** Provides a global access point (`config` object) to the loaded configuration.
@@ -54,6 +53,7 @@ src/
 *   **`src/models/mapping.py`:** Defines dataclasses or structures used for storing mapping information.
 *   **`src/utils.py`:** Holds common helper functions (e.g., file handling, date parsing, sanitization) used by multiple modules.
 *   **`src/cleanup_openproject.py`:** Provides functionality to remove data created by the migration tool in an OpenProject instance, primarily useful during testing and development.
+*   **`migration.py`:** Core migration logic and coordination of the migration process.
 
 ## Development Notes
 
