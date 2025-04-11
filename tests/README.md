@@ -40,7 +40,7 @@ The following test modules should be implemented to achieve comprehensive test c
 You can run tests using the provided test runner script:
 
 ```bash
-# Run all tests
+# Run all tests (logs are suppressed by default)
 python scripts/run_tests.py
 
 # Run a specific test file
@@ -48,6 +48,9 @@ python scripts/run_tests.py --pattern test_user_migration.py
 
 # Run tests with verbose output
 python scripts/run_tests.py --verbose
+
+# Run tests with log messages (for debugging)
+python scripts/run_tests.py --show-logs
 ```
 
 ### Running Individual Tests
@@ -56,8 +59,20 @@ To run a specific test case or test method:
 
 ```bash
 # Run a specific test method
-python scripts/run_tests.py --pattern tests/test_user_migration.py:TestUserMigration.test_extract_data
+python scripts/run_tests.py --pattern tests/test_user_migration.py:TestUserMigration.test_extract_jira_users
 ```
+
+## Test Environment
+
+The tests use a dedicated test environment configured in `.env.test`. This file contains:
+
+- `J2O_TEST_SHOW_LOGS`: Controls log visibility during tests (default is 0/off)
+- `J2O_DATA_DIR`: Sets the data directory for tests (`:memory:` for in-memory testing)
+- Test configuration for Jira and OpenProject instances
+- `J2O_USE_MOCK_APIS`: Enables mock APIs instead of real connections
+- `J2O_LOG_LEVEL`: Sets the log level for tests
+
+You can override these settings either by modifying the `.env.test` file or by setting environment variables in your shell.
 
 ## Test Configuration
 

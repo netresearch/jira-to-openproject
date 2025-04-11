@@ -26,18 +26,23 @@ class QuietTestRunner(unittest.TextTestRunner):
             return super().run(test)
 
 
-def run_tests(test_pattern=None, verbose=False, quiet=False):
+def run_tests(test_pattern=None, verbose=False, show_logs=False):
     """
     Run tests matching the given pattern.
 
     Args:
         test_pattern (str): Pattern for test discovery (e.g., 'test_user_migration.py')
         verbose (bool): Whether to output verbose test results
-        quiet (bool): Whether to suppress log messages during test execution
+        show_logs (bool): Whether to show log messages during test execution (default is False)
 
     Returns:
         bool: True if all tests pass, False otherwise
     """
+    # Check for environment variable override
+    env_show_logs = os.environ.get('J2O_TEST_SHOW_LOGS', '').lower() in ('1', 'true', 'yes')
+    if env_show_logs:
+        show_logs = True
+
     # Configure test loader
     loader = unittest.TestLoader()
 
@@ -90,8 +95,8 @@ def run_tests(test_pattern=None, verbose=False, quiet=False):
     # Set up test runner with appropriate options
     verbosity = 2 if verbose else 1
 
-    # Use the quiet runner if requested, otherwise use the standard runner
-    if quiet:
+    # Suppress logs by default, show them only if explicitly requested
+    if not show_logs:
         # Temporarily redirect the logging output
         logging_stream = io.StringIO()
         log_handler = logging.StreamHandler(logging_stream)
@@ -131,11 +136,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run tests for the Jira to OpenProject migration tool")
     parser.add_argument("--pattern", "-p", help="Pattern for test discovery (e.g., 'test_user_migration.py')")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose output")
-    parser.add_argument("--quiet", "-q", action="store_true", help="Suppress log messages during test execution")
+    parser.add_argument("--show-logs", "-l", action="store_true", help="Show log messages during test execution (default is to suppress logs)")
 
     args = parser.parse_args()
 
-    success = run_tests(args.pattern, args.verbose, args.quiet)
+    success = run_tests(args.pattern, args.verbose, args.show_logs)
 
     # Exit with appropriate status code
     sys.exit(0 if success else 1)
