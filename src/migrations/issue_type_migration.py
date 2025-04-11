@@ -842,3 +842,67 @@ class IssueTypeMigration(BaseMigration):
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
         logger.debug(f"Saved data to {filepath}")
+
+    def update_mapping_file(self, force: bool = False) -> bool:
+        """
+        Update the issue type mapping file with IDs from OpenProject.
+
+        This method is useful when work package types were created manually via a Ruby script
+        execution and the mapping file needs to be updated with the created type IDs.
+
+        Args:
+            force: If True, force refresh of OpenProject work package types
+
+        Returns:
+            True if mapping was updated successfully, False otherwise
+        """
+        logger.info("Updating issue type mapping file with IDs from OpenProject...")
+
+        # Get all work package types from OpenProject
+        op_types = self.op_client.get_work_package_types(force_refresh=force)
+        if not op_types:
+            logger.error("Failed to retrieve work package types from OpenProject")
+            return False
+
+        # Create a dictionary of name to type mapping for easy lookup
+        op_types_by_name = {type_data.get('name'): type_data for type_data in op_types}
+
+        # Count the mapping updates
+        updated_count = 0
+        already_mapped_count = 0
+        missing_count = 0
+
+        # Update mapping for each type that was supposed to be created
+        for jira_type_name, type_data in self.issue_type_mapping.items():
+            op_name = type_data.get('openproject_name', '')
+
+            # Skip if already mapped
+            if type_data.get('openproject_id') and type_data.get('matched_by') != 'default_mapping_to_create':
+                already_mapped_count += 1
+                continue
+
+            # Find by name in OpenProject types
+            if op_name in op_types_by_name:
+                op_type = op_types_by_name[op_name]
+                op_id = op_type.get('id')
+
+                # Update the mapping
+                logger.info(f"Found work package type '{op_name}' with ID {op_id}")
+                self.issue_type_mapping[jira_type_name]['openproject_id'] = op_id
+                self.issue_type_mapping[jira_type_name]['matched_by'] = 'created' if type_data.get('matched_by') == 'default_mapping_to_create' else 'exact_match'
+                updated_count += 1
+            else:
+                logger.warning(f"Work package type '{op_name}' not found in OpenProject")
+                missing_count += 1
+
+        # Save the updated mapping
+        if updated_count > 0:
+            self._save_to_json(self.issue_type_mapping, "issue_type_mapping.json")
+            logger.success(f"Updated mapping for {updated_count} work package types")
+        else:
+            logger.info("No mapping updates needed")
+
+        # Print summary
+        logger.info(f"Summary: Updated {updated_count}, Already mapped {already_mapped_count}, Missing {missing_count}")
+
+        return updated_count > 0 or already_mapped_count > 0
