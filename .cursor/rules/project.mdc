@@ -26,3 +26,7 @@ Follow the files and keep them tightly udpated: [TASKS.md](mdc:TASKS.md), [READM
 # Project overview
 
 See [repomix-output.txt](mdc:repomix-output.txt) for a project overview.
+
+# Version Control System
+
+Use git to make commits with comprehensive and semantic messages.
