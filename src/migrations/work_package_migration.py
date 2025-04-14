@@ -35,6 +35,9 @@ class WorkPackageMigration:
     4. Handling attachments, comments, and relationships
     """
 
+    # Define mapping file pattern constant
+    WORK_PACKAGE_MAPPING_FILE_PATTERN = "work_package_mapping_{}.json"
+
     def __init__(
         self,
         jira_client: JiraClient,
@@ -132,8 +135,8 @@ class WorkPackageMigration:
                     project_tracker.update_description(progress_desc)
 
                     # Fetch a batch of issues
-                    issues = self.jira_client.get_issues(
-                        project_key, start_at=start_at, max_results=batch_size
+                    issues = self.jira_client.get_all_issues_for_project(
+                        project_key, expand_changelog=True
                     )
 
                     if not issues:
@@ -163,8 +166,8 @@ class WorkPackageMigration:
                         tracker.update_description(f"Fetching {project_key} issues {start_at+1}-{min(start_at+batch_size, total_issues)}/{total_issues}")
 
                         # Fetch a batch of issues
-                        issues = self.jira_client.get_issues(
-                            project_key, start_at=start_at, max_results=batch_size
+                        issues = self.jira_client.get_all_issues_for_project(
+                            project_key, expand_changelog=True
                         )
 
                         if not issues:
@@ -203,15 +206,54 @@ class WorkPackageMigration:
         Prepare a work package object from a Jira issue (without creating it).
 
         Args:
-            jira_issue: The Jira issue dictionary
+            jira_issue: The Jira issue dictionary or jira.Issue object
             project_id: The ID of the OpenProject project
 
         Returns:
             Dictionary with work package data
         """
-        # Map the Jira issue to an OpenProject work package
-        issue_type_id = jira_issue["issue_type"]["id"]
-        issue_type_name = jira_issue["issue_type"]["name"]
+        # Check if jira_issue is a Jira Issue object or a dictionary
+        if hasattr(jira_issue, 'raw'):
+            # It's a Jira Issue object, convert it to a dictionary
+            logger.debug(f"Converting Jira Issue object {jira_issue.key} to dictionary")
+
+            # Extract the necessary fields from the Jira Issue object
+            issue_type_id = jira_issue.fields.issuetype.id
+            issue_type_name = jira_issue.fields.issuetype.name
+
+            status_id = None
+            if hasattr(jira_issue.fields, 'status'):
+                status_id = getattr(jira_issue.fields.status, 'id', None)
+
+            assignee_name = None
+            if hasattr(jira_issue.fields, 'assignee') and jira_issue.fields.assignee:
+                assignee_name = getattr(jira_issue.fields.assignee, 'name', None)
+
+            subject = jira_issue.fields.summary
+            description = getattr(jira_issue.fields, 'description', '') or ''
+
+            jira_id = jira_issue.id
+            jira_key = jira_issue.key
+        else:
+            # It's a dictionary (as in the original implementation)
+            issue_type_id = jira_issue["issue_type"]["id"]
+            issue_type_name = jira_issue["issue_type"]["name"]
+
+            status_id = None
+            if "status" in jira_issue and "id" in jira_issue["status"]:
+                status_id = jira_issue["status"]["id"]
+
+            assignee_name = None
+            if "assignee" in jira_issue and jira_issue["assignee"]:
+                assignee_name = jira_issue["assignee"].get("name")
+
+            subject = jira_issue["summary"]
+            description = jira_issue.get("description", "")
+
+            jira_id = jira_issue["id"]
+            jira_key = jira_issue["key"]
+
+        # Map the issue type
         type_id = self.issue_type_mapping.get(issue_type_id)
 
         # Log detailed type mapping information for debugging
@@ -233,23 +275,18 @@ class WorkPackageMigration:
                     logger.error("No work package types available in OpenProject", extra={"markup": True})
                     return None
 
-        status_id = None
-        if "status" in jira_issue and "id" in jira_issue["status"]:
-            status_id = self.status_mapping.get(jira_issue["status"]["id"])
+        # Map the status
+        status_op_id = None
+        if status_id:
+            status_op_id = self.status_mapping.get(status_id)
 
-        # Get assignee if available
+        # Map the assignee
         assigned_to_id = None
-        if "assignee" in jira_issue and jira_issue["assignee"]:
-            assignee_name = jira_issue["assignee"].get("name")
-            if assignee_name in self.user_mapping:
-                assigned_to_id = self.user_mapping[assignee_name]
-
-        # Create the work package data
-        subject = jira_issue["summary"]
-        description = jira_issue.get("description", "")
+        if assignee_name and assignee_name in self.user_mapping:
+            assigned_to_id = self.user_mapping[assignee_name]
 
         # Add Jira issue key to description for reference
-        jira_reference = f"\n\n*Imported from Jira issue: {jira_issue['key']}*"
+        jira_reference = f"\n\n*Imported from Jira issue: {jira_key}*"
         if description:
             description += jira_reference
         else:
@@ -261,13 +298,13 @@ class WorkPackageMigration:
             "type_id": type_id,
             "subject": subject,
             "description": description,
-            "jira_id": jira_issue["id"],
-            "jira_key": jira_issue["key"]
+            "jira_id": jira_id,
+            "jira_key": jira_key
         }
 
         # Add optional fields if available
-        if status_id:
-            work_package["status_id"] = status_id
+        if status_op_id:
+            work_package["status_id"] = status_op_id
         if assigned_to_id:
             work_package["assigned_to_id"] = assigned_to_id
 
@@ -288,16 +325,13 @@ class WorkPackageMigration:
         """
         logger.info("Starting work package migration...", extra={"markup": True})
 
-        # Load mappings
-        self.mappings.load_mappings()
-
         # Check if Rails client is available - we need it for bulk imports
         if not hasattr(self.op_client, 'rails_client') or not self.op_client.rails_client:
             logger.error("Rails client is required for work package migration. Please ensure tmux session is running.", extra={"markup": True})
             return {}
 
         # Get list of Jira projects to process
-        jira_projects = list(set(entry.get("jira_key") for entry in self.mappings.project_mapping.values() if entry.get("jira_key")))
+        jira_projects = list(set(entry.get("jira_key") for entry in self.project_mapping.values() if entry.get("jira_key")))
 
         if not jira_projects:
             logger.warning("No Jira projects found in mapping, nothing to migrate", extra={"markup": True})
@@ -325,7 +359,7 @@ class WorkPackageMigration:
 
                 # Find corresponding OpenProject project ID
                 project_mapping_entry = None
-                for key, entry in self.mappings.project_mapping.items():
+                for key, entry in self.project_mapping.items():
                     if entry.get("jira_key") == project_key and entry.get("openproject_id"):
                         project_mapping_entry = entry
                         break
@@ -353,26 +387,49 @@ class WorkPackageMigration:
                 logger.notice(f"Preparing {len(issues)} work packages for project {project_key}", extra={"markup": True})
 
                 for i, issue in enumerate(issues):
-                    issue_key = issue.get("key", "Unknown")
-                    if i % 10 == 0 or i == len(issues) - 1:  # Log progress every 10 issues
-                        project_tracker.update_description(f"Preparing issue {issue_key} ({i+1}/{len(issues)})")
+                    try:
+                        # Handle both dictionary and jira.Issue objects
+                        if hasattr(issue, 'key'):
+                            # It's a jira.Issue object
+                            issue_key = issue.key
+                            issue_id = issue.id
+                            issue_summary = issue.fields.summary
+                        else:
+                            # It's a dictionary
+                            issue_key = issue.get("key", "Unknown")
+                            issue_id = issue.get("id", "Unknown")
+                            issue_summary = issue.get("summary", "Unknown")
 
-                    if self.dry_run:
-                        logger.notice(f"DRY RUN: Would create work package for {issue_key}", extra={"markup": True})
-                        # Add a placeholder to mapping for dry runs
-                        self.work_package_mapping[issue["id"]] = {
-                            "jira_id": issue["id"],
-                            "jira_key": issue["key"],
-                            "openproject_id": None,
-                            "subject": issue["summary"],
-                            "dry_run": True
-                        }
+                        if i % 10 == 0 or i == len(issues) - 1:  # Log progress every 10 issues
+                            project_tracker.update_description(f"Preparing issue {issue_key} ({i+1}/{len(issues)})")
+
+                        if self.dry_run:
+                            logger.notice(f"DRY RUN: Would create work package for {issue_key}", extra={"markup": True})
+                            # Add a placeholder to mapping for dry runs
+                            self.work_package_mapping[issue_id] = {
+                                "jira_id": issue_id,
+                                "jira_key": issue_key,
+                                "openproject_id": None,
+                                "subject": issue_summary,
+                                "dry_run": True
+                            }
+                            continue
+
+                        # Prepare work package data
+                        try:
+                            wp_data = self.prepare_work_package(issue, op_project_id)
+                            if wp_data:
+                                work_packages_data.append(wp_data)
+                        except Exception as e:
+                            # Log the error with details about the issue
+                            logger.error(f"Error preparing work package for issue {issue_key}: {str(e)}", extra={"markup": True})
+                            logger.debug(f"Issue type: {type(issue)}", extra={"markup": True})
+                            # Continue with the next issue
+                            continue
+
+                    except Exception as e:
+                        logger.error(f"Error processing issue at index {i}: {str(e)}", extra={"markup": True})
                         continue
-
-                    # Prepare work package data
-                    wp_data = self.prepare_work_package(issue, op_project_id)
-                    if wp_data:
-                        work_packages_data.append(wp_data)
 
                 if self.dry_run:
                     project_tracker.add_log_item(f"DRY RUN: Would create {len(issues)} work packages for {project_key}")
@@ -650,7 +707,7 @@ class WorkPackageMigration:
                 total_created += created_count
 
         # Save the work package mapping
-        mapping_file_path = os.path.join(self.data_dir, self.mappings.WORK_PACKAGE_MAPPING_FILE_PATTERN.format(self.project_key))
+        mapping_file_path = os.path.join(self.data_dir, "work_package_mapping.json")
         save_json_file(self.work_package_mapping, mapping_file_path) # Use the imported utility function
 
         logger.success(f"Work package migration completed", extra={"markup": True})
@@ -670,7 +727,7 @@ class WorkPackageMigration:
 
         if not self.work_package_mapping:
             try:
-                with open(os.path.join(self.data_dir, self.mappings.WORK_PACKAGE_MAPPING_FILE_PATTERN.format(self.project_key)), "r") as f:
+                with open(os.path.join(self.data_dir, "work_package_mapping.json"), "r") as f:
                     self.work_package_mapping = json.load(f)
             except Exception as e:
                 logger.error(f"Failed to load work package mapping: {str(e)}", extra={"markup": True})
@@ -777,22 +834,37 @@ class WorkPackageMigration:
             filename: The name of the file to save to
         """
         filepath = os.path.join(self.data_dir, filename)
+
+        # Convert Jira Issue objects to dictionaries if needed
+        if isinstance(data, list) and data and hasattr(data[0], 'raw'):
+            # This is a list of jira.Issue objects
+            serializable_data = []
+            for item in data:
+                if hasattr(item, 'raw'):
+                    # Convert Jira Issue to dict
+                    serializable_data.append(item.raw)
+                else:
+                    # Skip this item if it doesn't have 'raw' attribute
+                    logger.warning(f"Skipping non-serializable item in {filename}")
+            data = serializable_data
+
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
         logger.debug(f"Saved data to {filepath}", extra={"markup": True})
 
-    def import_work_packages_direct(self, issues: List['JiraIssueType']) -> Dict[str, Any]:
+    def import_work_packages_direct(self, issues: List['JiraIssueType'], op_project_id: int = None) -> Dict[str, Any]:
         """
         Migrates work packages directly using API or Rails console.
         Accepts a list of jira.Issue objects.
 
         Args:
             issues: List of jira.Issue objects to migrate.
+            op_project_id: OpenProject project ID to use for the work packages.
 
         Returns:
             Dictionary with migration summary (created_count, error_count).
         """
-        logger.info(f"Starting direct work package import for project {self.project_key} (OP ID: {self.op_project_id})...")
+        logger.info("Starting direct work package import...", extra={"markup": True})
         created_count = 0
         error_count = 0
         processed_count = 0
@@ -803,9 +875,6 @@ class WorkPackageMigration:
         logger.info(f"Using {migration_method} for direct work package creation.")
 
         total_issues = len(issues)
-        # Use self.tracker if it exists, otherwise iterate without a specific tracker for this inner loop
-        # (Outer loop in export_work_packages already tracks overall progress)
-        # Removed internal: with ProgressTracker(...) as tracker:
         for issue in issues:
             if self.tracker:
                 self.tracker.update_description(f"Importing {issue.key} via {migration_method} ({processed_count+1}/{total_issues})")
@@ -837,7 +906,7 @@ class WorkPackageMigration:
                 try:
                     # Prepare payload using the Mappings class method
                     # This method already handles jira.Issue objects
-                    wp_payload_for_creation = self.mappings.prepare_work_package(issue, self.op_project_id)
+                    wp_payload_for_creation = self.prepare_work_package(issue, op_project_id)
 
                     if not wp_payload_for_creation:
                          logger.warning(f"Failed to prepare payload for issue {jira_key}. Skipping.")
@@ -894,10 +963,10 @@ class WorkPackageMigration:
             processed_count += 1
 
         # Save the updated mapping for this project
-        mapping_file_path = os.path.join(self.data_dir, self.mappings.WORK_PACKAGE_MAPPING_FILE_PATTERN.format(self.project_key))
+        mapping_file_path = os.path.join(self.data_dir, "work_package_mapping.json")
         save_json_file(self.work_package_mapping, mapping_file_path) # Use the imported utility function
 
-        logger.success(f"Finished direct work package import for {self.project_key}. Created: {created_count}, Errors/Skipped: {error_count}")
+        logger.success(f"Finished direct work package import. Created: {created_count}, Errors/Skipped: {error_count}")
         return {
             "created_count": created_count,
             "error_count": error_count,
@@ -920,7 +989,7 @@ class WorkPackageMigration:
         status_id = wp_payload.get('status_id')
         if not status_id and jira_status_name:
             # First attempt to get status ID from status mapping in memory
-            for status_name, status_info in self.mappings.status_mapping.items():
+            for status_name, status_info in self.status_mapping.items():
                 if status_name == jira_status_name and 'openproject_id' in status_info:
                     status_id = status_info['openproject_id']
                     logger.debug(f"Found status ID {status_id} for '{jira_status_name}' in mapping")
@@ -1039,13 +1108,9 @@ class WorkPackageMigration:
                         logger.info(f"Created new status mapping: '{status_name}' -> {status_id}")
 
                         # Update status mapping dynamically
-                        if hasattr(self.mappings, 'status_mapping_by_name') and jira_status_name:
-                            self.mappings.status_mapping_by_name[jira_status_name] = status_id
+                        if hasattr(self, 'status_mapping_by_name') and jira_status_name:
+                            self.status_mapping_by_name[jira_status_name] = status_id
                             logger.debug(f"Updated status mapping with new entry: {jira_status_name} -> {status_id}")
-
-                            # Save mapping to file to persist for future runs
-                            # (Optional, depends on how mappings are persisted in your system)
-                            self.mappings.save_mappings()
 
                     return {
                         "id": wp_id,
@@ -1087,3 +1152,33 @@ class WorkPackageMigration:
         except Exception as e:
             logger.error(f"Exception during Rails execution for {jira_key}: {str(e)}", exc_info=True)
             return None
+
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> Dict[str, Any]:
+        """
+        Run the work package migration process.
+
+        Args:
+            dry_run: If True, don't actually create or update anything
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object for accessing other migration results
+
+        Returns:
+            Dictionary with migration results
+        """
+        logger.info("Starting work package migration", extra={"markup": True})
+
+        # Set dry_run flag
+        self.dry_run = dry_run
+
+        # Store mappings reference
+        self.mappings = mappings
+
+        # Load mappings if provided
+        if mappings:
+            self.project_mapping = mappings.get_mapping("project") or {}
+            self.user_mapping = mappings.get_mapping("user") or {}
+            self.issue_type_mapping = mappings.get_mapping("issue_type") or {}
+            self.status_mapping = mappings.get_mapping("status") or {}
+
+        # Run the migration
+        return self.migrate_work_packages()
