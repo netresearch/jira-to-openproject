@@ -5,12 +5,12 @@ Provides a centralized configuration interface using ConfigLoader.
 
 import os
 import logging
-from typing import Any, Literal
+from typing import Any, Literal, Union, Optional
 from .config_loader import ConfigLoader, ConfigDict
 from .display import configure_logging
 
 # PEP 695 Type Aliases
-type DirType = Literal["root", "data", "logs", "output", "backups", "temp"]
+type DirType = Literal["root", "data", "logs", "output", "backups", "temp", "exports", "results"]
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 # Create a singleton instance of ConfigLoader
@@ -33,6 +33,8 @@ var_dirs: dict[DirType, str] = {
     "output": os.path.join(var_dir, "output"),
     "backups": os.path.join(var_dir, "backups"),
     "temp": os.path.join(var_dir, "temp"),
+    "exports": os.path.join(var_dir, "exports"),
+    "results": os.path.join(var_dir, "results"),
 }
 
 # Create all var directories
@@ -70,35 +72,50 @@ def get_value(section: str, key: str, default: Any = None) -> Any:
     return _config_loader.get_value(section, key, default)
 
 def get_path(dir_type: DirType) -> str:
-    """
-    Get the path to a var directory.
+    """Get the path to a directory based on its type.
 
     Args:
-        dir_type: Type of directory ('data', 'logs', 'output', 'backups', 'temp')
+        dir_type: The type of directory to get the path for.
 
     Returns:
-        Path to the requested directory
+        Path to the directory.
+
+    Raises:
+        ValueError: If the directory type is not supported.
     """
     if dir_type in var_dirs:
         return var_dirs[dir_type]
-    raise ValueError(f"Unknown directory type: {dir_type=}")
+    else:
+        raise ValueError(f"Unknown directory type: dir_type='{dir_type}'")
 
-def ensure_subdir(parent_dir_type: DirType, subdir_name: str) -> str:
+def ensure_subdir(parent_dir_type: Union[DirType, str], subdir_name: Optional[str] = None) -> str:
     """
     Ensure a subdirectory exists under one of the var directories.
 
     Args:
-        parent_dir_type: Type of parent directory ('data', 'logs', 'output', 'backups', 'temp')
-        subdir_name: Name of the subdirectory to create
+        parent_dir_type: Type of parent directory or path to the parent directory
+        subdir_name: Name of the subdirectory to create (optional if parent_dir_type is a path)
 
     Returns:
         Path to the created subdirectory
     """
-    parent_dir = get_path(parent_dir_type)
-    subdir_path = os.path.join(parent_dir, subdir_name)
-    os.makedirs(subdir_path, exist_ok=True)
-    logger.debug(f"Created subdirectory: {subdir_path=}")
-    return subdir_path
+    # Handle the case where parent_dir_type is a DirType
+    if isinstance(parent_dir_type, str) and parent_dir_type in ["data", "logs", "output", "backups", "temp", "exports", "results", "root"]:
+        parent_dir = get_path(parent_dir_type)
+    else:
+        # Handle the case where parent_dir_type is directly a path
+        parent_dir = parent_dir_type
+
+    if subdir_name:
+        subdir_path = os.path.join(parent_dir, subdir_name)
+        os.makedirs(subdir_path, exist_ok=True)
+        logger.debug(f"Created subdirectory: {subdir_path}")
+        return subdir_path
+    else:
+        # Just ensure the parent directory exists
+        os.makedirs(parent_dir, exist_ok=True)
+        logger.debug(f"Created directory: {parent_dir}")
+        return parent_dir
 
 # Validate required configuration
 def validate_config() -> bool:

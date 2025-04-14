@@ -691,14 +691,14 @@ class OpenProjectRailsClient:
 
     def transfer_file_from_container(self, remote_path: str, local_path: str) -> bool:
         """
-        Transfer a file from the OpenProject container to the local machine.
+        Transfer a file from the container to the local machine.
 
         Args:
-            remote_path: Path to the file in the container
-            local_path: Path where the file should be placed on the local machine
+            remote_path: Path to file in container
+            local_path: Path to save file locally
 
         Returns:
-            bool: True if successful, False otherwise
+            True if successful, False otherwise
         """
         try:
             # Get container and server info from config
@@ -744,15 +744,30 @@ class OpenProjectRailsClient:
             logger.error(f"Unexpected error during file transfer: {e}")
             return False
 
-    def read_json_from_container(self, remote_path: str) -> Optional[Any]:
+    def test_connection(self) -> bool:
         """
-        Read JSON data directly from a file in the container.
-
-        Args:
-            remote_path: Path to the JSON file in the container
+        Test if the Rails console connection is working.
 
         Returns:
-            The parsed JSON data or None if it failed
+            True if connection is successful, False otherwise
+        """
+        try:
+            # Execute a simple Ruby command to verify connectivity
+            result = self.execute("puts 'Rails console connection test'; true")
+            return result.get('status') == 'success'
+        except Exception as e:
+            logger.error(f"Rails console connection test failed: {str(e)}")
+            return False
+
+    def read_json_from_container(self, remote_path: str) -> Optional[Any]:
+        """
+        Read a JSON file from the container.
+
+        Args:
+            remote_path: Path to JSON file in container
+
+        Returns:
+            Parsed JSON content or None if file doesn't exist or isn't valid JSON
         """
         try:
             # Get container and server info from config

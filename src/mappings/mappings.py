@@ -94,6 +94,36 @@ class Mappings:
         logger.debug(f"No OpenProject ID found in mapping for Jira status name: {jira_status_name}")
         return None
 
+    def has_mapping(self, mapping_name: str) -> bool:
+        """Check if a mapping exists and has entries.
+
+        Args:
+            mapping_name: Name of the mapping (e.g., 'projects', 'users', etc.)
+
+        Returns:
+            True if the mapping exists and has entries, False otherwise
+        """
+        mapping_attr = f"{mapping_name}_mapping"
+        if hasattr(self, mapping_attr):
+            mapping = getattr(self, mapping_attr)
+            return bool(mapping)
+        return False
+
+    def get_mapping(self, mapping_name: str) -> Dict[str, Any]:
+        """Get a specific mapping.
+
+        Args:
+            mapping_name: Name of the mapping (e.g., 'projects', 'users', etc.)
+
+        Returns:
+            The mapping dictionary or an empty dict if not found
+        """
+        mapping_attr = f"{mapping_name}_mapping"
+        if hasattr(self, mapping_attr):
+            return getattr(self, mapping_attr)
+        logger.warning(f"Mapping '{mapping_name}' not found")
+        return {}
+
     # --- Methods needed by export_work_packages ---
 
     def extract_jira_issues(self, project_key: str, project_tracker=None) -> List[Dict[str, Any]]:

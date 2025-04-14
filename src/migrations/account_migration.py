@@ -482,8 +482,88 @@ class AccountMigration(BaseMigration):
         return analysis
 
     def _save_custom_field_id(self, cf_id: int) -> None:
-        """Save the custom field ID, typically within the analysis file."""
-        analysis_data = self._load_from_json("account_mapping_analysis.json", {})
-        analysis_data["custom_field_id"] = cf_id
-        self._save_to_json(analysis_data, "account_mapping_analysis.json")
-        self.logger.debug(f"Saved account custom field ID ({cf_id}) to analysis file.")
+        """
+        Save the custom field ID to the analysis file.
+
+        Args:
+            cf_id: The custom field ID to save
+        """
+        analysis = self._load_from_json("account_mapping_analysis.json", {})
+        analysis["custom_field_id"] = cf_id
+        self._save_to_json(analysis, "account_mapping_analysis.json")
+        self.account_custom_field_id = cf_id
+
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> Dict[str, Any]:
+        """
+        Run the account migration process.
+
+        Args:
+            dry_run: If True, don't actually create or modify accounts in OpenProject
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object (not used in this migration)
+
+        Returns:
+            Dictionary with migration results
+        """
+        self.logger.info("Starting account migration", extra={"markup": True})
+
+        try:
+            # Load existing data
+            self._load_data()
+
+            # Load company mapping (dependency)
+            company_mapping = self.load_company_mapping()
+            if not company_mapping:
+                self.logger.warning("No company mapping found. Run company migration first.", extra={"markup": True})
+
+            # Extract data
+            tempo_accounts = self.extract_tempo_accounts(force=force)
+            op_projects = self.extract_openproject_projects()
+
+            # Create mapping
+            mapping = self.create_account_mapping()
+
+            # Create custom field and migrate accounts if not in dry run mode
+            if not dry_run:
+                # Create custom field
+                custom_field_id = self.create_account_custom_field()
+                if custom_field_id:
+                    self.logger.success(f"Created/found Tempo account custom field with ID: {custom_field_id}", extra={"markup": True})
+                else:
+                    self.logger.error("Failed to create Tempo account custom field", extra={"markup": True})
+
+                # Migrate accounts
+                result = self.migrate_accounts()
+            else:
+                self.logger.warning("Dry run mode - not creating Tempo account custom field or accounts", extra={"markup": True})
+                result = {
+                    "status": "success",
+                    "matched_count": sum(1 for account in mapping.values() if account["matched_by"] != "none"),
+                    "created_count": 0,
+                    "skipped_count": 0,
+                    "failed_count": 0
+                }
+
+            # Analyze results
+            analysis = self.analyze_account_mapping()
+
+            return {
+                "status": result.get("status", "success"),
+                "success_count": result.get("matched_count", 0) + result.get("created_count", 0),
+                "failed_count": result.get("failed_count", 0),
+                "total_count": len(tempo_accounts),
+                "tempo_accounts_count": len(tempo_accounts),
+                "op_projects_count": len(op_projects),
+                "mapped_accounts_count": len(mapping),
+                "custom_field_id": self.account_custom_field_id,
+                "analysis": analysis
+            }
+        except Exception as e:
+            self.logger.error(f"Error during account migration: {str(e)}", extra={"markup": True, "traceback": True})
+            return {
+                "status": "failed",
+                "error": str(e),
+                "success_count": 0,
+                "failed_count": len(self.tempo_accounts) if self.tempo_accounts else 0,
+                "total_count": len(self.tempo_accounts) if self.tempo_accounts else 0
+            }

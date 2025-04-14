@@ -452,3 +452,67 @@ class ProjectMigration(BaseMigration):
         logger.info(f"Failed projects: {analysis['failed_projects']}")
 
         return analysis
+
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> Dict[str, Any]:
+        """
+        Run the project migration process.
+
+        Args:
+            dry_run: If True, don't actually create projects in OpenProject
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object (not used in this migration)
+
+        Returns:
+            Dictionary with migration results
+        """
+        self.logger.info("Starting project migration", extra={"markup": True})
+
+        try:
+            # Extract data
+            jira_projects = self.extract_jira_projects(force=force)
+            op_projects = self.extract_openproject_projects(force=force)
+
+            # Load account mapping (dependency)
+            account_mapping = self.load_account_mapping()
+
+            # Extract project-account mapping
+            project_account_mapping = self.extract_project_account_mapping(force=force)
+
+            # Migrate projects if not in dry run mode
+            if not dry_run:
+                result = self.migrate_projects()
+            else:
+                self.logger.warning("Dry run mode - not creating projects", extra={"markup": True})
+                # Count how many projects are already mapped
+                mapped_count = sum(1 for proj in self.project_mapping.values() if proj.get("openproject_id"))
+                result = {
+                    "status": "success",
+                    "created_count": 0,
+                    "matched_count": mapped_count,
+                    "skipped_count": 0,
+                    "failed_count": 0,
+                    "total_count": len(jira_projects)
+                }
+
+            # Analyze results
+            analysis = self.analyze_project_mapping()
+
+            return {
+                "status": result.get("status", "success"),
+                "success_count": result.get("created_count", 0) + result.get("matched_count", 0),
+                "failed_count": result.get("failed_count", 0),
+                "total_count": len(jira_projects),
+                "jira_projects_count": len(jira_projects),
+                "op_projects_count": len(op_projects),
+                "mapped_projects_count": len(self.project_mapping),
+                "analysis": analysis
+            }
+        except Exception as e:
+            self.logger.error(f"Error during project migration: {str(e)}", extra={"markup": True, "traceback": True})
+            return {
+                "status": "failed",
+                "error": str(e),
+                "success_count": 0,
+                "failed_count": len(self.jira_projects) if self.jira_projects else 0,
+                "total_count": len(self.jira_projects) if self.jira_projects else 0
+            }

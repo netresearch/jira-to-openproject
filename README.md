@@ -25,6 +25,7 @@ It leverages Python 3.13, Docker for environment consistency, and direct integra
 ### Prerequisites
 
 *   Docker and Docker Compose
+*   Python 3.12 or 3.13
 *   Access credentials for both your Jira Server 9.11 API and your OpenProject 15 API.
 *   (Optional but Recommended) SSH access to the server hosting the OpenProject Docker container if you intend to use `--direct-migration` for custom fields/types.
 
@@ -36,25 +37,33 @@ It leverages Python 3.13, Docker for environment consistency, and direct integra
     cd jira-to-openproject-migration
     ```
 
-2.  **Configure Environment:**
+2.  **Set up Python environment:**
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+    ```
+
+3.  **Install the package:**
+    ```bash
+    pip install -e .
+    ```
+
+    This project uses modern Python packaging with `pyproject.toml`. The `-e` flag installs the package in development mode.
+
+4.  **Configure Environment:**
     *   Copy the default environment file: `cp .env .env.local`
     *   Edit `.env.local` and fill in your specific Jira and OpenProject URLs, API tokens/credentials, and any necessary SSH details for direct Rails console access.
     *   Review `config/config.yaml` for other migration settings (batch sizes, rate limits, etc.) and adjust if needed.
     *   See the [Configuration Guide](docs/configuration.md) for full details.
 
-3.  **Build and Start Docker Container:**
+5.  **Build and Start Docker Container (optional):**
     ```bash
     docker compose up -d --build
     ```
 
 ### Basic Usage
 
-Run commands inside the Docker container:
-
 ```bash
-# Install the tool (development mode)
-pip install -e .
-
 # The tool can be run using the 'j2o' command:
 
 # Perform a dry run migration (simulates migration, no changes made)

@@ -325,7 +325,12 @@ def export_work_packages(
 
         # Initialize mappings
         from src.mappings.mappings import Mappings
-        mappings = Mappings()
+        from src.utils import get_path
+        mappings = Mappings(
+            data_dir=get_path("data"),
+            jira_client=jira_client,
+            op_client=op_client
+        )
 
         # Extract all necessary data (users, projects, custom fields, etc.)
         if not mappings.has_mapping("projects"):

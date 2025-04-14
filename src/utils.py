@@ -6,26 +6,29 @@ from typing import Any, Optional
 
 from src.config import logger
 
-def load_json_file(file_path: str) -> Optional[Any]:
+def load_json_file(file_path: str, custom_logger=None) -> Optional[Any]:
     """Load data from a JSON file.
 
     Args:
         file_path: Path to the JSON file.
+        custom_logger: Optional logger to use instead of the default.
 
     Returns:
         Loaded JSON data or None if an error occurred.
     """
+    log = custom_logger or logger
+
     if not os.path.exists(file_path):
-        logger.debug(f"JSON file not found: {file_path}")
+        log.debug(f"JSON file not found: {file_path}")
         return None
     try:
         with open(file_path, "r", encoding='utf-8') as f:
             return json.load(f)
     except json.JSONDecodeError as e:
-        logger.error(f"Error decoding JSON file {file_path}: {e}")
+        log.error(f"Error decoding JSON file {file_path}: {e}")
         return None
     except IOError as e:
-        logger.error(f"Error reading file {file_path}: {e}")
+        log.error(f"Error reading file {file_path}: {e}")
         return None
 
 def save_json_file(data: Any, file_path: str) -> bool:
