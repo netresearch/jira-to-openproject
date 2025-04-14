@@ -253,7 +253,11 @@ def run_migration(
                 return results
 
         # Initialize mappings
-        mappings = Mappings()
+        mappings = Mappings(
+            data_dir=get_path("data"),
+            jira_client=jira_client,
+            op_client=op_client
+        )
 
         # Define all available migration components
         available_components = {

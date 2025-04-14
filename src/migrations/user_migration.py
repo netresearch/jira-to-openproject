@@ -509,10 +509,60 @@ class UserMigration:
         Save data to a JSON file.
 
         Args:
-            data: Data to save
-            filename: Name of the file to save to
+            data: Data to save.
+            filename: Name of the file to save to (will be stored in data_dir).
         """
-        filepath = os.path.join(self.data_dir, filename)
-        with open(filepath, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.info(f"Saved data to {filepath}", extra={"markup": True})
+        file_path = os.path.join(self.data_dir, filename)
+        try:
+            with open(file_path, "w") as f:
+                json.dump(data, f, indent=2)
+            logger.debug(f"Data saved to {file_path}")
+        except IOError as e:
+            logger.error(f"Error saving data to {file_path}: {str(e)}")
+
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> Dict[str, Any]:
+        """
+        Run the user migration process.
+
+        Args:
+            dry_run: If True, don't actually create or update anything
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object (not used in this migration)
+
+        Returns:
+            Dictionary with migration results
+        """
+        logger.info("Starting user migration", extra={"markup": True})
+
+        try:
+            # Extract data
+            jira_users = self.extract_jira_users()
+            op_users = self.extract_openproject_users()
+
+            # Create mapping
+            user_mapping = self.create_user_mapping()
+
+            # Analyze results
+            analysis = self.analyze_user_mapping()
+
+            return {
+                "status": "success",
+                "jira_users_count": len(jira_users),
+                "op_users_count": len(op_users),
+                "mapped_users_count": analysis["matched_users"],
+                "unmapped_users_count": analysis["unmatched_users"],
+                "match_percentage": analysis["match_percentage"],
+                "success_count": analysis["matched_users"],
+                "failed_count": analysis["unmatched_users"],
+                "total_count": len(jira_users),
+                "analysis": analysis
+            }
+        except Exception as e:
+            logger.error(f"Error during user migration: {str(e)}", extra={"markup": True, "traceback": True})
+            return {
+                "status": "failed",
+                "error": str(e),
+                "success_count": 0,
+                "failed_count": 0,
+                "total_count": 0
+            }

@@ -77,3 +77,24 @@ class BaseMigration:
 
         self.logger.debug(f"Saved data to {filepath}")
         return filepath
+
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> dict[str, Any]:
+        """
+        Default implementation of the run method that all migration classes should implement.
+
+        Args:
+            dry_run: If True, no changes will be made to OpenProject
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object that can be used for mapping IDs between systems
+
+        Returns:
+            Dictionary with migration results
+        """
+        self.logger.warning(f"The run method has not been implemented for {self.__class__.__name__}")
+        return {
+            "status": "failed",
+            "error": f"The run method has not been implemented for {self.__class__.__name__}",
+            "success_count": 0,
+            "failed_count": 0,
+            "total_count": 0
+        }

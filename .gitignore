@@ -22,9 +22,6 @@ dist/
 build/
 *.egg-info/
 
-# Logs
-var/logs/
-
 # IDE specific files
 .idea/
 .vscode/
@@ -33,10 +30,7 @@ var/logs/
 .DS_Store
 
 # Output and temporary data files
-var/output/
-var/data/
-!var/data/*.example.json
-var/temp/
+var/
 
 # Testing
 .coverage
@@ -52,6 +46,3 @@ Thumbs.db
 
 # Migration specific
 id_mapping.json
-
-# Ignore all files in the backups directory
-var/backups/*

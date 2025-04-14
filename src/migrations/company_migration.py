@@ -456,3 +456,62 @@ class CompanyMigration(BaseMigration):
     def _create_project_via_rails(self, company_name: str) -> Optional[Dict[str, Any]]:
         # Implementation of _create_project_via_rails method
         pass
+
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> Dict[str, Any]:
+        """
+        Run the company migration process.
+
+        Args:
+            dry_run: If True, don't actually create companies in OpenProject
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object (not used in this migration)
+
+        Returns:
+            Dictionary with migration results
+        """
+        self.logger.info("Starting company migration", extra={"markup": True})
+
+        try:
+            # Extract data
+            tempo_companies = self.extract_tempo_companies()
+            op_projects = self.extract_openproject_projects(force=force)
+
+            # Create mapping
+            mapping = self.create_company_mapping()
+
+            # Migrate companies if not in dry run mode
+            if not dry_run:
+                result = self.migrate_companies()
+            else:
+                self.logger.warning("Dry run mode - not creating company projects", extra={"markup": True})
+                result = {
+                    "status": "success",
+                    "created_count": 0,
+                    "matched_count": sum(1 for company in mapping.values() if company["matched_by"] != "none"),
+                    "skipped_count": 0,
+                    "failed_count": 0,
+                    "total_count": len(tempo_companies)
+                }
+
+            # Analyze results
+            analysis = self.analyze_company_mapping()
+
+            return {
+                "status": result.get("status", "success"),
+                "success_count": result.get("created_count", 0) + result.get("matched_count", 0),
+                "failed_count": result.get("failed_count", 0),
+                "total_count": len(tempo_companies),
+                "tempo_companies_count": len(tempo_companies),
+                "op_projects_count": len(op_projects),
+                "mapped_companies_count": len(mapping),
+                "analysis": analysis
+            }
+        except Exception as e:
+            self.logger.error(f"Error during company migration: {str(e)}", extra={"markup": True, "traceback": True})
+            return {
+                "status": "failed",
+                "error": str(e),
+                "success_count": 0,
+                "failed_count": len(self.tempo_companies) if self.tempo_companies else 0,
+                "total_count": len(self.tempo_companies) if self.tempo_companies else 0
+            }

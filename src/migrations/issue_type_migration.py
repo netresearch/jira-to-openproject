@@ -851,3 +851,87 @@ class IssueTypeMigration(BaseMigration):
         logger.info(f"Summary: Updated {updated_count}, Already mapped {already_mapped_count}, Missing {missing_count}")
 
         return updated_count > 0 or already_mapped_count > 0
+
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> dict[str, Any]:
+        """
+        Run the issue type migration.
+
+        Args:
+            dry_run: If True, no changes will be made to OpenProject
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object that can be used for mapping IDs between systems
+
+        Returns:
+            Dictionary with migration results
+        """
+        logger.info("Starting issue type migration...")
+
+        # Extract data from Jira and OpenProject
+        self.extract_jira_issue_types(force=force)
+        self.extract_openproject_work_package_types(force=force)
+
+        # Create/update the issue type mapping
+        self.create_issue_type_mapping(force=force)
+
+        total_jira_types = len(self.jira_issue_types)
+        matched_types = sum(1 for mapping in self.issue_type_mapping.values()
+                           if mapping.get("openproject_id") is not None)
+        types_to_create = total_jira_types - matched_types
+
+        result = {
+            "status": "success",
+            "component": "issue_types",
+            "total_count": total_jira_types,
+            "matched_count": matched_types,
+            "to_create_count": types_to_create,
+            "match_percentage": (matched_types / total_jira_types * 100) if total_jira_types > 0 else 0,
+            "details": self.analyze_issue_type_mapping()
+        }
+
+        # If we're not in dry run mode and there are types to create, create them
+        if not dry_run and types_to_create > 0:
+            logger.info(f"Need to create {types_to_create} work package types in OpenProject")
+            migration_successful = self.migrate_issue_types_via_rails()
+
+            if migration_successful:
+                # Update counts after migration
+                matched_types = sum(1 for mapping in self.issue_type_mapping.values()
+                                  if mapping.get("openproject_id") is not None)
+                types_to_create = total_jira_types - matched_types
+
+                result.update({
+                    "matched_count": matched_types,
+                    "to_create_count": types_to_create,
+                    "match_percentage": (matched_types / total_jira_types * 100) if total_jira_types > 0 else 0,
+                    "created_count": matched_types - result["matched_count"],
+                })
+            else:
+                result["status"] = "partial_success" if matched_types > 0 else "failed"
+                result["error"] = "Failed to create some or all work package types"
+        elif dry_run and types_to_create > 0:
+            logger.info(f"Dry run: Would create {types_to_create} work package types in OpenProject")
+
+        # Save the final mappings
+        self._save_to_json(self.issue_type_mapping, "issue_type_mapping.json")
+
+        # Create a simplified ID mapping for other components to use
+        final_mapping = {}
+        for type_name, mapping in self.issue_type_mapping.items():
+            jira_id = mapping.get("jira_id")
+            op_id = mapping.get("openproject_id")
+
+            if jira_id and op_id:
+                final_mapping[jira_id] = op_id
+
+        self._save_to_json(final_mapping, "issue_type_id_mapping.json")
+
+        # Update mappings object if provided
+        if mappings is not None:
+            mappings["issue_type_id_mapping"] = final_mapping
+
+        logger.info(f"Issue type migration completed with status: {result['status']}")
+        logger.info(f"Total Jira issue types: {total_jira_types}")
+        logger.info(f"Matched with OpenProject: {matched_types} ({result['match_percentage']:.1f}%)")
+        logger.info(f"Types to create: {types_to_create}")
+
+        return result

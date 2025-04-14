@@ -1118,64 +1118,72 @@ end
 
     def update_mapping_file(self, force: bool = False) -> bool:
         """
-        Update the custom field mapping file with IDs from OpenProject.
-
-        This method is useful when custom fields were created manually via a Ruby script
-        execution and the mapping file needs to be updated with the created field IDs.
+        Update the mapping file after manual creation of custom fields.
 
         Args:
-            force: If True, force refresh of OpenProject custom fields
+            force: If True, force extraction even if data exists
 
         Returns:
-            True if mapping was updated successfully, False otherwise
+            True if mapping was updated, False otherwise
         """
-        self.logger.info("Updating custom field mapping file with IDs from OpenProject...")
+        self.extract_openproject_custom_fields(force=force)
+        self.extract_jira_custom_fields(force=force)
+        return self.create_custom_field_mapping(force=force) is not None
 
-        # Get all custom fields from OpenProject
-        op_fields = self.op_client.get_custom_fields(force_refresh=force)
-        if not op_fields:
-            self.logger.error("Failed to retrieve custom fields from OpenProject")
-            return False
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> Dict[str, Any]:
+        """
+        Run the custom field migration process.
 
-        # Create a dictionary of name to field mapping for easy lookup
-        op_fields_by_name = {field.get('name'): field for field in op_fields}
+        Args:
+            dry_run: If True, don't actually create fields in OpenProject
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object (not used in this migration)
 
-        # Count the mapping updates
-        updated_count = 0
-        already_mapped_count = 0
-        missing_count = 0
+        Returns:
+            Dictionary with migration results
+        """
+        self.logger.info("Starting custom field migration", extra={"markup": True})
 
-        # Update mapping for each field that was supposed to be created
-        for jira_id, field in self.mapping.items():
-            op_name = field.get('openproject_name', '')
+        try:
+            # Extract data
+            jira_fields = self.extract_jira_custom_fields(force=force)
+            op_fields = self.extract_openproject_custom_fields(force=force)
 
-            # Skip if already mapped
-            if field.get('openproject_id') and field.get('matched_by') != 'create':
-                already_mapped_count += 1
-                continue
+            # Create mapping
+            mapping = self.create_custom_field_mapping(force=force)
 
-            # Find by name in OpenProject fields
-            if op_name in op_fields_by_name:
-                op_field = op_fields_by_name[op_name]
-                op_id = op_field.get('id')
-
-                # Update the mapping
-                self.logger.info(f"Found custom field '{op_name}' with ID {op_id}")
-                self.mapping[jira_id]['openproject_id'] = op_id
-                self.mapping[jira_id]['matched_by'] = 'created' if field.get('matched_by') == 'create' else 'name'
-                updated_count += 1
+            # Migrate custom fields based on the direct migration flag
+            if not dry_run and self.rails_console:
+                self.logger.info("Migrating custom fields via Rails console", extra={"markup": True})
+                success = self.migrate_custom_fields(direct_migration=True)
+            elif not dry_run:
+                self.logger.info("Generating JSON migration script (no Rails console available)", extra={"markup": True})
+                success = self.migrate_custom_fields(direct_migration=False)
             else:
-                self.logger.warning(f"Custom field '{op_name}' not found in OpenProject")
-                missing_count += 1
+                self.logger.warning("Dry run mode - not creating custom fields", extra={"markup": True})
+                success = True
 
-        # Save the updated mapping
-        if updated_count > 0:
-            self._save_to_json(self.mapping, "custom_field_mapping.json")
-            self.logger.success(f"Updated mapping for {updated_count} custom fields")
-        else:
-            self.logger.info("No mapping updates needed")
+            # Analyze results
+            analysis = self.analyze_custom_field_mapping()
 
-        # Print summary
-        self.logger.info(f"Summary: Updated {updated_count}, Already mapped {already_mapped_count}, Missing {missing_count}")
+            status = "success" if success else "failed"
 
-        return updated_count > 0 or already_mapped_count > 0
+            return {
+                "status": status,
+                "jira_fields_count": len(jira_fields),
+                "op_fields_count": len(op_fields),
+                "mapped_fields_count": len(mapping),
+                "success_count": analysis.get("matched_by_name", 0) + analysis.get("created_directly", 0),
+                "failed_count": analysis.get("needs_manual_creation_or_script", 0),
+                "total_count": len(jira_fields),
+                "analysis": analysis
+            }
+        except Exception as e:
+            self.logger.error(f"Error during custom field migration: {str(e)}", extra={"markup": True, "traceback": True})
+            return {
+                "status": "failed",
+                "error": str(e),
+                "success_count": 0,
+                "failed_count": len(self.jira_custom_fields) if self.jira_custom_fields else 0,
+                "total_count": len(self.jira_custom_fields) if self.jira_custom_fields else 0
+            }

@@ -1195,6 +1195,14 @@ class OpenProjectClient:
 
             try:
                 # Parse the JSON output directly
+                # Check if the output looks like a Ruby object/string representation instead of JSON
+                if output.startswith('"') and output.endswith('"'):
+                    # Handle the case where output is a string representation
+                    logger.warning("Received string output instead of JSON array. Attempting to handle it.")
+                    custom_fields = []
+                    logger.debug(f"Raw output: {output}")
+                    return custom_fields
+
                 custom_fields = json.loads(output)
 
                 if not isinstance(custom_fields, list):
