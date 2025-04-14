@@ -664,8 +664,13 @@ class CustomFieldMigration(BaseMigration):
         self.logger.success("Custom fields migration via Rails console completed successfully.")
         return True
 
-    def migrate_custom_fields(self, direct_migration=False):
-        """Migrate custom fields from Jira to OpenProject"""
+    def migrate_custom_fields(self, direct_migration=False, force=False):
+        """Migrate custom fields from Jira to OpenProject
+
+        Args:
+            direct_migration (bool): Whether to use direct Rails console migration
+            force (bool): If True, force re-extraction of data from both systems
+        """
         # Use the mapping analysis to decide whether to do direct migration or generate a Ruby script
         analysis = self.analyze_custom_field_mapping()
 
@@ -674,6 +679,13 @@ class CustomFieldMigration(BaseMigration):
             return False
 
         self.logger.info(f"Starting custom field migration with {len(self.mapping)} fields in mapping")
+
+        # If force is True, refresh OpenProject custom fields to get the latest state
+        if force:
+            self.logger.info("Force flag is set, refreshing OpenProject custom fields data")
+            self.extract_openproject_custom_fields(force=True)
+            # Recreate mapping with force to ensure we have the latest state
+            self.create_custom_field_mapping(force=True)
 
         # Check if we have fields that need to be created
         fields_to_create = [f for f in self.mapping.values() if f["matched_by"] == "create"]
@@ -1155,10 +1167,10 @@ end
             # Migrate custom fields based on the direct migration flag
             if not dry_run and self.rails_console:
                 self.logger.info("Migrating custom fields via Rails console", extra={"markup": True})
-                success = self.migrate_custom_fields(direct_migration=True)
+                success = self.migrate_custom_fields(direct_migration=True, force=force)
             elif not dry_run:
                 self.logger.info("Generating JSON migration script (no Rails console available)", extra={"markup": True})
-                success = self.migrate_custom_fields(direct_migration=False)
+                success = self.migrate_custom_fields(direct_migration=False, force=force)
             else:
                 self.logger.warning("Dry run mode - not creating custom fields", extra={"markup": True})
                 success = True
