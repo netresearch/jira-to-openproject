@@ -43,12 +43,43 @@ class Mappings:
         self.link_type_mapping = self._load_mapping(self.LINK_TYPE_MAPPING_FILE)
         self.custom_field_mapping = self._load_mapping(self.CUSTOM_FIELD_MAPPING_FILE)
 
+        # Additional mappings that might be added during runtime
+        self.issue_type_id_mapping = {}
+
         # Check essential mappings
         if not self.project_mapping:
             logger.warning(f"Project mapping ({self.PROJECT_MAPPING_FILE}) is missing or empty!")
         if not self.issue_type_mapping:
             logger.warning(f"Issue type mapping ({self.ISSUE_TYPE_MAPPING_FILE}) is missing or empty!")
         # Add checks for other critical mappings as needed
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        """
+        Support dictionary-style item assignment for compatibility with migration modules.
+
+        Args:
+            key: The mapping key to set (e.g., 'issue_type_id_mapping')
+            value: The value to set for this mapping
+        """
+        if hasattr(self, key):
+            setattr(self, key, value)
+        else:
+            logger.warning(f"Setting unknown mapping attribute: {key}")
+            setattr(self, key, value)
+
+    def __getitem__(self, key: str) -> Any:
+        """
+        Support dictionary-style item access for compatibility with migration modules.
+
+        Args:
+            key: The mapping key to get (e.g., 'issue_type_id_mapping')
+
+        Returns:
+            The mapping value or raises KeyError if not found
+        """
+        if hasattr(self, key):
+            return getattr(self, key)
+        raise KeyError(f"Mapping '{key}' not found")
 
     def _load_mapping(self, filename: str) -> Dict[str, Any]:
         """Loads a specific mapping file from the data directory."""

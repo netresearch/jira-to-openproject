@@ -927,7 +927,18 @@ class IssueTypeMigration(BaseMigration):
 
         # Update mappings object if provided
         if mappings is not None:
-            mappings["issue_type_id_mapping"] = final_mapping
+            # Check if mappings is a dictionary (direct assignment)
+            if isinstance(mappings, dict):
+                mappings["issue_type_id_mapping"] = final_mapping
+            else:
+                # For Mappings class objects, check if they have a method to update mappings
+                # or access the internal mapping attributes directly
+                try:
+                    if hasattr(mappings, "issue_type_mapping"):
+                        setattr(mappings, "issue_type_mapping", final_mapping)
+                    logger.info("Updated mappings object with issue type ID mapping")
+                except Exception as e:
+                    logger.warning(f"Could not update mappings object: {e}")
 
         logger.info(f"Issue type migration completed with status: {result['status']}")
         logger.info(f"Total Jira issue types: {total_jira_types}")
