@@ -570,3 +570,118 @@ class StatusMigration(BaseMigration):
             "unmapped_statuses": unmapped[:10],  # Limit to first 10
             "message": f"Found {mapped_statuses}/{total_statuses} mapped statuses"
         }
+
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> dict[str, Any]:
+        """
+        Run the status migration process.
+
+        Args:
+            dry_run: If True, no changes will be made to OpenProject
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object that can be used for mapping IDs between systems
+
+        Returns:
+            Dictionary with migration results
+        """
+        logger.info("Running status migration...")
+
+        # Update instance variables
+        self.dry_run = dry_run
+        if mappings:
+            self.mappings = mappings
+            self.status_mapping = mappings.status_mapping if hasattr(mappings, 'status_mapping') else {}
+
+        try:
+            # Step 1: Extract Jira statuses
+            self.jira_statuses = self.extract_jira_statuses(force=force)
+            if not self.jira_statuses:
+                return {
+                    "status": "failed",
+                    "error": "Failed to extract Jira statuses",
+                    "success_count": 0,
+                    "failed_count": 0,
+                    "total_count": 0
+                }
+
+            # Step 2: Extract Jira status categories
+            self.jira_status_categories = self.extract_status_categories(force=force)
+
+            # Step 3: Get OpenProject statuses
+            self.op_statuses = self.get_openproject_statuses(force=force)
+
+            # Step 4: Create status mapping if needed
+            if not self.status_mapping or force:
+                self.status_mapping = self.create_status_mapping(force=force)
+
+            # Step 5: Migrate statuses - if in dry_run mode, simulate success for all
+            if dry_run:
+                logger.info("[DRY RUN] Simulating status migration success")
+
+                # Create simulated mapping for all statuses
+                op_statuses_by_name = {s.get("name", "").lower(): s for s in self.op_statuses}
+                for jira_status in self.jira_statuses:
+                    jira_id = jira_status.get("id")
+                    name = jira_status.get("name", "")
+
+                    # Check if it already exists in OpenProject
+                    existing = False
+                    for op_name, op_status in op_statuses_by_name.items():
+                        if op_name.lower() == name.lower():
+                            existing = True
+                            # Use the actual existing status ID
+                            self.status_mapping[jira_id] = {
+                                "openproject_id": op_status.get("id"),
+                                "openproject_name": op_status.get("name")
+                            }
+                            break
+
+                    # If not existing, create a simulated ID
+                    if not existing:
+                        self.status_mapping[jira_id] = {
+                            "openproject_id": f"dry_run_{jira_id}",
+                            "openproject_name": name
+                        }
+
+                # Save the mapping
+                self._save_to_json(self.status_mapping, "status_mapping.json")
+
+                # If we have a mappings object, update it
+                if self.mappings:
+                    self.mappings.status_mapping = self.status_mapping
+
+                return {
+                    "status": "success",
+                    "message": "[DRY RUN] Simulated status migration",
+                    "success_count": len(self.jira_statuses),
+                    "failed_count": 0,
+                    "total_count": len(self.jira_statuses),
+                    "details": {
+                        "status": "success",
+                        "total_processed": len(self.jira_statuses),
+                        "already_exists_count": 0,
+                        "created_count": len(self.jira_statuses),
+                        "error_count": 0,
+                    }
+                }
+            else:
+                # Real migration
+                migration_result = self.migrate_statuses()
+
+                return {
+                    "status": migration_result.get("status", "failed"),
+                    "message": migration_result.get("message", "Status migration completed"),
+                    "success_count": migration_result.get("created_count", 0) + migration_result.get("already_exists_count", 0),
+                    "failed_count": migration_result.get("error_count", 0),
+                    "total_count": migration_result.get("total_processed", 0),
+                    "details": migration_result
+                }
+
+        except Exception as e:
+            logger.error(f"Error during status migration: {str(e)}")
+            return {
+                "status": "failed",
+                "error": f"Error during status migration: {str(e)}",
+                "success_count": 0,
+                "failed_count": 0,
+                "total_count": 0
+            }

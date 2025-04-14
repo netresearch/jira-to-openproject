@@ -268,7 +268,7 @@ def run_migration(
             "projects": ProjectMigration(jira_client, op_client),
             "link_types": LinkTypeMigration(jira_client, op_client),
             "issue_types": IssueTypeMigration(jira_client, op_client, op_rails_client),
-            "status_types": StatusMigration(jira_client, op_client),
+            "status_types": StatusMigration(jira_client, op_client, op_rails_client),
             "work_packages": None,  # Initialized later if needed
         }
 
