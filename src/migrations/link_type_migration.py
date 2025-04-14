@@ -48,6 +48,54 @@ class LinkTypeMigration:
 
         self.console = console
 
+    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> Dict[str, Any]:
+        """
+        Run the link type migration process.
+
+        Args:
+            dry_run: If True, no changes will be made to OpenProject
+            force: If True, force extraction of data even if it already exists
+            mappings: Optional mappings object that can be used for mapping IDs between systems
+
+        Returns:
+            Dictionary with migration results
+        """
+        logger.info("Starting link type migration...")
+
+        try:
+            result = self.migrate_link_types()
+
+            # Format result to match the expected structure
+            # If all types were matched and none needed creation, consider it a success
+            if "already_matched" in result and result["already_matched"]:
+                return {
+                    "status": "success",
+                    "success_count": result.get("total_count", 0),
+                    "failed_count": 0,
+                    "total_count": result.get("total_count", 0),
+                    "message": "All link types were already matched, no creation needed",
+                    "details": result
+                }
+            else:
+                return {
+                    "status": "success" if result.get("success", False) else "failed",
+                    "success_count": result.get("migrated_count", 0),
+                    "failed_count": result.get("failed_count", 0),
+                    "total_count": result.get("total_count", 0),
+                    "message": result.get("message", ""),
+                    "details": result
+                }
+        except Exception as e:
+            logger.error(f"Error in link type migration: {str(e)}")
+            return {
+                "status": "failed",
+                "error": str(e),
+                "message": f"Error in link type migration: {str(e)}",
+                "success_count": 0,
+                "failed_count": 0,
+                "total_count": 0
+            }
+
     def extract_jira_link_types(self) -> List[Dict[str, Any]]:
         """
         Extract link type definitions from Jira.
@@ -284,7 +332,7 @@ class LinkTypeMigration:
         Migrate link types from Jira to OpenProject.
 
         Returns:
-            Updated mapping between Jira link types and OpenProject relation types
+            Dictionary with migration results including mappings and status
         """
         logger.info("Starting link type migration...")
 
@@ -304,7 +352,19 @@ class LinkTypeMigration:
 
         if not link_types_to_create:
             logger.info("No link types need to be created, all are already matched")
-            return self.link_type_mapping
+            # Return properly structured result
+            return {
+                "success": True,
+                "already_matched": True,
+                "total_count": len(self.link_type_mapping),
+                "migrated_count": len(self.link_type_mapping),
+                "failed_count": 0,
+                "message": "All link types were already matched, no creation needed",
+                "mapping": self.link_type_mapping
+            }
+
+        migrated_count = 0
+        failed_count = 0
 
         with ProgressTracker(
             description="Migrating link types",
@@ -339,6 +399,11 @@ class LinkTypeMigration:
 
                 tracker.increment()
 
+                if op_relation_type:
+                    migrated_count += 1
+                else:
+                    failed_count += 1
+
         self._save_to_json(self.link_type_mapping, "link_type_mapping.json")
 
         analysis = self.analyze_link_type_mapping()
@@ -348,7 +413,16 @@ class LinkTypeMigration:
                 "DRY RUN: No relation types were actually created in OpenProject"
             )
 
-        return self.link_type_mapping
+        return {
+            "success": migrated_count > 0,
+            "already_matched": migrated_count == len(self.link_type_mapping),
+            "total_count": len(self.link_type_mapping),
+            "migrated_count": migrated_count,
+            "failed_count": failed_count,
+            "message": analysis.get("message", ""),
+            "details": analysis,
+            "mapping": self.link_type_mapping
+        }
 
     def analyze_link_type_mapping(self) -> Dict[str, Any]:
         """
@@ -422,6 +496,12 @@ class LinkTypeMigration:
             analysis["match_percentage"] = (analysis["matched_types"] / total) * 100
         else:
             analysis["match_percentage"] = 0
+
+        # Add a summary message
+        if analysis["unmatched_types"] == 0:
+            analysis["message"] = f"All {total} link types are mapped successfully"
+        else:
+            analysis["message"] = f"{analysis['matched_types']} of {total} link types mapped ({analysis['match_percentage']:.1f}%), {analysis['unmatched_types']} remaining"
 
         self._save_to_json(analysis, "link_type_mapping_analysis.json")
 
