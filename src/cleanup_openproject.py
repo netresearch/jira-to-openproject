@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 import requests
 import subprocess
 import json
+import math
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -88,24 +89,8 @@ class OpenProjectCleaner:
             if self.dry_run:
                 return True
 
-            # DELETE request to the work_package endpoint
-            url = f"/work_packages/{work_package_id}"
-            # Handle empty response - modify the _request method call directly
-            endpoint = url.lstrip("/")  # Remove leading slash if present
-            full_url = f"{self.op_client.api_url}/api/v3/{endpoint}"
-
             try:
-                self.op_client._rate_limit()
-                response = requests.request(
-                    "DELETE",
-                    full_url,
-                    headers=self.op_client.session.headers,
-                    verify=self.op_client.ssl_verify,
-                )
-                self.op_client.request_count += 1
-
-                # Check if request was successful (status code 2xx)
-                response.raise_for_status()
+                self.op_client._request("DELETE", f"/work_packages/{work_package_id}")
                 return True
             except requests.exceptions.HTTPError as e:
                 logger.error(f"HTTP error while deleting work package {work_package_id}: {e}", extra={"markup": True})
@@ -134,24 +119,9 @@ class OpenProjectCleaner:
             if self.dry_run:
                 return True
 
-            # DELETE request to the projects endpoint
-            url = f"/projects/{project_id}"
-            # Handle empty response - modify the _request method call directly
-            endpoint = url.lstrip("/")  # Remove leading slash if present
-            full_url = f"{self.op_client.api_url}/api/v3/{endpoint}"
-
             try:
-                self.op_client._rate_limit()
-                response = requests.request(
-                    "DELETE",
-                    full_url,
-                    headers=self.op_client.session.headers,
-                    verify=self.op_client.ssl_verify,
-                )
-                self.op_client.request_count += 1
+                self.op_client._request("DELETE", f"/projects/{project_id}")
 
-                # Check if request was successful (status code 2xx)
-                response.raise_for_status()
                 return True
             except requests.exceptions.HTTPError as e:
                 logger.error(f"HTTP error while deleting project {project_id}: {e}", extra={"markup": True})
@@ -216,37 +186,45 @@ class OpenProjectCleaner:
             all_work_packages = []
             page = 1
             page_size = 100
-            total_pages = 1  # Will be updated on first request
-            has_more_data = True
 
-            while has_more_data:
+            logger.info("Starting work package retrieval with pagination...", extra={"markup": True})
+
+            # Keep fetching until we get a page with no results
+            while True:
                 logger.info(f"Fetching work packages - page {page}", extra={"markup": True})
+
+                # Try standard REST parameters first
                 params = {
-                    "pageSize": page_size,
-                    "offset": (page - 1) * page_size
+                    "page": page,
+                    "per_page": page_size
                 }
 
                 response = self.op_client._request("GET", "/work_packages", params=params)
-
-                # Update total pages on first request
-                if page == 1 and "total" in response:
-                    total_items = response.get("total", 0)
-                    total_pages = (total_items + page_size - 1) // page_size
-                    logger.info(f"Found {total_items} work packages in total", extra={"markup": True})
 
                 # Get work packages from response
                 work_packages = response.get("_embedded", {}).get("elements", [])
                 logger.info(f"Retrieved {len(work_packages)} work packages on page {page}", extra={"markup": True})
 
+                # If first page, log the total count
+                if page == 1 and "total" in response:
+                    total = response.get("total", 0)
+                    logger.info(f"Found {total} work packages in total", extra={"markup": True})
+
+                # Stop if we got zero results
+                if len(work_packages) == 0:
+                    logger.info("No more work packages to fetch (received zero)", extra={"markup": True})
+                    break
+
                 # Add to our collection
                 all_work_packages.extend(work_packages)
 
-                # Check if we have more data
-                if len(work_packages) < page_size:
-                    has_more_data = False
-                    logger.info("No more work packages to fetch", extra={"markup": True})
-                else:
-                    page += 1
+                # Move to next page
+                page += 1
+
+                # Safety limit to prevent infinite loops
+                if page > 50:
+                    logger.warning("Reached safety limit of 50 pages, stopping pagination", extra={"markup": True})
+                    break
 
             logger.success(f"Successfully retrieved {len(all_work_packages)} work packages in total", extra={"markup": True})
             return all_work_packages
