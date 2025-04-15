@@ -320,8 +320,7 @@ def export_work_packages(
         os.makedirs(export_dir, exist_ok=True)
 
         # Initialize work package migration
-        from src.migrations.work_package_migration import WorkPackageMigration
-        work_package_migration = WorkPackageMigration(jira_client, op_client, op_rails_client)
+        work_package_migration = WorkPackageMigration(jira_client, op_client, op_rails_client, data_dir=config.get_path("data"))
 
         # Initialize mappings
         from src.mappings.mappings import Mappings
