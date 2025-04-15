@@ -1,6 +1,6 @@
 # Development Guide
 
-This guide provides instructions for setting up the development environment, running tests, and contributing to the Jira to OpenProject migration tool.
+This guide provides instructions for setting up the development environment, running tests, and contributing to the Jira to OpenProject migration tool. It is up to date with the current codebase and practices.
 
 ## Development Environment Setup
 
@@ -51,9 +51,7 @@ Docker is the **required** development environment to ensure consistency and sim
 
 ## Running Tests
 
-*(Current test suite is minimal. This section needs expansion as tests are added.)*
-
-Tests are run using `pytest` inside the Docker container.
+Tests are run using `pytest` inside the Docker container. The test suite covers environment validation, migration components, utilities, and end-to-end processes. See [tests/README.md](../tests/README.md) for details.
 
 ```bash
 # Run all tests
@@ -73,7 +71,7 @@ docker exec -it j2o-app pytest -v
     *   Use `black` for code formatting.
     *   Use `isort` for import sorting.
     *   Follow PEP 8 guidelines.
-    *   (Consider adding `flake8` or `ruff` for linting).
+    *   Use `ruff` or `flake8` for linting.
 *   **Type Hinting:** Use type hints extensively for clarity and static analysis.
 *   **Logging:** Use Python's standard `logging` module. Configure levels via environment variables (`J2O_LOG_LEVEL`).
 *   **Configuration:** Access all configuration via the `src.config` module. Do not access environment variables directly outside `src.config_loader`.
@@ -89,12 +87,12 @@ docker exec -it j2o-app pytest -v
 
 Refer to [TASKS.md](TASKS.md) for the list of pending implementation and testing tasks.
 
-*   **Implementing Test Cases:** Expanding the test suite (`tests/`) is a high priority.
-*   **Refining Error Handling:** Making the migration process more resilient to API errors, network issues, and unexpected data.
-*   **Improving Validation:** Adding more automated checks to validate the migrated data.
-*   **Optimizing Performance:** Investigating bottlenecks in API interaction and data processing.
+*   **Implementing Test Cases:** Expand the test suite (`tests/`) as new features are added.
+*   **Refining Error Handling:** Make the migration process more resilient to API errors, network issues, and unexpected data.
+*   **Improving Validation:** Add more automated checks to validate the migrated data.
+*   **Optimizing Performance:** Investigate bottlenecks in API interaction and data processing.
 
-## Contribution Process (Example)
+## Contribution Process
 
 1.  Ensure you have a development environment setup.
 2.  Create a new branch for your feature or bug fix: `git checkout -b feature/my-new-feature` or `fix/issue-123`.
