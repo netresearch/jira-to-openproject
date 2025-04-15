@@ -43,7 +43,9 @@ class OpenProjectRailsClient:
             window: int = 0,
             pane: int = 0,
             marker_prefix: str = "RAILSCMD_",
-            debug: bool = False
+            debug: bool = False,
+            command_timeout: int = 600,
+            inactivity_timeout: int = 30
         ):
         """
         Initialize the Rails client.
@@ -53,6 +55,8 @@ class OpenProjectRailsClient:
             pane: tmux pane number (default: 0)
             marker_prefix: prefix for output markers (default: "RAILSCMD_")
             debug: whether to enable debug logging (default: False)
+            command_timeout: maximum time in seconds to wait for a command to complete (default: 180)
+            inactivity_timeout: time in seconds to wait after output stops changing before interrupting (default: 30)
         """
         # Skip initialization if already initialized
         if self._initialized:
@@ -67,6 +71,10 @@ class OpenProjectRailsClient:
         self.debug = debug
         self.command_counter = 0
         self._is_connected = False
+
+        # Timeout settings
+        self.command_timeout = command_timeout
+        self.inactivity_timeout = inactivity_timeout
 
         # Validate that tmux is installed
         try:
@@ -108,13 +116,14 @@ class OpenProjectRailsClient:
         """Get the tmux target string for the session, window, and pane."""
         return f"{self.session_name}:{self.window}.{self.pane}"
 
-    def execute(self, command: str, timeout: int = 60) -> Dict[str, Any]:
+    def execute(self, command: str, timeout: int = None) -> Dict[str, Any]:
         """
         Execute a command in the Rails console and wait for it to complete.
 
         Args:
             command: The Ruby command to execute
-            timeout: Maximum time to wait for command completion (seconds)
+            timeout: Maximum time to wait for command completion (seconds).
+                     If None, uses the instance's command_timeout.
 
         Returns:
             Dictionary with status ('success' or 'error') and output or error message
@@ -124,6 +133,10 @@ class OpenProjectRailsClient:
                 'status': 'error',
                 'error': 'Not connected to tmux session'
             }
+
+        # Use the provided timeout or fall back to the instance's command_timeout
+        if timeout is None:
+            timeout = self.command_timeout
 
         target = self._get_target()
         marker_id = str(int(time.time()))
@@ -258,7 +271,7 @@ class OpenProjectRailsClient:
             # Send the command to the tmux session
             target = self._get_target()
 
-            logger.debug(f"Sending command to tmux (wrapped): {command[:100]}...")
+            logger.debug(f"Sending command to tmux (wrapped): {command}")
 
             send_cmd = ["tmux", "send-keys", "-t", target, command, "Enter"]
             subprocess.run(send_cmd, check=True)
@@ -268,6 +281,10 @@ class OpenProjectRailsClient:
             found_start = False
             found_end = False
 
+            # For checking inactivity
+            last_output_change_time = start_time
+            last_output = ""
+
             # Check more frequently at the beginning
             check_interval = 0.2
             attempts = 0
@@ -276,7 +293,13 @@ class OpenProjectRailsClient:
             # For debugging long-running commands
             recovery_attempts = 0
 
-            while time.time() - start_time < timeout:
+            # Use command_timeout as the overall limit (default to passed timeout if not set)
+            max_timeout = getattr(self, 'command_timeout', timeout)
+
+            # Use inactivity_timeout for detecting stalled output (default 30s if not set)
+            inactivity_timeout = getattr(self, 'inactivity_timeout', 30)
+
+            while time.time() - start_time < max_timeout:
                 attempts += 1
                 current_time = time.time()
 
@@ -290,10 +313,16 @@ class OpenProjectRailsClient:
                 )
                 pane_content = result.stdout
 
+                # Check if output has changed
+                if pane_content != last_output:
+                    last_output = pane_content
+                    last_output_change_time = current_time
+
                 # Log captured content periodically
                 if current_time - last_log_time > 5:  # Log every 5 seconds for long-running commands
                     elapsed = int(current_time - start_time)
-                    logger.debug(f"Still waiting after {elapsed}s, start={found_start}, end={found_end}, content sample: {pane_content[-200:] if pane_content else 'None'}")
+                    inactivity = int(current_time - last_output_change_time)
+                    logger.debug(f"Still waiting after {elapsed}s (inactive: {inactivity}s), start={found_start}, end={found_end}, content sample: {pane_content[-200:] if pane_content else 'None'}")
                     last_log_time = current_time
 
                 # Check for start marker
@@ -303,13 +332,18 @@ class OpenProjectRailsClient:
                     found_start = True
 
                 # Check for end marker if start marker was found
-                if found_start and end_marker in pane_content:
-                    logger.debug(f"Found end marker after {int(time.time()-start_time)}s")
-                    found_end = True
-                    return pane_content
+                if found_start:
+                    # Only match the end marker when it appears on its own line
+                    lines = pane_content.splitlines()
+                    for line in lines:
+                        if line.strip() == end_marker:
+                            logger.debug(f"Found end marker after {int(time.time()-start_time)}s")
+                            found_end = True
+                            return pane_content
 
                 # Recovery strategy for potentially hanging commands
                 elapsed_time = current_time - start_time
+                inactivity_time = current_time - last_output_change_time
 
                 # After 10 seconds without start marker, try recovery
                 if not found_start and elapsed_time > 10 and recovery_attempts == 0:
@@ -323,22 +357,16 @@ class OpenProjectRailsClient:
                     subprocess.run(send_cmd, check=True)
                     continue
 
-                # If start marker found but no end marker after 30 seconds, try interrupting
-                if found_start and not found_end and elapsed_time > 30 and recovery_attempts == 0:
-                    logger.warning("Command running for 30s without completion, attempting to interrupt...")
+                # If start marker found but no end marker after inactivity timeout with no output change, try interrupting
+                if found_start and not found_end and inactivity_time > inactivity_timeout and recovery_attempts == 0:
+                    logger.warning(f"Command inactive for {inactivity_time:.1f}s without completion, attempting to interrupt...")
                     recovery_attempts += 1
                     # Send Ctrl+C to interrupt any running process
                     ctrlc_cmd = ["tmux", "send-keys", "-t", target, "C-c"]
                     subprocess.run(ctrlc_cmd, check=True)
                     # Return partial result
-                    logger.warning("Returning partial result due to long-running command")
+                    logger.warning("Returning partial result due to inactivity")
                     return pane_content
-
-                # After a while, press Enter to try to recover if stuck
-                if not found_end and attempts % 50 == 0:  # Periodically try to recover
-                    logger.debug(f"Sending Enter to try to recover prompt (attempt #{attempts})")
-                    enter_cmd = ["tmux", "send-keys", "-t", target, "Enter"]
-                    subprocess.run(enter_cmd, check=True)
 
                 # Gradually increase the check interval
                 if attempts > 50:  # After ~10s, slow down polling
@@ -704,7 +732,9 @@ class OpenProjectRailsClient:
         """
         for attempt in range(retries):
             if attempt > 0:
-                logger.warning(f"Retrying file transfer from container: {remote_path} (attempt {attempt+1}/{retries})")
+                logger.warning(f"Retrying file transfer from container: attempt {attempt+1}/{retries}")
+                # wait attempt * delay seconds
+                time.sleep(delay * attempt)
             try:
                 # Get container and server info from config
                 container_name = config.openproject_config.get("container")
@@ -715,7 +745,7 @@ class OpenProjectRailsClient:
                     return False
 
                 # First check if the file exists in the container
-                logger.debug(f"Checking if file exists in container: {remote_path} (attempt {attempt+1}/{retries})")
+                logger.debug(f"Checking if file exists in container: {remote_path}")
                 check_cmd = ["ssh", op_server, "docker", "exec", container_name,
                            "bash", "-c", f"ls -la {remote_path} || echo 'File not found'"]
 
@@ -723,9 +753,8 @@ class OpenProjectRailsClient:
                 output = result.stdout.strip()
 
                 if "File not found" in output:
-                    logger.error(f"File not found in container: {remote_path} (attempt {attempt+1}/{retries})")
+                    logger.error(f"File not found in container: {remote_path}")
                     if attempt < retries - 1:
-                        time.sleep(delay)
                         continue
                     return False
 
@@ -746,15 +775,13 @@ class OpenProjectRailsClient:
                 logger.notice(f"Successfully copied file from container to local: {local_path}")
                 return True
             except subprocess.SubprocessError as e:
-                logger.error(f"Error transferring file from container: {e} (attempt {attempt+1}/{retries})")
+                logger.error(f"Error transferring file from container: {e}")
                 if attempt < retries - 1:
-                    time.sleep(delay)
                     continue
                 return False
             except Exception as e:
-                logger.error(f"Unexpected error during file transfer: {e} (attempt {attempt+1}/{retries})")
+                logger.error(f"Unexpected error during file transfer: {e}")
                 if attempt < retries - 1:
-                    time.sleep(delay)
                     continue
                 return False
         return False

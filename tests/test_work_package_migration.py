@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 from src.migrations.work_package_migration import WorkPackageMigration
+from src import config
 
 
 class TestWorkPackageMigration(unittest.TestCase):
@@ -125,11 +126,12 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            op_rails_client=mock_rails_instance
+            op_rails_client=mock_rails_instance,
+            data_dir=config.get_path("data")
         )
 
         # Assertions
-        self.assertEqual(mock_load_json_file.call_count, 4)  # Should be called 4 times for different mappings
+        self.assertEqual(mock_load_json_file.call_count, 5)  # Should be called 5 times for different mappings
         self.assertIsInstance(migration.jira_client, MagicMock)
         self.assertIsInstance(migration.op_client, MagicMock)
         self.assertIsInstance(migration.op_rails_client, MagicMock)
@@ -152,6 +154,7 @@ class TestWorkPackageMigration(unittest.TestCase):
             self.project_mapping,
             self.user_mapping,
             self.issue_type_mapping,
+            {},  # issue_type_id_mapping
             self.status_mapping
         ]
 
@@ -159,7 +162,7 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            data_dir='/tmp/test_data'
+            data_dir=config.get_path("data")
         )
 
         # Assertions - verify mappings were loaded correctly
@@ -190,7 +193,8 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            op_rails_client=mock_rails_instance
+            op_rails_client=mock_rails_instance,
+            data_dir=config.get_path("data")
         )
 
         # Create a mock issue with the correct structure
@@ -234,7 +238,8 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = MockedWorkPackageMigration(
             jira_client=MagicMock(),
             op_client=MagicMock(),
-            op_rails_client=MagicMock()
+            op_rails_client=MagicMock(),
+            data_dir=config.get_path("data")
         )
 
         # Verify the method exists
@@ -286,7 +291,8 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            op_rails_client=mock_rails_instance
+            op_rails_client=mock_rails_instance,
+            data_dir=config.get_path("data")
         )
 
         # Set required attributes
@@ -298,8 +304,7 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration.tracker = tracker_instance
 
         # Mock the mappings class with prepare_work_package
-        migration.mappings = MagicMock()
-        migration.mappings.prepare_work_package.side_effect = [
+        migration.prepare_work_package = MagicMock(side_effect=[
             {  # First work package payload
                 'project_id': 1,
                 'subject': 'First issue',
@@ -310,7 +315,7 @@ class TestWorkPackageMigration(unittest.TestCase):
                 'subject': 'Second issue',
                 'jira_key': 'PROJ-124'
             }
-        ]
+        ])
 
         # Set initial mapping dictionary
         migration.work_package_mapping = {}
@@ -321,9 +326,6 @@ class TestWorkPackageMigration(unittest.TestCase):
             None           # Failure for second
         ]
 
-        # Mock WORK_PACKAGE_MAPPING_FILE_PATTERN for the mappings class
-        migration.mappings.WORK_PACKAGE_MAPPING_FILE_PATTERN = 'work_package_mapping_{}.json'
-
         # Call method
         result = migration.import_work_packages_direct([jira_issue1, jira_issue2])
 
@@ -332,8 +334,8 @@ class TestWorkPackageMigration(unittest.TestCase):
         self.assertEqual(result['error_count'], 1)
         self.assertEqual(result['total_processed'], 2)
 
-        # Verify mappings.prepare_work_package was called
-        self.assertEqual(migration.mappings.prepare_work_package.call_count, 2)
+        # Verify prepare_work_package was called
+        self.assertEqual(migration.prepare_work_package.call_count, 2)
 
         # Verify op_client.create_work_package was called
         self.assertEqual(mock_op_instance.create_work_package.call_count, 2)
@@ -358,7 +360,7 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            data_dir='/tmp/test_data'
+            data_dir=config.get_path("data")
         )
         migration.work_package_mapping = self.work_package_mapping
 
