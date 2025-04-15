@@ -269,6 +269,9 @@ class OpenProjectClient:
                 logger.error(f"Error making {method} request to {url}: {str(e)}")
                 raise
 
+            if response.status_code == 204:
+                return None
+
             return response.json()
         except requests.HTTPError as e:
             # This is already logged above
