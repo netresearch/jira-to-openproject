@@ -28,7 +28,18 @@
                     "source.organizeImports": "explicit"
                 },
                 "files.trimTrailingWhitespace": true,
-                "files.insertFinalNewline": true
+                "files.insertFinalNewline": true,
+                "terminal.integrated.profiles.linux": {
+                    "CursorShell": {
+                        "path": "/bin/bash",
+                        "args": ["--rcfile", "/home/sme/.cursor_shellrc"]
+                    }
+                },
+                "terminal.integrated.automationProfile.linux": {
+                    "path": "/bin/bash",
+                    "args": ["--rcfile", "/home/sme/.cursor_shellrc"]
+                },
+                "terminal.integrated.defaultProfile.linux": "CursorShell"
             }
         }
     },
