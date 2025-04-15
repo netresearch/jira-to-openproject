@@ -703,6 +703,8 @@ class OpenProjectRailsClient:
             True if successful, False otherwise
         """
         for attempt in range(retries):
+            if attempt > 0:
+                logger.warning(f"Retrying file transfer from container: {remote_path} (attempt {attempt+1}/{retries})")
             try:
                 # Get container and server info from config
                 container_name = config.openproject_config.get("container")
@@ -741,7 +743,7 @@ class OpenProjectRailsClient:
 
                 subprocess.run(scp_cmd, check=True)
 
-                logger.debug(f"Successfully copied file from container to local: {local_path}")
+                logger.notice(f"Successfully copied file from container to local: {local_path}")
                 return True
             except subprocess.SubprocessError as e:
                 logger.error(f"Error transferring file from container: {e} (attempt {attempt+1}/{retries})")
