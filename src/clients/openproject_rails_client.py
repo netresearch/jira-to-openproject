@@ -689,60 +689,73 @@ class OpenProjectRailsClient:
             logger.error(f"Unexpected error during file transfer: {e}")
             return False
 
-    def transfer_file_from_container(self, remote_path: str, local_path: str) -> bool:
+    def transfer_file_from_container(self, remote_path: str, local_path: str, retries: int = 3, delay: float = 1.0) -> bool:
         """
-        Transfer a file from the container to the local machine.
+        Transfer a file from the container to the local machine, with retry logic if the file is not found.
 
         Args:
             remote_path: Path to file in container
             local_path: Path to save file locally
+            retries: Number of times to retry if file is not found (default: 3)
+            delay: Delay in seconds between retries (default: 1.0)
 
         Returns:
             True if successful, False otherwise
         """
-        try:
-            # Get container and server info from config
-            container_name = config.openproject_config.get("container")
-            op_server = config.openproject_config.get("server")
+        for attempt in range(retries):
+            try:
+                # Get container and server info from config
+                container_name = config.openproject_config.get("container")
+                op_server = config.openproject_config.get("server")
 
-            if not container_name or not op_server:
-                logger.error("Missing container or server configuration")
+                if not container_name or not op_server:
+                    logger.error("Missing container or server configuration")
+                    return False
+
+                # First check if the file exists in the container
+                logger.debug(f"Checking if file exists in container: {remote_path} (attempt {attempt+1}/{retries})")
+                check_cmd = ["ssh", op_server, "docker", "exec", container_name,
+                           "bash", "-c", f"ls -la {remote_path} || echo 'File not found'"]
+
+                result = subprocess.run(check_cmd, capture_output=True, text=True)
+                output = result.stdout.strip()
+
+                if "File not found" in output:
+                    logger.error(f"File not found in container: {remote_path} (attempt {attempt+1}/{retries})")
+                    if attempt < retries - 1:
+                        time.sleep(delay)
+                        continue
+                    return False
+
+                # Copy from container to server
+                logger.debug(f"Copying file from container to server")
+                docker_cp_cmd = ["ssh", op_server, "docker", "cp",
+                              f"{container_name}:{remote_path}", "/tmp/"]
+
+                subprocess.run(docker_cp_cmd, check=True)
+
+                # Copy from server to local
+                logger.debug(f"Copying file from server to local")
+                scp_cmd = ["scp", f"{op_server}:/tmp/{os.path.basename(remote_path)}",
+                         local_path]
+
+                subprocess.run(scp_cmd, check=True)
+
+                logger.debug(f"Successfully copied file from container to local: {local_path}")
+                return True
+            except subprocess.SubprocessError as e:
+                logger.error(f"Error transferring file from container: {e} (attempt {attempt+1}/{retries})")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                    continue
                 return False
-
-            # First check if the file exists in the container
-            logger.info(f"Checking if file exists in container: {remote_path}")
-            check_cmd = ["ssh", op_server, "docker", "exec", container_name,
-                       "bash", "-c", f"ls -la {remote_path} || echo 'File not found'"]
-
-            result = subprocess.run(check_cmd, capture_output=True, text=True)
-            output = result.stdout.strip()
-
-            if "File not found" in output:
-                logger.error(f"File not found in container: {remote_path}")
+            except Exception as e:
+                logger.error(f"Unexpected error during file transfer: {e} (attempt {attempt+1}/{retries})")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                    continue
                 return False
-
-            # Copy from container to server
-            logger.info(f"Copying file from container to server")
-            docker_cp_cmd = ["ssh", op_server, "docker", "cp",
-                          f"{container_name}:{remote_path}", "/tmp/"]
-
-            subprocess.run(docker_cp_cmd, check=True)
-
-            # Copy from server to local
-            logger.info(f"Copying file from server to local")
-            scp_cmd = ["scp", f"{op_server}:/tmp/{os.path.basename(remote_path)}",
-                     local_path]
-
-            subprocess.run(scp_cmd, check=True)
-
-            logger.success(f"Successfully copied file from container to local: {local_path}")
-            return True
-        except subprocess.SubprocessError as e:
-            logger.error(f"Error transferring file from container: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error during file transfer: {e}")
-            return False
+        return False
 
     def test_connection(self) -> bool:
         """
