@@ -9,6 +9,7 @@ import json
 import re
 from typing import Dict, List, Any, Optional
 from pathlib import Path
+from datetime import datetime
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -90,6 +91,7 @@ class WorkPackageMigration:
         self.project_mapping = load_json_file(self.data_dir / "project_mapping.json", logger) or {}
         self.user_mapping = load_json_file(self.data_dir / "user_mapping.json", logger) or {}
         self.issue_type_mapping = load_json_file(self.data_dir / "issue_type_mapping.json", logger) or {}
+        self.issue_type_id_mapping = load_json_file(self.data_dir / "issue_type_id_mapping.json", logger) or {}
         self.status_mapping = load_json_file(self.data_dir / "status_mapping.json", logger) or {}
 
     def extract_jira_issues(self, project_key: str, batch_size: int = 100, project_tracker: ProgressTracker = None) -> List[Dict[str, Any]]:
@@ -254,9 +256,20 @@ class WorkPackageMigration:
             jira_key = jira_issue["key"]
 
         # Map the issue type
-        type_id = self.issue_type_mapping.get(issue_type_id)
+        type_id = None
 
-        # Log detailed type mapping information for debugging
+        # First try to look up directly in issue_type_id_mapping, which is keyed by ID and has a direct OpenProject ID as value
+        if self.issue_type_id_mapping and str(issue_type_id) in self.issue_type_id_mapping:
+            type_id = self.issue_type_id_mapping[str(issue_type_id)]
+        # Then try to look up by ID in the issue_type_mapping
+        elif str(issue_type_id) in self.issue_type_mapping:
+            type_id = self.issue_type_mapping[str(issue_type_id)].get('openproject_id')
+        # Finally, check in mappings object if available
+        elif hasattr(self, 'mappings') and self.mappings and hasattr(self.mappings, 'issue_type_id_mapping'):
+            # Try to get the ID from the mappings object
+            type_id = self.mappings.issue_type_id_mapping.get(str(issue_type_id))
+
+        # Debug mapping information
         logger.debug(f"Mapping issue type: {issue_type_name} (ID: {issue_type_id}) -> OpenProject type ID: {type_id}", extra={"markup": True})
 
         # If no type mapping exists, default to Task
@@ -337,7 +350,33 @@ class WorkPackageMigration:
             logger.warning("No Jira projects found in mapping, nothing to migrate", extra={"markup": True})
             return {}
 
-        logger.info(f"Found {len(jira_projects)} Jira projects to process", extra={"markup": True})
+        # Check for migration state file to resume from last processed project
+        migration_state_file = os.path.join(self.data_dir, "work_package_migration_state.json")
+        processed_projects = set()
+        last_processed_project = None
+
+        if os.path.exists(migration_state_file):
+            try:
+                with open(migration_state_file, 'r') as f:
+                    migration_state = json.load(f)
+                    processed_projects = set(migration_state.get('processed_projects', []))
+                    last_processed_project = migration_state.get('last_processed_project')
+
+                logger.info(f"Found migration state - {len(processed_projects)} projects already processed", extra={"markup": True})
+                if last_processed_project and last_processed_project in jira_projects:
+                    logger.info(f"Last processed project was {last_processed_project} - will resume from there", extra={"markup": True})
+            except Exception as e:
+                logger.warning(f"Error loading migration state: {str(e)}", extra={"markup": True})
+
+        # Filter unprocessed projects or start from the interrupted project
+        remaining_projects = []
+        if last_processed_project and last_processed_project in jira_projects:
+            last_index = jira_projects.index(last_processed_project)
+            remaining_projects = jira_projects[last_index:]
+        else:
+            remaining_projects = [p for p in jira_projects if p not in processed_projects]
+
+        logger.info(f"Found {len(jira_projects)} Jira projects, will process {len(remaining_projects)} remaining projects", extra={"markup": True})
 
         # Initialize counters
         total_issues = 0
@@ -352,10 +391,21 @@ class WorkPackageMigration:
             return {}
 
         # Process each project
-        with ProgressTracker("Migrating projects", len(jira_projects), "Recent Projects") as project_tracker:
-            for project_key in jira_projects:
+        with ProgressTracker("Migrating projects", len(remaining_projects), "Recent Projects") as project_tracker:
+            for project_key in remaining_projects:
                 project_tracker.update_description(f"Processing project {project_key}")
                 logger.info(f"Processing project {project_key}", extra={"markup": True})
+
+                # Update the state file at the start of each project processing
+                try:
+                    with open(migration_state_file, 'w') as f:
+                        json.dump({
+                            'processed_projects': list(processed_projects),
+                            'last_processed_project': project_key,
+                            'timestamp': datetime.now().isoformat()
+                        }, f, indent=2)
+                except Exception as e:
+                    logger.warning(f"Error saving migration state: {str(e)}", extra={"markup": True})
 
                 # Find corresponding OpenProject project ID
                 project_mapping_entry = None
@@ -368,6 +418,7 @@ class WorkPackageMigration:
                     logger.warning(f"No OpenProject project mapping found for Jira project {project_key}, skipping", extra={"markup": True})
                     project_tracker.add_log_item(f"Skipped: {project_key} (no mapping)")
                     project_tracker.increment()
+                    processed_projects.add(project_key)  # Mark as processed even if skipped
                     continue
 
                 op_project_id = project_mapping_entry["openproject_id"]
@@ -380,6 +431,7 @@ class WorkPackageMigration:
                     logger.warning(f"No issues found for project {project_key}, skipping", extra={"markup": True})
                     project_tracker.add_log_item(f"Skipped: {project_key} (no issues)")
                     project_tracker.increment()
+                    processed_projects.add(project_key)  # Mark as processed even if no issues
                     continue
 
                 # Prepare work packages data
@@ -440,6 +492,7 @@ class WorkPackageMigration:
                     logger.warning(f"No work package data prepared for project {project_key}, skipping", extra={"markup": True})
                     project_tracker.add_log_item(f"Skipped: {project_key} (no work packages prepared)")
                     project_tracker.increment()
+                    processed_projects.add(project_key)  # Mark as processed even if no work packages
                     continue
 
                 # Save work packages data to temp file
@@ -480,21 +533,29 @@ class WorkPackageMigration:
                     logger.error(f"Error copying file to Docker container: {str(e)}", extra={"markup": True})
                     project_tracker.add_log_item(f"Error: {project_key} (file transfer failed)")
                     project_tracker.increment()
+                    processed_projects.add(project_key)  # Mark as processed even if file transfer failed
                     continue
 
                 # Now execute Rails code to import the work packages
                 logger.notice(f"Importing {len(work_packages_data)} work packages via Rails console", extra={"markup": True})
 
-                rails_command = f"""
+                # Header section with Python f-string variables
+                header_script = f"""
+                # Ruby variables from Python
+                container_temp_path_var = '{container_temp_path}'
+                """
+
+                # Main Ruby section without f-strings
+                main_script = """
                 begin
                   require 'json'
 
                   # Read the temp file
-                  work_packages_data = JSON.parse(File.read('{container_temp_path}'))
+                  work_packages_data = JSON.parse(File.read(container_temp_path_var))
                   created_work_packages = []
                   errors = []
 
-                  puts "Processing #{work_packages_data.size} work packages..."
+                  puts "Processing #{work_packages_data.length} work packages..."
 
                   # Process work packages
                   work_packages_data.each_with_index do |wp_data, index|
@@ -529,20 +590,20 @@ class WorkPackageMigration:
                     end
 
                     if wp.save
-                      created_work_packages << {{
+                      created_work_packages << {
                         jira_id: wp_data['jira_id'],
                         jira_key: wp_data['jira_key'],
                         openproject_id: wp.id,
                         subject: wp.subject
-                      }}
+                      }
 
                       # Log progress every 10 items
-                      if (index + 1) % 10 == 0 || index == work_packages_data.size - 1
-                        puts "Created #{created_work_packages.size}/#{work_packages_data.size} work packages"
+                      if (index + 1) % 10 == 0 || index == work_packages_data.length - 1
+                        puts "Created #{created_work_packages.length}/#{work_packages_data.length} work packages"
                       end
                     else
                       # If type is not available for project, try with a default type
-                      if wp.errors.full_messages.any? {{ |msg| msg.include?('type') && msg.include?('not available') }}
+                      if wp.errors.full_messages.any? { |msg| msg.include?('type') && msg.include?('not available') }
                         # Find a default type
                         default_types = Type.where(is_default: true)
                         if default_types.any?
@@ -574,7 +635,7 @@ class WorkPackageMigration:
                           end
 
                           if wp.save
-                            created_work_packages << {{
+                            created_work_packages << {
                               jira_id: wp_data['jira_id'],
                               jira_key: wp_data['jira_key'],
                               openproject_id: wp.id,
@@ -582,63 +643,72 @@ class WorkPackageMigration:
                               used_fallback_type: true,
                               original_type_id: wp_data['type_id'],
                               used_type_id: default_types.first.id
-                            }}
+                            }
 
                             # Log progress
-                            if (index + 1) % 10 == 0 || index == work_packages_data.size - 1
-                              puts "Created #{created_work_packages.size}/#{work_packages_data.size} work packages (with fallback type)"
+                            if (index + 1) % 10 == 0 || index == work_packages_data.length - 1
+                              puts "Created #{created_work_packages.length}/#{work_packages_data.length} work packages (with fallback type)"
                             end
                           else
-                            errors << {{
+                            errors << {
                               jira_id: wp_data['jira_id'],
                               jira_key: wp_data['jira_key'],
                               subject: wp_data['subject'],
                               errors: wp.errors.full_messages,
                               error_type: 'validation_error_with_fallback'
-                            }}
+                            }
                           end
                         else
-                          errors << {{
+                          errors << {
                             jira_id: wp_data['jira_id'],
                             jira_key: wp_data['jira_key'],
                             subject: wp_data['subject'],
                             errors: wp.errors.full_messages,
                             error_type: 'no_default_type'
-                          }}
+                          }
                         end
                       else
-                        errors << {{
+                        errors << {
                           jira_id: wp_data['jira_id'],
                           jira_key: wp_data['jira_key'],
                           subject: wp_data['subject'],
                           errors: wp.errors.full_messages,
                           error_type: 'validation_error'
-                        }}
+                        }
                       end
                     end
                   end
 
                   # Write results to files
-                  File.write('{container_temp_path}.result', JSON.generate({{
+                  File.write("#{container_temp_path_var}.result", JSON.generate({
                     created: created_work_packages,
                     errors: errors,
-                    total: work_packages_data.size,
-                    created_count: created_work_packages.size,
-                    error_count: errors.size
-                  }}))
+                    total: work_packages_data.length,
+                    created_count: created_work_packages.length,
+                    error_count: errors.length
+                  }))
 
                   # Return summary
-                  {{
+                  {
                     status: 'success',
-                    message: "Processed #{work_packages_data.size} work packages: Created #{created_work_packages.size}, Failed #{errors.size}",
-                    created_count: created_work_packages.size,
-                    error_count: errors.size,
-                    result_file: '{container_temp_path}.result'
-                  }}
+                    message: "Processed #{work_packages_data.length} work packages: Created #{created_work_packages.length}, Failed #{errors.length}",
+                    created_count: created_work_packages.length,
+                    error_count: errors.length,
+                    total: work_packages_data.length,
+                    result_file: "#{container_temp_path_var}.result"
+                  }
                 rescue => e
-                  {{ status: 'error', message: e.message, backtrace: e.backtrace }}
+                  # Handle any errors
+                  {
+                    status: 'error',
+                    message: "Error while importing work packages: #{e.message}",
+                    backtrace: e.backtrace
+                  }
                 end
                 """
+
+                # Combine the sections
+                rails_command = header_script + main_script
 
                 # Execute the Rails command
                 result = self.op_client.rails_client.execute(rails_command)
@@ -653,16 +723,23 @@ class WorkPackageMigration:
                     result_file_local = os.path.join(self.data_dir, f"work_packages_{project_key}_result.json")
 
                     try:
+                        if not result_file_container:
+                            logger.warning(f"No result file path returned from Rails command. Skipping result processing.", extra={"markup": True})
+                            continue
+
                         if op_server:
                             # If we have a server, use SSH + Docker cp
                             docker_cp_cmd = ["ssh", op_server, "docker", "cp", f"{container_name}:{result_file_container}", "/tmp/"]
+                            logger.debug(f"Running command: {' '.join(docker_cp_cmd)}", extra={"markup": True})
                             subprocess.run(docker_cp_cmd, check=True)
 
                             scp_cmd = ["scp", f"{op_server}:/tmp/{os.path.basename(result_file_container)}", result_file_local]
+                            logger.debug(f"Running command: {' '.join(scp_cmd)}", extra={"markup": True})
                             subprocess.run(scp_cmd, check=True)
                         else:
                             # Direct docker cp
                             docker_cp_cmd = ["docker", "cp", f"{container_name}:{result_file_container}", result_file_local]
+                            logger.debug(f"Running command: {' '.join(docker_cp_cmd)}", extra={"markup": True})
                             subprocess.run(docker_cp_cmd, check=True)
 
                         # Read the result file
@@ -706,8 +783,26 @@ class WorkPackageMigration:
                 project_tracker.increment()
                 total_created += created_count
 
+                # Mark project as successfully processed after all items have been imported
+                processed_projects.add(project_key)
+                success = True
+
         # Save the work package mapping
         mapping_file_path = os.path.join(self.data_dir, "work_package_mapping.json")
+
+        # Save final migration state
+        try:
+            with open(migration_state_file, 'w') as f:
+                json.dump({
+                    'processed_projects': list(processed_projects),
+                    'last_processed_project': None,  # Reset the last processed since we're done with it
+                    'timestamp': datetime.now().isoformat(),
+                    'completed': True
+                }, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Error saving final migration state: {str(e)}", extra={"markup": True})
+
+        # Save the work package mapping
         save_json_file(self.work_package_mapping, mapping_file_path) # Use the imported utility function
 
         logger.success(f"Work package migration completed", extra={"markup": True})
@@ -1010,7 +1105,7 @@ class WorkPackageMigration:
 
         # Header section with Python f-string variables
         header_script = f"""
-        # Work Package configuration variables
+        # Ruby variables from Python
         project_id_var = {str(project_id)}
         type_id_var = {str(type_id)}
         subject_var = '{safe_subject}'
@@ -1088,8 +1183,8 @@ class WorkPackageMigration:
         command = header_script + main_script
 
         try:
-            # Corrected method name: execute
-            result = self.op_rails_client.execute(command, timeout=180) # Use execute, maybe add timeout
+            # Execute the command
+            result = self.op_client.rails_client.execute(command)
 
             if result and result.get("status") == "success":
                 output_str = result.get("output", "")
