@@ -4,7 +4,7 @@ This directory contains tests for the Jira to OpenProject migration tool.
 
 ## Overview
 
-The test suite uses Python's built-in `unittest` framework and covers:
+The test suite uses `pytest` and covers:
 
 1. Environment and configuration validation
 2. Individual migration component functionality
@@ -17,25 +17,33 @@ The test suite uses Python's built-in `unittest` framework and covers:
 - `test_main.py`: Tests for the main CLI interface
 - `test_user_migration.py`: Tests for user migration functionality
 - `test_custom_field_migration.py`: Tests for custom field extraction, mapping, and migration via Rails console
+- `test_status_migration.py`: Tests for status extraction, mapping, and migration
+- `test_project_migration.py`: Tests for project extraction and migration
+- `test_work_package_migration.py`: Tests for work package (issue) migration, including attachments and comments
+- `test_account_migration.py`: Tests for Tempo Account migration
+- `test_company_migration.py`: Tests for company migration
+- `test_link_type_migration.py`: Tests for link type/relation migration
+- `test_issue_type_migration.py`: Tests for issue type/work package type migration
+- `test_workflow_migration.py`: Tests for workflow extraction and mapping
 
 ## Running Tests
 
 To run all tests:
 
 ```bash
-python -m unittest discover tests
+docker exec -it j2o-app pytest
 ```
 
 To run a specific test file:
 
 ```bash
-python -m unittest tests/test_custom_field_migration.py
+docker exec -it j2o-app pytest tests/test_custom_field_migration.py
 ```
 
 To run a specific test case:
 
 ```bash
-python -m unittest tests.test_custom_field_migration.TestCustomFieldMigration.test_extract_jira_custom_fields
+docker exec -it j2o-app pytest tests/test_custom_field_migration.py::TestCustomFieldMigration::test_extract_jira_custom_fields
 ```
 
 ## Test Environment
@@ -44,7 +52,7 @@ Tests use mocking to avoid making actual API calls to Jira or OpenProject. The `
 
 ## Code Coverage
 
-Code coverage is not currently measured automatically. Consider adding a coverage tool if needed.
+Code coverage is not currently measured automatically. Consider adding a coverage tool (e.g., `pytest-cov`) if needed.
 
 ## Adding New Tests
 

@@ -1,6 +1,6 @@
 # Configuration Guide
 
-This document explains the configuration system for the Jira to OpenProject migration tool.
+This document explains the configuration system for the Jira to OpenProject migration tool. It is up to date with the current codebase and environment variable usage.
 
 **Key Documentation:**
 
@@ -84,64 +84,7 @@ Environment variables provide a secure way to handle secrets and allow for easy 
 
 ## YAML Configuration (`config/config.yaml`)
 
-This file defines the structure and default values for less sensitive or more complex configuration parameters.
-
-```yaml
-migration:
-  # General migration settings
-  batch_size: 100                # Default batch size (overridden by J2O_BATCH_SIZE env var)
-  ssl_verify: true               # Default SSL verification (overridden by J2O_SSL_VERIFY env var)
-  parallel_downloads: 5          # Number of parallel attachment downloads
-  data_dir: "var/data"           # Directory for mapping files, extracted data
-  log_dir: "var/logs"            # Directory for log files
-  script_dir: "var/scripts"      # Directory for generated Ruby scripts
-
-performance:
-  # Rate limiting for API calls
-  rate_limit:
-    jira:
-      requests: 100            # Max requests (overridden by J2O_RATE_LIMIT_REQUESTS)
-      period: 60               # Period in seconds (overridden by J2O_RATE_LIMIT_PERIOD)
-    openproject:
-      requests: 100
-      period: 60
-
-jira:
-  # Jira specific settings (URL/Credentials set via Env Vars)
-  api_version: "2"
-  search_max_results: 50         # Page size for JQL searches
-  attachment_download_timeout: 120 # Timeout in seconds for downloading attachments
-  scriptrunner:
-    enabled: false                 # Set to true if using ScriptRunner endpoint
-    custom_field_options_endpoint: "" # Full URL to ScriptRunner endpoint (if enabled)
-
-openproject:
-  # OpenProject specific settings (URL/Credentials set via Env Vars)
-  api_version: "v3"
-  attachment_upload_timeout: 180 # Timeout in seconds for uploading attachments
-  # User to attribute actions to during migration (if not mapping)
-  default_migration_user: "admin"
-
-rails_console:
-  # Settings for interacting with OP Rails console via SSH/Docker
-  # Server, User, Key Path, Container Name, App Path are set via Env Vars
-  connection_timeout: 30         # SSH connection timeout
-  command_timeout: 300           # Timeout for executing commands in Rails console
-  shell_prompt_regex: '.*# '      # Regex to detect the shell prompt
-  rails_prompt_regex: '.*irb.*> '  # Regex to detect the Rails console prompt
-
-mappings:
-  # Configuration for how different entities are mapped
-  users:
-    # Strategy: 'email', 'username', 'ldap', 'manual'
-    strategy: "email"
-    # If strategy is 'manual', specify the mapping file
-    # mapping_file: "var/data/manual_user_map.json"
-  projects:
-    # If true, attempts to map Jira project keys to OP identifiers
-    use_jira_key_as_identifier: true
-  # Add other mapping configurations as needed (e.g., status, type)
-```
+This file defines the structure and default values for less sensitive or more complex configuration parameters. See the file for the most up-to-date options and comments.
 
 ## Best Practices
 
@@ -153,8 +96,6 @@ mappings:
 6.  **Validate Configuration:** Consider adding validation logic within `ConfigLoader` or on first use to ensure required settings are present and correctly formatted.
 
 ## Python 3.13 Configuration Features
-
-The configuration system takes advantage of Python 3.13 features:
 
 - Type hints for configuration values
 - Pattern matching for processing configuration sources
@@ -169,4 +110,4 @@ These configuration settings directly affect migration behavior:
 - `J2O_RATE_LIMIT_REQUESTS` and `J2O_RATE_LIMIT_PERIOD`: Prevent API rate limit issues
 - `J2O_SSL_VERIFY`: May need to be disabled in test environments
 
-For details on running migrations, see [Migration Components](../PROGRESS.md#migration-components) in the Progress Tracker.
+For details on running migrations, see [TASKS.md](../TASKS.md).
