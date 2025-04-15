@@ -148,7 +148,8 @@ class JiraClient:
         all_issues = []
         start_at = 0
         max_results = 100 # Fetch in batches of 100 (adjust as needed)
-        jql = f"project = '{project_key}' ORDER BY created ASC"
+        # Surround project key with quotes to handle reserved words
+        jql = f"project = \"{project_key}\" ORDER BY created ASC"
         # Specify fields needed, or use None to get all (can be slower)
         # fields = ["summary", "description", "issuetype", "status", "assignee", "reporter", "created", "updated", "parent", "priority", "components", "versions", "labels"] # Example list
         fields = None # Get all fields for simplicity, though might be less efficient
@@ -295,8 +296,8 @@ class JiraClient:
             The total number of issues in the project
         """
         try:
-            # Use JQL to count issues in the project
-            jql = f"project={project_key}"
+            # Use JQL to count issues in the project - surround with quotes to handle reserved words
+            jql = f'project="{project_key}"'
 
             # Using fields="key" and expand='' minimizes data transfer
             # when we only need to get the total count
