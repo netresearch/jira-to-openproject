@@ -310,12 +310,16 @@ class CustomFieldMigration(BaseMigration):
         """
         self.logger.info("Creating custom field mapping...")
 
-        self.logger.info("Extracting custom fields from Jira...")
-        self.logger.debug(f"Force: {force}")
-        self.extract_jira_custom_fields(force=force)
+        # Only extract data if not using cached data
+        if not hasattr(self, '_create_mapping_with_cached_data') or not self._create_mapping_with_cached_data:
+            self.logger.info("Extracting custom fields from Jira...")
+            self.logger.debug(f"Force: {force}")
+            self.extract_jira_custom_fields(force=force)
 
-        self.logger.info("Extracting custom fields from OpenProject...")
-        self.extract_openproject_custom_fields(force=force)
+            self.logger.info("Extracting custom fields from OpenProject...")
+            self.extract_openproject_custom_fields(force=force)
+        else:
+            self.logger.info("Using cached custom field data")
 
         mapping = {}
 
@@ -684,8 +688,10 @@ class CustomFieldMigration(BaseMigration):
         if force:
             self.logger.info("Force flag is set, refreshing OpenProject custom fields data")
             self.extract_openproject_custom_fields(force=True)
-            # Recreate mapping with force to ensure we have the latest state
+            # Use cached data for Jira custom fields to avoid unnecessary API calls
+            self._create_mapping_with_cached_data = True
             self.create_custom_field_mapping(force=True)
+            self._create_mapping_with_cached_data = False
 
         # Check if we have fields that need to be created
         fields_to_create = [f for f in self.mapping.values() if f["matched_by"] == "create"]
@@ -1157,20 +1163,22 @@ end
         self.logger.info("Starting custom field migration", extra={"markup": True})
 
         try:
-            # Extract data
+            # Extract data once and cache it
             jira_fields = self.extract_jira_custom_fields(force=force)
             op_fields = self.extract_openproject_custom_fields(force=force)
 
-            # Create mapping
-            mapping = self.create_custom_field_mapping(force=force)
+            # Create mapping using the cached data (set force=False to avoid re-extraction)
+            self._create_mapping_with_cached_data = True
+            mapping = self.create_custom_field_mapping(force=False)
+            self._create_mapping_with_cached_data = False
 
             # Migrate custom fields based on the direct migration flag
             if not dry_run and self.rails_console:
                 self.logger.info("Migrating custom fields via Rails console", extra={"markup": True})
-                success = self.migrate_custom_fields(direct_migration=True, force=force)
+                success = self.migrate_custom_fields(direct_migration=True, force=False)
             elif not dry_run:
                 self.logger.info("Generating JSON migration script (no Rails console available)", extra={"markup": True})
-                success = self.migrate_custom_fields(direct_migration=False, force=force)
+                success = self.migrate_custom_fields(direct_migration=False, force=False)
             else:
                 self.logger.warning("Dry run mode - not creating custom fields", extra={"markup": True})
                 success = True
