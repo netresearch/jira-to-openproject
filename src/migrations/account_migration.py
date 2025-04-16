@@ -397,14 +397,17 @@ class AccountMigration(BaseMigration):
 
         # Custom field ID should already be created/found by the time this method is called
         if not self.account_custom_field_id:
-            self.logger.error("Cannot migrate accounts - no custom field ID available", extra={"markup": True})
-            return {
-                "status": "failed",
-                "error": "No custom field ID available",
-                "matched_count": 0,
-                "created_count": 0,
-                "failed_count": len(self.tempo_accounts) if self.tempo_accounts else 0
-            }
+            self.logger.info("No custom field ID available, attempting to create one...", extra={"markup": True})
+            self.account_custom_field_id = self.create_account_custom_field()
+            if not self.account_custom_field_id:
+                self.logger.error("Failed to create custom field - cannot continue migration", extra={"markup": True})
+                return {
+                    "status": "failed",
+                    "error": "No custom field ID available and creation failed",
+                    "matched_count": 0,
+                    "created_count": 0,
+                    "failed_count": len(self.tempo_accounts) if self.tempo_accounts else 0
+                }
 
         if not self.account_mapping:
             self.create_account_mapping()
@@ -446,12 +449,8 @@ class AccountMigration(BaseMigration):
         if config.migration_config.get("dry_run", False):
             self.logger.info("DRY RUN: No custom fields were actually created or updated in OpenProject", extra={"markup": True})
 
-        return {
-            "status": "success",
-            "matched_count": matched_accounts,
-            "created_count": total_accounts - matched_accounts,
-            "failed_count": 0
-        }
+        # Return the account mapping instead of status summary
+        return self.account_mapping
 
     def analyze_account_mapping(self) -> Dict[str, Any]:
         """
@@ -590,24 +589,27 @@ class AccountMigration(BaseMigration):
             mapping = self.create_account_mapping()
 
             # Create/find custom field if not in dry run mode
-            result = {"status": "success", "matched_count": 0, "created_count": 0, "failed_count": 0}
+            result = None
 
             if not dry_run:
-                # Create custom field
-                custom_field_id = self.create_account_custom_field()
-                if custom_field_id:
-                    self.logger.success(f"Created/found Tempo account custom field with ID: {custom_field_id}", extra={"markup": True})
+                # Migrate accounts (will create custom field if needed)
+                account_mapping = self.migrate_accounts()
 
-                    # Now migrate accounts using the custom field
-                    result = self.migrate_accounts()
+                # Check if there was an error (error response has 'status' field)
+                if isinstance(account_mapping, dict) and 'status' in account_mapping and account_mapping['status'] == 'failed':
+                    # Pass through the error status
+                    result = account_mapping
                 else:
-                    self.logger.error("Failed to create Tempo account custom field", extra={"markup": True})
-                    return {
-                        "status": "failed",
-                        "error": "Failed to create custom field",
-                        "success_count": 0,
-                        "failed_count": len(tempo_accounts),
-                        "total_count": len(tempo_accounts)
+                    # Process the successful mapping return
+                    matched_accounts = sum(1 for account in account_mapping.values()
+                                          if account.get("openproject_id") is not None)
+                    total_accounts = len(account_mapping)
+
+                    result = {
+                        "status": "success",
+                        "matched_count": matched_accounts,
+                        "created_count": total_accounts - matched_accounts,
+                        "failed_count": 0
                     }
             else:
                 self.logger.warning("Dry run mode - not creating Tempo account custom field or accounts", extra={"markup": True})
