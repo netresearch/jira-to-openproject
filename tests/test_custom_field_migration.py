@@ -7,8 +7,9 @@ import os
 import sys
 import json
 import unittest
-from unittest.mock import Mock, patch, MagicMock, call
+from unittest.mock import Mock, patch, MagicMock, call, ANY
 from typing import Dict, List, Any
+import tempfile
 
 # Add src directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -175,8 +176,8 @@ class TestCustomFieldMigration(unittest.TestCase):
         }
         self.assertEqual(self.migration.map_jira_field_to_openproject_format(date_field), "date")
 
-    def test_migrate_custom_fields_via_rails(self):
-        """Test migrating custom fields via Rails console."""
+    def test_migrate_custom_fields(self):
+        """Test migrating custom fields using the JSON-based approach."""
         # Set up mocks for existing mapping and field data
         field_data = {
             "jira_id": "customfield_10001",
@@ -191,27 +192,262 @@ class TestCustomFieldMigration(unittest.TestCase):
             "customfield_10001": field_data
         }
 
-        # Mock the rails client to return success for create_custom_field_via_rails
+        # Mock the file transfer and execute methods
+        self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
+        self.mock_rails_client.transfer_file_from_container = Mock(return_value=True)
+
+        # Mock the execute method to return success
         self.mock_rails_client.execute = Mock(return_value={
             "status": "success",
-            "id": 3,
-            "name": "Test Text Field"
+            "output": {
+                "status": "success",
+                "created": [
+                    {
+                        "name": "Test Text Field",
+                        "status": "created",
+                        "id": 3,
+                        "jira_id": "customfield_10001"
+                    }
+                ],
+                "created_count": 1,
+                "existing_count": 0,
+                "error_count": 0
+            }
         })
 
-        # Mock analyze_custom_field_mapping to return our field
-        analyze_result = {
-            "fields_to_migrate": [field_data]
-        }
-        with patch.object(self.migration, 'analyze_custom_field_mapping', return_value=analyze_result):
+        # Mock the open function to return a mock file for the result json
+        mock_json_content = json.dumps({
+            "status": "success",
+            "created": [
+                {
+                    "name": "Test Text Field",
+                    "status": "created",
+                    "id": 3,
+                    "jira_id": "customfield_10001"
+                }
+            ],
+            "created_count": 1,
+            "existing_count": 0,
+            "error_count": 0
+        })
+        mock_file = Mock()
+        mock_file.__enter__ = Mock(return_value=mock_file)
+        mock_file.__exit__ = Mock(return_value=None)
+        mock_file.read = Mock(return_value=mock_json_content)
+        self.mock_open.return_value = mock_file
+
+        # Mock analyze_custom_field_mapping to return successful analysis
+        with patch.object(self.migration, 'analyze_custom_field_mapping', return_value={"status": "success"}):
             # Run the migration
-            result = self.migration.migrate_custom_fields_via_rails()
+            result = self.migration.migrate_custom_fields()
 
             # Verify the migration
             self.assertTrue(result)
 
-            # Verify that execute was called with a command that includes our field name
-            called_with = self.mock_rails_client.execute.call_args[0][0]
-            self.assertIn("Test Text Field", called_with)
+            # Verify that file transfer methods and execute were called
+            self.mock_rails_client.transfer_file_to_container.assert_called_once()
+            self.mock_rails_client.execute.assert_called_once()
+
+            # Check the arguments - needs to contain the data_file_path which should
+            # start with "/tmp/custom_fields_batch_"
+            args, kwargs = self.mock_rails_client.execute.call_args
+            script_content = args[0] if args else ""
+            self.assertIn("Ruby variables from Python", script_content)
+            self.assertIn("data_file_path", script_content)
+            self.assertIn("/tmp/custom_fields_batch_", script_content)
+
+    def test_migrate_custom_fields_with_error(self):
+        """Test migrating custom fields when an error occurs."""
+        # Set up mocks for existing mapping and field data
+        field_data = {
+            "jira_id": "customfield_10001",
+            "jira_name": "Test Text Field",
+            "openproject_name": "Test Text Field",
+            "openproject_type": "text",
+            "matched_by": "create"
+        }
+
+        # Mock mapping with a field that needs to be created
+        self.migration.mapping = {
+            "customfield_10001": field_data
+        }
+
+        # Mock the file transfer methods
+        self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
+
+        # Mock the execute method to return an error
+        self.mock_rails_client.execute = Mock(return_value={
+            "status": "error",
+            "error": "Test error message"
+        })
+
+        # Mock analyze_custom_field_mapping to return successful analysis
+        with patch.object(self.migration, 'analyze_custom_field_mapping', return_value={"status": "success"}):
+            # Run the migration
+            result = self.migration.migrate_custom_fields()
+
+            # Verify the migration failed
+            self.assertFalse(result)
+
+            # Verify that transfer and execute were called
+            self.mock_rails_client.transfer_file_to_container.assert_called_once()
+            self.mock_rails_client.execute.assert_called_once()
+
+    def test_json_file_handling(self):
+        """Test the handling of JSON files for custom field migration."""
+        # Set up sample data for the test
+        test_mapping = {
+            "customfield_10001": {
+                "jira_id": "customfield_10001",
+                "jira_name": "Test Field",
+                "openproject_name": "Test Field",
+                "openproject_type": "text",
+                "matched_by": "create"
+            }
+        }
+
+        # Replace json.dump to capture the data being written
+        json_dump_mock = Mock()
+        with patch('json.dump', json_dump_mock):
+            # Replace tempfile.NamedTemporaryFile to return a controlled temp file
+            temp_file_mock = Mock()
+            temp_file_mock.name = "/tmp/test_json_file.json"
+
+            with patch('tempfile.NamedTemporaryFile', return_value=temp_file_mock):
+                # Mock the file transfer and execute methods
+                self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
+                self.mock_rails_client.execute = Mock(return_value={"status": "success"})
+
+                # Create a version of migrate_custom_fields_via_json that doesn't need full setup
+                with patch.object(self.migration, 'mapping', test_mapping):
+                    with patch.object(self.migration, 'analyze_custom_field_mapping', return_value={"status": "success"}):
+                        # Call the method
+                        self.migration.migrate_custom_fields()
+
+                        # Verify json.dump was called with the correct data
+                        json_dump_mock.assert_called_once()
+                        args, _ = json_dump_mock.call_args
+
+                        # Check that data is a list of fields
+                        self.assertTrue(isinstance(args[0], list), "First argument to json.dump should be a list")
+                        self.assertEqual(len(args[0]), 1, "Expected one field in the data")
+
+                        # Check the field properties
+                        field = args[0][0]
+                        self.assertEqual(field["jira_id"], "customfield_10001")
+                        self.assertEqual(field["name"], "Test Field")
+
+                        # Verify that transfer_file_to_container was called at least once
+                        self.mock_rails_client.transfer_file_to_container.assert_called_once()
+                        # Verify the execute method was called
+                        self.mock_rails_client.execute.assert_called_once()
+
+    def test_container_file_transfer_failure(self):
+        """Test handling of container file transfer failures."""
+        # Set up sample data
+        test_mapping = {
+            "customfield_10001": {
+                "jira_id": "customfield_10001",
+                "jira_name": "Test Field",
+                "openproject_name": "Test Field",
+                "openproject_type": "text",
+                "matched_by": "create"
+            }
+        }
+
+        # Mock the transfer_file_to_container to simulate failure
+        self.mock_rails_client.transfer_file_to_container = Mock(return_value=False)
+
+        # Mock analyze_custom_field_mapping to return successful analysis
+        with patch.object(self.migration, 'mapping', test_mapping):
+            with patch.object(self.migration, 'analyze_custom_field_mapping', return_value={"status": "success"}):
+                # Run the migration - should fail due to transfer failure
+                result = self.migration.migrate_custom_fields()
+
+                # Verify the migration failed
+                self.assertFalse(result)
+
+                # Verify transfer was attempted
+                self.mock_rails_client.transfer_file_to_container.assert_called_once()
+
+                # Verify execute was not called (since transfer failed)
+                self.mock_rails_client.execute.assert_not_called()
+
+    def test_ruby_script_generation(self):
+        """Test the generation of Ruby script with proper structure."""
+        # Set up sample data
+        test_mapping = {
+            "customfield_10001": {
+                "jira_id": "customfield_10001",
+                "jira_name": "Test Field",
+                "openproject_name": "Test Field",
+                "openproject_type": "text",
+                "matched_by": "create"
+            }
+        }
+
+        # Mock file operations
+        self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
+        self.mock_rails_client.execute = Mock(return_value={"status": "success"})
+
+        # Mock analyze_custom_field_mapping to return successful analysis
+        with patch.object(self.migration, 'mapping', test_mapping):
+            with patch.object(self.migration, 'analyze_custom_field_mapping', return_value={"status": "success"}):
+                # Run the migration
+                self.migration.migrate_custom_fields()
+
+                # Get the script content from the execute call
+                args, _ = self.mock_rails_client.execute.call_args
+                script_content = args[0]
+
+                # Verify script structure - header with Python variables
+                self.assertIn("# Ruby variables from Python", script_content)
+
+                # Verify main Ruby code section
+                self.assertIn("begin", script_content)
+                self.assertIn("rescue Exception => e", script_content)
+
+                # Check for proper error handling
+                self.assertIn("error_result", script_content)
+                self.assertIn("message", script_content)
+                self.assertIn("backtrace", script_content)
+
+                # Check for handling of list field possible values
+                self.assertIn("possible_values", script_content)
+                self.assertIn("value.to_s.strip", script_content)
+
+    def test_handle_list_field_possible_values(self):
+        """Test that list field possible values are properly handled."""
+        # Create a mock for execute that captures the script
+        self.mock_rails_client.execute = Mock(return_value={"status": "success"})
+        self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
+
+        # Set up sample data with a list field
+        test_mapping = {
+            "customfield_10002": {
+                "jira_id": "customfield_10002",
+                "jira_name": "Test Select Field",
+                "openproject_name": "Test Select Field",
+                "openproject_type": "list",
+                "matched_by": "create",
+                "allowed_values": ["Option 1", "Option 2", "Option 3"]
+            }
+        }
+
+        # Mock analyze_custom_field_mapping to return successful analysis
+        with patch.object(self.migration, 'mapping', test_mapping):
+            with patch.object(self.migration, 'analyze_custom_field_mapping', return_value={"status": "success"}):
+                # Run the migration
+                self.migration.migrate_custom_fields()
+
+                # Get the script content
+                args, _ = self.mock_rails_client.execute.call_args
+                script_content = args[0]
+
+                # Check for proper handling of values.map call with to_s.strip
+                self.assertIn("map { |value| value.to_s.strip }", script_content)
+                # Check for conversion of list field values
+                self.assertIn("values.map { |value| value.to_s.strip }", script_content)
 
 
 if __name__ == '__main__':
