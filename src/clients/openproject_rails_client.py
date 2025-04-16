@@ -772,7 +772,7 @@ class OpenProjectRailsClient:
 
                 subprocess.run(scp_cmd, check=True)
 
-                logger.notice(f"Successfully copied file from container to local: {local_path}")
+                logger.debug(f"Successfully copied file from container to local: {local_path}")
                 return True
             except subprocess.SubprocessError as e:
                 logger.error(f"Error transferring file from container: {e}")
@@ -901,7 +901,8 @@ class OpenProjectRailsClient:
 
             # Format for JSON output if needed
             if output_as_json:
-                command = f"""
+                # Header section with Python interpolation
+                header = f"""
                 begin
                   require 'json'
                   puts "JSON_OUTPUT_START"
@@ -909,6 +910,10 @@ class OpenProjectRailsClient:
                   result = (
                     {script_content}
                   )
+                """
+
+                # Main section without Python interpolation
+                main_section = """
                   # Convert result to JSON if it's not already a string
                   if result.is_a?(String)
                     puts result
@@ -917,23 +922,34 @@ class OpenProjectRailsClient:
                   end
                   puts "JSON_OUTPUT_END"
                 rescue => e
-                  puts "ERROR: #{{e.class.name}}: #{{e.message}}"
+                  puts "ERROR: #{e.class.name}: #{e.message}"
                   puts e.backtrace.join("\\n")
                   puts "JSON_OUTPUT_START"
-                  puts {{ "error": e.message, "backtrace": e.backtrace }}.to_json
+                  puts({ "error" => e.message, "backtrace" => e.backtrace }.to_json)
                   puts "JSON_OUTPUT_END"
                 end
                 """
+
+                # Combine the sections
+                command = header + main_section
             else:
-                command = f"""
+                # Header section with Python interpolation
+                header = f"""
                 begin
                   # Execute the script content directly
                   {script_content}
+                """
+
+                # Main section without Python interpolation
+                main_section = """
                 rescue => e
-                  puts "ERROR: #{{e.class.name}}: #{{e.message}}"
+                  puts "ERROR: #{e.class.name}: #{e.message}"
                   puts e.backtrace.join("\\n")
                 end
                 """
+
+                # Combine the sections
+                command = header + main_section
 
             # Execute the command in the Rails console
             result = self.execute(command)
@@ -1008,31 +1024,129 @@ class OpenProjectRailsClient:
 
             script_path = None
             data_path = None
+            container_data_path = None
 
             # If data is provided, write it to a separate JSON file
             if data is not None:
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as data_file:
-                    json.dump(data, data_file)
-                    data_path = data_file.name
+                    # Ensure data is properly serializable
+                    try:
+                        json.dump(data, data_file, ensure_ascii=False, indent=2)
+                        data_file.flush()  # Ensure all data is written to disk
+                        data_path = data_file.name
+                        logger.info(f"Created temporary JSON data file: {data_path}")
 
+                        # Verify the JSON file is valid
+                        with open(data_path, 'r') as verify_file:
+                            json.load(verify_file)  # This will raise an exception if JSON is invalid
+                            logger.debug("Verified JSON data is valid")
+                    except Exception as e:
+                        logger.error(f"Error creating JSON data file: {e}")
+                        if os.path.exists(data_path):
+                            os.unlink(data_path)
+                        return {
+                            'status': 'error',
+                            'message': f'Failed to create valid JSON data: {str(e)}'
+                        }
+
+                    # Generate a timestamp-based path for the container
+                    timestamp = int(time.time())
+                    filename = os.path.basename(data_path)
+                    container_data_path = f"/tmp/j2o_data_{timestamp}_{filename}"
+
+                    # Transfer the JSON file to the container
+                    logger.info(f"Transferring JSON data file to container at {container_data_path}")
+                    if not self.transfer_file_to_container(data_path, container_data_path):
+                        logger.error("Failed to transfer JSON data file to container")
+                        return {
+                            'status': 'error',
+                            'message': 'Failed to transfer JSON data file to container'
+                        }
+
+                    # Verify the file exists in the container and has content
+                    container_name = config.openproject_config.get("container")
+                    op_server = config.openproject_config.get("server")
+                    if container_name and op_server:
+                        try:
+                            verify_cmd = ["ssh", op_server, "docker", "exec", container_name,
+                                        "bash", "-c", f"cat {container_data_path} | head -10"]
+                            result = subprocess.run(verify_cmd, capture_output=True, text=True, check=True)
+                            if not result.stdout.strip():
+                                logger.error(f"Container file exists but appears to be empty: {container_data_path}")
+                                return {
+                                    'status': 'error',
+                                    'message': 'Container data file is empty'
+                                }
+                            logger.debug(f"Verified container data file has content (first few lines): {result.stdout[:100]}...")
+                        except Exception as e:
+                            logger.error(f"Failed to verify container data file: {e}")
+                            return {
+                                'status': 'error',
+                                'message': f'Failed to verify container data file: {str(e)}'
+                            }
+
+            # Create Ruby script with improved data loading and error handling
             with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
-                # If data is provided, add code to load it from the JSON file
+                # Header section with Python variable interpolation
                 if data is not None:
-                    f.write(f'# Load data from separate JSON file\nrequire "json"\ninput_data = JSON.parse(File.read("{data_path.replace("\\\\", "/")}"))\n\n')
+                    # Python string interpolation for the path
+                    data_file_path = container_data_path
 
-                # Add the script content
+                    # Write Ruby header with plain string instead of f-string to avoid interpolation issues
+                    header = f"""
+                    # Load data from separate JSON file
+                    require "json"
+                    begin
+                      # Check if the file exists and has content
+                      unless File.exist?("{data_file_path}")
+                        raise "Data file not found at {data_file_path}"
+                      end
+
+                      file_content = File.read("{data_file_path}")
+                      if file_content.nil? || file_content.empty?
+                        raise "Data file is empty"
+                      end
+
+                      begin
+                        input_data = JSON.parse(file_content)
+                        puts "Successfully loaded data with " + (input_data.is_a?(Array) ? input_data.size.to_s : "1") + " records"
+                      rescue JSON::ParserError => e
+                        puts "JSON parse error: " + e.message
+                        puts "First 100 chars of file: " + file_content[0..100].inspect
+                        raise "Failed to parse JSON data: " + e.message
+                      end
+
+                    """
+                    f.write(header)
+
+                # Main section - just the script content without interpolation
                 f.write(script_content)
                 script_path = f.name
 
             # Execute the script
+            logger.info(f"Executing Ruby script with data")
             result = self.execute_ruby_script(script_path, in_container=False, output_as_json=output_as_json)
 
             # Clean up the temporary files
             try:
                 if script_path:
                     os.unlink(script_path)
+                    logger.debug(f"Removed temporary script file: {script_path}")
                 if data_path:
                     os.unlink(data_path)
+                    logger.debug(f"Removed temporary JSON data file: {data_path}")
+                if container_data_path:
+                    # Clean up the remote file after execution
+                    logger.debug(f"Attempting to remove container file: {container_data_path}")
+                    container_name = config.openproject_config.get("container")
+                    op_server = config.openproject_config.get("server")
+                    if container_name and op_server:
+                        try:
+                            clean_cmd = ["ssh", op_server, "docker", "exec", container_name, "rm", "-f", container_data_path]
+                            subprocess.run(clean_cmd, check=False, capture_output=True, timeout=10)
+                            logger.debug(f"Container file cleanup attempted")
+                        except Exception as e:
+                            logger.debug(f"Error during container file cleanup: {e}")
             except Exception as e:
                 logger.debug(f"Error cleaning up temporary files: {e}")
 

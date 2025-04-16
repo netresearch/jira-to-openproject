@@ -374,7 +374,7 @@ class IssueTypeMigration(BaseMigration):
           puts "===JSON_WRITE_SUCCESS==="
           nil
         rescue => e
-          puts "RAILS_EXEC_ERROR: #{{e.message}} \\n #{{e.backtrace.join("\n")}}"
+          puts "RAILS_EXEC_ERROR: #{{e.message}} \\n #{{e.backtrace.join("\\n")}}"
           nil
         end
         """
