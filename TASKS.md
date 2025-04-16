@@ -219,6 +219,42 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
         - [x] Test custom field value migration (including Tempo Account)
         - [x] Perform data validation (counts, specific examples)
 
+## Phase 2.5: High Priority Improvements (NEW)
+
+- [ ] **Fix Project Hierarchy Structure** (`project_migration.py`)
+    - [ ] Implement hierarchical project structure (Tempo Company -> Jira Project relationship)
+    - [ ] Modify project migration to create Tempo Companies as main projects
+    - [ ] Make Jira Projects sub-projects of their respective Tempo Company
+    - [ ] Update project mapping to reflect hierarchical structure
+    - [ ] Test hierarchical project creation and relationships
+
+- [ ] **Normalize Issue Types** (`issue_type_migration.py`)
+    - [ ] Identify issue types starting with "Sub:" or "Sub-"
+    - [ ] Map these to their corresponding "normal" issue types
+    - [ ] Update issue type mapping to reflect normalized types
+    - [ ] Test issue type normalization
+
+- [ ] **Complete Work Package Field Migration** (`work_package_migration.py`)
+    - [ ] Add missing meta fields:
+        - [ ] Creation date and update date
+        - [ ] Creator and author
+        - [ ] Watchers
+    - [ ] Implement custom field value migration
+    - [ ] Test complete field migration accuracy
+
+- [ ] **Implement Comments, Attachments, Work Log Migration** (`work_package_migration.py`)
+    - [ ] Extract and migrate issue comments
+    - [ ] Handle attachment downloading and uploading
+    - [ ] Migrate work logs (time entries)
+    - [ ] Test comment, attachment, and work log migration
+
+- [ ] **Fix Work Package Relationships** (`work_package_migration.py`)
+    - [ ] Implement proper Epic-Issue relationship (as parent-child)
+    - [ ] Implement sub-issue relationships (as parent-child)
+    - [ ] Migrate all other issue link types
+    - [ ] Test work package relationship accuracy
+    - [ ] Ensure proper hierarchy and links between work packages
+
 ## Phase 3: Refinement, Testing & Validation
 
 - [ ] **Refine Migration Scripts:**
