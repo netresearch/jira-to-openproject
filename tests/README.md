@@ -28,25 +28,73 @@ The test suite uses `pytest` and covers:
 
 ## Running Tests
 
+### Prerequisites
+
+Before running tests, make sure to activate the Python virtual environment:
+
+```bash
+# From the project root
+source .venv/bin/activate
+# Or use the provided script
+source activate.sh
+```
+
+You should see the virtual environment activated in your terminal prompt.
+
+### Using pytest
+
 To run all tests:
 
 ```bash
-docker exec -it j2o-app pytest
+# From the project root
+pytest
+
+# Or from within the tests directory
+cd tests && pytest
 ```
 
 To run a specific test file:
 
 ```bash
-docker exec -it j2o-app pytest tests/test_custom_field_migration.py
+pytest tests/test_custom_field_migration.py
 ```
 
 To run a specific test case:
 
 ```bash
-docker exec -it j2o-app pytest tests/test_custom_field_migration.py::TestCustomFieldMigration::test_extract_jira_custom_fields
+pytest tests/test_custom_field_migration.py::test_extract_jira_custom_fields
+```
+
+To run tests with verbose output:
+
+```bash
+pytest -v tests/test_environment.py
+```
+
+Additional pytest options:
+
+```bash
+# Show more detailed output
+pytest -vv
+
+# Only run tests matching a pattern
+pytest -k "environment or project"
+
+# Stop after first failure
+pytest -x
+```
+
+### Running tests in Docker
+
+If you're using Docker:
+
+```bash
+docker exec -it j2o-app pytest
 ```
 
 ## Test Environment
+
+Tests use the `.env.test` file for configuration during test runs. This file contains mock credentials and settings suitable for testing.
 
 Tests use mocking to avoid making actual API calls to Jira or OpenProject. The `unittest.mock` module is used extensively to patch external dependencies and simulate API responses.
 
