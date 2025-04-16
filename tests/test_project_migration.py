@@ -142,7 +142,7 @@ class TestProjectMigration(unittest.TestCase):
         mock_op_instance.find_project_by_name_or_identifier.return_value = None
 
         # Mock successful project creation
-        mock_op_instance.create_project.return_value = {'id': 2, 'name': 'Project Two', 'identifier': 'proj2'}
+        mock_op_instance.create_project.return_value = ({'id': 2, 'name': 'Project Two', 'identifier': 'proj2'}, True)
 
         # Mock setting custom field
         mock_op_instance.update_project_custom_field.return_value = True
@@ -202,15 +202,15 @@ class TestProjectMigration(unittest.TestCase):
         mock_op_instance.find_project_by_name_or_identifier.side_effect = find_project_mock
 
         # Mock project creation for new projects
-        def create_project_side_effect(name, identifier, description):
+        def create_project_side_effect(name, identifier, description=None, parent_id=None):
             if name == 'Project One':
-                return {'id': 1, 'name': name, 'identifier': identifier}
+                return ({'id': 1, 'name': name, 'identifier': identifier}, False)
             elif name == 'Project Two':
-                return {'id': 2, 'name': name, 'identifier': identifier}
+                return ({'id': 2, 'name': name, 'identifier': identifier}, True)
             elif name == 'Project Three':
-                return {'id': 4, 'name': name, 'identifier': identifier}
+                return ({'id': 4, 'name': name, 'identifier': identifier}, True)
             else:
-                return None
+                return (None, False)
 
         mock_op_instance.create_project.side_effect = create_project_side_effect
         mock_op_instance.update_project_custom_field.return_value = True
