@@ -352,16 +352,8 @@ class LinkTypeMigration:
 
         if not link_types_to_create:
             logger.info("No link types need to be created, all are already matched")
-            # Return properly structured result
-            return {
-                "success": True,
-                "already_matched": True,
-                "total_count": len(self.link_type_mapping),
-                "migrated_count": len(self.link_type_mapping),
-                "failed_count": 0,
-                "message": "All link types were already matched, no creation needed",
-                "mapping": self.link_type_mapping
-            }
+            # Return the mapping directly
+            return self.link_type_mapping
 
         migrated_count = 0
         failed_count = 0
@@ -413,16 +405,8 @@ class LinkTypeMigration:
                 "DRY RUN: No relation types were actually created in OpenProject"
             )
 
-        return {
-            "success": migrated_count > 0,
-            "already_matched": migrated_count == len(self.link_type_mapping),
-            "total_count": len(self.link_type_mapping),
-            "migrated_count": migrated_count,
-            "failed_count": failed_count,
-            "message": analysis.get("message", ""),
-            "details": analysis,
-            "mapping": self.link_type_mapping
-        }
+        # Return the mapping directly
+        return self.link_type_mapping
 
     def analyze_link_type_mapping(self) -> Dict[str, Any]:
         """

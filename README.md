@@ -82,6 +82,7 @@ python src/main.py --dry-run
 
 * **Components:** Migration is modular; each component (users, projects, etc.) can be run independently.
 * **Mappings:** Mapping files in `var/data/*.json` translate IDs and values between systems.
+* **Project Hierarchy:** Projects are organized hierarchically with Tempo companies as top-level projects and Jira projects as their sub-projects.
 * **Rails Console Integration:** For entities not supported by the OpenProject API, the tool can:
     - Execute commands via SSH/Docker (`--direct-migration`)
     - Generate Ruby scripts for manual execution
