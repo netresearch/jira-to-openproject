@@ -43,7 +43,7 @@ class AccountMigration(BaseMigration):
         self,
         jira_client: 'JiraClient',
         op_client: 'OpenProjectClient',
-        op_rails_client: Optional['OpenProjectRailsClient'] = None,
+        op_rails_client: 'OpenProjectRailsClient',
     ):
         """
         Initialize the account migration tools.
@@ -51,7 +51,7 @@ class AccountMigration(BaseMigration):
         Args:
             jira_client: Initialized Jira client instance.
             op_client: Initialized OpenProject client instance.
-            op_rails_client: Optional instance of OpenProjectRailsClient for direct migration.
+            op_rails_client: OpenProjectRailsClient instance for direct migration (REQUIRED).
         """
         super().__init__(jira_client, op_client, op_rails_client)
         self.tempo_accounts = []
@@ -75,7 +75,17 @@ class AccountMigration(BaseMigration):
         self.account_mapping = self._load_from_json(ACCOUNT_MAPPING_FILE) or {}
 
         analysis_data = self._load_from_json("account_mapping_analysis.json", {})
-        self.account_custom_field_id = analysis_data.get("custom_field_id")
+        custom_field_id = analysis_data.get("custom_field_id")
+
+        # Validate the custom field ID
+        if custom_field_id == "nil" or custom_field_id is None:
+            self.account_custom_field_id = None
+        else:
+            try:
+                self.account_custom_field_id = int(custom_field_id)
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid custom field ID in analysis file: {custom_field_id}, will create a new one")
+                self.account_custom_field_id = None
 
         self.logger.info(f"Loaded {len(self.tempo_accounts)=} Tempo accounts")
         self.logger.info(f"Loaded {len(self.op_projects)=} OpenProject projects")
@@ -83,6 +93,8 @@ class AccountMigration(BaseMigration):
         self.logger.info(f"Loaded {len(self.account_mapping)=} account mappings")
         if self.account_custom_field_id:
             self.logger.info(f"Loaded existing {self.account_custom_field_id=}")
+        else:
+            self.logger.info("No valid custom field ID found, will create a new one")
 
     def load_company_mapping(self) -> Dict[str, Any]:
         """
@@ -268,9 +280,20 @@ class AccountMigration(BaseMigration):
         """
         self.logger.info("Ensuring 'Tempo Account' custom field exists in OpenProject...")
 
+        # Double check that account_custom_field_id is not a string "nil" or other invalid value
+        if isinstance(self.account_custom_field_id, str) and self.account_custom_field_id == "nil":
+            self.account_custom_field_id = None
+            self.logger.info("Pre-loaded custom field ID was 'nil', will create a new one")
+
         if self.account_custom_field_id is not None:
-            self.logger.info(f"Using pre-loaded custom field ID: {self.account_custom_field_id}")
-            return self.account_custom_field_id
+            try:
+                # Ensure it's a valid integer
+                self.account_custom_field_id = int(self.account_custom_field_id)
+                self.logger.info(f"Using pre-loaded custom field ID: {self.account_custom_field_id}")
+                return self.account_custom_field_id
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid pre-loaded custom field ID: {self.account_custom_field_id}, will create a new one")
+                self.account_custom_field_id = None
 
         if config.migration_config.get("dry_run", False):
             self.logger.info("DRY RUN: Would check/create custom field for Tempo accounts")
@@ -279,13 +302,22 @@ class AccountMigration(BaseMigration):
 
         try:
             self.logger.info("Checking if 'Tempo Account' custom field exists via Rails...")
-            existing_id = self.op_rails_client.get_custom_field_id_by_name('Tempo Account') # type: ignore
+            existing_id = self.op_rails_client.get_custom_field_id_by_name('Tempo Account')
 
-            if existing_id is not None:
-                self.logger.info(f"Custom field 'Tempo Account' already exists with ID: {existing_id}")
-                self.account_custom_field_id = existing_id
-                self._save_custom_field_id(existing_id)
-                return existing_id
+            # Handle nil value properly (convert to None)
+            if existing_id is None:
+                self.logger.info("No existing 'Tempo Account' custom field found, will create one")
+            else:
+                try:
+                    # Convert to integer if it's a string representation of a number
+                    existing_id = int(existing_id)
+                    self.logger.info(f"Custom field 'Tempo Account' already exists with ID: {existing_id}")
+                    self.account_custom_field_id = existing_id
+                    self._save_custom_field_id(existing_id)
+                    return existing_id
+                except (ValueError, TypeError):
+                    self.logger.warning(f"Invalid custom field ID returned: {existing_id}, will create a new one")
+                    existing_id = None
 
             self.logger.info("Creating 'Tempo Account' custom field via Rails client...")
             if not self.tempo_accounts:
@@ -299,21 +331,30 @@ class AccountMigration(BaseMigration):
               is_required: false,
               searchable: true,
               editable: true,
-              visible: true,
               type: 'WorkPackageCustomField',
-              possible_values: {json.dumps(possible_values)},
-              description: 'Account from Tempo timesheet in Jira'
+              possible_values: {json.dumps(possible_values)}
             )
             cf.save!
             cf.id
             """
 
-            result = self.op_rails_client.execute(create_command) # type: ignore
+            result = self.op_rails_client.execute(create_command)
 
             if result['status'] == 'success' and result['output'] is not None:
                 new_id = result['output']
-                self.logger.success(f"Successfully created 'Tempo Account' custom field with ID: {new_id}", extra={"markup": True})
-                self.account_custom_field_id = new_id
+                # Check for nil value
+                if new_id == "nil" or new_id is None:
+                    self.logger.error("Failed to create custom field - got nil ID", extra={"markup": True})
+                    return None
+
+                try:
+                    # Convert to integer if it's a string
+                    new_id = int(new_id)
+                    self.logger.success(f"Successfully created 'Tempo Account' custom field with ID: {new_id}", extra={"markup": True})
+                    self.account_custom_field_id = new_id
+                except (ValueError, TypeError):
+                    self.logger.error(f"Invalid custom field ID returned: {new_id}", extra={"markup": True})
+                    return None
 
                 self.logger.info("Making custom field available for all work package types...", extra={"markup": True})
                 activate_command = f"""
@@ -327,7 +368,7 @@ class AccountMigration(BaseMigration):
                 true
                 """
 
-                activate_result = self.op_rails_client.execute(activate_command) # type: ignore
+                activate_result = self.op_rails_client.execute(activate_command)
                 if activate_result['status'] == 'success':
                     self.logger.success("Custom field activated for all work package types", extra={"markup": True})
                 else:
@@ -354,8 +395,16 @@ class AccountMigration(BaseMigration):
         if not self.tempo_accounts:
             self.extract_tempo_accounts()
 
+        # Custom field ID should already be created/found by the time this method is called
         if not self.account_custom_field_id:
-            self.create_account_custom_field()
+            self.logger.error("Cannot migrate accounts - no custom field ID available", extra={"markup": True})
+            return {
+                "status": "failed",
+                "error": "No custom field ID available",
+                "matched_count": 0,
+                "created_count": 0,
+                "failed_count": len(self.tempo_accounts) if self.tempo_accounts else 0
+            }
 
         if not self.account_mapping:
             self.create_account_mapping()
@@ -397,7 +446,12 @@ class AccountMigration(BaseMigration):
         if config.migration_config.get("dry_run", False):
             self.logger.info("DRY RUN: No custom fields were actually created or updated in OpenProject", extra={"markup": True})
 
-        return self.account_mapping
+        return {
+            "status": "success",
+            "matched_count": matched_accounts,
+            "created_count": total_accounts - matched_accounts,
+            "failed_count": 0
+        }
 
     def analyze_account_mapping(self) -> Dict[str, Any]:
         """
@@ -488,6 +542,18 @@ class AccountMigration(BaseMigration):
         Args:
             cf_id: The custom field ID to save
         """
+        # Validate the custom field ID
+        if cf_id is None or cf_id == "nil":
+            self.logger.warning("Not saving None or 'nil' as custom field ID")
+            return
+
+        try:
+            # Ensure it's a valid integer
+            cf_id = int(cf_id)
+        except (ValueError, TypeError):
+            self.logger.warning(f"Not saving invalid custom field ID: {cf_id}")
+            return
+
         analysis = self._load_from_json("account_mapping_analysis.json", {})
         analysis["custom_field_id"] = cf_id
         self._save_to_json(analysis, "account_mapping_analysis.json")
@@ -523,17 +589,26 @@ class AccountMigration(BaseMigration):
             # Create mapping
             mapping = self.create_account_mapping()
 
-            # Create custom field and migrate accounts if not in dry run mode
+            # Create/find custom field if not in dry run mode
+            result = {"status": "success", "matched_count": 0, "created_count": 0, "failed_count": 0}
+
             if not dry_run:
                 # Create custom field
                 custom_field_id = self.create_account_custom_field()
                 if custom_field_id:
                     self.logger.success(f"Created/found Tempo account custom field with ID: {custom_field_id}", extra={"markup": True})
+
+                    # Now migrate accounts using the custom field
+                    result = self.migrate_accounts()
                 else:
                     self.logger.error("Failed to create Tempo account custom field", extra={"markup": True})
-
-                # Migrate accounts
-                result = self.migrate_accounts()
+                    return {
+                        "status": "failed",
+                        "error": "Failed to create custom field",
+                        "success_count": 0,
+                        "failed_count": len(tempo_accounts),
+                        "total_count": len(tempo_accounts)
+                    }
             else:
                 self.logger.warning("Dry run mode - not creating Tempo account custom field or accounts", extra={"markup": True})
                 result = {
