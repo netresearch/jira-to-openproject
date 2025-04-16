@@ -136,13 +136,46 @@ class WorkPackageMigration:
                     progress_desc = f"Fetching {project_key} issues {start_at+1}-{min(start_at+batch_size, total_issues)}/{total_issues}"
                     project_tracker.update_description(progress_desc)
 
-                    # Fetch a batch of issues
-                    issues = self.jira_client.get_all_issues_for_project(
-                        project_key, expand_changelog=True
-                    )
+                    # Fetch a batch of issues with retry logic
+                    max_retries = 3
+                    retry_count = 0
+                    issues = None
+
+                    while retry_count < max_retries:
+                        try:
+                            issues = self.jira_client.get_all_issues_for_project(
+                                project_key, expand_changelog=True
+                            )
+                            break
+                        except Exception as e:
+                            retry_count += 1
+                            retry_msg = f"Error fetching issues for {project_key} (attempt {retry_count}/{max_retries}): {str(e)}"
+                            logger.warning(retry_msg, extra={"markup": True})
+                            project_tracker.add_log_item(retry_msg)
+
+                            if retry_count >= max_retries:
+                                logger.error(f"Failed to fetch issues after {max_retries} attempts: {str(e)}", extra={"markup": True})
+                                project_tracker.add_log_item(f"Failed to fetch issues after {max_retries} attempts")
+                                # Save what we have so far before potentially raising exception
+                                if all_issues:
+                                    self._save_to_json(all_issues, f"jira_issues_{project_key}.json")
+                                    logger.info(f"Saved {len(all_issues)} issues collected before error occurred", extra={"markup": True})
+                                # Continue with next batch instead of failing completely
+                                issues = []
+                                break
+
+                            # Exponential backoff: wait longer with each retry
+                            import time
+                            wait_time = 2 ** retry_count
+                            logger.info(f"Retrying in {wait_time} seconds...", extra={"markup": True})
+                            time.sleep(wait_time)
 
                     if not issues:
-                        break
+                        # Log message and move to next batch instead of breaking completely
+                        logger.warning(f"No issues retrieved for batch starting at {start_at}. Moving to next batch.", extra={"markup": True})
+                        project_tracker.add_log_item(f"Warning: No issues retrieved for batch starting at {start_at}")
+                        start_at += batch_size
+                        continue
 
                     # Add to overall list
                     all_issues.extend(issues)
@@ -167,13 +200,46 @@ class WorkPackageMigration:
                         # Update progress description
                         tracker.update_description(f"Fetching {project_key} issues {start_at+1}-{min(start_at+batch_size, total_issues)}/{total_issues}")
 
-                        # Fetch a batch of issues
-                        issues = self.jira_client.get_all_issues_for_project(
-                            project_key, expand_changelog=True
-                        )
+                        # Fetch a batch of issues with retry logic
+                        max_retries = 3
+                        retry_count = 0
+                        issues = None
+
+                        while retry_count < max_retries:
+                            try:
+                                issues = self.jira_client.get_all_issues_for_project(
+                                    project_key, expand_changelog=True
+                                )
+                                break
+                            except Exception as e:
+                                retry_count += 1
+                                retry_msg = f"Error fetching issues for {project_key} (attempt {retry_count}/{max_retries}): {str(e)}"
+                                logger.warning(retry_msg, extra={"markup": True})
+                                tracker.add_log_item(retry_msg)
+
+                                if retry_count >= max_retries:
+                                    logger.error(f"Failed to fetch issues after {max_retries} attempts: {str(e)}", extra={"markup": True})
+                                    tracker.add_log_item(f"Failed to fetch issues after {max_retries} attempts")
+                                    # Save what we have so far before potentially raising exception
+                                    if all_issues:
+                                        self._save_to_json(all_issues, f"jira_issues_{project_key}.json")
+                                        logger.info(f"Saved {len(all_issues)} issues collected before error occurred", extra={"markup": True})
+                                    # Continue with next batch instead of failing completely
+                                    issues = []
+                                    break
+
+                                # Exponential backoff: wait longer with each retry
+                                import time
+                                wait_time = 2 ** retry_count
+                                logger.info(f"Retrying in {wait_time} seconds...", extra={"markup": True})
+                                time.sleep(wait_time)
 
                         if not issues:
-                            break
+                            # Log message and move to next batch instead of breaking completely
+                            logger.warning(f"No issues retrieved for batch starting at {start_at}. Moving to next batch.", extra={"markup": True})
+                            tracker.add_log_item(f"Warning: No issues retrieved for batch starting at {start_at}")
+                            start_at += batch_size
+                            continue
 
                         # Add to overall list
                         all_issues.extend(issues)
@@ -193,15 +259,30 @@ class WorkPackageMigration:
 
                         start_at += batch_size
 
-            # Save issues to file for later reference
-            self._save_to_json(all_issues, f"jira_issues_{project_key}.json")
+            # Save issues to file for later reference, using safe save
+            try:
+                self._save_to_json(all_issues, f"jira_issues_{project_key}.json")
+                logger.info(f"Extracted and saved {len(all_issues)} issues from project {project_key}", extra={"markup": True})
+            except Exception as e:
+                logger.error(f"Failed to save issues to file: {str(e)}", extra={"markup": True})
+                # Try to save to alternate location as backup
+                backup_path = self.data_dir / f"jira_issues_{project_key}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                try:
+                    with open(backup_path, 'w') as f:
+                        json.dump(all_issues, f, indent=2)
+                    logger.info(f"Saved backup of issues to {backup_path}", extra={"markup": True})
+                except Exception as backup_error:
+                    logger.critical(f"Also failed to save backup: {str(backup_error)}", extra={"markup": True})
 
-            logger.info(f"Extracted {len(all_issues)} issues from project {project_key}", extra={"markup": True})
             return all_issues
 
         except Exception as e:
-            logger.error(f"Failed to extract issues from project {project_key}: {str(e)}", extra={"markup": True})
-            return []
+            error_msg = f"Failed to extract issues from project {project_key}: {str(e)}"
+            logger.error(error_msg, extra={"markup": True})
+            if project_tracker:
+                project_tracker.add_log_item(error_msg)
+            # Reraise with more context
+            raise RuntimeError(f"Jira issue extraction failed for project {project_key}: {str(e)}") from e
 
     def prepare_work_package(self, jira_issue: Dict[str, Any], project_id: int) -> Dict[str, Any]:
         """
@@ -364,6 +445,15 @@ class WorkPackageMigration:
                     logger.info(f"Last processed project was {last_processed_project} - will resume from there", extra={"markup": True})
             except Exception as e:
                 logger.warning(f"Error loading migration state: {str(e)}", extra={"markup": True})
+                # Create a backup of the corrupted state file if it exists
+                if os.path.exists(migration_state_file):
+                    backup_file = f"{migration_state_file}.bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    try:
+                        import shutil
+                        shutil.copy2(migration_state_file, backup_file)
+                        logger.info(f"Created backup of corrupted state file: {backup_file}", extra={"markup": True})
+                    except Exception as backup_err:
+                        logger.warning(f"Failed to create backup of state file: {str(backup_err)}", extra={"markup": True})
 
         # Filter unprocessed projects or start from the interrupted project
         remaining_projects = []
@@ -378,6 +468,8 @@ class WorkPackageMigration:
         # Initialize counters
         total_issues = 0
         total_created = 0
+        failed_projects = []
+        successful_projects = []
 
         # Process each project
         with ProgressTracker("Migrating projects", len(remaining_projects), "Recent Projects") as project_tracker:
@@ -395,6 +487,18 @@ class WorkPackageMigration:
                         }, f, indent=2)
                 except Exception as e:
                     logger.warning(f"Error saving migration state: {str(e)}", extra={"markup": True})
+                    # Try alternate location if main save fails
+                    try:
+                        alt_file = f"{migration_state_file}.latest"
+                        with open(alt_file, 'w') as f:
+                            json.dump({
+                                'processed_projects': list(processed_projects),
+                                'last_processed_project': project_key,
+                                'timestamp': datetime.now().isoformat()
+                            }, f, indent=2)
+                        logger.info(f"Saved migration state to alternate location: {alt_file}", extra={"markup": True})
+                    except Exception as alt_err:
+                        logger.error(f"Failed to save migration state to alternate location: {str(alt_err)}", extra={"markup": True})
 
                 # Find corresponding OpenProject project ID
                 project_mapping_entry = None
@@ -408,23 +512,34 @@ class WorkPackageMigration:
                     project_tracker.add_log_item(f"Skipped: {project_key} (no mapping)")
                     project_tracker.increment()
                     processed_projects.add(project_key)  # Mark as processed even if skipped
+                    failed_projects.append({"project_key": project_key, "reason": "no_mapping"})
                     continue
 
                 op_project_id = project_mapping_entry["openproject_id"]
 
                 # Extract issues for this project
-                issues = self.extract_jira_issues(project_key, project_tracker=project_tracker)
-                total_issues += len(issues)
+                try:
+                    issues = self.extract_jira_issues(project_key, project_tracker=project_tracker)
+                    total_issues += len(issues)
 
-                if not issues:
-                    logger.warning(f"No issues found for project {project_key}, skipping", extra={"markup": True})
-                    project_tracker.add_log_item(f"Skipped: {project_key} (no issues)")
+                    if not issues:
+                        logger.warning(f"No issues found for project {project_key}, skipping", extra={"markup": True})
+                        project_tracker.add_log_item(f"Skipped: {project_key} (no issues)")
+                        project_tracker.increment()
+                        processed_projects.add(project_key)  # Mark as processed even if no issues
+                        failed_projects.append({"project_key": project_key, "reason": "no_issues"})
+                        continue
+                except Exception as e:
+                    logger.error(f"Failed to extract issues for project {project_key}: {str(e)}", extra={"markup": True})
+                    project_tracker.add_log_item(f"Failed: {project_key} (issue extraction error)")
                     project_tracker.increment()
-                    processed_projects.add(project_key)  # Mark as processed even if no issues
+                    failed_projects.append({"project_key": project_key, "reason": "extraction_error", "error": str(e)})
+                    # Continue with next project instead of failing completely
                     continue
 
                 # Prepare work packages data
                 work_packages_data = []
+                preparation_errors = 0
                 logger.notice(f"Preparing {len(issues)} work packages for project {project_key}", extra={"markup": True})
 
                 for i, issue in enumerate(issues):
@@ -465,12 +580,18 @@ class WorkPackageMigration:
                             # Log the error with details about the issue
                             logger.error(f"Error preparing work package for issue {issue_key}: {str(e)}", extra={"markup": True})
                             logger.debug(f"Issue type: {type(issue)}", extra={"markup": True})
+                            preparation_errors += 1
                             # Continue with the next issue
                             continue
 
                     except Exception as e:
                         logger.error(f"Error processing issue at index {i}: {str(e)}", extra={"markup": True})
+                        preparation_errors += 1
                         continue
+
+                if preparation_errors > 0:
+                    logger.warning(f"Encountered {preparation_errors} errors while preparing work packages for {project_key}", extra={"markup": True})
+                    project_tracker.add_log_item(f"Warnings: {preparation_errors} preparation errors for {project_key}")
 
                 if hasattr(self, 'dry_run') and self.dry_run:
                     project_tracker.add_log_item(f"DRY RUN: Would create {len(issues)} work packages for {project_key}")
@@ -482,6 +603,7 @@ class WorkPackageMigration:
                     project_tracker.add_log_item(f"Skipped: {project_key} (no work packages prepared)")
                     project_tracker.increment()
                     processed_projects.add(project_key)  # Mark as processed even if no work packages
+                    failed_projects.append({"project_key": project_key, "reason": "preparation_failed"})
                     continue
 
                 # --- Enable required types for the project before import ---
@@ -546,13 +668,36 @@ class WorkPackageMigration:
                     end
                     """
 
-                    # Execute once with simplified error handling
-                    types_result = self.op_client.rails_client.execute(enable_types_header + enable_types_script)
+                    # Execute with retry logic
+                    max_retries = 3
+                    retry_count = 0
+                    types_result = None
 
-                    if types_result.get('status') == 'success':
+                    while retry_count < max_retries:
+                        try:
+                            types_result = self.op_client.rails_client.execute(enable_types_header + enable_types_script)
+                            break
+                        except Exception as e:
+                            retry_count += 1
+                            logger.warning(f"Error enabling types (attempt {retry_count}/{max_retries}): {str(e)}", extra={"markup": True})
+
+                            if retry_count >= max_retries:
+                                logger.error(f"Failed to enable types after {max_retries} attempts: {str(e)}", extra={"markup": True})
+                                project_tracker.add_log_item(f"Warning: Failed to enable types for {project_key}")
+                                break
+
+                            # Exponential backoff
+                            import time
+                            wait_time = 2 ** retry_count
+                            logger.info(f"Retrying in {wait_time} seconds...", extra={"markup": True})
+                            time.sleep(wait_time)
+
+                    if types_result and types_result.get('status') == 'success':
                         logger.info(f"Types setup complete for project {op_project_id}", extra={"markup": True})
                     else:
-                        logger.error(f"Error enabling types: {types_result.get('error')}", extra={"markup": True})
+                        error_msg = types_result.get('error') if types_result else "No result returned"
+                        logger.error(f"Error enabling types: {error_msg}", extra={"markup": True})
+                        project_tracker.add_log_item(f"Warning: Types may not be properly enabled for {project_key}")
                         # Continue despite errors - the bulk import might still work with default types
 
                 # Bulk create work packages using Rails client
@@ -603,6 +748,7 @@ class WorkPackageMigration:
                     project_tracker.add_log_item(f"Error: {project_key} (file transfer failed)")
                     project_tracker.increment()
                     processed_projects.add(project_key)
+                    failed_projects.append({"project_key": project_key, "reason": "file_transfer_failed"})
                     continue
 
                 # Create a simple Ruby script based on the example
@@ -714,6 +860,8 @@ class WorkPackageMigration:
                     logger.error(f"Rails error during work package creation: {result.get('error', 'Unknown error')}", extra={"markup": True})
                     project_tracker.add_log_item(f"Error: {project_key} (Rails execution failed)")
                     project_tracker.increment()
+                    processed_projects.add(project_key)
+                    failed_projects.append({"project_key": project_key, "reason": "rails_execution_failed"})
                     continue
 
                 # Try to get the result file from the container
@@ -797,6 +945,7 @@ class WorkPackageMigration:
 
                 # Mark project as successfully processed
                 processed_projects.add(project_key)
+                successful_projects.append({"project_key": project_key, "created_count": created_count})
 
         # Save the work package mapping
         mapping_file_path = os.path.join(self.data_dir, "work_package_mapping.json")
@@ -1129,19 +1278,172 @@ class WorkPackageMigration:
             Dictionary with migration results
         """
         logger.info("Starting work package migration", extra={"markup": True})
+        start_time = datetime.now()
 
-        # Set dry_run flag
-        self.dry_run = dry_run
+        try:
+            # Set dry_run flag
+            self.dry_run = dry_run
 
-        # Store mappings reference
-        self.mappings = mappings
+            # Store mappings reference
+            self.mappings = mappings
 
-        # Load mappings if provided
-        if mappings:
-            self.project_mapping = mappings.get_mapping("project") or {}
-            self.user_mapping = mappings.get_mapping("user") or {}
-            self.issue_type_mapping = mappings.get_mapping("issue_type") or {}
-            self.status_mapping = mappings.get_mapping("status") or {}
+            # Verify required mappings are available
+            missing_mappings = []
 
-        # Run the migration
-        return self.migrate_work_packages()
+            # Load mappings if provided
+            if mappings:
+                self.project_mapping = mappings.get_mapping("project") or {}
+                self.user_mapping = mappings.get_mapping("user") or {}
+                self.issue_type_mapping = mappings.get_mapping("issue_type") or {}
+                self.status_mapping = mappings.get_mapping("status") or {}
+
+                # Check if critical mappings are empty
+                if not self.project_mapping:
+                    missing_mappings.append("project")
+                if not self.issue_type_mapping:
+                    missing_mappings.append("issue_type")
+                if not self.status_mapping:
+                    missing_mappings.append("status")
+            else:
+                # Load mappings from disk again
+                self._load_mappings()
+
+                # Check if critical mappings are empty
+                if not self.project_mapping:
+                    missing_mappings.append("project")
+                if not self.issue_type_mapping:
+                    missing_mappings.append("issue_type")
+                if not self.status_mapping:
+                    missing_mappings.append("status")
+
+            if missing_mappings:
+                warning_message = f"Missing critical mappings: {', '.join(missing_mappings)}. Migration may fail or create incomplete data."
+                logger.warning(warning_message, extra={"markup": True})
+
+                # Create the var/data directory if it doesn't exist
+                if not os.path.exists(self.data_dir):
+                    os.makedirs(self.data_dir, exist_ok=True)
+
+                # Record the warning in a migration issues file
+                issues_file = os.path.join(self.data_dir, "migration_issues.json")
+                issues_data = {}
+
+                if os.path.exists(issues_file):
+                    try:
+                        with open(issues_file, 'r') as f:
+                            issues_data = json.load(f)
+                    except Exception as e:
+                        logger.warning(f"Error loading migration issues file: {str(e)}", extra={"markup": True})
+
+                # Update issues data
+                timestamp = datetime.now().isoformat()
+                if "work_package_migration" not in issues_data:
+                    issues_data["work_package_migration"] = []
+
+                issues_data["work_package_migration"].append({
+                    "timestamp": timestamp,
+                    "type": "warning",
+                    "message": warning_message,
+                    "missing_mappings": missing_mappings
+                })
+
+                try:
+                    with open(issues_file, 'w') as f:
+                        json.dump(issues_data, f, indent=2)
+                except Exception as e:
+                    logger.warning(f"Error writing to migration issues file: {str(e)}", extra={"markup": True})
+
+            # Run the migration with additional error handling
+            migration_results = {}
+            try:
+                migration_results = self.migrate_work_packages()
+            except Exception as e:
+                error_message = f"Work package migration failed with error: {str(e)}"
+                logger.error(error_message, extra={"markup": True})
+
+                # Record the error in the migration issues file
+                issues_file = os.path.join(self.data_dir, "migration_issues.json")
+                issues_data = {}
+
+                if os.path.exists(issues_file):
+                    try:
+                        with open(issues_file, 'r') as f:
+                            issues_data = json.load(f)
+                    except Exception as read_err:
+                        logger.warning(f"Error loading migration issues file: {str(read_err)}", extra={"markup": True})
+
+                # Update issues data
+                timestamp = datetime.now().isoformat()
+                if "work_package_migration" not in issues_data:
+                    issues_data["work_package_migration"] = []
+
+                issues_data["work_package_migration"].append({
+                    "timestamp": timestamp,
+                    "type": "error",
+                    "message": error_message,
+                    "error": str(e),
+                    "traceback": str(getattr(e, "__traceback__", "No traceback available"))
+                })
+
+                try:
+                    with open(issues_file, 'w') as f:
+                        json.dump(issues_data, f, indent=2)
+                except Exception as write_err:
+                    logger.warning(f"Error writing to migration issues file: {str(write_err)}", extra={"markup": True})
+
+                # Return error result
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "timestamp": datetime.now().isoformat(),
+                    "duration_seconds": (datetime.now() - start_time).total_seconds()
+                }
+
+            # Calculate duration
+            end_time = datetime.now()
+            duration_seconds = (end_time - start_time).total_seconds()
+
+            # Add duration and timestamps to results
+            migration_results["timestamp"] = end_time.isoformat()
+            migration_results["start_time"] = start_time.isoformat()
+            migration_results["duration_seconds"] = duration_seconds
+
+            # Add success status
+            migration_results["status"] = "success"
+
+            # Log summary
+            logger.success(f"Work package migration completed in {duration_seconds:.2f} seconds", extra={"markup": True})
+            if "total_created" in migration_results:
+                logger.success(f"Created {migration_results['total_created']} work packages", extra={"markup": True})
+
+            return migration_results
+
+        except Exception as e:
+            # Catch any unexpected errors
+            end_time = datetime.now()
+            duration_seconds = (end_time - start_time).total_seconds()
+
+            error_message = f"Unexpected error in work package migration: {str(e)}"
+            logger.critical(error_message, extra={"markup": True})
+
+            # Try to save error information
+            try:
+                error_file = os.path.join(self.data_dir, "migration_error.json")
+                with open(error_file, 'w') as f:
+                    json.dump({
+                        "component": "work_package_migration",
+                        "timestamp": datetime.now().isoformat(),
+                        "error": str(e),
+                        "traceback": str(getattr(e, "__traceback__", "No traceback available")),
+                        "duration_seconds": duration_seconds
+                    }, f, indent=2)
+                logger.info(f"Error details saved to {error_file}", extra={"markup": True})
+            except Exception as save_err:
+                logger.warning(f"Could not save error details: {str(save_err)}", extra={"markup": True})
+
+            return {
+                "status": "critical_error",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+                "duration_seconds": duration_seconds
+            }
