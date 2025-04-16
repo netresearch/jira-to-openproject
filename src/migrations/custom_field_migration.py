@@ -450,7 +450,8 @@ class CustomFieldMigration(BaseMigration):
             elif field_type == 'date':
                 default_value = f'Date.parse("{value}")' if value else 'nil'
 
-        command = f"""
+        # Header section with Python variable interpolation
+        header = f"""
         begin
           cf = CustomField.find_by(name: '{field_name}')
           if cf
@@ -468,13 +469,17 @@ class CustomFieldMigration(BaseMigration):
             # Set possible values for list type fields
             if cf.field_format == 'list'
               cf.possible_values = {possible_values_ruby}
+        """
+
+        # Main section without Python interpolation
+        main_section = """
               if cf.possible_values.nil? || cf.possible_values.empty?
                 cf.possible_values = ['Default option'] # Ensure default option exists
               end
             end
 
             if cf.save
-              puts "  Successfully created custom field '{field_name}' with ID: #{{cf.id}}"
+              puts "  Successfully created custom field '#{cf.name}' with ID: #{cf.id}"
 
               # Make it available for all work package types
               if cf.is_for_all?
@@ -485,13 +490,16 @@ class CustomFieldMigration(BaseMigration):
                 end
               end
             else
-              puts "  Error creating custom field '{field_name}': #{{cf.errors.full_messages.join(', ')}}"
+              puts "  Error creating custom field '#{cf.name}': #{cf.errors.full_messages.join(', ')}"
             end
           end
         rescue => e
-          puts "  An unexpected error occurred while processing '{field_name}': #{{e.message}}"
+          puts "  An unexpected error occurred while processing '#{e.message}'"
         end
         """
+
+        # Combine the sections
+        command = header + main_section
 
         result = self.rails_console.execute(command)
 
@@ -511,171 +519,372 @@ class CustomFieldMigration(BaseMigration):
 
         return result
 
-    def migrate_custom_fields_via_rails(self, window: int = 0, pane: int = 0) -> bool:
-        """
-        Migrate custom fields via direct Rails console execution.
+    def migrate_custom_fields_via_json(self, fields_to_migrate):
+        """Migrate custom fields by creating a JSON file and processing it in a Ruby script.
+
+        This is a more efficient approach than creating fields one by one via API calls.
 
         Args:
-            window: tmux window number (default: 0)
-            pane: tmux pane number (default: 0)
+            fields_to_migrate: List of custom field definitions to migrate
 
         Returns:
-            True if migration was successful, False otherwise
+            Boolean indicating success or failure
         """
-        self.logger.info("Starting direct custom fields migration via Rails console")
+        self.logger.info(f"Migrating {len(fields_to_migrate)} custom fields using batch migration")
 
-        existing_fields = self.op_client.get_custom_fields()
-        if existing_fields is None:
-            self.logger.error("Failed to retrieve existing custom fields from OpenProject. Defaulting to empty list.")
-            existing_fields = []
-        existing_names = [field.get('name') for field in existing_fields]
-        existing_name_to_field = {field.get('name'): field for field in existing_fields}
+        # Convert the fields to the format expected by the Ruby script
+        custom_fields_data = []
+        for field in fields_to_migrate:
+            if not field.get("jira_name"):
+                self.logger.warning(f"Skipping field without name: {field}")
+                continue
 
-        results = []
-        success_count = 0
-        error_count = 0
-        skipped_count = 0
-        fixed_count = 0
+            field_data = {
+                "name": field.get("jira_name"),
+                "field_format": field.get("openproject_type", "text"),
+                "is_required": field.get("is_required", False),
+                "is_for_all": field.get("is_for_all", True),
+                "type": field.get("openproject_field_type", "WorkPackageCustomField"),
+                "jira_id": field.get("jira_id"),  # For mapping back
+            }
 
-        previous_results_file = os.path.join(self.data_dir, "custom_field_migration_results.json")
-        previous_errors = {}
-        if os.path.exists(previous_results_file):
-            try:
-                with open(previous_results_file, "r") as f:
-                    previous_results = json.load(f)
-                    for result in previous_results:
-                        if result.get('status') == 'error':
-                            previous_errors[result.get('name')] = result
+            # Add possible values for list fields
+            if field_data["field_format"] == "list":
+                possible_values = field.get("possible_values", [])
+                # Ensure there's at least one default option if none exist
+                if not possible_values or not isinstance(possible_values, list):
+                    possible_values = ["Default option"]
+                field_data["possible_values"] = possible_values
 
-                    if previous_errors:
-                        self.logger.info(f"Found {len(previous_errors)} previously failed custom fields")
-            except Exception as e:
-                self.logger.warning(f"Could not load previous migration results: {str(e)}")
+            custom_fields_data.append(field_data)
 
-        fields_to_create = [field for field in self.mapping.values() if field["matched_by"] == "create"]
+        # Get the Rails client
+        rails_client = None
+        if self.rails_console:
+            rails_client = self.rails_console
+        elif hasattr(self.op_client, 'rails_client') and self.op_client.rails_client:
+            rails_client = self.op_client.rails_client
+            self.logger.info("Using Rails client from OpenProject client")
 
-        updated_count = 0
-        for field in list(fields_to_create):
-            field_name = field.get('openproject_name', field.get('jira_name', 'Unknown field'))
-            if field_name in existing_names:
-                field_id = field.get('jira_id')
-                if field_id in self.mapping:
-                    self.mapping[field_id]["matched_by"] = "name"
-                    self.mapping[field_id]["openproject_id"] = existing_name_to_field.get(field_name, {}).get('id')
-                    updated_count += 1
-
-        if updated_count > 0:
-            self.logger.info(f"Updated mapping for {updated_count} fields that already exist in OpenProject")
-            fields_to_create = [field for field in self.mapping.values() if field["matched_by"] == "create"]
-
-        self.logger.info(f"Found {len(fields_to_create)} custom fields to create")
-
-        with ProgressTracker(
-            description="Migrating custom fields",
-            total=len(fields_to_create) + updated_count,
-            log_title="Custom Fields Migration Results"
-        ) as tracker:
-            for i in range(updated_count):
-                tracker.increment()
-
-            for field in fields_to_create:
-                field_name = field.get('openproject_name', field.get('jira_name', 'Unknown field'))
-                tracker.update_description(f"Migrating field: {field_name[:20]}")
-
-                if field_name in existing_names:
-                    tracker.add_log_item(f"{field_name}: Skipped (already exists)")
-                    skipped_count += 1
-
-                    field_id = field.get('jira_id')
-                    if field_id in self.mapping:
-                        self.mapping[field_id]["matched_by"] = "name"
-                        self.mapping[field_id]["openproject_id"] = existing_name_to_field.get(field_name, {}).get('id')
-
-                    tracker.increment()
-                    results.append({
-                        'name': field_name,
-                        'status': 'skipped',
-                        'message': 'Already exists'
-                    })
-                    continue
-
-                if field_name in previous_errors:
-                    prev_error = previous_errors[field_name]
-                    self.logger.info(f"Field '{field_name}' failed in previous run: {prev_error.get('message')}")
-
-                    if field.get('openproject_type') == 'list' and (
-                        'possible_values' not in field or
-                        not field['possible_values'] or
-                        not isinstance(field['possible_values'], list)
-                    ):
-                        self.logger.info(f"Adding default option to list field '{field_name}'")
-                        field['possible_values'] = ["Default option"]
-                        fixed_count += 1
-
-                result = self.create_custom_field_via_rails(field)
-
-                if result['status'] == 'success':
-                    tracker.add_log_item(f"{field_name}: Created successfully")
-                    success_count += 1
-
-                    field_id = field.get('jira_id')
-                    if field_id in self.mapping:
-                        self.mapping[field_id]["matched_by"] = "created"
-                        self.mapping[field_id]["openproject_id"] = result.get('id')
-
-                    results.append({
-                        'name': field_name,
-                        'status': 'success',
-                        'message': 'Created successfully',
-                        'id': result.get('id')
-                    })
-                else:
-                    if 'errors' in result and isinstance(result['errors'], list):
-                        error_message = ', '.join(result['errors'])
-                    elif 'validation_errors' in result:
-                        error_message = str(result['validation_errors'])
-                    else:
-                        error_message = result.get('error', 'Unknown error')
-
-                    tracker.add_log_item(f"{field_name}: Error - {error_message}")
-                    error_count += 1
-                    results.append({
-                        'name': field_name,
-                        'status': 'error',
-                        'message': error_message
-                    })
-
-                tracker.increment()
-
-        self._save_to_json(self.mapping, "custom_field_mapping.json")
-
-        self.logger.info("\nCustom Fields Rails Migration Summary:")
-        self.logger.info(f"Total fields processed: {len(fields_to_create) + updated_count}")
-        self.logger.info(f"Successfully created: {success_count}")
-        self.logger.info(f"Skipped (already exists): {skipped_count + updated_count}")
-        self.logger.info(f"Fixed before migration: {fixed_count}")
-        self.logger.info(f"Failed: {error_count}")
-
-        results_file = os.path.join(self.data_dir, "custom_field_migration_results.json")
-        with open(results_file, "w") as f:
-            json.dump(results, f, indent=2)
-        self.logger.info(f"Saved migration results to {results_file}")
-
-        if error_count > 0:
-            self.logger.error(f"{error_count} custom fields failed to migrate. Check {results_file} for details.")
+        if not rails_client:
+            self.logger.error("No Rails client available for execution")
             return False
 
-        self.logger.success("Custom fields migration via Rails console completed successfully.")
-        return True
+        # First, write the custom fields data to a JSON file
+        import tempfile
+        import os
+
+        # Generate unique filename
+        timestamp = int(time.time())
+        temp_file_path = os.path.join(self.data_dir, f"custom_fields_batch_{timestamp}.json")
+        self.logger.info(f"Writing {len(custom_fields_data)} custom fields to {temp_file_path}")
+
+        try:
+            # Write the data to the JSON file
+            with open(temp_file_path, "w", encoding="utf-8") as f:
+                json.dump(custom_fields_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self.logger.error(f"Error creating JSON file: {e}")
+            return False
+
+        # Define the path for the file inside the container
+        container_temp_path = f"/tmp/custom_fields_batch_{timestamp}.json"
+
+        # Copy the file to the container
+        if not rails_client.transfer_file_to_container(temp_file_path, container_temp_path):
+            self.logger.error(f"Failed to transfer custom fields file to container")
+            return False
+
+        self.logger.success(f"Successfully copied custom fields data to container")
+
+        # Define result file paths
+        result_file_container = f"/tmp/cf_result_{timestamp}.json"
+        result_file_local = os.path.join(self.data_dir, f"cf_result_{timestamp}.json")
+
+        # Create the Ruby script (separating Python variables and Ruby code)
+
+        # Python variables
+        data_file_path = container_temp_path
+        result_file_path = result_file_container
+
+        # Header with Python interpolation
+        header_script = f"""
+        # Ruby script to process custom fields from JSON file
+        # Data file: {data_file_path}
+        # Result file: {result_file_path}
+        """
+
+        # Main Ruby script (no Python interpolation)
+        main_script = """
+        begin
+          require 'json'
+
+          # Load the data from the JSON file
+          begin
+            file_content = File.read(data_file_path)
+            custom_fields_data = JSON.parse(file_content)
+            puts "Loaded #{custom_fields_data.length} custom fields from JSON file"
+          rescue => e
+            puts "Error loading custom fields data: #{e.message}"
+            return { "status" => "error", "message" => "Failed to load JSON data: #{e.message}" }
+          end
+
+          # Process each custom field
+          results = []
+          success_count = 0
+          existing_count = 0
+          error_count = 0
+
+          custom_fields_data.each_with_index do |field_data, index|
+            begin
+              field_name = field_data['name']
+
+              # Show progress indicator
+              if (index + 1) % 50 == 0 || index + 1 == custom_fields_data.count
+                puts "  Progress: #{index + 1}/#{custom_fields_data.count} fields"
+              end
+
+              # Check if the field already exists
+              cf = CustomField.find_by(name: field_name)
+              if cf
+                results << {
+                  'name' => field_name,
+                  'status' => 'existing',
+                  'id' => cf.id,
+                  'jira_id' => field_data['jira_id']
+                }
+                existing_count += 1
+                next
+              end
+
+              # Create a new custom field
+              cf = CustomField.new(
+                name: field_name,
+                field_format: field_data['field_format'],
+                is_required: field_data['is_required'],
+                is_for_all: field_data['is_for_all'],
+                type: field_data['type']
+              )
+
+              # Set possible values for list fields
+              if cf.field_format == 'list' && field_data['possible_values']
+                # Handle possible values properly - it could be an array or a hash
+                values = field_data['possible_values']
+                if values.is_a?(Hash)
+                  # Convert hash to array of values if needed
+                  cf.possible_values = values.values.map { |value| value.to_s.strip }
+                elsif values.is_a?(Array)
+                  # Ensure all values are strings to prevent 'strip' errors on non-string objects
+                  cf.possible_values = values.map { |value| value.to_s.strip }
+                else
+                  # Fallback to single value as string
+                  cf.possible_values = [values.to_s.strip]
+                end
+
+                # Ensure we have at least one value
+                if cf.possible_values.nil? || cf.possible_values.empty?
+                  cf.possible_values = ['Default option']
+                end
+              end
+
+              # Save the custom field
+              if cf.save
+                # Make it available for all work package types if is_for_all is true
+                if cf.is_for_all?
+                  Type.all.each do |type|
+                    type.custom_fields << cf unless type.custom_fields.include?(cf)
+                    type.save!
+                  end
+                end
+
+                results << {
+                  'name' => field_name,
+                  'status' => 'created',
+                  'id' => cf.id,
+                  'jira_id' => field_data['jira_id']
+                }
+                success_count += 1
+              else
+                error_message = cf.errors.full_messages.join(', ')
+                results << {
+                  'name' => field_name,
+                  'status' => 'error',
+                  'message' => error_message,
+                  'jira_id' => field_data['jira_id']
+                }
+                error_count += 1
+              end
+            rescue => e
+              error_field = field_data['name'] || 'Unknown field'
+              results << {
+                'name' => error_field,
+                'status' => 'error',
+                'message' => e.message,
+                'jira_id' => field_data['jira_id']
+              }
+              error_count += 1
+            end
+          end
+
+          # Print summary to console
+          puts "\nMigration complete: Created: #{success_count}, Existing: #{existing_count}, Errors: #{error_count}"
+
+          # Write results to file
+          result = {
+            'status' => 'success',
+            'created' => results.select { |r| r['status'] == 'created' },
+            'existing' => results.select { |r| r['status'] == 'existing' },
+            'errors' => results.select { |r| r['status'] == 'error' },
+            'created_count' => success_count,
+            'existing_count' => existing_count,
+            'error_count' => error_count,
+            'total' => custom_fields_data.length
+          }
+
+          # Save results to file
+          File.write(result_file_path, result.to_json)
+          puts "Results written to #{result_file_path}"
+
+          # Return results
+          result
+        rescue Exception => e
+          error_result = {
+            'status' => 'error',
+            'message' => e.message,
+            'backtrace' => e.backtrace[0..5]
+          }
+
+          # Try to save error to file
+          begin
+            File.write(result_file_path, error_result.to_json)
+          rescue => write_error
+            puts "Failed to write error to file: #{write_error.message}"
+          end
+
+          # Return error result
+          error_result
+        end
+        """
+
+        # Execute the script
+        self.logger.info("Executing Ruby script with custom field data")
+
+        # Combine header and main script, define variables
+        complete_script = f"""
+        # Ruby variables from Python
+        data_file_path = '{data_file_path}'
+        result_file_path = '{result_file_path}'
+
+        {main_script}
+        """
+
+        # Execute the script
+        result = rails_client.execute(complete_script)
+
+        if result.get('status') != 'success':
+            self.logger.error(f"Error executing Ruby script: {result.get('error', 'Unknown error')}")
+            return False
+
+        # Initialize variables
+        created_count = 0
+        error_count = 0
+        existing_count = 0
+        created_fields = []
+        results = []
+
+        # Try to get results from direct output first
+        output = result.get('output')
+        if isinstance(output, dict) and output.get('status') == 'success':
+            results = []
+            results.extend(output.get('created', []))
+            results.extend(output.get('existing', []))
+            results.extend(output.get('errors', []))
+
+            created_count = output.get('created_count', 0)
+            existing_count = output.get('existing_count', 0)
+            error_count = output.get('error_count', 0)
+
+            self.logger.info(f"Retrieved results with {len(results)} entries")
+        else:
+            # If direct output doesn't work, try to get the result file
+            if rails_client.transfer_file_from_container(result_file_container, result_file_local):
+                try:
+                    with open(result_file_local, 'r') as f:
+                        result_data = json.load(f)
+
+                        if result_data.get('status') == 'success':
+                            results = []
+                            results.extend(result_data.get('created', []))
+                            results.extend(result_data.get('existing', []))
+                            results.extend(result_data.get('errors', []))
+
+                            created_count = result_data.get('created_count', 0)
+                            existing_count = result_data.get('existing_count', 0)
+                            error_count = result_data.get('error_count', 0)
+
+                            self.logger.info(f"Retrieved results with {len(results)} entries")
+                        else:
+                            self.logger.error(f"Error in result data: {result_data.get('message', 'Unknown error')}")
+                            return False
+                except Exception as e:
+                    self.logger.error(f"Error processing result file: {str(e)}")
+                    return False
+            else:
+                self.logger.error("Failed to retrieve result file from container")
+                return False
+
+        # Process the results
+        for result_entry in results:
+            status = result_entry.get('status')
+            jira_id = result_entry.get('jira_id')
+            name = result_entry.get('name')
+
+            if status == 'created':
+                if jira_id and jira_id in self.mapping:
+                    self.mapping[jira_id]["matched_by"] = "created"
+                    self.mapping[jira_id]["openproject_id"] = result_entry.get('id')
+                    created_fields.append(name)
+            elif status == 'existing':
+                if jira_id and jira_id in self.mapping:
+                    self.mapping[jira_id]["matched_by"] = "name"
+                    self.mapping[jira_id]["openproject_id"] = result_entry.get('id')
+            elif status == 'error':
+                self.logger.error(f"Error creating field '{name}': {result_entry.get('message')}")
+
+        # Save the updated mapping
+        self._save_to_json(self.mapping, "custom_field_mapping.json")
+
+        # Print summary
+        self.logger.info("\nCustom Fields JSON Migration Summary:")
+        self.logger.info(f"Total fields processed: {len(results)}")
+        self.logger.info(f"Successfully created: {created_count}")
+        self.logger.info(f"Already existing: {existing_count}")
+        self.logger.info(f"Failed: {error_count}")
+
+        if error_count > 0:
+            self.logger.warning(f"{error_count} custom fields failed to create")
+
+        if created_count > 0:
+            self.logger.success(f"Successfully created {created_count} custom fields")
+            return True
+        elif error_count == 0:
+            self.logger.info("No new custom fields created, but no errors either")
+            return True
+        else:
+            self.logger.error("Failed to create any custom fields")
+            return False
 
     def migrate_custom_fields(self, direct_migration=False, force=False):
         """Migrate custom fields from Jira to OpenProject
 
         Args:
-            direct_migration (bool): Whether to use direct Rails console migration
+            direct_migration (bool): Deprecated parameter, kept for backward compatibility
             force (bool): If True, force re-extraction of data from both systems
+
+        Returns:
+            Boolean indicating success or failure
         """
-        # Use the mapping analysis to decide whether to do direct migration or generate a Ruby script
+        # Use the mapping analysis to decide whether to migrate
         analysis = self.analyze_custom_field_mapping()
 
         if not analysis:
@@ -702,311 +911,12 @@ class CustomFieldMigration(BaseMigration):
 
         self.logger.info(f"Found {len(fields_to_create)} custom fields to create")
 
-        if direct_migration and self.rails_console:
-            self.logger.info("Using direct Rails console migration method")
-            return self.migrate_custom_fields_via_rails()
+        # The direct_migration parameter is deprecated
+        if direct_migration:
+            self.logger.warning("The 'direct_migration' parameter is deprecated. Always using JSON-based approach.")
 
-        # Use JSON-based approach
+        # Use JSON-based approach for all migrations
         return self.migrate_custom_fields_via_json(fields_to_create)
-
-    def migrate_custom_fields_via_json(self, fields_to_migrate):
-        """Migrate custom fields by creating a JSON file and processing it in a Ruby script.
-
-        This is a more efficient approach than creating fields one by one via API calls.
-        """
-        self.logger.info(f"Migrating {len(fields_to_migrate)} custom fields using Ruby migration")
-
-        # Convert the fields to the format expected by the Ruby script
-        custom_fields_data = []
-        for field in fields_to_migrate:
-            if not field.get("jira_name"):
-                self.logger.warning(f"Skipping field without name: {field}")
-                continue
-
-            field_data = {
-                "name": field.get("jira_name"),
-                "field_format": field.get("field_format", "string"),
-                "is_required": field.get("is_required", False),
-                "is_for_all": field.get("is_for_all", True),
-                "type": field.get("type", "WorkPackageCustomField"),
-                "jira_id": field.get("jira_id"),  # For mapping back
-            }
-
-            # Add possible values for list fields
-            if field_data["field_format"] == "list":
-                possible_values = field.get("possible_values", [])
-                # Ensure there's at least one default option if none exist
-                if not possible_values or not isinstance(possible_values, list):
-                    possible_values = ["Default option"]
-                field_data["possible_values"] = possible_values
-
-            custom_fields_data.append(field_data)
-
-        # Save the custom fields data to a JSON file
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(custom_fields_data, f, indent=2)
-            json_file_path = f.name
-
-        self.logger.info(f"Created JSON file with {len(custom_fields_data)} custom field definitions")
-
-        # Get the Rails client
-        rails_client = None
-        if self.rails_console:
-            rails_client = self.rails_console
-        elif hasattr(self.op_client, 'rails_client') and self.op_client.rails_client:
-            rails_client = self.op_client.rails_client
-            self.logger.info("Using Rails client from OpenProject client")
-
-        if not rails_client:
-            self.logger.error("No Rails client available for execution")
-            return False
-
-        # First, transfer the JSON file to the container
-        timestamp = int(time.time())
-        container_json_path = f"/tmp/custom_fields_{timestamp}.json"
-        if not rails_client.transfer_file_to_container(json_file_path, container_json_path):
-            self.logger.error("Failed to transfer JSON file to container")
-            return False
-
-        # Define a results file path in the container
-        results_file_path = f"/tmp/custom_fields_results_{timestamp}.json"
-        log_file_path = f"/tmp/custom_fields_log_{timestamp}.txt"
-
-        # Create the header script with Python f-string variables
-        header_script = f"""
-# Configuration variables
-container_json_path = '{container_json_path}'
-results_file_path = '{results_file_path}'
-log_file_path = '{log_file_path}'
-"""
-
-        # Main Ruby script without f-strings
-        main_script = """
-begin
-  # Open a log file for detailed output
-  log_file = File.open(log_file_path, 'w')
-
-  # Function to write to log file instead of console
-  def log(message, log_file)
-    log_file.puts(message)
-    log_file.flush
-  end
-
-  # Read the JSON file
-  require 'json'
-  log("Reading custom field definitions from #{container_json_path}...", log_file)
-  custom_fields_data = JSON.parse(File.read(container_json_path))
-  puts "Processing #{custom_fields_data.count} custom fields..."
-
-  # Process each custom field
-  results = []
-  success_count = 0
-  existing_count = 0
-  error_count = 0
-
-  custom_fields_data.each_with_index do |field_data, index|
-    begin
-      field_name = field_data['name']
-      log("Processing field: #{field_name}", log_file)
-
-      # Show minimal progress indicator every 50 fields or at the end
-      if (index + 1) % 50 == 0 || index + 1 == custom_fields_data.count
-        puts "  Progress: #{index + 1}/#{custom_fields_data.count} fields"
-      end
-
-      # Check if the field already exists
-      cf = CustomField.find_by(name: field_name)
-      if cf
-        log("  Custom field '#{field_name}' already exists with ID #{cf.id}", log_file)
-        results << {
-          'name' => field_name,
-          'status' => 'existing',
-          'id' => cf.id,
-          'jira_id' => field_data['jira_id']
-        }
-        existing_count += 1
-        next
-      end
-
-      # Create a new custom field
-      log("  Creating custom field '#{field_name}'...", log_file)
-      cf = CustomField.new(
-        name: field_name,
-        field_format: field_data['field_format'],
-        is_required: field_data['is_required'],
-        is_for_all: field_data['is_for_all'],
-        type: field_data['type']
-      )
-
-      # Set possible values for list fields
-      if cf.field_format == 'list' && field_data['possible_values']
-        cf.possible_values = field_data['possible_values']
-        if cf.possible_values.nil? || cf.possible_values.empty?
-          cf.possible_values = ['Default option']
-        end
-      end
-
-      # Save the custom field
-      if cf.save
-        log("  Successfully created custom field '#{field_name}' with ID #{cf.id}", log_file)
-
-        # Make it available for all work package types if is_for_all is true
-        if cf.is_for_all?
-          log("  Activating for all work package types...", log_file)
-          Type.all.each do |type|
-            type.custom_fields << cf unless type.custom_fields.include?(cf)
-            type.save!
-          end
-        end
-
-        results << {
-          'name' => field_name,
-          'status' => 'created',
-          'id' => cf.id,
-          'jira_id' => field_data['jira_id']
-        }
-        success_count += 1
-      else
-        error_message = cf.errors.full_messages.join(', ')
-        log("  Error creating custom field '#{field_name}': #{error_message}", log_file)
-        results << {
-          'name' => field_name,
-          'status' => 'error',
-          'message' => error_message,
-          'jira_id' => field_data['jira_id']
-        }
-        error_count += 1
-      end
-    rescue => e
-      error_field = field_data['name'] || 'Unknown field'
-      log("  Error processing field '#{error_field}': #{e.message}", log_file)
-      log("  #{e.backtrace.join("\n")}", log_file)
-      results << {
-        'name' => error_field,
-        'status' => 'error',
-        'message' => e.message,
-        'jira_id' => field_data['jira_id']
-      }
-      error_count += 1
-    end
-  end
-
-  # Write the results to a JSON file
-  File.write(results_file_path, results.to_json)
-  log("Results written to #{results_file_path}", log_file)
-
-  # Print just a summary to console
-  puts "\nMigration complete: Created: #{success_count}, Existing: #{existing_count}, Errors: #{error_count}"
-  puts "  Log: #{log_file_path}"
-
-  # Close log file
-  log_file.close
-rescue => e
-  puts "Error: #{e.message}"
-  # Try to log the error to the file
-  begin
-    File.open(log_file_path, 'a') do |f|
-      f.puts("FATAL ERROR: #{e.message}")
-      f.puts(e.backtrace.join("\n"))
-    end
-  rescue
-    # If logging fails, at least show the error in console
-    puts e.backtrace.join("\n")
-  end
-end
-"""
-
-        # Combine the scripts
-        ruby_command = header_script + main_script
-
-        # Execute the Ruby command
-        self.logger.info(f"Executing Ruby command to process fields from {container_json_path}")
-        result = rails_client.execute(ruby_command)
-
-        # Also retrieve the log file from the container
-        local_log_path = os.path.join(self.output_dir, f"custom_fields_log_{timestamp}.txt")
-        rails_client.transfer_file_from_container(log_file_path, local_log_path)
-        self.logger.info(f"Detailed logs saved to {local_log_path}")
-
-        # Clean up local temporary file
-        try:
-            os.unlink(json_file_path)
-        except Exception as e:
-            self.logger.debug(f"Error cleaning up temporary JSON file: {e}")
-
-        # Check if execution was successful
-        if result.get('status') != 'success':
-            self.logger.error(f"Error executing Ruby command: {result.get('error', 'Unknown error')}")
-            return False
-
-        # Get the results file from the container
-        local_results_path = os.path.join(self.output_dir, f"custom_fields_results_{timestamp}.json")
-
-        if not rails_client.transfer_file_from_container(results_file_path, local_results_path):
-            self.logger.warning("Could not retrieve results file from container")
-            # Try to parse results from stdout
-            output = result.get('output', '')
-            # Check if we can find the summary line in the output
-            if "Migration complete" in output:
-                self.logger.info(f"Results detected in output: {output}")
-                return True
-            else:
-                self.logger.error("Could not extract results from output")
-                return False
-
-        # Read the results file
-        try:
-            with open(local_results_path, 'r') as f:
-                results = json.load(f)
-            self.logger.info(f"Retrieved results file with {len(results)} entries")
-
-            # Process the results
-            success_count = 0
-            error_count = 0
-            created_fields = []
-
-            for result_entry in results:
-                status = result_entry.get('status')
-                jira_id = result_entry.get('jira_id')
-                name = result_entry.get('name')
-
-                if status == 'created' or status == 'existing':
-                    if jira_id and jira_id in self.mapping:
-                        self.mapping[jira_id]["matched_by"] = status
-                        self.mapping[jira_id]["openproject_id"] = result_entry.get('id')
-                        if status == 'created':
-                            success_count += 1
-                            created_fields.append(name)
-                elif status == 'error':
-                    error_count += 1
-                    self.logger.error(f"Error creating field '{name}': {result_entry.get('message')}")
-
-            # Save the updated mapping
-            self._save_to_json(self.mapping, "custom_field_mapping.json")
-
-            # Print summary
-            self.logger.info("\nCustom Fields JSON Migration Summary:")
-            self.logger.info(f"Total fields processed: {len(results)}")
-            self.logger.info(f"Successfully created: {success_count}")
-            self.logger.info(f"Failed: {error_count}")
-
-            if error_count > 0:
-                self.logger.warning(f"{error_count} custom fields failed to create")
-
-            if success_count > 0:
-                self.logger.success(f"Successfully created {success_count} custom fields")
-                return True
-            elif error_count == 0:
-                self.logger.info("No new custom fields created, but no errors either")
-                return True
-            else:
-                self.logger.error("Failed to create any custom fields")
-                return False
-
-        except Exception as e:
-            self.logger.error(f"Error processing results: {e}")
-            return False
 
     def analyze_custom_field_mapping(self) -> Dict[str, Any]:
         """
