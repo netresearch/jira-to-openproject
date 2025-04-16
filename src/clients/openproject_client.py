@@ -558,30 +558,56 @@ class OpenProjectClient:
         logger.debug("All caches have been cleared.")
 
     def update_project(
-        self, project_id: int, name: str = None, description: str = None
+        self, project_id: int, data_or_name=None, description=None
     ) -> Optional[Dict[str, Any]]:
         """Update an existing project in OpenProject.
 
         Args:
             project_id: The ID of the project to update
-            name: The new name for the project
-            description: The new description for the project
+            data_or_name: Either a dictionary of data to update or the name (for backward compatibility)
+            description: The description (used only with backward compatibility mode)
 
         Returns:
             The updated project or None if update failed
         """
         try:
-            data = {}
-            if name:
-                data["name"] = name
-            if description:
-                data["description"] = {"raw": description}
+            # Handle backward compatibility for old method signature
+            if not isinstance(data_or_name, dict):
+                logger.warning("Using deprecated update_project method signature with separate parameters")
+                name = data_or_name
+                data = {}
+                if name:
+                    data["name"] = name
+                if description:
+                    data["description"] = {"raw": description}
+            else:
+                data = data_or_name
 
             if not data:  # Nothing to update
                 return None
 
-            logger.debug(f"Updating project {project_id} with data: {json.dumps(data)}")
-            return self._request("PATCH", f"/projects/{project_id}", data=data)
+            # Format the data - handle parent as _links
+            formatted_data = {}
+
+            # Copy basic fields
+            if "name" in data:
+                formatted_data["name"] = data["name"]
+            if "description" in data:
+                if isinstance(data["description"], dict) and "raw" in data["description"]:
+                    formatted_data["description"] = data["description"]
+                else:
+                    formatted_data["description"] = {"raw": data["description"]}
+
+            # Handle parent project as _links
+            if "parent" in data and data["parent"]:
+                formatted_data["_links"] = {
+                    "parent": {
+                        "href": f"/api/v3/projects/{data['parent']}"
+                    }
+                }
+
+            logger.debug(f"Updating project {project_id} with data: {json.dumps(formatted_data)}")
+            return self._request("PATCH", f"/projects/{project_id}", data=formatted_data)
         except Exception as e:
             if hasattr(e, 'response') and e.response is not None:
                 try:
@@ -591,6 +617,57 @@ class OpenProjectClient:
                     logger.error(f"Server response text: {e.response.text}")
 
             logger.error(f"Failed to update project {project_id}: {str(e)}")
+            return None
+
+    def find_project_by_name_or_identifier(
+        self, name: str, identifier: str = None
+    ) -> Optional[Dict[str, Any]]:
+        """Find a project by name or identifier.
+
+        Args:
+            name: The name of the project
+            identifier: The identifier of the project, if available
+
+        Returns:
+            The project data if found, None otherwise
+        """
+        try:
+            # Get all projects if not cached
+            if not self._projects_cache:
+                self.get_projects()
+
+            # First try exact identifier match (most reliable)
+            if identifier:
+                for project in self._projects_cache:
+                    if project.get("identifier") == identifier:
+                        logger.debug(f"Found project with identifier '{identifier}'")
+                        return project
+
+            # Then try exact name match
+            for project in self._projects_cache:
+                if project.get("name") == name:
+                    logger.debug(f"Found project with name '{name}'")
+                    return project
+
+            # If no exact matches, try case-insensitive name match
+            name_lower = name.lower()
+            for project in self._projects_cache:
+                if project.get("name", "").lower() == name_lower:
+                    logger.debug(f"Found project with case-insensitive name '{name}'")
+                    return project
+
+            # Try case-insensitive identifier match as last resort
+            if identifier:
+                identifier_lower = identifier.lower()
+                for project in self._projects_cache:
+                    if project.get("identifier", "").lower() == identifier_lower:
+                        logger.debug(f"Found project with case-insensitive identifier '{identifier}'")
+                        return project
+
+            logger.debug(f"No project found with name '{name}' or identifier '{identifier}'")
+            return None
+        except Exception as e:
+            logger.error(f"Error finding project by name/identifier: {str(e)}")
             return None
 
     def get_work_package_types(self) -> List[Dict[str, Any]]:
@@ -1252,3 +1329,70 @@ class OpenProjectClient:
         except Exception as e:
             logger.error(f"Failed to get custom fields: {str(e)}")
             return []
+
+    def update_project_custom_field(self, project_id: int, custom_field_id: int, value: Any) -> bool:
+        """
+        Update a custom field value for a project.
+
+        Args:
+            project_id: The ID of the project
+            custom_field_id: The ID of the custom field
+            value: The value to set for the custom field
+
+        Returns:
+            True if successful, False otherwise
+        """
+        logger.info(f"Setting custom field {custom_field_id} for project {project_id} to '{value}'")
+
+        try:
+            # If we have a rails client, use it for direct custom field updates
+            # as the API doesn't always support all custom field types
+            if self.rails_client:
+                ruby_script = f"""
+                project = Project.find({project_id})
+                custom_field = CustomField.find({custom_field_id})
+
+                if project && custom_field
+                  project.custom_field_values = {{custom_field.id => '{value}'}}
+                  if project.save
+                    puts "Custom field updated successfully"
+                    true
+                  else
+                    puts "Failed to update custom field: #{project.errors.full_messages.join(', ')}"
+                    false
+                  end
+                else
+                  puts "Project or custom field not found"
+                  false
+                end
+                """
+                result = self.rails_client.execute(ruby_script)
+                success = "Custom field updated successfully" in result
+
+                if success:
+                    logger.info(f"Successfully updated custom field {custom_field_id} for project {project_id}")
+                    return True
+                else:
+                    logger.error(f"Failed to update custom field via Rails: {result}")
+                    return False
+
+            # Fall back to API if rails client not available
+            # This assumes the custom field is available via the API
+            data = {
+                "customField" + str(custom_field_id): {
+                    "raw": value
+                }
+            }
+
+            response = self._request("PATCH", f"projects/{project_id}", data=data)
+
+            if response and "_type" in response and response["_type"] == "Project":
+                logger.info(f"Successfully updated custom field {custom_field_id} for project {project_id}")
+                return True
+            else:
+                logger.error(f"Failed to update custom field via API: {response}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error updating custom field: {str(e)}")
+            return False

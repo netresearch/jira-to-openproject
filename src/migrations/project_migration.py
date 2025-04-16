@@ -29,6 +29,7 @@ OP_PROJECTS_FILE = "openproject_projects.json"
 ACCOUNT_MAPPING_FILE = "account_mapping.json"
 PROJECT_ACCOUNT_MAPPING_FILE = "project_account_mapping.json"
 TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
+COMPANY_MAPPING_FILE = "company_mapping.json"
 
 
 class ProjectMigration(BaseMigration):
@@ -43,6 +44,7 @@ class ProjectMigration(BaseMigration):
 
     The structure created in OpenProject is:
     - Top-level projects representing Tempo companies (created by company_migration.py)
+    - Jira projects as sub-projects under their respective Tempo company parent projects
     - Projects with account information stored in custom fields
     """
 
@@ -66,6 +68,7 @@ class ProjectMigration(BaseMigration):
         self.project_mapping = {}
         self.account_mapping = {}
         self.project_account_mapping = {}
+        self.company_mapping = {}
         self._created_projects = 0
 
         self.account_custom_field_id = None
@@ -74,6 +77,7 @@ class ProjectMigration(BaseMigration):
         self.jira_projects = self._load_from_json(JIRA_PROJECTS_FILE) or []
         self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or []
         self.project_mapping = self._load_from_json(PROJECT_MAPPING_FILE) or {}
+        self.company_mapping = self._load_from_json(COMPANY_MAPPING_FILE) or {}
 
     def extract_jira_projects(self, force: bool = False) -> List[Dict[str, Any]]:
         """
@@ -142,6 +146,23 @@ class ProjectMigration(BaseMigration):
             return self.account_mapping
         else:
             logger.warning("No account mapping found. Account information won't be migrated.")
+            return {}
+
+    def load_company_mapping(self) -> Dict[str, Any]:
+        """
+        Load the company mapping created by the company migration.
+
+        Returns:
+            Dictionary mapping Tempo company IDs to OpenProject project IDs
+        """
+        self.company_mapping = self._load_from_json(COMPANY_MAPPING_FILE, default={})
+        if self.company_mapping:
+            company_count = len(self.company_mapping)
+            matched_count = sum(1 for c in self.company_mapping.values() if c.get("openproject_id"))
+            logger.info(f"Loaded company mapping with {company_count} entries, {matched_count} matched to OpenProject.")
+            return self.company_mapping
+        else:
+            logger.warning("No company mapping found. Projects won't be organized hierarchically.")
             return {}
 
     def extract_project_account_mapping(self, force: bool = False) -> Dict[str, Any]:
@@ -213,8 +234,67 @@ class ProjectMigration(BaseMigration):
             logger.error(f"Error extracting project-account mapping: {str(e)}", exc_info=True)
             return {}
 
+    def find_parent_company_for_project(self, jira_project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Find the appropriate parent company for a Jira project.
+
+        This looks for a Tempo company that should be the parent of this project
+        based on project account associations.
+
+        Args:
+            jira_project: The Jira project to find a parent company for
+
+        Returns:
+            A dictionary with company information or None if no parent found
+        """
+        jira_key = jira_project.get("key")
+
+        # Check if this project has associated accounts
+        if not self.project_account_mapping or jira_key not in self.project_account_mapping:
+            logger.debug(f"No account mapping found for project {jira_key}")
+            return None
+
+        # Get the associated accounts
+        project_accounts = self.project_account_mapping.get(jira_key, [])
+        if not project_accounts:
+            logger.debug(f"Project {jira_key} has no associated accounts")
+            return None
+
+        # Handle case where project_accounts is an integer or string instead of a list
+        if isinstance(project_accounts, (int, str)):
+            account_id = str(project_accounts)
+            # Search for a company with this account ID
+            for company_id, company_data in self.company_mapping.items():
+                if not company_data.get("openproject_id"):
+                    continue
+                # Match by account ID (simplified approach)
+                if account_id == str(company_data.get("tempo_id", "")):
+                    return company_data
+            return None
+
+        # Use the first account's company as the parent
+        # Logic could be enhanced for multiple accounts if needed
+        for account in project_accounts:
+            account_id = account.get("id")
+            account_name = account.get("name", "")
+            account_key = account.get("key", "")
+
+            # Search for a company with this account
+            for company_id, company_data in self.company_mapping.items():
+                if not company_data.get("openproject_id"):
+                    continue
+
+                # Match by account name or key (simplified approach - could be improved)
+                if (account_key and account_key.startswith(company_data.get("tempo_key", ""))) or \
+                   (account_name and account_name.startswith(company_data.get("tempo_name", ""))):
+                    return company_data
+
+        logger.debug(f"No parent company found for project {jira_key}")
+        return None
+
     def create_project_in_openproject(
-        self, jira_project: Dict[str, Any], account_id: Optional[int] = None
+        self, jira_project: Dict[str, Any], account_id: Optional[int] = None,
+        parent_id: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Create a project in OpenProject based on a Jira project.
@@ -222,6 +302,7 @@ class ProjectMigration(BaseMigration):
         Args:
             jira_project: Jira project data
             account_id: Optional ID of the associated Tempo account
+            parent_id: Optional ID of the parent project in OpenProject
 
         Returns:
             OpenProject project data or None if creation failed
@@ -246,41 +327,75 @@ class ProjectMigration(BaseMigration):
                 "identifier": identifier,
                 "jira_key": jira_key,
                 "account_name": account_name,
+                "parent_id": parent_id
             }
 
-        try:
-            project_result, was_created = self.op_client.create_project(
-                name=jira_name,
-                identifier=identifier,
-                description=jira_description
-            )
+        # Check if project exists by name or identifier
+        project = self.op_client.find_project_by_name_or_identifier(jira_name, identifier)
 
-            if not project_result:
-                logger.error(f"Failed to create project: {jira_name}")
-                return None
+        if project:
+            logger.info(f"Project '{jira_name}' already exists in OpenProject with ID {project.get('id')}")
 
-            if was_created:
-                logger.info(f"Created new project: {jira_name} with identifier {identifier}")
-            else:
-                logger.info(f"Using existing project: {jira_name} with identifier {identifier}")
+            # Update with parent if needed
+            if parent_id and not project.get("_links", {}).get("parent", {}).get("href"):
+                logger.info(f"Updating project {jira_name} to set parent ID {parent_id}")
+                try:
+                    updated_project = self.op_client.update_project(
+                        project.get("id"),
+                        {"parent": parent_id}
+                    )
+                    if updated_project:
+                        logger.info(f"Successfully updated parent for project {jira_name}")
+                        project = updated_project
+                except Exception as e:
+                    logger.error(f"Failed to update parent for project {jira_name}: {str(e)}")
 
-            if account_name and self.account_custom_field_id:
-                cf_success = self.op_client.set_project_custom_field(
-                    project_id=project_result.get("id"),
-                    custom_field_id=self.account_custom_field_id,
-                    value=account_name
-                )
-
+            # Add account_name to the project dict
             if account_name:
-                project_result["account_name"] = account_name
+                project["account_name"] = account_name
 
-            return project_result
-        except Exception as e:
-            error_msg = str(e)
-            if "422 Client Error" in error_msg and "Unprocessable Entity" in error_msg:
-                logger.warning(f"Project {jira_name} may already exist with a different identifier")
+            return project
+
+        # Create project
+        project_data = {
+            "name": jira_name,
+            "identifier": identifier,
+            "description": {"raw": jira_description} if jira_description else {"raw": ""},
+        }
+
+        # Add parent if specified
+        if parent_id:
+            project_data["parent"] = parent_id
+            logger.info(f"Setting parent project ID {parent_id} for {jira_name}")
+
+        logger.info(f"Creating project '{jira_name}' in OpenProject")
+        try:
+            project = self.op_client.create_project(project_data)
+            if project:
+                self._created_projects += 1
+                logger.info(f"Successfully created project '{jira_name}' with ID {project.get('id')}")
+
+                # Add account_name to the project dict
+                if account_name:
+                    project["account_name"] = account_name
+
+                # Add account custom field value if available
+                if self.account_custom_field_id and account_name:
+                    try:
+                        self.op_client.update_project_custom_field(
+                            project_id=project.get("id"),
+                            custom_field_id=self.account_custom_field_id,
+                            value=account_name,
+                        )
+                        logger.info(f"Added account '{account_name}' to project '{jira_name}'")
+                    except Exception as e:
+                        logger.error(f"Failed to set account for project {jira_name}: {str(e)}")
+                return project
             else:
-                logger.error(f"Error creating project {jira_name}: {error_msg}")
+                logger.error(f"Failed to create project '{jira_name}' in OpenProject")
+                return None
+        except Exception as e:
+            logger.error(f"Error creating project '{jira_name}': {str(e)}")
             return None
 
     def migrate_projects(self) -> Dict[str, Any]:
@@ -304,6 +419,9 @@ class ProjectMigration(BaseMigration):
         if not self.project_account_mapping:
             self.extract_project_account_mapping()
 
+        if not self.company_mapping:
+            self.load_company_mapping()
+
         op_projects_by_name = {
             project.get("name", "").lower(): project for project in self.op_projects
         }
@@ -323,17 +441,39 @@ class ProjectMigration(BaseMigration):
                 potential_identifier = "p-" + potential_identifier
             potential_identifier = potential_identifier[:100]
 
+            # Find existing project
             op_project = None
             if jira_name.lower() in op_projects_by_name:
                 op_project = op_projects_by_name[jira_name.lower()]
             elif potential_identifier in op_projects_by_identifier:
                 op_project = op_projects_by_identifier[potential_identifier]
-            else:
-                account_id = None
-                if jira_key in self.project_account_mapping:
-                    account_id = self.project_account_mapping[jira_key]
 
-                op_project = self.create_project_in_openproject(jira_project, account_id)
+            # Find parent company for hierarchical structure
+            parent_company = None
+            parent_id = None
+            if not op_project:  # Only look for parent if creating a new project
+                parent_company = self.find_parent_company_for_project(jira_project)
+                if parent_company:
+                    parent_id = parent_company.get("openproject_id")
+                    logger.info(f"Found parent company for {jira_key}: {parent_company.get('tempo_name')} (ID: {parent_id})")
+
+            # Get account ID if available
+            account_id = None
+            if jira_key in self.project_account_mapping:
+                accounts = self.project_account_mapping[jira_key]
+                # Handle case where accounts might be an integer instead of a list
+                if isinstance(accounts, int) or isinstance(accounts, str):
+                    account_id = accounts
+                elif isinstance(accounts, list) and len(accounts) > 0:
+                    account_id = accounts[0].get("id")
+
+            # Create or update project
+            if not op_project:
+                op_project = self.create_project_in_openproject(
+                    jira_project,
+                    account_id=account_id,
+                    parent_id=parent_id
+                )
 
             if op_project:
                 mapping[jira_key] = {
@@ -342,8 +482,10 @@ class ProjectMigration(BaseMigration):
                     "openproject_id": op_project.get("id"),
                     "openproject_identifier": op_project.get("identifier"),
                     "openproject_name": op_project.get("name"),
-                    "account_id": self.project_account_mapping.get(jira_key),
+                    "account_id": account_id,
                     "account_name": op_project.get("account_name"),
+                    "parent_id": parent_id,
+                    "parent_name": parent_company.get("tempo_name") if parent_company else None,
                     "created_new": op_project.get("id")
                     not in [p.get("id") for p in self.op_projects],
                 }
@@ -357,8 +499,10 @@ class ProjectMigration(BaseMigration):
                     "openproject_id": None,
                     "openproject_identifier": None,
                     "openproject_name": None,
-                    "account_id": self.project_account_mapping.get(jira_key),
+                    "account_id": account_id,
                     "account_name": None,
+                    "parent_id": parent_id,
+                    "parent_name": parent_company.get("tempo_name") if parent_company else None,
                     "created_new": False,
                     "failed": True,
                 }
@@ -421,13 +565,18 @@ class ProjectMigration(BaseMigration):
                 for p in self.project_mapping.values()
                 if p.get("account_name") is not None
             ),
+            "projects_with_parent": sum(
+                1
+                for p in self.project_mapping.values()
+                if p.get("parent_id") is not None
+            ),
             "failed_projects": sum(
-                1 for p in self.project_mapping.values() if p.get("status") == "failed"
+                1 for p in self.project_mapping.values() if p.get("failed", False)
             ),
             "failed_details": [
                 {"jira_key": p.get("jira_key"), "jira_name": p.get("jira_name")}
                 for p in self.project_mapping.values()
-                if p.get("status") == "failed"
+                if p.get("failed", False)
             ],
         }
 
@@ -436,8 +585,12 @@ class ProjectMigration(BaseMigration):
             analysis["migration_percentage"] = (
                 analysis["migrated_projects"] / total
             ) * 100
+            analysis["hierarchical_percentage"] = (
+                analysis["projects_with_parent"] / total
+            ) * 100
         else:
             analysis["migration_percentage"] = 0
+            analysis["hierarchical_percentage"] = 0
 
         self._save_to_json(analysis, "project_mapping_analysis.json")
 
@@ -449,6 +602,7 @@ class ProjectMigration(BaseMigration):
         logger.info(f"- Newly created: {analysis['new_projects']}")
         logger.info(f"- Already existing: {analysis['existing_projects']}")
         logger.info(f"- With account information: {analysis['projects_with_accounts']}")
+        logger.info(f"- With parent company: {analysis['projects_with_parent']} ({analysis['hierarchical_percentage']:.1f}%)")
         logger.info(f"Failed projects: {analysis['failed_projects']}")
 
         return analysis
@@ -475,6 +629,9 @@ class ProjectMigration(BaseMigration):
             # Load account mapping (dependency)
             account_mapping = self.load_account_mapping()
 
+            # Load company mapping (dependency for hierarchy)
+            company_mapping = self.load_company_mapping()
+
             # Extract project-account mapping
             project_account_mapping = self.extract_project_account_mapping(force=force)
 
@@ -483,36 +640,14 @@ class ProjectMigration(BaseMigration):
                 result = self.migrate_projects()
             else:
                 self.logger.warning("Dry run mode - not creating projects", extra={"markup": True})
-                # Count how many projects are already mapped
-                mapped_count = sum(1 for proj in self.project_mapping.values() if proj.get("openproject_id"))
-                result = {
-                    "status": "success",
-                    "created_count": 0,
-                    "matched_count": mapped_count,
-                    "skipped_count": 0,
-                    "failed_count": 0,
-                    "total_count": len(jira_projects)
-                }
+                result = self.analyze_project_mapping()
 
-            # Analyze results
-            analysis = self.analyze_project_mapping()
+            self.logger.info("Project migration completed", extra={"markup": True})
+            return result
 
-            return {
-                "status": result.get("status", "success"),
-                "success_count": result.get("created_count", 0) + result.get("matched_count", 0),
-                "failed_count": result.get("failed_count", 0),
-                "total_count": len(jira_projects),
-                "jira_projects_count": len(jira_projects),
-                "op_projects_count": len(op_projects),
-                "mapped_projects_count": len(self.project_mapping),
-                "analysis": analysis
-            }
         except Exception as e:
-            self.logger.error(f"Error during project migration: {str(e)}", extra={"markup": True, "traceback": True})
+            self.logger.error(f"Error in project migration: {str(e)}", exc_info=True)
             return {
-                "status": "failed",
                 "error": str(e),
-                "success_count": 0,
-                "failed_count": len(self.jira_projects) if self.jira_projects else 0,
-                "total_count": len(self.jira_projects) if self.jira_projects else 0
+                "projects_migrated": self._created_projects,
             }
