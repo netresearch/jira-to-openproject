@@ -181,14 +181,14 @@ class CustomFieldMigration(BaseMigration):
             except Exception as e:
                 self.logger.error(f"Error reading existing data: {str(e)}. Re-extracting data.")
 
-        self.logger.info("Retrieving custom fields from OpenProject via API...")
+        self.logger.info("Retrieving custom fields from OpenProject via Rails console...")
 
         try:
             # Use the op_client's get_custom_fields method which uses Rails console
             all_fields = self.op_client.get_custom_fields(force_refresh=True)
 
             if not all_fields:
-                self.logger.error("Failed to retrieve custom fields from OpenProject")
+                self.logger.info("No custom fields found in OpenProject - this is normal for a new installation")
                 return []
 
             self.logger.info(f"Retrieved {len(all_fields)} custom fields from OpenProject")
@@ -874,11 +874,10 @@ class CustomFieldMigration(BaseMigration):
             self.logger.error("Failed to create any custom fields")
             return False
 
-    def migrate_custom_fields(self, direct_migration=False, force=False):
+    def migrate_custom_fields(self, force=False):
         """Migrate custom fields from Jira to OpenProject
 
         Args:
-            direct_migration (bool): Deprecated parameter, kept for backward compatibility
             force (bool): If True, force re-extraction of data from both systems
 
         Returns:
@@ -910,10 +909,6 @@ class CustomFieldMigration(BaseMigration):
             return True
 
         self.logger.info(f"Found {len(fields_to_create)} custom fields to create")
-
-        # The direct_migration parameter is deprecated
-        if direct_migration:
-            self.logger.warning("The 'direct_migration' parameter is deprecated. Always using JSON-based approach.")
 
         # Use JSON-based approach for all migrations
         return self.migrate_custom_fields_via_json(fields_to_create)
@@ -1082,13 +1077,13 @@ class CustomFieldMigration(BaseMigration):
             mapping = self.create_custom_field_mapping(force=False)
             self._create_mapping_with_cached_data = False
 
-            # Migrate custom fields based on the direct migration flag
+            # Migrate custom fields
             if not dry_run and self.rails_console:
                 self.logger.info("Migrating custom fields via Rails console", extra={"markup": True})
-                success = self.migrate_custom_fields(direct_migration=True, force=False)
+                success = self.migrate_custom_fields(force=False)
             elif not dry_run:
                 self.logger.info("Generating JSON migration script (no Rails console available)", extra={"markup": True})
-                success = self.migrate_custom_fields(direct_migration=False, force=False)
+                success = self.migrate_custom_fields(force=False)
             else:
                 self.logger.warning("Dry run mode - not creating custom fields", extra={"markup": True})
                 success = True
