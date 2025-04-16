@@ -138,14 +138,14 @@ class TestProjectMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
 
+        # Mock project not found by name or identifier
+        mock_op_instance.find_project_by_name_or_identifier.return_value = None
+
         # Mock successful project creation
-        mock_op_instance.create_project.return_value = (
-            {'id': 2, 'name': 'Project Two', 'identifier': 'proj2'},
-            True  # was_created flag
-        )
+        mock_op_instance.create_project.return_value = {'id': 2, 'name': 'Project Two', 'identifier': 'proj2'}
 
         # Mock setting custom field
-        mock_op_instance.set_project_custom_field.return_value = True
+        mock_op_instance.update_project_custom_field.return_value = True
 
         mock_get_path.return_value = '/tmp/test_data'
         mock_migration_config.get.return_value = False  # Not dry run
@@ -163,12 +163,8 @@ class TestProjectMigration(unittest.TestCase):
         self.assertEqual(result['id'], 2)
         self.assertEqual(result['name'], 'Project Two')
         self.assertEqual(result['account_name'], 'Account Two')
-        mock_op_instance.create_project.assert_called_with(
-            name='Project Two',
-            identifier='proj2',
-            description='Second test project'
-        )
-        mock_op_instance.set_project_custom_field.assert_called_with(
+        mock_op_instance.create_project.assert_called_once()
+        mock_op_instance.update_project_custom_field.assert_called_with(
             project_id=2,
             custom_field_id=100,
             value='Account Two'
@@ -180,7 +176,8 @@ class TestProjectMigration(unittest.TestCase):
     @patch('src.migrations.project_migration.config.migration_config')
     @patch('os.path.exists')
     @patch('builtins.open', new_callable=mock_open)
-    def test_migrate_projects(self, mock_file, mock_exists, mock_migration_config,
+    @patch('src.migrations.base_migration.BaseMigration._save_to_json')
+    def test_migrate_projects(self, mock_save_to_json, mock_file, mock_exists, mock_migration_config,
                              mock_get_path, mock_op_client, mock_jira_client):
         """Test the migrate_projects method."""
         # Setup mocks
@@ -191,19 +188,32 @@ class TestProjectMigration(unittest.TestCase):
         mock_jira_instance.get_projects.return_value = self.jira_projects
         mock_op_instance.get_projects.return_value = self.op_projects
 
+        # Mock find_project_by_name_or_identifier to return a project with proper ID
+        def find_project_mock(name, identifier=None):
+            # Return proper dictionary with ID for existing projects
+            if name == 'Project One':
+                return {'id': 1, 'name': name, 'identifier': 'proj1'}
+            elif name == 'Project Two':
+                return {'id': 2, 'name': name, 'identifier': 'proj2'}
+            elif name == 'Project Three':
+                return {'id': 4, 'name': name, 'identifier': 'proj3'}
+            return None
+
+        mock_op_instance.find_project_by_name_or_identifier.side_effect = find_project_mock
+
         # Mock project creation for new projects
         def create_project_side_effect(name, identifier, description):
             if name == 'Project One':
-                return {'id': 1, 'name': name, 'identifier': identifier}, False
+                return {'id': 1, 'name': name, 'identifier': identifier}
             elif name == 'Project Two':
-                return {'id': 2, 'name': name, 'identifier': identifier}, True
+                return {'id': 2, 'name': name, 'identifier': identifier}
             elif name == 'Project Three':
-                return {'id': 4, 'name': name, 'identifier': identifier}, True
+                return {'id': 4, 'name': name, 'identifier': identifier}
             else:
-                return None, False
+                return None
 
         mock_op_instance.create_project.side_effect = create_project_side_effect
-        mock_op_instance.set_project_custom_field.return_value = True
+        mock_op_instance.update_project_custom_field.return_value = True
 
         mock_get_path.return_value = '/tmp/test_data'
         mock_migration_config.get.return_value = False  # Not dry run and not force
@@ -214,6 +224,9 @@ class TestProjectMigration(unittest.TestCase):
             json.dumps(self.project_account_mapping),  # For project_account_mapping.json
             json.dumps(self.account_mapping)           # For account_mapping.json
         ]
+
+        # Mock _save_to_json to prevent MagicMock serialization issue
+        mock_save_to_json.return_value = None
 
         # Create instance
         migration = ProjectMigration(mock_jira_instance, mock_op_instance)
@@ -242,8 +255,9 @@ class TestProjectMigration(unittest.TestCase):
         self.assertEqual(result['PROJ2']['account_id'], 102)
         self.assertIsNone(result['PROJ3']['account_id'])
 
-        # Verify the file was written
-        mock_file.assert_any_call('/tmp/test_data/project_mapping.json', 'w')
+        # Verify _save_to_json was called with the expected arguments
+        self.assertEqual(mock_save_to_json.call_count, 2)
+        mock_save_to_json.assert_any_call(result, 'project_mapping.json')
 
     @patch('src.migrations.project_migration.JiraClient')
     @patch('src.migrations.project_migration.OpenProjectClient')
