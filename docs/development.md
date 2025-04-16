@@ -83,6 +83,93 @@ docker exec -it j2o-app pytest -v
     *   Keep README files (`README.md`, `src/README.md`, etc.) updated.
     *   Update `TASKS.md` as features are developed or bugs fixed.
 
+## Error Handling Guidelines
+
+Robust error handling is critical for the migration tool's reliability, especially when dealing with large datasets and external APIs. Follow these practices:
+
+### General Principles
+
+1. **Graceful Degradation**: Components should continue functioning even if parts fail. Migrations should attempt to complete as much as possible rather than failing completely.
+
+2. **Detailed Logging**: All errors should be logged with sufficient context to diagnose the issue. Include relevant IDs, file paths, and operation details.
+
+3. **Recovery Mechanisms**: Implement retry logic for transient failures, especially with API calls.
+
+4. **State Preservation**: Save state frequently during long operations to allow resuming after interruptions.
+
+5. **Error Categorization**: Distinguish between different error types:
+   - Critical errors (prevent further operations)
+   - Non-critical errors (can continue with reduced functionality)
+   - Warnings (potential issues but operation can proceed)
+
+### Implementation
+
+1. **API Calls**:
+   - Implement retry logic with exponential backoff
+   - Handle rate limiting with appropriate waits
+   - Cache results where possible to avoid redundant calls
+   - Example:
+     ```python
+     max_retries = 3
+     retry_count = 0
+
+     while retry_count < max_retries:
+         try:
+             result = api_client.make_call()
+             break
+         except Exception as e:
+             retry_count += 1
+             if retry_count >= max_retries:
+                 logger.error(f"Failed after {max_retries} attempts: {str(e)}")
+                 # Handle permanent failure
+                 break
+             wait_time = 2 ** retry_count  # Exponential backoff
+             logger.warning(f"Retrying in {wait_time} seconds...")
+             time.sleep(wait_time)
+     ```
+
+2. **File Operations**:
+   - Use safe file operations (temp files, atomic writes where possible)
+   - Always handle IOError and similar exceptions
+   - Create backups of important data files before modifications
+   - Example:
+     ```python
+     try:
+         with open(filepath, 'w') as f:
+             json.dump(data, f, indent=2)
+     except Exception as e:
+         logger.error(f"Failed to save data: {str(e)}")
+         # Try backup location
+         try:
+             backup_path = f"{filepath}.backup"
+             with open(backup_path, 'w') as f:
+                 json.dump(data, f, indent=2)
+             logger.info(f"Saved to backup location: {backup_path}")
+         except Exception as backup_e:
+             logger.critical(f"Failed to save backup: {str(backup_e)}")
+     ```
+
+3. **Progress Tracking**:
+   - Update progress indicators frequently
+   - Save intermediate results during batch processing
+   - Add log entries for major milestones
+
+4. **Error Documentation**:
+   - Record errors in dedicated log files or databases
+   - Include timestamps and context
+   - Implement `migration_issues.json` for tracking issues across runs
+
+### Testing Error Scenarios
+
+Test error handling by simulating failure conditions:
+
+1. Network interruptions during API calls
+2. Invalid data from external systems
+3. Permission issues with file operations
+4. Process interruption in the middle of migration
+
+Use the `@pytest.mark.parametrize` decorator to test multiple error scenarios efficiently.
+
 ## Key Development Tasks
 
 Refer to [TASKS.md](TASKS.md) for the list of pending implementation and testing tasks.

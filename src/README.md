@@ -60,3 +60,89 @@ src/
 *   New migration components should inherit from `BaseMigration`.
 *   API interactions should be encapsulated within the `clients/` modules.
 *   Configuration should always be accessed via `src.config`.
+
+## Error Handling and Resilience
+
+The codebase implements comprehensive error handling strategies to ensure robustness during migration:
+
+### Key Error Handling Features
+
+1. **Retry Logic**: API calls and critical operations implement retry mechanisms with exponential backoff to handle transient failures:
+   ```python
+   # Example from work_package_migration.py
+   max_retries = 3
+   retry_count = 0
+   while retry_count < max_retries:
+       try:
+           result = operation()
+           break
+       except Exception as e:
+           retry_count += 1
+           # Handle error, backoff and retry
+   ```
+
+2. **State Preservation**: Long-running operations save their state regularly, allowing resume capability:
+   ```python
+   # Migration state is saved at the beginning of each project processing
+   with open(migration_state_file, 'w') as f:
+       json.dump({
+           'processed_projects': list(processed_projects),
+           'last_processed_project': project_key,
+           'timestamp': datetime.now().isoformat()
+       }, f, indent=2)
+   ```
+
+3. **Safe File Operations**: File operations include error handling and backup mechanisms:
+   ```python
+   try:
+       with open(filepath, 'w') as f:
+           json.dump(data, f, indent=2)
+   except Exception as e:
+       # Attempt backup save to alternate location
+       try:
+           backup_path = f"{filepath}.backup"
+           with open(backup_path, 'w') as f:
+               json.dump(data, f, indent=2)
+       except Exception as backup_e:
+           logger.critical(f"Failed to save backup: {str(backup_e)}")
+   ```
+
+4. **Structured Error Reporting**: Errors are logged with context and saved to dedicated files for analysis:
+   ```python
+   # Example from work_package_migration.py
+   issues_data["work_package_migration"].append({
+       "timestamp": timestamp,
+       "type": "error",
+       "message": error_message,
+       "error": str(e),
+       "traceback": str(getattr(e, "__traceback__", "No traceback available"))
+   })
+   ```
+
+5. **Graceful Degradation**: The migration continues despite partial failures, with clear reporting of what succeeded and what failed:
+   ```python
+   # Continue to next batch/project instead of failing completely
+   if not issues:
+       logger.warning(f"No issues retrieved for batch starting at {start_at}")
+       continue  # Move to next batch instead of breaking
+   ```
+
+6. **Rails Client Resilience**: For operations using the Rails console, we implement safeguards against connection failures and command execution errors.
+
+### Error Files and Logs
+
+The migration process generates several error-related files:
+
+* `var/data/migration_issues.json`: Records warnings and errors encountered during migration
+* `var/data/migration_error.json`: Records critical errors that caused migration to abort
+* `var/logs/j2o.log`: Full application log with timestamps and log levels
+
+### Implementing New Error Handling
+
+When adding new code, follow the error handling guidelines in [../docs/development.md](../docs/development.md), particularly:
+
+1. Use try/except blocks around all external operations (API calls, file I/O)
+2. Implement retry logic for operations that might experience transient failures
+3. Log all errors with appropriate context
+4. Save partial results whenever possible
+5. Provide clear error messages and error codes where appropriate
