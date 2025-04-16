@@ -264,7 +264,6 @@ def run_migration(
             "users": UserMigration(jira_client, op_client),
             "custom_fields": CustomFieldMigration(jira_client, op_client, op_rails_client),
             "companies": CompanyMigration(jira_client, op_client),
-            "accounts": AccountMigration(jira_client, op_client),
             "projects": ProjectMigration(jira_client, op_client),
             "link_types": LinkTypeMigration(jira_client, op_client),
             "issue_types": IssueTypeMigration(jira_client, op_client, op_rails_client),
@@ -272,19 +271,31 @@ def run_migration(
             "work_packages": None,  # Initialized later if needed
         }
 
+        # Add accounts component only if Rails client is available
+        if op_rails_client:
+            available_components["accounts"] = AccountMigration(jira_client, op_client, op_rails_client)
+        else:
+            config.logger.warning("Rails client not available - 'accounts' component will be skipped", extra={"markup": True})
+
         # If components parameter is not provided, use default component order
         if not components:
-            components = [
+            default_components = [
                 "users",
                 "custom_fields",
                 "companies",
-                "accounts",
                 "projects",
                 "link_types",
                 "issue_types",
                 "status_types",
                 "work_packages",
             ]
+
+            # Add accounts only if it's available
+            if "accounts" in available_components:
+                # Add accounts after companies and before projects
+                default_components.insert(3, "accounts")
+
+            components = default_components
 
         # Filter to keep only supported components
         components = [c for c in components if c in available_components]

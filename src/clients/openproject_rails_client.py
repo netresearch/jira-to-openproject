@@ -160,7 +160,7 @@ class OpenProjectRailsClient:
             # Write the result to a file to handle large outputs
             File.write('{output_file}', {{
               status: 'success',
-              output: result.inspect
+              output: result.nil? ? "nil" : result.inspect
             }}.to_json)
 
             # Print a short confirmation to stdout
@@ -223,9 +223,16 @@ class OpenProjectRailsClient:
 
                 # Return the parsed results
                 if result_data.get('status') == 'success':
+                    output = result_data.get('output')
+                    # Explicitly handle nil values from Ruby
+                    if output == "nil":
+                        return {
+                            'status': 'success',
+                            'output': None
+                        }
                     return {
                         'status': 'success',
-                        'output': result_data.get('output')
+                        'output': output
                     }
                 else:
                     return {
@@ -599,6 +606,11 @@ class OpenProjectRailsClient:
         if result['status'] == 'success' and result['output'] is not None:
             # Get the output and sanitize it if it's a string
             output = result['output']
+
+            # Handle nil value from Ruby
+            if output == "nil" or output is None:
+                return None
+
             if isinstance(output, str):
                 # Remove any Rails console output or whitespace
                 # Extract just the numeric ID if present
@@ -606,9 +618,16 @@ class OpenProjectRailsClient:
                 match = re.search(r'\b(\d+)\b', output)
                 if match:
                     return int(match.group(1))
-                # If no numeric ID found, just return the string itself
-                return output
-            return output
+                # If no numeric ID found but it's not nil, log and return None
+                if output.strip() != "nil":
+                    logger.warning(f"Unexpected output format from Rails console: {output}")
+                return None
+
+            # If it's already a numeric type, return it directly
+            if isinstance(output, (int, float)):
+                return int(output)
+
+            return None
         return None
 
     def execute_transaction(self, commands: List[str]) -> Dict[str, Any]:
