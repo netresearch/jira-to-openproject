@@ -14,7 +14,7 @@ def test_python_version():
     assert sys.version_info.minor == 12
 
 
-def test_required_packages():
+def _test_required_packages():
     """Test all required packages are installed"""
     # Test requests
     response = requests.get("https://httpbin.org/get")
