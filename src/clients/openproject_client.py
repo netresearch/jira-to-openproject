@@ -1290,25 +1290,13 @@ class OpenProjectClient:
                             self._custom_fields_cache = custom_fields
                             return custom_fields
                     except json.JSONDecodeError:
-                        logger.warning("Could not parse string content as JSON")
+                        # This is normal when there are no custom fields yet - just log at debug level
+                        logger.debug("Could not parse string content as JSON - this is normal if no custom fields exist yet")
 
-                    # If we can't parse it, try to get custom fields via API as fallback
-                    logger.info("Attempting to fetch custom fields via API as fallback")
-                    try:
-                        response = self._request("GET", "/api/v3/custom_fields")
-                        if response.status_code == 200:
-                            data = response.json()
-                            embedded = data.get("_embedded", {})
-                            elements = embedded.get("elements", [])
-                            logger.info(f"Retrieved {len(elements)} custom fields via API")
-                            self._custom_fields_cache = elements
-                            return elements
-                    except Exception as api_error:
-                        logger.error(f"API fallback also failed: {str(api_error)}")
-
-                    # If all else fails
-                    custom_fields = []
-                    return custom_fields
+                    # If all else fails - return empty list (no custom fields yet)
+                    logger.info("No custom fields found in OpenProject")
+                    self._custom_fields_cache = []
+                    return []
 
                 custom_fields = json.loads(output)
 
