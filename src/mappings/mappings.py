@@ -23,6 +23,11 @@ class Mappings:
     CUSTOM_FIELD_MAPPING_FILE = "custom_field_mapping.json"
     WORK_PACKAGE_MAPPING_FILE_PATTERN = "work_package_mapping_{}.json" # Per project
 
+    TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
+    OP_PROJECTS_FILE = "openproject_projects.json"
+    TEMPO_COMPANIES_FILE = "tempo_companies.json"
+
+
     def __init__(
         self,
         data_dir: str,

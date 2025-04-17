@@ -19,11 +19,7 @@ from src import config
 from src.display import process_with_progress
 from src.utils import load_json_file
 from src.migrations.base_migration import BaseMigration
-
-# Constants for filenames
-COMPANY_MAPPING_FILE = "company_mapping.json"
-TEMPO_COMPANIES_FILE = "tempo_companies.json"
-OP_PROJECTS_FILE = "openproject_projects.json"
+from src.mappings.mappings import Mappings
 
 class CompanyMigration(BaseMigration):
     """
@@ -61,9 +57,8 @@ class CompanyMigration(BaseMigration):
         os.makedirs(self.data_dir, exist_ok=True)
 
         # Setup file paths
-        self.tempo_companies_file = self.data_dir / TEMPO_COMPANIES_FILE
-        self.op_projects_file = self.data_dir / OP_PROJECTS_FILE
-        self.company_mapping_file = self.data_dir / COMPANY_MAPPING_FILE
+        self.tempo_companies_file = self.data_dir / Mappings.TEMPO_COMPANIES_FILE
+        self.op_projects_file = self.data_dir / Mappings.OP_PROJECTS_FILE
 
         # Data storage
         self.tempo_companies = {}
@@ -75,9 +70,9 @@ class CompanyMigration(BaseMigration):
         self.logger.debug(f"CompanyMigration initialized with data dir: {self.data_dir}")
 
         # Load existing data if available
-        self.tempo_companies = self._load_from_json(TEMPO_COMPANIES_FILE) or {}
-        self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or {}
-        self.company_mapping = self._load_from_json(COMPANY_MAPPING_FILE) or {}
+        self.tempo_companies = self._load_from_json(Mappings.TEMPO_COMPANIES_FILE) or {}
+        self.op_projects = self._load_from_json(Mappings.OP_PROJECTS_FILE) or {}
+        self.company_mapping = self._load_from_json(Mappings.COMPANY_MAPPING_FILE) or {}
 
     def extract_tempo_companies(self) -> Dict[str, Any]:
         """
@@ -143,7 +138,7 @@ class CompanyMigration(BaseMigration):
             }
 
         # Save to file
-        self._save_to_json(self.tempo_companies, TEMPO_COMPANIES_FILE)
+        self._save_to_json(self.tempo_companies, Mappings.TEMPO_COMPANIES_FILE)
         self.logger.info(f"Saved {len(self.tempo_companies)} companies to {self.tempo_companies_file}")
 
         return self.tempo_companies
@@ -166,7 +161,7 @@ class CompanyMigration(BaseMigration):
 
         self.logger.info(f"Extracted {len(self.op_projects)} projects from OpenProject")
 
-        self._save_to_json(self.op_projects, OP_PROJECTS_FILE)
+        self._save_to_json(self.op_projects, Mappings.OP_PROJECTS_FILE)
 
         return self.op_projects
 
@@ -243,7 +238,7 @@ class CompanyMigration(BaseMigration):
                 }
 
         self.company_mapping = mapping
-        self._save_to_json(mapping, COMPANY_MAPPING_FILE)
+        self._save_to_json(mapping, Mappings.COMPANY_MAPPING_FILE)
 
         total_companies = len(mapping)
         matched_companies = sum(
@@ -275,6 +270,12 @@ class CompanyMigration(BaseMigration):
         name = tempo_company.get("name")
         key = tempo_company.get("key", "")
         lead = tempo_company.get("lead", "")
+        status = tempo_company.get("status", "ACTIVE")
+
+        # Map Tempo status to OpenProject status
+        op_status = "ON_TRACK"  # Default status
+        if status in ["CLOSED", "ARCHIVED"]:
+            op_status = "FINISHED"
 
         description = f"Migrated from Tempo company: {key}\n"
         if lead:
@@ -300,11 +301,17 @@ class CompanyMigration(BaseMigration):
                 "identifier": identifier,
                 "description": {"raw": description},
                 "_links": {"parent": {"href": None}},
+                "public": False,
+                "status": op_status
             }
 
         try:
             project, was_created = self.op_client.create_project(
-                name=name, identifier=identifier, description=description
+                name=name,
+                identifier=identifier,
+                description=description,
+                public=False,
+                status=op_status
             )
 
             if project:
@@ -318,7 +325,9 @@ class CompanyMigration(BaseMigration):
                     "identifier": identifier,
                     "description": {"raw": description},
                     "_links": {"parent": {"href": None}},
-                    "_placeholder": True
+                    "_placeholder": True,
+                    "public": False,
+                    "status": op_status
                 }
         except Exception as e:
             error_msg = str(e)
@@ -329,7 +338,9 @@ class CompanyMigration(BaseMigration):
                     "identifier": identifier,
                     "description": {"raw": description},
                     "_links": {"parent": {"href": None}},
-                    "_placeholder": True
+                    "_placeholder": True,
+                    "public": False,
+                    "status": op_status
                 }
             else:
                 self.logger.error(f"Error creating company project {name}: {str(e)}")
@@ -419,7 +430,7 @@ class CompanyMigration(BaseMigration):
             item_name_func=lambda company: company.get("name", "Unknown")
         )
 
-        self._save_to_json(self.company_mapping, COMPANY_MAPPING_FILE)
+        self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
 
         if config.migration_config.get('dry_run'):
             self.logger.info(
@@ -436,7 +447,7 @@ class CompanyMigration(BaseMigration):
             Dictionary with analysis results
         """
         if not self.company_mapping:
-            mapping_path = os.path.join(self.data_dir, COMPANY_MAPPING_FILE)
+            mapping_path = os.path.join(self.data_dir, Mappings.COMPANY_MAPPING_FILE)
             if os.path.exists(mapping_path):
                 with open(mapping_path, "r") as f:
                     self.company_mapping = json.load(f)
@@ -597,12 +608,14 @@ class CompanyMigration(BaseMigration):
                 "tempo_name": tempo_name,
                 "name": tempo_name,
                 "identifier": identifier,
-                "description": description
+                "description": description,
+                "status": company.get("status", "ACTIVE"),
+                "public": False
             })
 
         if not companies_data:
             self.logger.info("No companies need to be created, all matched or already exist")
-            self._save_to_json(self.company_mapping, COMPANY_MAPPING_FILE)
+            self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
             return self.company_mapping
 
         if config.migration_config.get('dry_run'):
@@ -618,11 +631,11 @@ class CompanyMigration(BaseMigration):
                     "openproject_name": company_data["name"],
                     "matched_by": "would_create",
                 }
-            self._save_to_json(self.company_mapping, COMPANY_MAPPING_FILE)
+            self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
             return self.company_mapping
 
         # First, write the companies data to a JSON file that Rails can read
-        temp_file_path = os.path.join(self.data_dir, "tempo_companies.json")
+        temp_file_path = os.path.join(self.data_dir, Mappings.TEMPO_COMPANIES_FILE)
         self.logger.info(f"Writing {len(companies_data)} companies to {temp_file_path}")
 
         # Write the JSON file
@@ -672,25 +685,85 @@ class CompanyMigration(BaseMigration):
               tempo_id = company['tempo_id']
               tempo_key = company['tempo_key']
               tempo_name = company['tempo_name']
+              tempo_status = company['status'] || 'ACTIVE'
+
+              # Map Tempo status to OpenProject status code
+              status_code = 'on_track'  # Default status
+              if ['CLOSED', 'ARCHIVED'].include?(tempo_status)
+                status_code = 'finished'
+              end
 
               # Create project object with only the needed attributes
               project = Project.new(
                 name: company['name'],
                 identifier: company['identifier'],
-                description: company['description']
+                description: company['description'],
+                public: false
               )
 
               # Save the project
               if project.save
+                # Set the project status using appropriate model
+                begin
+                  if defined?(Status)  # Try Status model first (older OpenProject)
+                    begin
+                      # Map status code to name
+                      status_name = 'On track'
+                      if status_code == 'finished'
+                        status_name = 'Finished'
+                      end
+
+                      status = Status.find_or_create_by(name: status_name)
+                      if project.respond_to?(:status=)
+                        project.status = status
+                        project.save
+                        puts "Set project status to #{status_name} using Status model"
+                      else
+                        puts "Project does not respond to status="
+                      end
+                    rescue => e1
+                      puts "Status model error: #{e1.message}"
+
+                      # Try ProjectStatus instead
+                      if defined?(ProjectStatus)
+                        begin
+                          ps = ProjectStatus.find_or_create_by(project_id: project.id)
+                          ps.code = status_code
+                          ps.save
+                          puts "Set project status to #{status_code} using ProjectStatus model"
+                        rescue => e2
+                          puts "ProjectStatus error: #{e2.message}"
+                        end
+                      else
+                        puts "Neither Status nor ProjectStatus models available"
+                      end
+                    end
+                  elsif defined?(ProjectStatus)  # Try ProjectStatus model directly
+                    begin
+                      ps = ProjectStatus.find_or_create_by(project_id: project.id)
+                      ps.code = status_code
+                      ps.save
+                      puts "Set project status to #{status_code} using ProjectStatus model"
+                    rescue => e
+                      puts "ProjectStatus error: #{e.message}"
+                    end
+                  else
+                    puts "No status models available"
+                  end
+                rescue => status_error
+                  puts "Error setting project status for #{project.name}: #{status_error.message}"
+                end
+
                 created_companies << {
                   'tempo_id' => tempo_id,
                   'tempo_key' => tempo_key,
                   'tempo_name' => tempo_name,
                   'openproject_id' => project.id,
                   'openproject_identifier' => project.identifier,
-                  'openproject_name' => project.name
+                  'openproject_name' => project.name,
+                  'status' => status_code
                 }
-                puts "Created project #{project.id}: #{project.name}"
+                puts "Created project #{project.id}: #{project.name} with status #{status_code}"
               else
                 errors << {
                   'tempo_id' => tempo_id,
@@ -856,7 +929,7 @@ class CompanyMigration(BaseMigration):
         self.logger.info(f"Created {created_count} company projects (errors: {len(errors)})")
 
         # Save the updated mapping
-        self._save_to_json(self.company_mapping, COMPANY_MAPPING_FILE)
+        self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
 
         return self.company_mapping
 

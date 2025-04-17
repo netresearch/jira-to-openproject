@@ -17,12 +17,11 @@ from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src import config
 from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration
+from src.mappings.mappings import Mappings
 
 # Constants for filenames
 ACCOUNT_MAPPING_FILE = "account_mapping.json"
 TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
-OP_PROJECTS_FILE = "openproject_projects.json"
-COMPANY_MAPPING_FILE = "company_mapping.json"
 
 class AccountMigration(BaseMigration):
     """
@@ -63,16 +62,16 @@ class AccountMigration(BaseMigration):
         self.account_custom_field_id = None
 
         # Load existing data if available
-        self.tempo_accounts = self._load_from_json(TEMPO_ACCOUNTS_FILE) or []
-        self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or []
-        self.account_mapping = self._load_from_json(ACCOUNT_MAPPING_FILE) or {}
+        self.tempo_accounts = self._load_from_json(Mappings.TEMPO_ACCOUNTS_FILE) or []
+        self.op_projects = self._load_from_json(Mappings.OP_PROJECTS_FILE) or []
+        self.account_mapping = config.mappings.get_mapping(Mappings.ACCOUNT_MAPPING_FILE)
 
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
-        self.tempo_accounts = self._load_from_json(TEMPO_ACCOUNTS_FILE) or []
-        self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or []
-        self.company_mapping = self._load_from_json(COMPANY_MAPPING_FILE) or {}
-        self.account_mapping = self._load_from_json(ACCOUNT_MAPPING_FILE) or {}
+        self.tempo_accounts = self._load_from_json(Mappings.TEMPO_ACCOUNTS_FILE) or []
+        self.op_projects = self._load_from_json(Mappings.OP_PROJECTS_FILE) or []
+        self.company_mapping = config.mappings.get_mapping(Mappings.COMPANY_MAPPING_FILE)
+        self.account_mapping = config.mappings.get_mapping(Mappings.ACCOUNT_MAPPING_FILE)
 
         analysis_data = self._load_from_json("account_mapping_analysis.json", {})
         custom_field_id = analysis_data.get("custom_field_id")
@@ -96,23 +95,6 @@ class AccountMigration(BaseMigration):
         else:
             self.logger.info("No valid custom field ID found, will create a new one")
 
-    def load_company_mapping(self) -> Dict[str, Any]:
-        """
-        Load the company mapping created by the company migration.
-
-        Returns:
-            Dictionary mapping Tempo company IDs to OpenProject project IDs
-        """
-        mapping_path = os.path.join(self.data_dir, COMPANY_MAPPING_FILE)
-
-        if os.path.exists(mapping_path):
-            with open(mapping_path, "r") as f:
-                self.company_mapping = json.load(f)
-            self.logger.info(f"Loaded company mapping with {len(self.company_mapping)} entries", extra={"markup": True})
-            return self.company_mapping
-        else:
-            self.logger.warning("No company mapping found. Accounts will be created as top-level projects.", extra={"markup": True})
-            return {}
 
     def extract_tempo_accounts(self, force: bool = False) -> List[Dict[str, Any]]:
         """
@@ -125,7 +107,7 @@ class AccountMigration(BaseMigration):
             List of Tempo account dictionaries.
         """
         if self.tempo_accounts and not force and not config.migration_config.get("force", False):
-            self.logger.info(f"Using cached Tempo accounts from {TEMPO_ACCOUNTS_FILE}")
+            self.logger.info(f"Using cached Tempo accounts from {Mappings.TEMPO_ACCOUNTS_FILE}")
             return self.tempo_accounts
 
         self.logger.info("Extracting Tempo accounts...")
@@ -137,7 +119,7 @@ class AccountMigration(BaseMigration):
             if accounts is not None:
                 self.logger.info(f"Retrieved {len(accounts)} Tempo accounts")
                 self.tempo_accounts = accounts
-                self._save_to_json(accounts, TEMPO_ACCOUNTS_FILE)
+                self._save_to_json(accounts, Mappings.TEMPO_ACCOUNTS_FILE)
                 return accounts
             else:
                 self.logger.error("Failed to retrieve Tempo accounts using JiraClient.")
@@ -165,7 +147,7 @@ class AccountMigration(BaseMigration):
 
         self.logger.info(f"Extracted {len(self.op_projects)} projects from OpenProject", extra={"markup": True})
 
-        self._save_to_json(self.op_projects, OP_PROJECTS_FILE)
+        self._save_to_json(self.op_projects, Mappings.OP_PROJECTS_FILE)
 
         return self.op_projects
 
@@ -196,7 +178,7 @@ class AccountMigration(BaseMigration):
             tempo_key = tempo_account.get("key")
             tempo_name = tempo_account.get("name", "")
             tempo_name_lower = tempo_name.lower()
-            company_id = tempo_account.get("companyId")
+            company_id = tempo_account.get("customer", {}).get("id")
             default_project = tempo_account.get("default_project", {})
             default_project_key = default_project.get("key")
 
@@ -214,6 +196,12 @@ class AccountMigration(BaseMigration):
                     "tempo_id": tempo_id,
                     "tempo_key": tempo_key,
                     "tempo_name": tempo_name,
+                    "tempo_lead": tempo_account.get("lead", {}).get("username"),
+                    "tempo_contact": tempo_account.get("contact", {}).get("username"),
+                    "tempo_status": tempo_account.get("status"),
+                    "tempo_customer_id": tempo_account.get("customer", {}).get("id"),
+                    "tempo_category": tempo_account.get("category", {}).get("name"),
+                    "tempo_category_type": tempo_account.get("category", {}).get("categorytype", {}).get("name"),
                     "company_id": company_id,
                     "default_project_key": default_project_key,
                     "openproject_id": op_project.get("id"),
@@ -228,6 +216,12 @@ class AccountMigration(BaseMigration):
                     "tempo_id": tempo_id,
                     "tempo_key": tempo_key,
                     "tempo_name": tempo_name,
+                    "tempo_lead": tempo_account.get("lead", {}).get("username"),
+                    "tempo_contact": tempo_account.get("contact", {}).get("username"),
+                    "tempo_status": tempo_account.get("status"),
+                    "tempo_customer_id": tempo_account.get("customer", {}).get("id"),
+                    "tempo_category": tempo_account.get("category", {}).get("name"),
+                    "tempo_category_type": tempo_account.get("category", {}).get("categorytype", {}).get("name"),
                     "company_id": company_id,
                     "default_project_key": default_project_key,
                     "openproject_id": None,
@@ -238,7 +232,7 @@ class AccountMigration(BaseMigration):
                 }
 
         self.account_mapping = mapping
-        self._save_to_json(mapping, ACCOUNT_MAPPING_FILE)
+        self._save_to_json(mapping, Mappings.ACCOUNT_MAPPING_FILE)
 
         total_accounts = len(mapping)
         matched_accounts = sum(
@@ -434,7 +428,7 @@ class AccountMigration(BaseMigration):
 
                 tracker.increment()
 
-        self._save_to_json(self.account_mapping, ACCOUNT_MAPPING_FILE)
+        self._save_to_json(self.account_mapping, Mappings.ACCOUNT_MAPPING_FILE)
 
         self.logger.info(f"Account migration complete: {total_accounts} accounts added to custom field", extra={"markup": True})
         self.logger.info(
@@ -460,7 +454,7 @@ class AccountMigration(BaseMigration):
             Dictionary with analysis results
         """
         if not self.account_mapping:
-            mapping_path = os.path.join(self.data_dir, ACCOUNT_MAPPING_FILE)
+            mapping_path = os.path.join(self.data_dir, Mappings.ACCOUNT_MAPPING_FILE)
             if os.path.exists(mapping_path):
                 with open(mapping_path, "r") as f:
                     self.account_mapping = json.load(f)
@@ -572,14 +566,11 @@ class AccountMigration(BaseMigration):
         """
         self.logger.info("Starting account migration", extra={"markup": True})
 
+        self.mappings = mappings
+
         try:
             # Load existing data
             self._load_data()
-
-            # Load company mapping (dependency)
-            company_mapping = self.load_company_mapping()
-            if not company_mapping:
-                self.logger.warning("No company mapping found. Run company migration first.", extra={"markup": True})
 
             # Extract data
             tempo_accounts = self.extract_tempo_accounts(force=force)

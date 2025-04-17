@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch, MagicMock, mock_open, ANY
 import json
 import os
+from src import config
 from src.migrations.project_migration import ProjectMigration
 
 
@@ -290,6 +291,35 @@ class TestProjectMigration(unittest.TestCase):
         self.assertEqual(result['new_projects'], 2)  # PROJ2 and PROJ3 are new
         self.assertEqual(result['existing_projects'], 1)  # PROJ1 already existed
         self.assertEqual(result['projects_with_accounts'], 2)  # PROJ1 and PROJ2 have accounts
+
+    def test_find_parent_company_for_project(self):
+        """Test that we resolve parent company via default Tempo account"""
+        migration = ProjectMigration(MagicMock(), MagicMock())
+        # Stub mappings
+        migration.project_account_mapping = {
+            'ACMEWEB': [{ 'id': '42', 'key': 'ACC-42', 'name': 'Q1 Review' }]
+        }
+        migration.account_mapping = {
+            '42': { 'tempo_id': '42', 'company_id': '7', 'tempo_name': 'Account42' }
+        }
+        migration.company_mapping = {
+            '7': { 'tempo_id': '7', 'openproject_id': 123, 'tempo_key': 'CUST7', 'tempo_name': 'AcmeCorp' }
+        }
+        parent = migration.find_parent_company_for_project({ 'key': 'ACMEWEB' })
+        self.assertIsNotNone(parent)
+        self.assertEqual(parent.get('openproject_id'), 123)
+        self.assertEqual(parent.get('tempo_name'), 'AcmeCorp')
+
+    def test_find_parent_company_warns_on_missing(self):
+        """Test that missing mappings return None and log a warning"""
+        migration = ProjectMigration(MagicMock(), MagicMock())
+        migration.project_account_mapping = {}
+        # Make sure we can capture warnings
+        with self.assertLogs(config.logger.name, level='DEBUG') as cm:
+            parent = migration.find_parent_company_for_project({ 'key': 'UNKNOWN' })
+        self.assertIsNone(parent)
+        # Should log a debug about missing account mapping
+        self.assertTrue(any('No account mapping found for project UNKNOWN' in msg for msg in cm.output))
 
 
 # Define testing steps for project migration validation

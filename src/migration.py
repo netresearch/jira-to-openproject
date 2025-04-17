@@ -253,7 +253,7 @@ def run_migration(
                 return results
 
         # Initialize mappings
-        mappings = Mappings(
+        config.mappings = Mappings(
             data_dir=config.get_path("data"),
             jira_client=jira_client,
             op_client=op_client
@@ -329,7 +329,7 @@ def run_migration(
                     result = component.run(
                         dry_run=dry_run,
                         force=force,
-                        mappings=mappings
+                        mappings=config.mappings
                     )
 
                     if result:
@@ -441,6 +441,7 @@ def run_migration(
 
     except Exception as e:
         # Handle unexpected errors at the top level
+        config.logger.exception(e)
         config.logger.error(f"Unexpected error during migration: {str(e)}", extra={"markup": True, "traceback": True})
 
         # Create a basic result object

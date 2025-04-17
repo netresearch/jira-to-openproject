@@ -269,7 +269,9 @@ class TestCompanyMigration(unittest.TestCase):
         self.op_client.create_project.assert_called_with(
             name="Globex Corporation",
             identifier="customer_globex",
-            description="Migrated from Tempo company: GLOBEX\nCompany Lead: user2\n"
+            description="Migrated from Tempo company: GLOBEX\nCompany Lead: user2\n",
+            public=False,
+            status="ON_TRACK"
         )
 
         # Verify the result is not None and has the expected values
@@ -426,7 +428,9 @@ class TestCompanyMigration(unittest.TestCase):
         self.op_client.create_project.assert_called_with(
             name="Globex Corporation",
             identifier="customer_globex",
-            description="Migrated from Tempo company: GLOBEX\nCompany Lead: user2\n"
+            description="Migrated from Tempo company: GLOBEX\nCompany Lead: user2\n",
+            public=False,
+            status="ON_TRACK"
         )
 
     def test_analyze_company_mapping(self):
