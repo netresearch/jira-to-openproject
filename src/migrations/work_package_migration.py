@@ -343,9 +343,9 @@ class WorkPackageMigration:
         elif str(issue_type_id) in self.issue_type_mapping:
             type_id = self.issue_type_mapping[str(issue_type_id)].get('openproject_id')
         # Finally, check in mappings object if available
-        elif hasattr(self, 'mappings') and self.mappings and hasattr(self.mappings, 'issue_type_id_mapping'):
+        elif config.mappings and hasattr(config.mappings, 'issue_type_id_mapping'):
             # Try to get the ID from the mappings object
-            type_id = self.mappings.issue_type_id_mapping.get(str(issue_type_id))
+            type_id = config.mappings.issue_type_id_mapping.get(str(issue_type_id))
 
         # Debug mapping information
         logger.debug(f"Mapping issue type: {issue_type_name} (ID: {issue_type_id}) -> OpenProject type ID: {type_id}", extra={"markup": True})
@@ -1284,18 +1284,15 @@ class WorkPackageMigration:
             # Set dry_run flag
             self.dry_run = dry_run
 
-            # Store mappings reference
-            self.mappings = mappings
-
             # Verify required mappings are available
             missing_mappings = []
 
             # Load mappings if provided
-            if mappings:
-                self.project_mapping = mappings.get_mapping("project") or {}
-                self.user_mapping = mappings.get_mapping("user") or {}
-                self.issue_type_mapping = mappings.get_mapping("issue_type") or {}
-                self.status_mapping = mappings.get_mapping("status") or {}
+            if config.mappings:
+                self.project_mapping = config.mappings.get_mapping("project") or {}
+                self.user_mapping = config.mappings.get_mapping("user") or {}
+                self.issue_type_mapping = config.mappings.get_mapping("issue_type") or {}
+                self.status_mapping = config.mappings.get_mapping("status") or {}
 
                 # Check if critical mappings are empty
                 if not self.project_mapping:

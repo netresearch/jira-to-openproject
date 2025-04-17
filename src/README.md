@@ -4,7 +4,7 @@ This directory contains the core Python source code for the Jira to OpenProject 
 
 ## Directory Structure
 
-```
+```plain
 src/
 ├── __init__.py
 ├── clients/                 # API clients for interacting with Jira and OpenProject
@@ -39,27 +39,27 @@ src/
 
 ## Key Modules & Classes
 
-*   **`src/main.py`:** The main entry point for all application functionality.
-*   **`src/config_loader.py:ConfigLoader`:** Loads configuration from YAML, `.env`, `.env.local`, and environment variables.
-*   **`src/config.py`:** Provides a global access point (`config` object) to the loaded configuration.
-*   **`src/clients/jira_client.py:JiraClient`:** Interacts with the Jira API to fetch data.
-*   **`src/clients/openproject_client.py:OpenProjectClient`:** Interacts with the OpenProject API v3 to create/update data.
-*   **`src/clients/openproject_rails_client.py:OpenProjectRailsClient`:** Connects via SSH to the OpenProject server, enters the Docker container, and executes commands/scripts within the Rails console. Used for operations not supported by the API.
-*   **`src/migrations/base_migration.py:BaseMigration`:** Abstract base class defining the interface for all migration components (`run`, `_extract`, `_map`, `_load`, `_test`).
-*   **`src/migrations/*_migration.py`:** Concrete implementations of `BaseMigration` for each specific data type (e.g., `UserMigration`, `ProjectMigration`). Each handles the Extract-Map-Load process for its component.
-*   **`src/display.py`:** Contains functions for user-friendly console output using the `rich` library (e.g., progress bars, tables, formatted logs).
-*   **`src/mappings/mappings.py`:** Helper functions for loading, saving, and applying mapping files (`var/data/*_mapping.json`).
-*   **`src/models/mapping.py`:** Dataclasses or structures used for storing mapping information.
-*   **`src/utils.py`:** Common helper functions (e.g., file handling, date parsing, sanitization) used by multiple modules.
-*   **`src/cleanup_openproject.py`:** Removes data created by the migration tool in an OpenProject instance, primarily for testing and development.
-*   **`migration.py`:** Core migration logic and coordination of the migration process.
+* **`src/main.py`:** The main entry point for all application functionality.
+* **`src/config_loader.py:ConfigLoader`:** Loads configuration from YAML, `.env`, `.env.local`, and environment variables.
+* **`src/config.py`:** Provides a global access point (`config` object) to the loaded configuration.
+* **`src/clients/jira_client.py:JiraClient`:** Interacts with the Jira API to fetch data.
+* **`src/clients/openproject_client.py:OpenProjectClient`:** Interacts with the OpenProject API v3 to create/update data.
+* **`src/clients/openproject_rails_client.py:OpenProjectRailsClient`:** Connects via SSH to the OpenProject server, enters the Docker container, and executes commands/scripts within the Rails console. Used for operations not supported by the API.
+* **`src/migrations/base_migration.py:BaseMigration`:** Abstract base class defining the interface for all migration components (`run`, `_extract`, `_map`, `_load`, `_test`).
+* **`src/migrations/*_migration.py`:** Concrete implementations of `BaseMigration` for each specific data type (e.g., `UserMigration`, `ProjectMigration`). Each handles the Extract-Map-Load process for its component.
+* **`src/display.py`:** Contains functions for user-friendly console output using the `rich` library (e.g., progress bars, tables, formatted logs).
+* **`src/mappings/mappings.py`:** Helper functions for loading, saving, and applying mapping files (`var/data/*_mapping.json`).
+* **`src/models/mapping.py`:** Dataclasses or structures used for storing mapping information.
+* **`src/utils.py`:** Common helper functions (e.g., file handling, date parsing, sanitization) used by multiple modules.
+* **`src/cleanup_openproject.py`:** Removes data created by the migration tool in an OpenProject instance, primarily for testing and development.
+* **`migration.py`:** Core migration logic and coordination of the migration process.
 
 ## Development Notes
 
-*   Code should follow standards outlined in [../docs/development.md](../docs/development.md).
-*   New migration components should inherit from `BaseMigration`.
-*   API interactions should be encapsulated within the `clients/` modules.
-*   Configuration should always be accessed via `src.config`.
+* Code should follow standards outlined in [../docs/development.md](../docs/development.md).
+* New migration components should inherit from `BaseMigration`.
+* API interactions should be encapsulated within the `clients/` modules.
+* Configuration should always be accessed via `src.config`.
 
 ## Error Handling and Resilience
 
@@ -68,6 +68,7 @@ The codebase implements comprehensive error handling strategies to ensure robust
 ### Key Error Handling Features
 
 1. **Retry Logic**: API calls and critical operations implement retry mechanisms with exponential backoff to handle transient failures:
+
    ```python
    # Example from work_package_migration.py
    max_retries = 3
@@ -82,6 +83,7 @@ The codebase implements comprehensive error handling strategies to ensure robust
    ```
 
 2. **State Preservation**: Long-running operations save their state regularly, allowing resume capability:
+
    ```python
    # Migration state is saved at the beginning of each project processing
    with open(migration_state_file, 'w') as f:
@@ -93,6 +95,7 @@ The codebase implements comprehensive error handling strategies to ensure robust
    ```
 
 3. **Safe File Operations**: File operations include error handling and backup mechanisms:
+
    ```python
    try:
        with open(filepath, 'w') as f:
@@ -108,6 +111,7 @@ The codebase implements comprehensive error handling strategies to ensure robust
    ```
 
 4. **Structured Error Reporting**: Errors are logged with context and saved to dedicated files for analysis:
+
    ```python
    # Example from work_package_migration.py
    issues_data["work_package_migration"].append({
@@ -120,6 +124,7 @@ The codebase implements comprehensive error handling strategies to ensure robust
    ```
 
 5. **Graceful Degradation**: The migration continues despite partial failures, with clear reporting of what succeeded and what failed:
+
    ```python
    # Continue to next batch/project instead of failing completely
    if not issues:

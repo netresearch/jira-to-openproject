@@ -1179,3 +1179,74 @@ class OpenProjectRailsClient:
                 'status': 'error',
                 'message': str(e)
             }
+
+    def set_project_status(self, project_id: int, status_code: str) -> Dict[str, Any]:
+        """
+        Set the project status using Rails.
+
+        Args:
+            project_id: The ID of the project
+            status_code: The status code to set ('on_track', 'off_track', 'at_risk', 'finished')
+
+        Returns:
+            Result dictionary
+        """
+        script = f"""
+        begin
+          project_id = {project_id}
+          status_code = '{status_code}'
+
+          if defined?(Status)  # Try Status model first (older OpenProject)
+            begin
+              status = Status.find_or_create_by(name: status_code.humanize)
+              project = Project.find(project_id)
+              if project.respond_to?(:status=)
+                project.status = status
+                project.save
+                puts "Set project status using Status model"
+                {{ status: 'success', message: "Status set to #{status_code}" }}
+              else
+                puts "Project does not respond to status="
+                {{ status: 'warning', message: "Project does not support status" }}
+              end
+            rescue => e1
+              puts "Status model error: #{{e1.message}}"
+
+              # Try ProjectStatus instead
+              if defined?(ProjectStatus)
+                begin
+                  ps = ProjectStatus.find_or_create_by(project_id: project_id)
+                  ps.code = status_code
+                  ps.save
+                  puts "Set project status using ProjectStatus model"
+                  {{ status: 'success', message: "Status set to #{status_code}" }}
+                rescue => e2
+                  puts "ProjectStatus error: #{{e2.message}}"
+                  {{ status: 'error', message: e2.message }}
+                end
+              else
+                puts "Neither Status nor ProjectStatus models available"
+                {{ status: 'error', message: "Status models not available" }}
+              end
+            end
+          elsif defined?(ProjectStatus)  # Try ProjectStatus model directly
+            begin
+              ps = ProjectStatus.find_or_create_by(project_id: project_id)
+              ps.code = status_code
+              ps.save
+              puts "Set project status using ProjectStatus model"
+              {{ status: 'success', message: "Status set to #{status_code}" }}
+            rescue => e
+              puts "ProjectStatus error: #{{e.message}}"
+              {{ status: 'error', message: e.message }}
+            end
+          else
+            puts "No status models available"
+            {{ status: 'error', message: "Status models not available" }}
+          end
+        rescue => e
+          puts "Error setting status: #{{e.message}}"
+          {{ status: 'error', message: e.message }}
+        end
+        """
+        return self.execute(script)

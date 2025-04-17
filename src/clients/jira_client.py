@@ -668,28 +668,27 @@ class JiraClient:
             logger.error("Failed to retrieve Tempo customers.")
         return customers
 
-    def get_tempo_account_links_for_project(self, project_key_or_id: str) -> Optional[List[Dict[str, Any]]]:
+    def get_tempo_account_links_for_project(self, project_id: int) -> Optional[List[Dict[str, Any]]]:
         """
         Retrieves Tempo account links for a specific Jira project.
         NOTE: This endpoint might differ or require specific Tempo versions/configurations.
               Adjust the endpoint based on Tempo API documentation if needed.
 
         Args:
-            project_key_or_id: The Jira project key or ID.
+            project_id: The Jira project ID.
 
         Returns:
             A list of account links or None if an error occurred.
         """
-        # Example endpoint - Verify this with your Tempo Server API documentation
-        # It might be /account-links/project/{project_key_or_id} or similar
-        path = f"/rest/tempo-accounts/1/account-links/project/{project_key_or_id}"
+        # Use the Tempo account-by-project endpoint for project-specific account lookup
+        path = f"/rest/tempo-accounts/1/account/project/{project_id}"
 
-        logger.info(f"Fetching Tempo account links for project '{project_key_or_id}'")
+        logger.info(f"Fetching Tempo account links for project '{project_id}'")
         response = self._make_request(path)
         links = response.json() if response and response.status_code == 200 else None
 
         if links is not None:
-            logger.info(f"Successfully retrieved {len(links)} account links for project {project_key_or_id}.")
+            logger.info(f"Successfully retrieved {len(links)} account links for project {project_id}.")
         else:
-            logger.warning(f"Failed to retrieve account links for project {project_key_or_id}. This might be expected if the endpoint is incorrect or no links exist.")
+            logger.warning(f"Failed to retrieve account links for project {project_id}. This might be expected if the endpoint is incorrect or no links exist.")
         return links

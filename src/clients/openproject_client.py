@@ -12,8 +12,7 @@ import base64
 import urllib3
 import logging
 import math
-
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
 # Add the src directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -351,111 +350,88 @@ class OpenProjectClient:
             return None
 
     def create_project(
-        self, name: str, identifier: str, description: str = None, parent_id: int = None
-    ) -> Optional[Dict[str, Any]]:
-        """Create a new project in OpenProject.
+        self,
+        name: str,
+        identifier: str,
+        description: str = "",
+        parent_id: Optional[int] = None,
+        public: bool = True,
+        status: Optional[str] = None,  # We'll handle this separately
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """
+        Create a project in OpenProject.
 
         Args:
-            name: The name of the project
-            identifier: The identifier of the project
-            description: An optional description of the project
-            parent_id: An optional parent project ID to create this as a sub-project
+            name: The project name
+            identifier: The project identifier (slug)
+            description: The project description
+            parent_id: Optional parent project ID
+            public: Whether the project is public
+            status: Project status (will be handled via Rails if available)
 
         Returns:
-            The created or updated project or None if failed
-            A second return value indicating if the project was created (True) or already existed (False)
+            Tuple of (project_data, was_created)
         """
-        try:
-            # First check if a project with this identifier already exists
-            existing_project = self.get_project_by_identifier(identifier)
+        # First check if the project already exists
+        existing = self.find_project_by_name_or_identifier(name, identifier)
+        if existing:
+            logger.info(f"Project '{name}' already exists with ID {existing.get('id')}")
+            return existing, False
 
-            if existing_project:
-                project_id = existing_project.get("id")
-                logger.debug(f"Project with identifier '{identifier}' already exists (ID: {project_id})")
+        # Create API payload
+        payload = {
+            "name": name,
+            "identifier": identifier,
+            "description": {"raw": description} if description else {"raw": ""},
+            "public": public,
+        }
 
-                # Update the project if needed
-                if name != existing_project.get("name") or description != existing_project.get("description", {}).get("raw", ""):
-                    logger.info(f"Updating existing project '{identifier}' with new details")
-                    updated_project = self.update_project(project_id, name, description)
-                    return (updated_project or existing_project, False)  # Return existing if update failed
-
-                return (existing_project, False)  # Project exists but no update needed
-
-            # Create new project
-            data = {"name": name, "identifier": identifier}
-
-            if description:
-                data["description"] = {"raw": description}
-
-            # Add parent project link if specified
-            if parent_id:
-                data["_links"] = {
-                    "parent": {
-                        "href": f"/api/v3/projects/{parent_id}"
-                    }
+        # Add parent link if specified
+        if parent_id:
+            payload["_links"] = {
+                "parent": {
+                    "href": f"/api/v3/projects/{parent_id}"
                 }
+            }
 
-            # Log the data being sent
-            logger.debug(f"Creating project with data: {json.dumps(data)}")
+        try:
+            logger.info(f"Creating project '{name}'...")
+            response = self.session.post(
+                f"{self.api_base_url}/projects",
+                json=payload,
+                headers=self.headers,
+            )
+            response.raise_for_status()
+            project = response.json()
+            logger.info(f"Created project '{name}' with ID {project.get('id')}")
 
-            created_project = self._request("POST", "/projects", data=data)
-
-            return (created_project, True)  # Project was created
-
-        except Exception as e:
-            # Try to extract response details if it's an HTTP error
-            if hasattr(e, 'response') and e.response is not None:
+            # If Rails client is available and status is provided, set the status
+            if self.rails_client and status:
                 try:
-                    error_details = e.response.json()
+                    # Map OpenProject status string to code
+                    status_code = status.lower()
+                    if status_code not in ["on_track", "off_track", "at_risk", "finished"]:
+                        status_code = "on_track"  # Default if invalid status
 
-                    # Check specifically for duplicate identifier error
-                    if (
-                        "_embedded" in error_details
-                        and "details" in error_details.get("_embedded", {})
-                        and error_details.get("_embedded", {}).get("details", {}).get("attribute") == "identifier"
-                        and "already been taken" in error_details.get("message", "")
-                    ):
-                        # Log as info instead of warning for this expected case
-                        logger.debug(f"Project identifier '{identifier}' already exists, retrieving existing project")
+                    # Set status via Rails
+                    result = self.rails_client.set_project_status(project.get('id'), status_code)
+                    if result.get('status') != 'success':
+                        logger.warning(f"Failed to set project status: {result.get('message')}")
+                except Exception as e:
+                    logger.warning(f"Failed to set project status: {str(e)}")
 
-                        # Try to get the project again - it might have been created in a race condition
-                        existing_project = self.get_project_by_identifier(identifier)
-                        if existing_project:
-                            logger.debug(f"Successfully found existing project with identifier '{identifier}'")
-                            return (existing_project, False)
-                        else:
-                            # Only log as warning if we couldn't find the existing project
-                            logger.warning(f"Could not find existing project with identifier '{identifier}' after 422 error")
-
-                            # Try an alternative lookup by name as a fallback
-                            # First check the cache
-                            for project in self._projects_cache:
-                                if project.get("name") == name:
-                                    logger.debug(f"Found existing project with name '{name}' instead")
-                                    return (project, False)
-
-                            # If not found in cache, try a fresh lookup
-                            projects = self.get_projects(force_refresh=True)
-                            for project in projects:
-                                if project.get("name") == name:
-                                    logger.debug(f"Found existing project with name '{name}' after refresh")
-                                    return (project, False)
-
-                            logger.debug(f"Server response for project {name}: {json.dumps(error_details)}")
-                    else:
-                        # For other errors, log the full details
-                        logger.error(f"Server response for project {name}: {json.dumps(error_details)}")
-
-                        # Look for specific validation errors
-                        if "_embedded" in error_details and "errors" in error_details["_embedded"]:
-                            for error in error_details["_embedded"]["errors"]:
-                                logger.error(f"Validation error: {error.get('message', 'Unknown error')}")
-                except Exception as json_err:
-                    # If we can't parse JSON, just log the text
-                    logger.error(f"Server response text: {e.response.text}")
-
-            logger.error(f"Failed to create project {name}: {str(e)}")
-            return (None, False)
+            return project, True
+        except Exception as e:
+            error_msg = str(e)
+            if "422" in error_msg and "has already been taken" in error_msg:
+                logger.warning(
+                    f"Project '{name}' could not be created, identifier '{identifier}' already exists"
+                )
+                existing = self.find_project_by_name_or_identifier(name, identifier)
+                if existing:
+                    return existing, False
+            logger.error(f"Failed to create project '{name}': {str(e)}")
+            return None, False
 
     def get_work_package_types(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """Get all work package types from OpenProject."""
@@ -619,56 +595,29 @@ class OpenProjectClient:
             logger.error(f"Failed to update project {project_id}: {str(e)}")
             return None
 
-    def find_project_by_name_or_identifier(
-        self, name: str, identifier: str = None
-    ) -> Optional[Dict[str, Any]]:
-        """Find a project by name or identifier.
+    def find_project_by_name_or_identifier(self, name: str, identifier: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a project by name or identifier.
 
         Args:
-            name: The name of the project
-            identifier: The identifier of the project, if available
+            name: The project name to search for
+            identifier: The project identifier to search for
 
         Returns:
-            The project data if found, None otherwise
+            The project data or None if not found
         """
-        try:
-            # Get all projects if not cached
-            if not self._projects_cache:
-                self.get_projects()
+        # First try by identifier since that should be unique
+        project = self.get_project_by_identifier(identifier)
+        if project:
+            return project
 
-            # First try exact identifier match (most reliable)
-            if identifier:
-                for project in self._projects_cache:
-                    if project.get("identifier") == identifier:
-                        logger.debug(f"Found project with identifier '{identifier}'")
-                        return project
+        # If not found by identifier, try by name
+        projects = self.get_projects()
+        for project in projects:
+            if project.get("name") == name:
+                return project
 
-            # Then try exact name match
-            for project in self._projects_cache:
-                if project.get("name") == name:
-                    logger.debug(f"Found project with name '{name}'")
-                    return project
-
-            # If no exact matches, try case-insensitive name match
-            name_lower = name.lower()
-            for project in self._projects_cache:
-                if project.get("name", "").lower() == name_lower:
-                    logger.debug(f"Found project with case-insensitive name '{name}'")
-                    return project
-
-            # Try case-insensitive identifier match as last resort
-            if identifier:
-                identifier_lower = identifier.lower()
-                for project in self._projects_cache:
-                    if project.get("identifier", "").lower() == identifier_lower:
-                        logger.debug(f"Found project with case-insensitive identifier '{identifier}'")
-                        return project
-
-            logger.debug(f"No project found with name '{name}' or identifier '{identifier}'")
-            return None
-        except Exception as e:
-            logger.error(f"Error finding project by name/identifier: {str(e)}")
-            return None
+        return None
 
     def get_work_package_types(self) -> List[Dict[str, Any]]:
         """Get all work package types from OpenProject."""
@@ -1346,7 +1295,7 @@ class OpenProjectClient:
                     puts "Custom field updated successfully"
                     true
                   else
-                    puts "Failed to update custom field: #{project.errors.full_messages.join(', ')}"
+                    puts "Failed to update custom field: #{{project.errors.full_messages.join(', ')}}"
                     false
                   end
                 else

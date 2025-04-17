@@ -58,6 +58,9 @@ log_file = os.path.join(var_dirs["logs"], "migration.log")
 # Configure rich logging instead of standard logging
 logger = configure_logging(LOG_LEVEL, log_file)
 
+# Create mappings object
+mappings = None
+
 # Now log the directory creation messages
 for message in created_dirs:
     logger.debug(message, extra={"markup": True})
