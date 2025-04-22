@@ -25,3 +25,31 @@ j2o = "src.main:main"
 
 [tool.setuptools]
 packages = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312", "py313"]
+skip-string-normalization = false
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | \.mypy_cache
+  | \.pytest_cache
+  | \.tox
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = 3.13
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+strict = true
+exclude = 'tests/.*'
+
+[tool.isort]
+profile = "black"
+line_length = 88
