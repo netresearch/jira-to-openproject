@@ -349,90 +349,6 @@ class OpenProjectClient:
             logger.debug(f"Failed to get project by identifier '{identifier}': {str(e)}")
             return None
 
-    def create_project(
-        self,
-        name: str,
-        identifier: str,
-        description: str = "",
-        parent_id: Optional[int] = None,
-        public: bool = True,
-        status: Optional[str] = None,  # We'll handle this separately
-    ) -> Tuple[Optional[Dict[str, Any]], bool]:
-        """
-        Create a project in OpenProject.
-
-        Args:
-            name: The project name
-            identifier: The project identifier (slug)
-            description: The project description
-            parent_id: Optional parent project ID
-            public: Whether the project is public
-            status: Project status (will be handled via Rails if available)
-
-        Returns:
-            Tuple of (project_data, was_created)
-        """
-        # First check if the project already exists
-        existing = self.find_project_by_name_or_identifier(name, identifier)
-        if existing:
-            logger.info(f"Project '{name}' already exists with ID {existing.get('id')}")
-            return existing, False
-
-        # Create API payload
-        payload = {
-            "name": name,
-            "identifier": identifier,
-            "description": {"raw": description} if description else {"raw": ""},
-            "public": public,
-        }
-
-        # Add parent link if specified
-        if parent_id:
-            payload["_links"] = {
-                "parent": {
-                    "href": f"/api/v3/projects/{parent_id}"
-                }
-            }
-
-        try:
-            logger.info(f"Creating project '{name}'...")
-            response = self.session.post(
-                f"{self.api_base_url}/projects",
-                json=payload,
-                headers=self.headers,
-            )
-            response.raise_for_status()
-            project = response.json()
-            logger.info(f"Created project '{name}' with ID {project.get('id')}")
-
-            # If Rails client is available and status is provided, set the status
-            if self.rails_client and status:
-                try:
-                    # Map OpenProject status string to code
-                    status_code = status.lower()
-                    if status_code not in ["on_track", "off_track", "at_risk", "finished"]:
-                        status_code = "on_track"  # Default if invalid status
-
-                    # Set status via Rails
-                    result = self.rails_client.set_project_status(project.get('id'), status_code)
-                    if result.get('status') != 'success':
-                        logger.warning(f"Failed to set project status: {result.get('message')}")
-                except Exception as e:
-                    logger.warning(f"Failed to set project status: {str(e)}")
-
-            return project, True
-        except Exception as e:
-            error_msg = str(e)
-            if "422" in error_msg and "has already been taken" in error_msg:
-                logger.warning(
-                    f"Project '{name}' could not be created, identifier '{identifier}' already exists"
-                )
-                existing = self.find_project_by_name_or_identifier(name, identifier)
-                if existing:
-                    return existing, False
-            logger.error(f"Failed to create project '{name}': {str(e)}")
-            return None, False
-
     def get_work_package_types(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """Get all work package types from OpenProject."""
         if not force_refresh and self._work_package_types_cache:
@@ -594,30 +510,6 @@ class OpenProjectClient:
 
             logger.error(f"Failed to update project {project_id}: {str(e)}")
             return None
-
-    def find_project_by_name_or_identifier(self, name: str, identifier: str) -> Optional[Dict[str, Any]]:
-        """
-        Find a project by name or identifier.
-
-        Args:
-            name: The project name to search for
-            identifier: The project identifier to search for
-
-        Returns:
-            The project data or None if not found
-        """
-        # First try by identifier since that should be unique
-        project = self.get_project_by_identifier(identifier)
-        if project:
-            return project
-
-        # If not found by identifier, try by name
-        projects = self.get_projects()
-        for project in projects:
-            if project.get("name") == name:
-                return project
-
-        return None
 
     def get_work_package_types(self) -> List[Dict[str, Any]]:
         """Get all work package types from OpenProject."""

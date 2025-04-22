@@ -16,7 +16,6 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src import config
-from src.display import process_with_progress
 from src.migrations.base_migration import BaseMigration
 from src.mappings.mappings import Mappings
 
@@ -251,7 +250,7 @@ class ProjectMigration(BaseMigration):
         # 1) Check project-account mapping
         raw_accts = self.project_account_mapping.get(jira_key)
         if not raw_accts:
-            logger.warning(f"No account mapping found for project {jira_key}")
+            logger.debug(f"No account mapping found for project {jira_key}")
             return None
 
         # 2) Use only the project's default Tempo account (first entry)
@@ -280,140 +279,6 @@ class ProjectMigration(BaseMigration):
 
         return company
 
-    def create_project_in_openproject(
-        self, jira_project: Dict[str, Any], account_id: Optional[int] = None,
-        parent_id: Optional[int] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Create a project in OpenProject based on a Jira project.
-
-        Args:
-            jira_project: Jira project data
-            account_id: Optional ID of the associated Tempo account
-            parent_id: Optional ID of the parent project in OpenProject
-
-        Returns:
-            OpenProject project data or None if creation failed
-        """
-        jira_key = jira_project.get("key", "")
-        jira_name = jira_project.get("name", "")
-        jira_description = jira_project.get("description", "")
-
-        identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
-        if not identifier[0].isalpha():
-            identifier = "p-" + identifier
-        identifier = identifier[:100]
-
-        account_name = None
-        if account_id and str(account_id) in self.account_mapping:
-            account_name = self.account_mapping[str(account_id)].get("tempo_name")
-
-        if config.migration_config.get("dry_run", False):
-            return {
-                "id": None,
-                "name": jira_name,
-                "identifier": identifier,
-                "jira_key": jira_key,
-                "account_name": account_name,
-                "parent_id": parent_id,
-                "public": False,
-                "status": "ON_TRACK"
-            }
-
-        # Check if project exists by name or identifier
-        project = self.op_client.find_project_by_name_or_identifier(jira_name, identifier)
-
-        if project:
-            logger.info(f"Project '{jira_name}' already exists in OpenProject with ID {project.get('id')}")
-
-            # Update with parent if needed
-            if parent_id and not project.get("_links", {}).get("parent", {}).get("href"):
-                logger.info(f"Updating project {jira_name} to set parent ID {parent_id}")
-                try:
-                    updated_project = self.op_client.update_project(
-                        project.get("id"),
-                        {"parent": parent_id}
-                    )
-                    if updated_project:
-                        logger.info(f"Successfully updated parent for project {jira_name}")
-                        project = updated_project
-                except Exception as e:
-                    logger.error(f"Failed to update parent for project {jira_name}: {str(e)}")
-
-            # Add account_name to the project dict
-            if account_name:
-                project["account_name"] = account_name
-
-            # Add account custom field value if available
-            if self.account_custom_field_id and account_name:
-                try:
-                    self.op_client.update_project_custom_field(
-                        project_id=project.get("id"),
-                        custom_field_id=self.account_custom_field_id,
-                        value=account_name,
-                    )
-                    logger.info(f"Added account '{account_name}' to project '{jira_name}'")
-                except Exception as e:
-                    logger.error(f"Failed to set account for project {jira_name}: {str(e)}")
-
-            # Return the created project (status handled by OpenProjectClient)
-            return project
-
-        # Create project
-        project_data = {
-            "name": jira_name,
-            "identifier": identifier,
-            "description": {"raw": jira_description} if jira_description else {"raw": ""},
-            "public": False,
-            "status": "ON_TRACK"
-        }
-
-        # Add parent if specified
-        if parent_id:
-            project_data["parent"] = parent_id
-            logger.info(f"Setting parent project ID {parent_id} for {jira_name}")
-
-        logger.info(f"Creating project '{jira_name}' in OpenProject")
-        try:
-            # Properly unpack the dictionary values as positional and named arguments
-            project, was_created = self.op_client.create_project(
-                name=project_data["name"],
-                identifier=project_data["identifier"],
-                description=project_data["description"].get("raw", "") if isinstance(project_data["description"], dict) else project_data["description"],
-                parent_id=project_data.get("parent"),
-                public=False,
-                status="ON_TRACK"
-            )
-            if project:
-                self._created_projects += 1
-                logger.info(f"Successfully created project '{jira_name}' with ID {project.get('id')}")
-
-                # Add account_name to the project dict
-                if account_name:
-                    project["account_name"] = account_name
-
-                # Add account custom field value if available
-                if self.account_custom_field_id and account_name:
-                    try:
-                        self.op_client.update_project_custom_field(
-                            project_id=project.get("id"),
-                            custom_field_id=self.account_custom_field_id,
-                            value=account_name,
-                        )
-                        logger.info(f"Added account '{account_name}' to project '{jira_name}'")
-                    except Exception as e:
-                        logger.error(f"Failed to set account for project {jira_name}: {str(e)}")
-
-                # Return the created project (status handled by OpenProjectClient)
-                return project
-            else:
-                logger.error(f"Failed to create project '{jira_name}' in OpenProject")
-                return None
-        except Exception as e:
-            logger.exception(f"Error creating project '{jira_name}': {str(e)}")
-            logger.error(f"Error creating project '{jira_name}': {str(e)}")
-            return None
-
     def bulk_migrate_projects(self) -> Dict[str, Any]:
         """
         Migrate projects from Jira to OpenProject in bulk using Rails console.
@@ -423,6 +288,9 @@ class ProjectMigration(BaseMigration):
             Dictionary mapping Jira project keys to OpenProject project IDs
         """
         logger.info("Starting bulk project migration using Rails client...")
+        if config.migration_config.get("dry_run", False):
+            logger.info("DRY RUN: skipping bulk project migration via Rails console")
+            return {}
 
         if not self.op_client.rails_client:
             logger.error("Rails client is required for bulk project migration. Aborting.")
@@ -512,6 +380,31 @@ class ProjectMigration(BaseMigration):
         if not self.op_client.rails_client.transfer_file_to_container(temp_file_path, container_temp_path):
             logger.error("Failed to transfer projects data file to container. Aborting.")
             return {}
+
+        # Check for dry run
+        if config.migration_config.get("dry_run", False):
+            logger.info("DRY RUN: Skipping Rails script execution. Would have created these projects:")
+            for project in projects_data:
+                logger.info(f"  - {project['name']} (identifier: {project['identifier']})")
+
+            # Create a dummy mapping for dry run
+            mapping = {}
+            for project in projects_data:
+                jira_key = project.get('jira_key')
+                mapping[jira_key] = {
+                    "jira_key": jira_key,
+                    "jira_name": project.get('name'),
+                    "openproject_id": None,  # None for dry run
+                    "openproject_identifier": project.get('identifier'),
+                    "openproject_name": project.get('name'),
+                    "created_new": False,
+                    "dry_run": True
+                }
+
+            self.project_mapping = mapping
+            self._save_to_json(mapping, Mappings.PROJECT_MAPPING_FILE)
+            logger.success(f"DRY RUN: Would have created {len(projects_data)} projects")
+            return mapping
 
         # Create Ruby script for bulk project creation
         header_script = f"""
@@ -659,8 +552,8 @@ class ProjectMigration(BaseMigration):
 
         if result.get('status') != 'success':
             logger.error(f"Rails error during bulk project creation: {result.get('error', 'Unknown error')}")
-            logger.warning("Falling back to API-based migration.")
-            return self.migrate_projects()
+            logger.error("Bulk project migration failed. Aborting.")
+            return {}
 
         # Get the results
         created_projects = []
@@ -724,135 +617,6 @@ class ProjectMigration(BaseMigration):
         logger.success(f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors")
         return mapping
 
-    def migrate_projects(self) -> Dict[str, Any]:
-        """
-        Migrate projects from Jira to OpenProject.
-
-        Returns:
-            Dictionary mapping Jira project keys to OpenProject project IDs
-        """
-        logger.info("Starting project migration...")
-
-        if not self.jira_projects:
-            self.extract_jira_projects()
-
-        if not self.op_projects:
-            self.extract_openproject_projects()
-
-        if not self.account_mapping:
-            self.load_account_mapping()
-
-        if not self.project_account_mapping:
-            self.extract_project_account_mapping()
-
-        if not self.company_mapping:
-            self.load_company_mapping()
-
-        op_projects_by_name = {
-            project.get("name", "").lower(): project for project in self.op_projects
-        }
-        op_projects_by_identifier = {
-            project.get("identifier", "").lower(): project
-            for project in self.op_projects
-        }
-
-        mapping = {}
-
-        def process_project(jira_project, context):
-            jira_key = jira_project.get("key")
-            jira_name = jira_project.get("name", "")
-
-            potential_identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
-            if not potential_identifier[0].isalpha():
-                potential_identifier = "p-" + potential_identifier
-            potential_identifier = potential_identifier[:100]
-
-            # Find existing project
-            op_project = None
-            if jira_name.lower() in op_projects_by_name:
-                op_project = op_projects_by_name[jira_name.lower()]
-            elif potential_identifier in op_projects_by_identifier:
-                op_project = op_projects_by_identifier[potential_identifier]
-
-            # Find parent company for hierarchical structure
-            parent_company = None
-            parent_id = None
-            if not op_project:  # Only look for parent if creating a new project
-                parent_company = self.find_parent_company_for_project(jira_project)
-                if parent_company:
-                    parent_id = parent_company.get("openproject_id")
-                    logger.info(f"Found parent company for {jira_key}: {parent_company.get('tempo_name')} (ID: {parent_id})")
-
-            # Get account ID if available
-            account_id = None
-            if jira_key in self.project_account_mapping:
-                accounts = self.project_account_mapping[jira_key]
-                # Handle case where accounts might be an integer instead of a list
-                if isinstance(accounts, int) or isinstance(accounts, str):
-                    account_id = accounts
-                elif isinstance(accounts, list) and len(accounts) > 0:
-                    account_id = accounts[0].get("id")
-
-            # Create or update project
-            if not op_project:
-                op_project = self.create_project_in_openproject(
-                    jira_project,
-                    account_id=account_id,
-                    parent_id=parent_id
-                )
-
-            if op_project:
-                mapping[jira_key] = {
-                    "jira_key": jira_key,
-                    "jira_name": jira_project.get("name"),
-                    "openproject_id": op_project.get("id"),
-                    "openproject_identifier": op_project.get("identifier"),
-                    "openproject_name": op_project.get("name"),
-                    "account_id": account_id,
-                    "account_name": op_project.get("account_name"),
-                    "parent_id": parent_id,
-                    "parent_name": parent_company.get("tempo_name") if parent_company else None,
-                    "created_new": op_project.get("id")
-                    not in [p.get("id") for p in self.op_projects],
-                }
-
-                if op_project.get("id") not in [p.get("id") for p in self.op_projects]:
-                    return jira_name
-            else:
-                mapping[jira_key] = {
-                    "jira_key": jira_key,
-                    "jira_name": jira_project.get("name"),
-                    "openproject_id": None,
-                    "openproject_identifier": None,
-                    "openproject_name": None,
-                    "account_id": account_id,
-                    "account_name": None,
-                    "parent_id": parent_id,
-                    "parent_name": parent_company.get("tempo_name") if parent_company else None,
-                    "created_new": False,
-                    "failed": True,
-                }
-
-            return None
-
-        process_with_progress(
-            items=self.jira_projects,
-            process_func=process_project,
-            description="Migrating projects",
-            log_title="Projects Being Created",
-            item_name_func=lambda project: project.get("name", "Unknown")
-        )
-
-        self.project_mapping = mapping
-        self._save_to_json(mapping, Mappings.PROJECT_MAPPING_FILE)
-
-        analysis = self.analyze_project_mapping()
-
-        if config.migration_config.get("dry_run", False):
-            logger.info("DRY RUN: No projects were actually created in OpenProject")
-
-        return mapping
-
     def analyze_project_mapping(self) -> Dict[str, Any]:
         """
         Analyze the project mapping to identify potential issues.
@@ -867,7 +631,7 @@ class ProjectMigration(BaseMigration):
                 ) as f:
                     self.project_mapping = json.load(f)
             else:
-                logger.error("No project mapping found. Run migrate_projects() first.")
+                logger.error("No project mapping found. Run bulk_migrate_projects() first.")
                 return {}
 
         analysis = {
@@ -966,13 +730,11 @@ class ProjectMigration(BaseMigration):
         # Extract project-account mapping
         self.extract_project_account_mapping(force=force)
 
-        # Choose migration strategy: simulate via API in dry-run, or bulk via Rails for real runs
+        # Always use Rails bulk migration for project creation
         if dry_run:
-            logger.info("DRY RUN: simulating project migration via API (no changes)")
-            result = self.migrate_projects()
-        else:
-            logger.info("Running bulk project migration via Rails console")
-            result = self.bulk_migrate_projects()
+            logger.info("DRY RUN: no projects will be created or modified in OpenProject")
+        logger.info("Running bulk project migration via Rails console")
+        result = self.bulk_migrate_projects()
 
         if not result:
             logger.error("Migration failed")

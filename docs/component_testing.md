@@ -12,8 +12,6 @@ This document summarizes the testing status of key migration components and prov
 
 - `test_extract_jira_projects`: Tests extraction of project data from Jira
 - `test_extract_openproject_projects`: Tests extraction of project data from OpenProject
-- `test_create_project_in_openproject`: Tests creation of a single project in OpenProject
-- `test_migrate_projects`: Tests the full migration process for projects
 - `test_analyze_project_mapping`: Tests the analysis functionality for project mapping
 
 **Manual Testing Steps**:
