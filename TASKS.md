@@ -221,6 +221,11 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
 
 ## Phase 2.5: High Priority Improvements (NEW)
 
+* [ ] **Remove obsolete project API code** (`project_migration.py`)
+  * [ ] Remove fallback/obsolete code handling projects added via API
+  * [ ] Ensure all project creation occurs through Rails console client
+* [ ] **Migrate Tempo Customer metadata** (`company_migration.py`)
+  * [ ] Migrate meta data from Tempo customer to OpenProject customer main project
 * [x] **Fix Project Hierarchy Structure** (`project_migration.py`)
   * [x] Implement hierarchical project structure (Tempo Company -> Jira Project relationship)
   * [x] Modify project migration to create Tempo Companies as main projects

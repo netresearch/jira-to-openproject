@@ -6,34 +6,18 @@ This script provides a unified interface for running both migration
 and export operations from a single command-line tool.
 """
 
-import os
 import sys
 import argparse
-import time
 from typing import Dict, List, Any, Optional
 
-from src.config import logger, get_path, ensure_subdir, migration_config
-from src.display import console, ProgressTracker, process_with_progress
-from src.migrations.user_migration import UserMigration
-from src.migrations.company_migration import CompanyMigration
-from src.migrations.account_migration import AccountMigration
-from src.migrations.project_migration import ProjectMigration
-from src.migrations.custom_field_migration import CustomFieldMigration
-from src.migrations.workflow_migration import WorkflowMigration
-from src.migrations.link_type_migration import LinkTypeMigration
-from src.migrations.issue_type_migration import IssueTypeMigration
-from src.migrations.status_migration import StatusMigration
-from src.migrations.work_package_migration import WorkPackageMigration
+from src.config import logger, migration_config
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
-from src.mappings.mappings import Mappings
-from src.utils import load_json_file, save_json_file, sanitize_for_filename
 
 # Import migration functions from the new modules
 from src.migration import (
     run_migration,
-    create_backup,
     restore_backup,
     setup_tmux_session
 )

@@ -15,13 +15,11 @@ from datetime import datetime
 from typing import Dict, List, Any, Literal, TypedDict, NotRequired, Optional
 
 from src import config
-from src.display import console, ProgressTracker, process_with_progress
 from src.migrations.user_migration import UserMigration
 from src.migrations.company_migration import CompanyMigration
 from src.migrations.account_migration import AccountMigration
 from src.migrations.project_migration import ProjectMigration
 from src.migrations.custom_field_migration import CustomFieldMigration
-from src.migrations.workflow_migration import WorkflowMigration
 from src.migrations.link_type_migration import LinkTypeMigration
 from src.migrations.issue_type_migration import IssueTypeMigration
 from src.migrations.status_migration import StatusMigration

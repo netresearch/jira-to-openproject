@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src import config
-from src.display import process_with_progress
 from src.utils import load_json_file
 from src.migrations.base_migration import BaseMigration
 from src.mappings.mappings import Mappings
@@ -255,190 +254,6 @@ class CompanyMigration(BaseMigration):
 
         return mapping
 
-    def create_company_project_in_openproject(
-        self, tempo_company: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Create a top-level project in OpenProject based on a Tempo company.
-
-        Args:
-            tempo_company: The Tempo company data
-
-        Returns:
-            The created OpenProject project or None if creation failed
-        """
-        name = tempo_company.get("name")
-        key = tempo_company.get("key", "")
-        lead = tempo_company.get("lead", "")
-        status = tempo_company.get("status", "ACTIVE")
-
-        # Map Tempo status to OpenProject status
-        op_status = "ON_TRACK"  # Default status
-        if status in ["CLOSED", "ARCHIVED"]:
-            op_status = "FINISHED"
-
-        description = f"Migrated from Tempo company: {key}\n"
-        if lead:
-            description += f"Company Lead: {lead}\n"
-
-        base_identifier = "customer_"
-
-        if key:
-            raw_id = key.lower()
-            sanitized_id = re.sub(r'[^a-z0-9_-]', '_', raw_id)
-            base_identifier += sanitized_id
-        else:
-            raw_id = name.lower()
-            sanitized_id = re.sub(r'[^a-z0-9_-]', '_', raw_id)
-            base_identifier += sanitized_id
-
-        identifier = base_identifier[:100]
-
-        if config.migration_config.get('dry_run'):
-            return {
-                "id": None,
-                "name": name,
-                "identifier": identifier,
-                "description": {"raw": description},
-                "_links": {"parent": {"href": None}},
-                "public": False,
-                "status": op_status
-            }
-
-        try:
-            project, was_created = self.op_client.create_project(
-                name=name,
-                identifier=identifier,
-                description=description,
-                public=False,
-                status=op_status
-            )
-
-            if project:
-                if was_created:
-                    self._created_companies += 1
-                return project
-            else:
-                return {
-                    "id": None,
-                    "name": name,
-                    "identifier": identifier,
-                    "description": {"raw": description},
-                    "_links": {"parent": {"href": None}},
-                    "_placeholder": True,
-                    "public": False,
-                    "status": op_status
-                }
-        except Exception as e:
-            error_msg = str(e)
-            if "422" in error_msg and "taken" in error_msg:
-                return {
-                    "id": None,
-                    "name": name,
-                    "identifier": identifier,
-                    "description": {"raw": description},
-                    "_links": {"parent": {"href": None}},
-                    "_placeholder": True,
-                    "public": False,
-                    "status": op_status
-                }
-            else:
-                self.logger.error(f"Error creating company project {name}: {str(e)}")
-                return None
-
-    def migrate_companies(self) -> Dict[str, Any]:
-        """
-        Migrate companies from Tempo timesheet to OpenProject as top-level projects.
-
-        Returns:
-            Updated mapping with migration results
-        """
-        self.logger.info("Starting company migration...")
-
-        if not self.tempo_companies:
-            self.extract_tempo_companies()
-
-        if not self.op_projects:
-            self.extract_openproject_projects()
-
-        if not self.company_mapping:
-            self.create_company_mapping()
-
-        companies_to_migrate = list(self.tempo_companies.values())
-
-        if not companies_to_migrate:
-            self.logger.warning(f"No companies found to migrate")
-            return self.company_mapping
-
-        self._created_companies = 0
-
-        def process_company(company, context):
-            # Get company ID, preferring 'id' but accepting 'tempo_id' as fallback
-            tempo_id = company.get("id")
-            if not tempo_id and "tempo_id" in company:
-                tempo_id = company.get("tempo_id")
-                # Add 'id' if missing but 'tempo_id' exists
-                company["id"] = tempo_id
-
-            if not tempo_id:
-                self.logger.warning(f"Skipping company without ID: {company}")
-                return "Unknown company (missing ID)"
-
-            tempo_id = str(tempo_id)  # Ensure it's a string
-            tempo_name = company.get("name", f"Unknown Company {tempo_id}")
-
-            identifier = None
-            if company.get("key"):
-                base_identifier = "customer_" + re.sub(r'[^a-z0-9_-]', '_', company["key"].lower())
-                identifier = base_identifier[:100]
-
-            if identifier:
-                existing = self.op_client.get_project_by_identifier(identifier)
-                if existing:
-                    self.company_mapping[tempo_id] = {
-                        "tempo_id": tempo_id,
-                        "tempo_key": company.get("key", ""),
-                        "tempo_name": tempo_name,
-                        "openproject_id": existing.get("id"),
-                        "openproject_identifier": existing.get("identifier"),
-                        "openproject_name": existing.get("name"),
-                        "matched_by": "existing",
-                    }
-                    return tempo_name
-
-            op_project = self.create_company_project_in_openproject(company)
-
-            if op_project:
-                self.company_mapping[tempo_id] = {
-                    "tempo_id": tempo_id,
-                    "tempo_key": company.get("key", ""),
-                    "tempo_name": tempo_name,
-                    "openproject_id": op_project.get("id"),
-                    "openproject_identifier": op_project.get("identifier"),
-                    "openproject_name": op_project.get("name"),
-                    "matched_by": "created",
-                }
-
-            return tempo_name
-
-        self.logger.info(f"Migrating {len(companies_to_migrate)} companies to OpenProject")
-        process_with_progress(
-            items=companies_to_migrate,
-            process_func=process_company,
-            description="Migrating companies",
-            log_title="Companies Being Migrated",
-            item_name_func=lambda company: company.get("name", "Unknown")
-        )
-
-        self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
-
-        if config.migration_config.get('dry_run'):
-            self.logger.info(
-                "DRY RUN: No company projects were actually created in OpenProject"
-            )
-
-        return self.company_mapping
-
     def analyze_company_mapping(self) -> Dict[str, Any]:
         """
         Analyze the company mapping to identify potential issues.
@@ -545,11 +360,6 @@ class CompanyMigration(BaseMigration):
             return self.company_mapping
 
         self._created_companies = 0
-
-        # Check if Rails client is available - we need it for bulk creation
-        if not self.op_client.rails_client:
-            self.logger.warning("Rails client is not available, falling back to API-based creation")
-            return self.migrate_companies()
 
         # Prepare company data for bulk creation
         companies_data = []
@@ -957,13 +767,8 @@ class CompanyMigration(BaseMigration):
 
             # Migrate companies if not in dry run mode
             if not dry_run:
-                # Use bulk migration if Rails client is available
-                if self.op_client.rails_client:
-                    self.logger.info("Using bulk creation for company projects")
-                    result = self.migrate_companies_bulk()
-                else:
-                    self.logger.info("Rails client not available, using individual API calls")
-                    result = self.migrate_companies()
+                self.logger.info("Using bulk creation for company projects")
+                result = self.migrate_companies_bulk()
             else:
                 self.logger.warning("Dry run mode - not creating company projects", extra={"markup": True})
                 result = {
