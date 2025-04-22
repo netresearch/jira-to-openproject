@@ -5,6 +5,7 @@ This document outlines the process for migrating Jira statuses to OpenProject, i
 ## Overview
 
 Status migration involves:
+
 1. Extracting statuses from Jira
 2. Extracting statuses from OpenProject
 3. Creating a mapping between Jira and OpenProject statuses
@@ -22,9 +23,10 @@ python src/main.py migrate --components status --force
 ```
 
 This will:
-- Extract all statuses from Jira
-- Extract status categories from Jira
-- Store the data in `var/data/jira_statuses.json` and `var/data/jira_status_categories.json`
+
+* Extract all statuses from Jira
+* Extract status categories from Jira
+* Store the data in `var/data/jira_statuses.json` and `var/data/jira_status_categories.json`
 
 ### 2. Extract OpenProject Statuses
 
@@ -35,8 +37,9 @@ python src/main.py migrate --components status --force
 ```
 
 This will:
-- Extract all statuses from OpenProject
-- Store the data in `var/data/op_statuses.json`
+
+* Extract all statuses from OpenProject
+* Store the data in `var/data/op_statuses.json`
 
 ### 3. Create Status Mapping
 
@@ -47,8 +50,9 @@ python src/main.py migrate --components status
 ```
 
 This will:
-- Create a mapping between Jira and OpenProject statuses
-- Store the mapping in `var/data/status_mapping.json`
+
+* Create a mapping between Jira and OpenProject statuses
+* Store the mapping in `var/data/status_mapping.json`
 
 ### 4. Create Missing Statuses in OpenProject
 
@@ -61,21 +65,23 @@ python src/main.py migrate --components status --direct-migration
 ```
 
 This will:
-- Connect to the OpenProject Rails console
-- Create statuses that exist in Jira but not in OpenProject
-- Update the status mapping with the newly created statuses
+
+* Connect to the OpenProject Rails console
+* Create statuses that exist in Jira but not in OpenProject
+* Update the status mapping with the newly created statuses
 
 #### Option 2: Manual Configuration in OpenProject
 
 1. Login to OpenProject as an administrator
 2. Navigate to Administration → Work packages → Status
 3. Create each missing status:
-   - Click "New status"
-   - Enter the name (from the Jira status)
-   - Set whether it's a closed status (usually based on Jira status category)
-   - Select an appropriate color
-   - Click "Create"
+   * Click "New status"
+   * Enter the name (from the Jira status)
+   * Set whether it's a closed status (usually based on Jira status category)
+   * Select an appropriate color
+   * Click "Create"
 4. After creating all statuses, update the status mapping:
+
    ```bash
    python src/main.py migrate --components status --update-mapping
    ```
@@ -95,9 +101,10 @@ python -m tests.test_status_migration
 ```
 
 This will:
-- Verify the status count matches between Jira and OpenProject
-- Verify that all Jira statuses have a corresponding OpenProject status
-- Check the mapping file integrity
+
+* Verify the status count matches between Jira and OpenProject
+* Verify that all Jira statuses have a corresponding OpenProject status
+* Check the mapping file integrity
 
 ### 2. Manual Testing
 
@@ -117,9 +124,10 @@ python src/main.py analyze --component status
 ```
 
 This will produce a report showing:
-- Status mapping completeness
-- Potential issues or conflicts
-- Suggestions for improving the mapping
+
+* Status mapping completeness
+* Potential issues or conflicts
+* Suggestions for improving the mapping
 
 ## Troubleshooting
 
@@ -142,5 +150,5 @@ If status transitions don't match the expected workflow:
 
 ## Reference
 
-- Jira Status API: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-status/#api-group-status
-- OpenProject Status API: https://www.openproject.org/docs/api/endpoints/status/
+* Jira Status API: <https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-status/#api-group-status>
+* OpenProject Status API: <https://www.openproject.org/docs/api/endpoints/status/>

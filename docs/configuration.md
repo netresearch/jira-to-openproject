@@ -4,29 +4,29 @@ This document explains the configuration system for the Jira to OpenProject migr
 
 **Key Documentation:**
 
-*   **Project Overview:** [README.md](../README.md)
-*   **Development Guide:** [development.md](development.md)
-*   **Tasks & Status:** [TASKS.md](../TASKS.md)
+* **Project Overview:** [README.md](../README.md)
+* **Development Guide:** [development.md](development.md)
+* **Tasks & Status:** [TASKS.md](../TASKS.md)
 
 ## Overview
 
 The migration tool uses a consolidated configuration approach combining:
 
-1.  **YAML Configuration File:** `config/config.yaml` for structured settings, defaults, and non-sensitive parameters.
-2.  **Environment Variables:** For secrets, environment-specific overrides, and compatibility with containerized deployments.
-    *   `.env`: Contains version-controlled default environment variables.
-    *   `.env.local`: Contains **non-version-controlled** custom settings and secrets (e.g., API keys, passwords). This file overrides `.env`.
-    *   Shell Environment Variables: System-level environment variables have the highest priority.
-3.  **Configuration Loader:** The `src.config_loader.ConfigLoader` class reads and merges these sources, making them accessible via the `src.config` module.
+1. **YAML Configuration File:** `config/config.yaml` for structured settings, defaults, and non-sensitive parameters.
+2. **Environment Variables:** For secrets, environment-specific overrides, and compatibility with containerized deployments.
+    * `.env`: Contains version-controlled default environment variables.
+    * `.env.local`: Contains **non-version-controlled** custom settings and secrets (e.g., API keys, passwords). This file overrides `.env`.
+    * Shell Environment Variables: System-level environment variables have the highest priority.
+3. **Configuration Loader:** The `src.config_loader.ConfigLoader` class reads and merges these sources, making them accessible via the `src.config` module.
 
 ## Configuration Priority
 
 Configuration values are loaded in the following order, with later sources overriding earlier ones:
 
-1.  Values defined in `config/config.yaml`.
-2.  Variables defined in the `.env` file.
-3.  Variables defined in the `.env.local` file.
-4.  Shell environment variables set in the system.
+1. Values defined in `config/config.yaml`.
+2. Variables defined in the `.env` file.
+3. Variables defined in the `.env.local` file.
+4. Shell environment variables set in the system.
 
 ## Accessing Configuration
 
@@ -58,9 +58,9 @@ all_settings = config.get_config()
 
 Environment variables provide a secure way to handle secrets and allow for easy overrides in different environments (development, testing, production).
 
-*   **Prefix:** All environment variables used by this application **must** start with the `J2O_` prefix to avoid conflicts.
-*   **.env:** Contains default, non-sensitive values. Commit this file to Git.
-*   **.env.local:** Contains sensitive data (API keys, usernames, passwords, SSH keys) and specific overrides for your local setup. **Do NOT commit this file to Git.** Ensure it's listed in `.gitignore`.
+* **Prefix:** All environment variables used by this application **must** start with the `J2O_` prefix to avoid conflicts.
+* **.env:** Contains default, non-sensitive values. Commit this file to Git.
+* **.env.local:** Contains sensitive data (API keys, usernames, passwords, SSH keys) and specific overrides for your local setup. **Do NOT commit this file to Git.** Ensure it's listed in `.gitignore`.
 
 ### Key Environment Variables:
 
@@ -88,26 +88,26 @@ This file defines the structure and default values for less sensitive or more co
 
 ## Best Practices
 
-1.  **Prioritize `.env.local` for Secrets:** Never commit API keys, passwords, or specific server details to Git. Use `.env.local`.
-2.  **Use `src.config`:** Always access configuration through the `src.config` module for consistency.
-3.  **Use `.get()`:** Access dictionary keys using `.get("key", default_value)` to avoid `KeyError` exceptions if a setting is missing.
-4.  **Keep YAML for Defaults:** Use `config.yaml` for non-sensitive defaults and structural organization.
-5.  **Document New Settings:** When adding new configuration options, document them in this guide, `config.yaml` (with comments), and the `.env` template.
-6.  **Validate Configuration:** Consider adding validation logic within `ConfigLoader` or on first use to ensure required settings are present and correctly formatted.
+1. **Prioritize `.env.local` for Secrets:** Never commit API keys, passwords, or specific server details to Git. Use `.env.local`.
+2. **Use `src.config`:** Always access configuration through the `src.config` module for consistency.
+3. **Use `.get()`:** Access dictionary keys using `.get("key", default_value)` to avoid `KeyError` exceptions if a setting is missing.
+4. **Keep YAML for Defaults:** Use `config.yaml` for non-sensitive defaults and structural organization.
+5. **Document New Settings:** When adding new configuration options, document them in this guide, `config.yaml` (with comments), and the `.env` template.
+6. **Validate Configuration:** Consider adding validation logic within `ConfigLoader` or on first use to ensure required settings are present and correctly formatted.
 
 ## Python 3.13 Configuration Features
 
-- Type hints for configuration values
-- Pattern matching for processing configuration sources
-- Dataclasses with slots for configuration schema
-- f-strings with `=` operator for debug output
+* Type hints for configuration values
+* Pattern matching for processing configuration sources
+* Dataclasses with slots for configuration schema
+* f-strings with `=` operator for debug output
 
 ## Impact on Migration
 
 These configuration settings directly affect migration behavior:
 
-- `J2O_BATCH_SIZE`: Controls how many items are processed in each batch, affecting memory usage and performance
-- `J2O_RATE_LIMIT_REQUESTS` and `J2O_RATE_LIMIT_PERIOD`: Prevent API rate limit issues
-- `J2O_SSL_VERIFY`: May need to be disabled in test environments
+* `J2O_BATCH_SIZE`: Controls how many items are processed in each batch, affecting memory usage and performance
+* `J2O_RATE_LIMIT_REQUESTS` and `J2O_RATE_LIMIT_PERIOD`: Prevent API rate limit issues
+* `J2O_SSL_VERIFY`: May need to be disabled in test environments
 
 For details on running migrations, see [TASKS.md](../TASKS.md).
