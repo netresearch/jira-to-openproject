@@ -9,6 +9,7 @@ This document summarizes the testing status of key migration components and prov
 **Status**: ✅ Implementation and Unit Tests Complete
 
 **Unit Tests**:
+
 - `test_extract_jira_projects`: Tests extraction of project data from Jira
 - `test_extract_openproject_projects`: Tests extraction of project data from OpenProject
 - `test_create_project_in_openproject`: Tests creation of a single project in OpenProject
@@ -16,6 +17,7 @@ This document summarizes the testing status of key migration components and prov
 - `test_analyze_project_mapping`: Tests the analysis functionality for project mapping
 
 **Manual Testing Steps**:
+
 1. Verify project extraction from Jira:
    - Check that all expected Jira projects are extracted
    - Verify key project attributes (key, name, description)
@@ -64,6 +66,7 @@ This document summarizes the testing status of key migration components and prov
 **Status**: ✅ Implementation and Unit Tests Complete
 
 **Unit Tests**:
+
 - `test_extract_jira_link_types`: Tests extraction of link type data from Jira
 - `test_extract_openproject_relation_types`: Tests extraction of relation type data from OpenProject
 - `test_create_link_type_mapping`: Tests the mapping strategy between Jira and OpenProject
@@ -72,6 +75,7 @@ This document summarizes the testing status of key migration components and prov
 - `test_analyze_link_type_mapping`: Tests the analysis functionality for link type mapping
 
 **Manual Testing Steps**:
+
 1. Verify link type extraction from Jira:
    - Check that all Jira link types are extracted correctly
    - Verify key attributes (name, inward, outward)
@@ -121,6 +125,7 @@ This document summarizes the testing status of key migration components and prov
 **Status**: ✅ Implementation and Unit Tests Complete
 
 **Unit Tests**:
+
 - `test_extract_jira_issue_types`: Tests extraction of issue type data from Jira
 - `test_extract_openproject_work_package_types`: Tests extraction of work package type data from OpenProject
 - `test_create_issue_type_mapping`: Tests the mapping strategy between Jira and OpenProject
@@ -130,6 +135,7 @@ This document summarizes the testing status of key migration components and prov
 - `test_update_mapping_file`: Tests updating the mapping file after manual creation of work package types
 
 **Manual Testing Steps**:
+
 1. Verify issue type extraction from Jira:
    - Check that all Jira issue types are extracted correctly
    - Verify key attributes (name, description, subtask flag)
@@ -180,6 +186,7 @@ This document summarizes the testing status of key migration components and prov
 **Status**: ✅ Implementation and Unit Tests Complete
 
 **Unit Tests**:
+
 - `test_extract_jira_statuses`: Tests extraction of status data from Jira
 - `test_extract_openproject_statuses`: Tests extraction of status data from OpenProject
 - `test_create_status_mapping`: Tests the mapping between Jira and OpenProject statuses
@@ -190,6 +197,7 @@ This document summarizes the testing status of key migration components and prov
 - `test_extract_jira_workflows`: Tests extraction of workflow data from Jira
 
 **Manual Testing Steps**:
+
 1. Verify status extraction from Jira:
    - Check that all Jira statuses are extracted correctly
    - Verify key attributes (name, category, color)

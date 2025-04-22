@@ -9,10 +9,10 @@ OpenProject's approach to workflows differs from Jira's:
 1. In OpenProject, all statuses are available to all work package types by default
 2. Custom workflow configurations need to be done manually through the Admin interface
 3. The migration tool helps by:
-   - Creating missing statuses in OpenProject
-   - Providing a mapping between Jira and OpenProject statuses
-   - Analyzing workflow transitions from Jira
-   - Generating documentation for manual configuration
+   * Creating missing statuses in OpenProject
+   * Providing a mapping between Jira and OpenProject statuses
+   * Analyzing workflow transitions from Jira
+   * Generating documentation for manual configuration
 
 ## Automated Steps
 
@@ -27,12 +27,13 @@ python src/main.py migrate --components workflow
 ```
 
 This will:
-- Extract statuses from Jira
-- Extract existing statuses from OpenProject
-- Create a mapping between Jira and OpenProject statuses
-- Create any missing statuses in OpenProject
-- Generate a status mapping file (`var/data/status_mapping.json`)
-- Produce an analysis of the status mapping (`var/data/status_mapping_analysis.json`)
+
+* Extract statuses from Jira
+* Extract existing statuses from OpenProject
+* Create a mapping between Jira and OpenProject statuses
+* Create any missing statuses in OpenProject
+* Generate a status mapping file (`var/data/status_mapping.json`)
+* Produce an analysis of the status mapping (`var/data/status_mapping_analysis.json`)
 
 ### 2. Workflow Analysis
 
@@ -44,10 +45,11 @@ python src/main.py migrate --components workflow
 ```
 
 This will:
-- Extract workflow definitions from Jira
-- Analyze workflow transitions for each Jira issue type
-- Generate a workflow mapping file (`var/data/workflow_mapping.json`)
-- Create a configuration guide (`var/data/workflow_configuration.json`)
+
+* Extract workflow definitions from Jira
+* Analyze workflow transitions for each Jira issue type
+* Generate a workflow mapping file (`var/data/workflow_mapping.json`)
+* Create a configuration guide (`var/data/workflow_configuration.json`)
 
 ## Manual Configuration Steps
 
@@ -71,9 +73,9 @@ After the automated steps, manual configuration is required to set up the workfl
 
 1. Navigate to: **Administration > Work Packages > Types**
 2. For each work package type:
-   - Select the type (e.g., "Bug", "Task", etc.)
-   - Click on the **Workflow** tab
-   - Configure status transitions based on the Jira workflow mapping
+   * Select the type (e.g., "Bug", "Task", etc.)
+   * Click on the **Workflow** tab
+   * Configure status transitions based on the Jira workflow mapping
 
 ### 3. Workflow Configuration Example
 
@@ -95,12 +97,13 @@ Reference the following section in `workflow_mapping.json`:
 ```
 
 In the OpenProject Admin interface:
+
 1. Select the "Bug" type
 2. In the Workflow tab, configure the transitions:
-   - From "Open" status, allow transition to "In Progress"
-   - From "In Progress" status, allow transition to "Testing"
-   - From "Testing" status, allow transition to "Done"
-   - From "Done" status, allow transition to "Open"
+   * From "Open" status, allow transition to "In Progress"
+   * From "In Progress" status, allow transition to "Testing"
+   * From "Testing" status, allow transition to "Done"
+   * From "Done" status, allow transition to "Open"
 
 ### 4. Default Configurations
 
@@ -121,9 +124,9 @@ After configuration, test the workflows to ensure they match the expected behavi
 
 ## Considerations
 
-- OpenProject has a different workflow model compared to Jira
-- Some complex Jira workflows may need to be simplified for OpenProject
-- Consider documenting any differences for end-user training
+* OpenProject has a different workflow model compared to Jira
+* Some complex Jira workflows may need to be simplified for OpenProject
+* Consider documenting any differences for end-user training
 
 ## Advanced Configuration
 
