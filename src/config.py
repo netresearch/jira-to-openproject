@@ -4,13 +4,15 @@ Provides a centralized configuration interface using ConfigLoader.
 """
 
 import os
-import logging
-from typing import Any, Literal, Union, Optional
-from .config_loader import ConfigLoader, ConfigDict
+from typing import Any, Literal
+
+from .config_loader import ConfigDict, ConfigLoader
 from .display import configure_logging
 
 # PEP 695 Type Aliases
-type DirType = Literal["root", "data", "logs", "output", "backups", "temp", "exports", "results"]
+type DirType = Literal[
+    "root", "data", "logs", "output", "backups", "temp", "exports", "results"
+]
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 # Create a singleton instance of ConfigLoader
@@ -65,14 +67,17 @@ mappings = None
 for message in created_dirs:
     logger.debug(message, extra={"markup": True})
 
+
 # Expose the function to get the full config
 def get_config() -> ConfigDict:
     """Get the complete configuration object."""
     return _config_loader.get_config()
 
+
 def get_value(section: str, key: str, default: Any = None) -> Any:
     """Get a specific configuration value."""
     return _config_loader.get_value(section, key, default)
+
 
 def get_path(dir_type: DirType) -> str:
     """Get the path to a directory based on its type.
@@ -91,7 +96,10 @@ def get_path(dir_type: DirType) -> str:
     else:
         raise ValueError(f"Unknown directory type: dir_type='{dir_type}'")
 
-def ensure_subdir(parent_dir_type: Union[DirType, str], subdir_name: Optional[str] = None) -> str:
+
+def ensure_subdir(
+    parent_dir_type: DirType | str, subdir_name: str | None = None
+) -> str:
     """
     Ensure a subdirectory exists under one of the var directories.
 
@@ -103,7 +111,16 @@ def ensure_subdir(parent_dir_type: Union[DirType, str], subdir_name: Optional[st
         Path to the created subdirectory
     """
     # Handle the case where parent_dir_type is a DirType
-    if isinstance(parent_dir_type, str) and parent_dir_type in ["data", "logs", "output", "backups", "temp", "exports", "results", "root"]:
+    if isinstance(parent_dir_type, str) and parent_dir_type in [
+        "data",
+        "logs",
+        "output",
+        "backups",
+        "temp",
+        "exports",
+        "results",
+        "root",
+    ]:
         parent_dir = get_path(parent_dir_type)
     else:
         # Handle the case where parent_dir_type is directly a path
@@ -119,6 +136,7 @@ def ensure_subdir(parent_dir_type: Union[DirType, str], subdir_name: Optional[st
         os.makedirs(parent_dir, exist_ok=True)
         logger.debug(f"Created directory: {parent_dir}")
         return parent_dir
+
 
 # Validate required configuration
 def validate_config() -> bool:
@@ -138,7 +156,9 @@ def validate_config() -> bool:
                 config_section = openproject_config
                 prefix = "J2O_OPENPROJECT_"
                 # Special handling for OpenProject authentication
-                if not (config_section.get("api_token") or config_section.get("api_key")):
+                if not (
+                    config_section.get("api_token") or config_section.get("api_key")
+                ):
                     missing_vars.append(f"{prefix}API_TOKEN or {prefix}API_KEY")
                 continue
             case _:
@@ -149,7 +169,9 @@ def validate_config() -> bool:
                 missing_vars.append(f"{prefix}{key.upper()}")
 
     if missing_vars:
-        logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        logger.error(
+            f"Missing required environment variables: {', '.join(missing_vars)}"
+        )
         return False
 
     return True

@@ -3,9 +3,8 @@ Data mapping module for Jira to OpenProject migration.
 Defines the mapping strategies between Jira and OpenProject data models.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional, Callable, Literal, Union, TypeVar
-import re
+from dataclasses import dataclass
+from typing import Any
 
 # Add the logger import
 from src import config
@@ -20,11 +19,13 @@ type StatusMapping = dict[str, int]
 # Get logger from config
 logger = config.logger
 
+
 @dataclass(slots=True)
 class JiraIssueType:
     id: str
     name: str
     description: str | None = None
+
 
 @dataclass(slots=True)
 class OpenProjectWorkPackageType:
@@ -37,11 +38,13 @@ class OpenProjectWorkPackageType:
     jira_id: str | None = None
     description: str | None = None
 
+
 @dataclass(slots=True)
 class JiraStatus:
     id: str
     name: str
     description: str | None = None
+
 
 @dataclass(slots=True)
 class OpenProjectStatus:
@@ -50,6 +53,7 @@ class OpenProjectStatus:
     is_closed: bool = False
     color: str = "#0000FF"
     jira_id: str | None = None
+
 
 class JiraToOPMapping:
     """
@@ -90,7 +94,9 @@ class JiraToOPMapping:
             "position": 1,  # Default position
             "is_default": False,
             "is_in_roadmap": True,
-            "jira_id": jira_issue_type["id"],  # Store the original Jira ID for reference
+            "jira_id": jira_issue_type[
+                "id"
+            ],  # Store the original Jira ID for reference
         }
 
     @staticmethod
@@ -152,7 +158,9 @@ class JiraToOPMapping:
             "is_public": True,
             "status": "active",
             "jira_id": jira_project["id"],  # Store the original Jira ID for reference
-            "jira_key": jira_project["key"],  # Store the original Jira key for reference
+            "jira_key": jira_project[
+                "key"
+            ],  # Store the original Jira key for reference
         }
 
     @staticmethod
@@ -231,7 +239,9 @@ class JiraToOPMapping:
             "lastname": lastname,
             "mail": email,
             "status": "active" if jira_user.get("active", True) else "locked",
-            "jira_name": jira_user["name"],  # Store the original Jira username for reference
+            "jira_name": jira_user[
+                "name"
+            ],  # Store the original Jira username for reference
         }
 
     @staticmethod

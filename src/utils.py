@@ -1,12 +1,13 @@
-import os
 import json
+import os
 import re
 import unicodedata
-from typing import Any, Optional
+from typing import Any
 
 from src.config import logger
 
-def load_json_file(file_path: str, custom_logger=None) -> Optional[Any]:
+
+def load_json_file(file_path: str, custom_logger=None) -> Any | None:
     """Load data from a JSON file.
 
     Args:
@@ -22,14 +23,15 @@ def load_json_file(file_path: str, custom_logger=None) -> Optional[Any]:
         log.debug(f"JSON file not found: {file_path}")
         return None
     try:
-        with open(file_path, "r", encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             return json.load(f)
     except json.JSONDecodeError as e:
         log.error(f"Error decoding JSON file {file_path}: {e}")
         return None
-    except IOError as e:
+    except OSError as e:
         log.error(f"Error reading file {file_path}: {e}")
         return None
+
 
 def save_json_file(data: Any, file_path: str) -> bool:
     """Save data to a JSON file.
@@ -44,16 +46,17 @@ def save_json_file(data: Any, file_path: str) -> bool:
     try:
         # Ensure directory exists
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, "w", encoding='utf-8') as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         logger.debug(f"Saved data to {file_path}")
         return True
-    except IOError as e:
+    except OSError as e:
         logger.error(f"Error writing file {file_path}: {e}")
         return False
     except TypeError as e:
         logger.error(f"Error serializing data to JSON for {file_path}: {e}")
         return False
+
 
 def sanitize_identifier(input_string: str) -> str:
     """
@@ -66,22 +69,26 @@ def sanitize_identifier(input_string: str) -> str:
     - Max length (optional, not strictly enforced here but good practice)
     """
     if not input_string:
-        return "default-identifier" # Or raise error
+        return "default-identifier"  # Or raise error
 
     # Normalize unicode characters
-    normalized = unicodedata.normalize('NFKD', input_string).encode('ascii', 'ignore').decode('ascii')
+    normalized = (
+        unicodedata.normalize("NFKD", input_string)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
 
     # Lowercase
     s = normalized.lower()
 
     # Replace spaces and invalid chars with dashes
-    s = re.sub(r'[^a-z0-9]+', '-', s)
+    s = re.sub(r"[^a-z0-9]+", "-", s)
 
     # Remove leading/trailing dashes
-    s = s.strip('-')
+    s = s.strip("-")
 
     # Replace consecutive dashes with a single dash
-    s = re.sub(r'-{2,}', '-', s)
+    s = re.sub(r"-{2,}", "-", s)
 
     # Ensure it's not empty after sanitization
     if not s:
@@ -97,6 +104,7 @@ def sanitize_identifier(input_string: str) -> str:
 
     return s
 
+
 def sanitize_for_filename(input_string: str) -> str:
     """
     Sanitizes a string to be safe for use as a filename.
@@ -106,16 +114,20 @@ def sanitize_for_filename(input_string: str) -> str:
         return "default_filename"
 
     # Normalize unicode
-    s = unicodedata.normalize('NFKD', input_string).encode('ascii', 'ignore').decode('ascii')
+    s = (
+        unicodedata.normalize("NFKD", input_string)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
 
     # Remove characters known to be problematic: / \ : * ? " < > |
-    s = re.sub(r'[\/\\:*?"<>|]', '_', s)
+    s = re.sub(r'[\/\\:*?"<>|]', "_", s)
 
     # Replace multiple spaces/underscores with a single underscore
-    s = re.sub(r'[\s_]+', '_', s)
+    s = re.sub(r"[\s_]+", "_", s)
 
     # Remove leading/trailing underscores/spaces
-    s = s.strip('_ ')
+    s = s.strip("_ ")
 
     # Limit length (e.g., 200 chars)
     s = s[:200]

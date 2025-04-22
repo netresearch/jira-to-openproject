@@ -6,9 +6,9 @@ This script extracts JSON data from the raw tmux output file
 by looking for specific markers in the output.
 """
 
-import sys
-import re
 import json
+import sys
+
 
 def extract_json(input_file, output_file):
     """
@@ -22,11 +22,11 @@ def extract_json(input_file, output_file):
         True if extraction was successful, False otherwise
     """
     # Read the raw output file
-    with open(input_file, 'r') as f:
+    with open(input_file) as f:
         content = f.read()
 
     # First find the line numbers where json_output is printed
-    lines = content.split('\n')
+    lines = content.split("\n")
 
     # Find where "puts json_output" is located
     json_output_line = None
@@ -50,11 +50,11 @@ def extract_json(input_file, output_file):
         json_lines.append(line)
 
     # Join the lines and look for the JSON array
-    json_text = ''.join(json_lines)
+    json_text = "".join(json_lines)
 
     # Find the JSON array in the text
-    array_start = json_text.find('[{')
-    array_end = json_text.rfind('}]') + 2
+    array_start = json_text.find("[{")
+    array_end = json_text.rfind("}]") + 2
 
     if array_start >= 0 and array_end > array_start:
         json_array = json_text[array_start:array_end]
@@ -66,7 +66,7 @@ def extract_json(input_file, output_file):
             print(f"Successfully parsed JSON with {len(data)} records")
 
             # Save to output file
-            with open(output_file, 'w') as f:
+            with open(output_file, "w") as f:
                 json.dump(data, f, indent=2)
 
             print(f"Saved JSON data to {output_file}")
@@ -74,7 +74,9 @@ def extract_json(input_file, output_file):
             # Print a summary of the first few fields
             print("\nCustom Fields:")
             for field in data[:5]:  # Show first 5 fields
-                print(f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})")
+                print(
+                    f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
+                )
             if len(data) > 5:
                 print(f"... and {len(data) - 5} more fields")
 
@@ -86,6 +88,7 @@ def extract_json(input_file, output_file):
         print("Could not find JSON array in the output")
 
     return False
+
 
 def main():
     """Main entry point."""
@@ -99,6 +102,7 @@ def main():
 
     success = extract_json(input_file, output_file)
     return 0 if success else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

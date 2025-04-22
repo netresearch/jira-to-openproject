@@ -3,15 +3,14 @@
 Setup script for the Jira to OpenProject migration tool.
 """
 
-from setuptools import setup, find_packages
-import os
+from setuptools import find_packages, setup
 
 # Read requirements from requirements.txt file
-with open('requirements.txt') as f:
+with open("requirements.txt") as f:
     requirements = f.read().splitlines()
 
 # Remove any comments or blank lines from requirements
-requirements = [line for line in requirements if line and not line.startswith('#')]
+requirements = [line for line in requirements if line and not line.startswith("#")]
 
 setup(
     name="j2o",

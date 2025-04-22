@@ -8,36 +8,28 @@ This script uses the most reliable approach to get custom fields from Rails cons
 3. Creates a JSON file with the custom fields
 """
 
-import subprocess
-import time
-import re
 import json
-import sys
 import os
+import subprocess
+import sys
+import time
+
 
 def run_command_in_tmux(session_name, command):
     """Run a command in the specified tmux session."""
     print(f"Running command in tmux session '{session_name}'...")
 
     # Clear the screen first (Ctrl+L)
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session_name, "C-l"],
-        check=True
-    )
+    subprocess.run(["tmux", "send-keys", "-t", session_name, "C-l"], check=True)
     time.sleep(0.5)
 
     # Send the command
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session_name, command],
-        check=True
-    )
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session_name, "Enter"],
-        check=True
-    )
+    subprocess.run(["tmux", "send-keys", "-t", session_name, command], check=True)
+    subprocess.run(["tmux", "send-keys", "-t", session_name, "Enter"], check=True)
 
     print("Command sent successfully")
     return True
+
 
 def capture_tmux_output(session_name, lines=1000):
     """Capture output from the tmux session."""
@@ -48,12 +40,13 @@ def capture_tmux_output(session_name, lines=1000):
         ["tmux", "capture-pane", "-p", "-S", f"-{lines}", "-t", session_name],
         check=True,
         capture_output=True,
-        text=True
+        text=True,
     )
 
     output = result.stdout
     print(f"Captured {len(output)} characters")
     return output
+
 
 def main():
     """Main entry point."""
@@ -100,25 +93,25 @@ def main():
         return 1
 
     # Extract and process the lines between markers
-    content = output[start_idx + len(start_marker):end_idx].strip()
+    content = output[start_idx + len(start_marker) : end_idx].strip()
     custom_fields = []
 
-    for line in content.split('\n'):
+    for line in content.split("\n"):
         line = line.strip()
-        if not line or '=>' in line or line.startswith('irb'):
+        if not line or "=>" in line or line.startswith("irb"):
             continue
 
         # Parse the pipe-delimited line
-        parts = line.split('|')
+        parts = line.split("|")
         if len(parts) >= 6:
             try:
                 custom_field = {
-                    'id': int(parts[0]),
-                    'name': parts[1],
-                    'field_format': parts[2],
-                    'type': parts[3],
-                    'is_required': parts[4].lower() == 'true',
-                    'is_for_all': parts[5].lower() == 'true'
+                    "id": int(parts[0]),
+                    "name": parts[1],
+                    "field_format": parts[2],
+                    "type": parts[3],
+                    "is_required": parts[4].lower() == "true",
+                    "is_for_all": parts[5].lower() == "true",
                 }
                 custom_fields.append(custom_field)
             except (ValueError, IndexError) as e:
@@ -143,6 +136,7 @@ def main():
         print(f"... and {len(custom_fields) - 5} more fields")
 
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

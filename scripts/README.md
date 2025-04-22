@@ -19,10 +19,6 @@ This directory contains various utility scripts to support the migration process
 *   **`get_custom_fields_simple.py`**: Fetches basic custom field details from a Rails console session.
     *   Usage: `python scripts/get_custom_fields_simple.py [output_json_file]`
 *   **`get_custom_fields.rb`**: Ruby script to be run inside the OpenProject Rails console. Fetches all custom fields and prints them as JSON to `/tmp/openproject_custom_fields.json`.
-*   **`get_openproject_fields.py`**: Runs `get_custom_fields.rb` inside the Rails console (via `tmux` or `docker exec`), retrieves the generated JSON file, and parses the output.
-    *   Usage: `python scripts/get_openproject_fields.py [--output <output_json_file>]`
-*   **`list_jira_data.py`**: Connects to Jira and lists metadata like projects, issue types, statuses, priorities, and custom fields, saving the output to JSON files in `var/data/jira_exports/`.
-    *   Usage: `python scripts/list_jira_data.py [--list <projects|issue_types|statuses|priorities|custom_fields|all>]`
 *   **`openproject_run_rails_script.sh`**: Shell script to copy a local Ruby script (`.rb`) into the OpenProject Docker container and execute it using the Rails runner.
     *   Usage: `./scripts/openproject_run_rails_script.sh [path/to/script.rb]`
 *   **`run_tests.py`**: Test runner script that discovers and runs unit tests in the 'tests' directory. Supports patterns for running specific tests.

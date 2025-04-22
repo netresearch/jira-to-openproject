@@ -4,21 +4,16 @@ Test module for CompanyMigration.
 This module contains test cases for validating the company migration from Jira Tempo to OpenProject.
 """
 
-import os
-import sys
 import json
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from src.migrations.company_migration import CompanyMigration
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
-from src import config
-from src.utils import load_json_file, save_json_file
+from src.migrations.company_migration import CompanyMigration
+from src.utils import save_json_file
 
 
 class TestCompanyMigration(unittest.TestCase):
@@ -31,14 +26,14 @@ class TestCompanyMigration(unittest.TestCase):
         self.op_client = MagicMock(spec=OpenProjectClient)
 
         # Create a test data directory
-        self.test_data_dir = os.path.join(os.path.dirname(__file__), 'test_data')
+        self.test_data_dir = os.path.join(os.path.dirname(__file__), "test_data")
         os.makedirs(self.test_data_dir, exist_ok=True)
 
         # Initialize the company migration
         self.company_migration = CompanyMigration(
             jira_client=self.jira_client,
             op_client=self.op_client,
-            data_dir=self.test_data_dir
+            data_dir=self.test_data_dir,
         )
 
         # Initialize _created_companies attribute
@@ -52,7 +47,12 @@ class TestCompanyMigration(unittest.TestCase):
                 "name": "ACME Corporation",
                 "lead": "user1",
                 "status": "ACTIVE",
-                "_raw": {"id": "1", "key": "ACME", "name": "ACME Corporation", "status": "ACTIVE"}
+                "_raw": {
+                    "id": "1",
+                    "key": "ACME",
+                    "name": "ACME Corporation",
+                    "status": "ACTIVE",
+                },
             },
             "2": {
                 "id": "2",
@@ -60,8 +60,13 @@ class TestCompanyMigration(unittest.TestCase):
                 "name": "Globex Corporation",
                 "lead": "user2",
                 "status": "ACTIVE",
-                "_raw": {"id": "2", "key": "GLOBEX", "name": "Globex Corporation", "status": "ACTIVE"}
-            }
+                "_raw": {
+                    "id": "2",
+                    "key": "GLOBEX",
+                    "name": "Globex Corporation",
+                    "status": "ACTIVE",
+                },
+            },
         }
 
         # Alternative tempo companies format (list format after JSON serialization)
@@ -79,7 +84,7 @@ class TestCompanyMigration(unittest.TestCase):
                 "name": "Umbrella Corp",
                 "lead": "user4",
                 "status": "ACTIVE",
-            }
+            },
         ]
 
         self.sample_op_projects = [
@@ -88,21 +93,26 @@ class TestCompanyMigration(unittest.TestCase):
                 "name": "ACME Corporation",
                 "identifier": "customer_acme",
                 "description": {"raw": "Company imported from Tempo"},
-                "_links": {"parent": {"href": None}}
+                "_links": {"parent": {"href": None}},
             },
             {
                 "id": 2,
                 "name": "Another Project",
                 "identifier": "another-project",
                 "description": {"raw": "This is another project"},
-                "_links": {"parent": {"href": "/api/v3/projects/1"}}
-            }
+                "_links": {"parent": {"href": "/api/v3/projects/1"}},
+            },
         ]
 
         # Set up the mock return values
         self.jira_client.get_tempo_customers.return_value = [
             {"id": "1", "key": "ACME", "name": "ACME Corporation", "status": "ACTIVE"},
-            {"id": "2", "key": "GLOBEX", "name": "Globex Corporation", "status": "ACTIVE"}
+            {
+                "id": "2",
+                "key": "GLOBEX",
+                "name": "Globex Corporation",
+                "status": "ACTIVE",
+            },
         ]
         self.op_client.get_projects.return_value = self.sample_op_projects
 
@@ -133,7 +143,7 @@ class TestCompanyMigration(unittest.TestCase):
         self.assertTrue(os.path.exists(companies_file))
 
         # Verify the file content
-        with open(companies_file, "r") as f:
+        with open(companies_file) as f:
             saved_companies = json.load(f)
         self.assertEqual(saved_companies, companies)
 
@@ -149,7 +159,10 @@ class TestCompanyMigration(unittest.TestCase):
     def test_extract_tempo_companies_from_list_format(self):
         """Test extracting tempo companies when the cached data is in list format."""
         # Save the list format data to the cache file
-        save_json_file(self.sample_tempo_companies_list, os.path.join(self.test_data_dir, "tempo_companies.json"))
+        save_json_file(
+            self.sample_tempo_companies_list,
+            os.path.join(self.test_data_dir, "tempo_companies.json"),
+        )
 
         # Reset the client
         self.jira_client.get_tempo_customers.reset_mock()
@@ -176,11 +189,13 @@ class TestCompanyMigration(unittest.TestCase):
         # Create a mixed list of company formats
         mixed_companies = [
             {"id": "1", "key": "ACME", "name": "ACME Corporation"},
-            {"tempo_id": "2", "key": "GLOBEX", "name": "Globex Corporation"}
+            {"tempo_id": "2", "key": "GLOBEX", "name": "Globex Corporation"},
         ]
 
         # Save to cache file
-        save_json_file(mixed_companies, os.path.join(self.test_data_dir, "tempo_companies.json"))
+        save_json_file(
+            mixed_companies, os.path.join(self.test_data_dir, "tempo_companies.json")
+        )
 
         # Load companies
         companies = self.company_migration.extract_tempo_companies()
@@ -233,10 +248,14 @@ class TestCompanyMigration(unittest.TestCase):
             self.assertIn(company_id, mapping)
 
         # Check specific mappings based on our sample data
-        self.assertEqual(mapping["1"]["openproject_id"], 1)  # "ACME Corporation" -> "ACME Corporation"
+        self.assertEqual(
+            mapping["1"]["openproject_id"], 1
+        )  # "ACME Corporation" -> "ACME Corporation"
         self.assertEqual(mapping["1"]["matched_by"], "name")
 
-        self.assertIsNone(mapping["2"]["openproject_id"])  # "Globex Corporation" -> None (not found)
+        self.assertIsNone(
+            mapping["2"]["openproject_id"]
+        )  # "Globex Corporation" -> None (not found)
         self.assertEqual(mapping["2"]["matched_by"], "none")
 
         # Verify that the mapping was saved to a file
@@ -251,26 +270,26 @@ class TestCompanyMigration(unittest.TestCase):
                 "tempo_id": "1",
                 "tempo_key": "ACME",
                 "tempo_name": "ACME Corporation",
-                "matched_by": "name"
+                "matched_by": "name",
             },
             "2": {
                 "tempo_id": "2",
                 "tempo_key": "GLOBEX",
                 "tempo_name": "Globex Corporation",
-                "matched_by": "created"
+                "matched_by": "created",
             },
             "3": {
                 "tempo_id": "3",
                 "tempo_key": "INITECH",
                 "tempo_name": "Initech",
-                "matched_by": "existing"
+                "matched_by": "existing",
             },
             "4": {
                 "tempo_id": "4",
                 "tempo_key": "UMBRELLA",
                 "tempo_name": "Umbrella Corp",
-                "matched_by": "none"
-            }
+                "matched_by": "none",
+            },
         }
         # Initialize the counter for created companies
         self.company_migration._created_companies = 1
@@ -287,7 +306,7 @@ class TestCompanyMigration(unittest.TestCase):
         self.assertEqual(analysis["unmatched_companies"], 1)
         self.assertEqual(analysis["actually_created"], 1)
 
-    @patch('src.migrations.company_migration.config.migration_config')
+    @patch("src.migrations.company_migration.config.migration_config")
     def test_migrate_companies_bulk(self, mock_migration_config):
         """Test the bulk migration of companies."""
         # Configure the mock to return False for dry_run
@@ -300,7 +319,7 @@ class TestCompanyMigration(unittest.TestCase):
         # Configure op_config attribute on the mock client
         self.op_client.op_config = {
             "container": "openproject-web-1",
-            "server": "test-server.com"
+            "server": "test-server.com",
         }
 
         # Setup file transfer mocks
@@ -309,32 +328,32 @@ class TestCompanyMigration(unittest.TestCase):
 
         # Setup execute mock to return a successful result
         mock_rails_client.execute.return_value = {
-            'status': 'success',
-            'output': {
-                'status': 'success',
-                'created': [
+            "status": "success",
+            "output": {
+                "status": "success",
+                "created": [
                     {
-                        'tempo_id': '2',
-                        'tempo_key': 'GLOBEX',
-                        'tempo_name': 'Globex Corporation',
-                        'openproject_id': 3,
-                        'openproject_identifier': 'customer_globex',
-                        'openproject_name': 'Globex Corporation'
+                        "tempo_id": "2",
+                        "tempo_key": "GLOBEX",
+                        "tempo_name": "Globex Corporation",
+                        "openproject_id": 3,
+                        "openproject_identifier": "customer_globex",
+                        "openproject_name": "Globex Corporation",
                     },
                     {
-                        'tempo_id': '4',
-                        'tempo_key': 'UMBRELLA',
-                        'tempo_name': 'Umbrella Corp',
-                        'openproject_id': 4,
-                        'openproject_identifier': 'customer_umbrella',
-                        'openproject_name': 'Umbrella Corp'
-                    }
+                        "tempo_id": "4",
+                        "tempo_key": "UMBRELLA",
+                        "tempo_name": "Umbrella Corp",
+                        "openproject_id": 4,
+                        "openproject_identifier": "customer_umbrella",
+                        "openproject_name": "Umbrella Corp",
+                    },
                 ],
-                'errors': [],
-                'created_count': 2,
-                'error_count': 0,
-                'total': 2
-            }
+                "errors": [],
+                "created_count": 2,
+                "error_count": 0,
+                "total": 2,
+            },
         }
 
         # Set up test data with mixed id formats
@@ -344,29 +363,29 @@ class TestCompanyMigration(unittest.TestCase):
                 "key": "ACME",
                 "name": "ACME Corporation",
                 "lead": "user1",
-                "matched_by": "name"  # Already matched
+                "matched_by": "name",  # Already matched
             },
             "2": {
                 "id": "2",
                 "key": "GLOBEX",
                 "name": "Globex Corporation",
                 "lead": "user2",
-                "matched_by": "none"  # Needs creation
+                "matched_by": "none",  # Needs creation
             },
             "3": {
                 "tempo_id": "3",  # Using tempo_id
                 "key": "INITECH",
                 "name": "Initech",
                 "lead": "user3",
-                "matched_by": "existing"  # Already existing
+                "matched_by": "existing",  # Already existing
             },
             "4": {
                 "tempo_id": "4",  # Using tempo_id
                 "key": "UMBRELLA",
                 "name": "Umbrella Corp",
                 "lead": "user4",
-                "matched_by": "none"  # Needs creation
-            }
+                "matched_by": "none",  # Needs creation
+            },
         }
 
         # Set up the company migration
@@ -378,7 +397,7 @@ class TestCompanyMigration(unittest.TestCase):
             "1": {"tempo_id": "1", "matched_by": "name", "openproject_id": 1},
             "2": {"tempo_id": "2", "matched_by": "none", "openproject_id": None},
             "3": {"tempo_id": "3", "matched_by": "existing", "openproject_id": 2},
-            "4": {"tempo_id": "4", "matched_by": "none", "openproject_id": None}
+            "4": {"tempo_id": "4", "matched_by": "none", "openproject_id": None},
         }
 
         # Mock get_project_by_identifier to simulate existing check

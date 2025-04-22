@@ -3,18 +3,13 @@ Workflow migration module for Jira to OpenProject migration.
 Handles the migration of workflow states and their transitions from Jira to OpenProject.
 """
 
-import os
-import sys
 import json
-from typing import Dict, List, Any, Optional
-
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
+import os
+from typing import Any
+from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src import config
-from src.display import ProgressTracker, console
+from src.display import ProgressTracker
 
 # Get logger from config
 logger = config.logger
@@ -49,7 +44,7 @@ class WorkflowMigration:
 
         self.data_dir = config.get_path("data")
 
-    def extract_jira_workflows(self) -> List[Dict[str, Any]]:
+    def extract_jira_workflows(self) -> list[dict[str, Any]]:
         """
         Extract workflow definitions from Jira.
 
@@ -60,13 +55,16 @@ class WorkflowMigration:
 
         self.jira_workflows = self._get_jira_workflows()
 
-        logger.info(f"Extracted {len(self.jira_workflows)} workflows from Jira", extra={"markup": True})
+        logger.info(
+            f"Extracted {len(self.jira_workflows)} workflows from Jira",
+            extra={"markup": True},
+        )
 
         self._save_to_json(self.jira_workflows, "jira_workflows.json")
 
         return self.jira_workflows
 
-    def _get_jira_workflows(self) -> List[Dict[str, Any]]:
+    def _get_jira_workflows(self) -> list[dict[str, Any]]:
         """
         Get workflow definitions from Jira.
 
@@ -91,16 +89,18 @@ class WorkflowMigration:
                 except Exception as e:
                     logger.warning(
                         f"Failed to get transitions for workflow {workflow_name}: {str(e)}",
-                        extra={"markup": True}
+                        extra={"markup": True},
                     )
                     workflow["transitions"] = []
 
             return workflows
         except Exception as e:
-            logger.error(f"Failed to get workflows from Jira: {str(e)}", extra={"markup": True})
+            logger.error(
+                f"Failed to get workflows from Jira: {str(e)}", extra={"markup": True}
+            )
             return []
 
-    def extract_jira_statuses(self) -> List[Dict[str, Any]]:
+    def extract_jira_statuses(self) -> list[dict[str, Any]]:
         """
         Extract workflow statuses from Jira.
 
@@ -115,17 +115,21 @@ class WorkflowMigration:
             response.raise_for_status()
             statuses = response.json()
 
-            logger.info(f"Extracted {len(statuses)} statuses from Jira", extra={"markup": True})
+            logger.info(
+                f"Extracted {len(statuses)} statuses from Jira", extra={"markup": True}
+            )
 
             self.jira_statuses = statuses
             self._save_to_json(statuses, "jira_statuses.json")
 
             return statuses
         except Exception as e:
-            logger.error(f"Failed to get statuses from Jira: {str(e)}", extra={"markup": True})
+            logger.error(
+                f"Failed to get statuses from Jira: {str(e)}", extra={"markup": True}
+            )
             return []
 
-    def extract_openproject_statuses(self) -> List[Dict[str, Any]]:
+    def extract_openproject_statuses(self) -> list[dict[str, Any]]:
         """
         Extract workflow statuses from OpenProject.
 
@@ -137,17 +141,26 @@ class WorkflowMigration:
         try:
             self.op_statuses = self.op_client.get_statuses()
         except Exception as e:
-            logger.warning(f"Failed to get statuses from OpenProject: {str(e)}", extra={"markup": True})
-            logger.warning("Using an empty list of statuses for OpenProject", extra={"markup": True})
+            logger.warning(
+                f"Failed to get statuses from OpenProject: {str(e)}",
+                extra={"markup": True},
+            )
+            logger.warning(
+                "Using an empty list of statuses for OpenProject",
+                extra={"markup": True},
+            )
             self.op_statuses = []
 
-        logger.info(f"Extracted {len(self.op_statuses)} statuses from OpenProject", extra={"markup": True})
+        logger.info(
+            f"Extracted {len(self.op_statuses)} statuses from OpenProject",
+            extra={"markup": True},
+        )
 
         self._save_to_json(self.op_statuses, "openproject_statuses.json")
 
         return self.op_statuses
 
-    def create_status_mapping(self) -> Dict[str, Any]:
+    def create_status_mapping(self) -> dict[str, Any]:
         """
         Create a mapping between Jira statuses and OpenProject statuses.
 
@@ -168,7 +181,9 @@ class WorkflowMigration:
 
         mapping = {}
 
-        with ProgressTracker("Mapping statuses", len(self.jira_statuses), "Recent Status Mappings") as tracker:
+        with ProgressTracker(
+            "Mapping statuses", len(self.jira_statuses), "Recent Status Mappings"
+        ) as tracker:
             for jira_status in self.jira_statuses:
                 jira_id = jira_status.get("id")
                 jira_name = jira_status.get("name")
@@ -187,7 +202,9 @@ class WorkflowMigration:
                         "is_closed": op_status.get("isClosed", False),
                         "matched_by": "name",
                     }
-                    tracker.add_log_item(f"Matched by name: {jira_name} → {op_status.get('name')}")
+                    tracker.add_log_item(
+                        f"Matched by name: {jira_name} → {op_status.get('name')}"
+                    )
                 else:
                     match_found = False
                     for op_name, op_status in op_statuses_by_name.items():
@@ -202,7 +219,9 @@ class WorkflowMigration:
                                 "is_closed": op_status.get("isClosed", False),
                                 "matched_by": "normalized_name",
                             }
-                            tracker.add_log_item(f"Matched by normalized name: {jira_name} → {op_status.get('name')}")
+                            tracker.add_log_item(
+                                f"Matched by normalized name: {jira_name} → {op_status.get('name')}"
+                            )
                             match_found = True
                             break
 
@@ -230,17 +249,20 @@ class WorkflowMigration:
             (matched_statuses / total_statuses) * 100 if total_statuses > 0 else 0
         )
 
-        logger.info(f"Status mapping created for {total_statuses} statuses", extra={"markup": True})
+        logger.info(
+            f"Status mapping created for {total_statuses} statuses",
+            extra={"markup": True},
+        )
         logger.info(
             f"Successfully matched {matched_statuses} statuses ({match_percentage:.1f}%)",
-            extra={"markup": True}
+            extra={"markup": True},
         )
 
         return mapping
 
     def create_status_in_openproject(
-        self, jira_status: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+        self, jira_status: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """
         Create a status in OpenProject based on a Jira status.
 
@@ -258,7 +280,10 @@ class WorkflowMigration:
 
         color = status_category.get("colorName", "#1F75D3")
 
-        logger.info(f"Creating status in OpenProject: {name} (Closed: {is_closed})", extra={"markup": True})
+        logger.info(
+            f"Creating status in OpenProject: {name} (Closed: {is_closed})",
+            extra={"markup": True},
+        )
 
         try:
             result = self.op_client.create_status(
@@ -266,19 +291,23 @@ class WorkflowMigration:
             )
 
             if result.get("success", False):
-                logger.info(f"Successfully created status: {name}", extra={"markup": True})
+                logger.info(
+                    f"Successfully created status: {name}", extra={"markup": True}
+                )
                 return result.get("data")
             else:
                 logger.error(
                     f"Failed to create status: {name} - {result.get('message', 'Unknown error')}",
-                    extra={"markup": True}
+                    extra={"markup": True},
                 )
                 return None
         except Exception as e:
-            logger.error(f"Error creating status {name}: {str(e)}", extra={"markup": True})
+            logger.error(
+                f"Error creating status {name}: {str(e)}", extra={"markup": True}
+            )
             return None
 
-    def migrate_statuses(self) -> Dict[str, Any]:
+    def migrate_statuses(self) -> dict[str, Any]:
         """
         Migrate statuses from Jira to OpenProject.
 
@@ -302,16 +331,24 @@ class WorkflowMigration:
             if mapping["matched_by"] == "none"
         ]
 
-        logger.info(f"Found {len(statuses_to_create)} statuses that need to be created in OpenProject", extra={"markup": True})
+        logger.info(
+            f"Found {len(statuses_to_create)} statuses that need to be created in OpenProject",
+            extra={"markup": True},
+        )
 
-        with ProgressTracker("Migrating statuses", len(statuses_to_create), "Recent Statuses") as tracker:
+        with ProgressTracker(
+            "Migrating statuses", len(statuses_to_create), "Recent Statuses"
+        ) as tracker:
             for i, (jira_id, mapping) in enumerate(statuses_to_create):
                 jira_status = next(
                     (s for s in self.jira_statuses if s.get("id") == jira_id), None
                 )
 
                 if not jira_status:
-                    logger.warning(f"Could not find Jira status definition for ID: {jira_id}", extra={"markup": True})
+                    logger.warning(
+                        f"Could not find Jira status definition for ID: {jira_id}",
+                        extra={"markup": True},
+                    )
                     tracker.add_log_item(f"Skipped: Unknown Jira status ID {jira_id}")
                     tracker.increment()
                     continue
@@ -326,7 +363,9 @@ class WorkflowMigration:
                     mapping["openproject_name"] = op_status.get("name")
                     mapping["is_closed"] = op_status.get("isClosed", False)
                     mapping["matched_by"] = "created"
-                    tracker.add_log_item(f"Created: {status_name} (ID: {op_status.get('id')})")
+                    tracker.add_log_item(
+                        f"Created: {status_name} (ID: {op_status.get('id')})"
+                    )
                 else:
                     tracker.add_log_item(f"Failed: {status_name}")
 
@@ -346,24 +385,32 @@ class WorkflowMigration:
             if status["matched_by"] == "created"
         )
 
-        logger.info(f"Status migration complete for {total_statuses} statuses", extra={"markup": True})
+        logger.info(
+            f"Status migration complete for {total_statuses} statuses",
+            extra={"markup": True},
+        )
         logger.info(
             f"Successfully matched {matched_statuses} statuses ({matched_statuses / total_statuses * 100:.1f}% of total)",
-            extra={"markup": True}
+            extra={"markup": True},
         )
-        logger.info(f"- Existing matches: {matched_statuses - created_statuses}", extra={"markup": True})
+        logger.info(
+            f"- Existing matches: {matched_statuses - created_statuses}",
+            extra={"markup": True},
+        )
         logger.info(f"- Newly created: {created_statuses}", extra={"markup": True})
 
         return self.status_mapping
 
-    def create_workflow_configuration(self) -> Dict[str, Any]:
+    def create_workflow_configuration(self) -> dict[str, Any]:
         """
         Create workflow configuration in OpenProject.
 
         Returns:
             Result of the workflow configuration
         """
-        logger.info("Creating workflow configuration in OpenProject...", extra={"markup": True})
+        logger.info(
+            "Creating workflow configuration in OpenProject...", extra={"markup": True}
+        )
 
         result = {
             "success": True,
@@ -375,7 +422,7 @@ class WorkflowMigration:
 
         return result
 
-    def analyze_status_mapping(self) -> Dict[str, Any]:
+    def analyze_status_mapping(self) -> dict[str, Any]:
         """
         Analyze the status mapping to identify potential issues.
 
@@ -385,12 +432,12 @@ class WorkflowMigration:
         if not self.status_mapping:
             mapping_path = os.path.join(self.data_dir, "status_mapping.json")
             if os.path.exists(mapping_path):
-                with open(mapping_path, "r") as f:
+                with open(mapping_path) as f:
                     self.status_mapping = json.load(f)
             else:
                 logger.error(
                     "No status mapping found. Run create_status_mapping() first.",
-                    extra={"markup": True}
+                    extra={"markup": True},
                 )
                 return {}
 
@@ -441,20 +488,32 @@ class WorkflowMigration:
 
         self._save_to_json(analysis, "status_mapping_analysis.json")
 
-        logger.info(f"Status mapping analysis complete", extra={"markup": True})
-        logger.info(f"Total statuses: {analysis['total_statuses']}", extra={"markup": True})
+        logger.info("Status mapping analysis complete", extra={"markup": True})
+        logger.info(
+            f"Total statuses: {analysis['total_statuses']}", extra={"markup": True}
+        )
         logger.info(
             f"Matched statuses: {analysis['matched_statuses']} ({analysis['match_percentage']:.1f}%)",
-            extra={"markup": True}
+            extra={"markup": True},
         )
-        logger.info(f"- Matched by name: {analysis['matched_by_name']}", extra={"markup": True})
+        logger.info(
+            f"- Matched by name: {analysis['matched_by_name']}", extra={"markup": True}
+        )
         logger.info(
             f"- Matched by normalized name: {analysis['matched_by_normalized_name']}",
-            extra={"markup": True}
+            extra={"markup": True},
         )
-        logger.info(f"- Created in OpenProject: {analysis['matched_by_creation']}", extra={"markup": True})
-        logger.info(f"Closed statuses: {analysis['closed_statuses']}", extra={"markup": True})
-        logger.info(f"Unmatched statuses: {analysis['unmatched_statuses']}", extra={"markup": True})
+        logger.info(
+            f"- Created in OpenProject: {analysis['matched_by_creation']}",
+            extra={"markup": True},
+        )
+        logger.info(
+            f"Closed statuses: {analysis['closed_statuses']}", extra={"markup": True}
+        )
+        logger.info(
+            f"Unmatched statuses: {analysis['unmatched_statuses']}",
+            extra={"markup": True},
+        )
 
         return analysis
 

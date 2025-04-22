@@ -3,17 +3,13 @@
 Script to test connection to both Jira and OpenProject APIs.
 """
 
-import sys
-import os
 import logging
+
 from dotenv import load_dotenv
 
-# Add parent directory to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from src.config_loader import ConfigLoader
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
+from src.config_loader import ConfigLoader
 
 
 def setup_logging():
@@ -40,7 +36,6 @@ def main():
 
     # Load config
     config_loader = ConfigLoader()
-    config = config_loader.get_config()
 
     # Test Jira connection
     logger.info("Testing Jira connection...")
@@ -57,7 +52,6 @@ def main():
             logger.info(f" - {project['key']}: {project['name']}")
         if len(projects) > 5:
             logger.info(f" - ... and {len(projects) - 5} more")
-
 
     # Test OpenProject connection
     logger.info("Testing OpenProject connection...")

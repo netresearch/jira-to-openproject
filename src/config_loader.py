@@ -3,31 +3,32 @@ Configuration module for Jira to OpenProject migration.
 Handles loading and accessing configuration settings.
 """
 
-import os
-import yaml
 import logging
+import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Union, Literal, Optional, TypeVar, Generic
+from typing import Any, Literal, TypeVar, Union
+
+import yaml
 from dotenv import load_dotenv
 
 # Set up basic logging for configuration loading phase
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 config_logger = logging.getLogger("config_loader")
 
 # Type aliases
 T = TypeVar("T")
-ConfigValue = Union[str, int, bool, Dict[str, Any], List[Any]]
-ConfigDict = Dict[str, Dict[str, ConfigValue]]
+ConfigValue = Union[str, int, bool, dict[str, Any], list[Any]]
+ConfigDict = dict[str, dict[str, ConfigValue]]
 SectionName = Literal["jira", "openproject", "migration"]
+
 
 @dataclass(slots=True)
 class ConfigSection:
     """Configuration section with its settings"""
+
     name: str
     settings: dict[str, Any] = field(default_factory=dict)
+
 
 class ConfigLoader:
     """
@@ -72,7 +73,7 @@ class ConfigLoader:
             dict: Configuration settings
         """
         try:
-            with open(config_file_path, "r") as config_file:
+            with open(config_file_path) as config_file:
                 return yaml.safe_load(config_file)
         except FileNotFoundError:
             config_logger.error(f"{config_file_path=} not found")
@@ -90,12 +91,22 @@ class ConfigLoader:
             match env_var.split("_"):
                 case ["J2O", "LOG", "LEVEL"]:
                     # Make sure log level is valid - our custom levels are handled by display.py
-                    valid_levels = ["DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "SUCCESS"]
+                    valid_levels = [
+                        "DEBUG",
+                        "INFO",
+                        "NOTICE",
+                        "WARNING",
+                        "ERROR",
+                        "CRITICAL",
+                        "SUCCESS",
+                    ]
                     if env_value.upper() in valid_levels:
                         self.config["migration"]["log_level"] = env_value.upper()
                         config_logger.debug(f"Applied log level: {env_value.upper()}")
                     else:
-                        config_logger.warning(f"Invalid log level: {env_value}. Using INFO instead.")
+                        config_logger.warning(
+                            f"Invalid log level: {env_value}. Using INFO instead."
+                        )
                         self.config["migration"]["log_level"] = "INFO"
 
                 case ["J2O", "JIRA", *rest] if rest:
@@ -108,9 +119,13 @@ class ConfigLoader:
                             self.config["jira"]["scriptrunner"] = {}
 
                         # Extract the specific scriptrunner config key
-                        sr_key = key[len("scriptrunner_"):]
-                        self.config["jira"]["scriptrunner"][sr_key] = self._convert_value(env_value)
-                        config_logger.debug(f"Applied Jira ScriptRunner config: {sr_key}={env_value}")
+                        sr_key = key[len("scriptrunner_") :]
+                        self.config["jira"]["scriptrunner"][sr_key] = (
+                            self._convert_value(env_value)
+                        )
+                        config_logger.debug(
+                            f"Applied Jira ScriptRunner config: {sr_key}={env_value}"
+                        )
                     else:
                         # Regular Jira config
                         self.config["jira"][key] = self._convert_value(env_value)
@@ -119,11 +134,15 @@ class ConfigLoader:
                 case ["J2O", "OPENPROJECT", *rest] if rest:
                     key = "_".join(rest).lower()
                     self.config["openproject"][key] = self._convert_value(env_value)
-                    config_logger.debug(f"Applied OpenProject config: {key}={env_value}")
+                    config_logger.debug(
+                        f"Applied OpenProject config: {key}={env_value}"
+                    )
 
                     # Special handling for tmux_session_name
                     if key == "tmux_session_name":
-                        config_logger.debug(f"Configured OpenProject tmux session name: {env_value}")
+                        config_logger.debug(
+                            f"Configured OpenProject tmux session name: {env_value}"
+                        )
 
                 case ["J2O", "BATCH", "SIZE"]:
                     self.config["migration"]["batch_size"] = int(env_value)

@@ -3,19 +3,16 @@ Tempo account migration module for Jira to OpenProject migration.
 Handles the migration of Tempo Timesheet accounts from Jira to OpenProject.
 """
 
-import os
-import sys
 import json
+import os
 import re
+from typing import Any
+
 import requests
-from typing import Dict, List, Any, Optional
 
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
+from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src import config
 from src.display import ProgressTracker
 
 # Get logger from config
@@ -26,6 +23,7 @@ batch_size = config.migration_config.get("batch_size", 1000)
 jira_url = config.jira_config.get("url")
 jira_username = config.jira_config.get("username")
 jira_api_token = config.jira_config.get("api_token")
+
 
 class TempoAccountMigration:
     """
@@ -57,7 +55,9 @@ class TempoAccountMigration:
 
         # Base Tempo API URL - typically {jira_url}/rest/tempo-accounts/1 for Server
         # or a separate endpoint for Cloud
-        self.tempo_api_base = f"{config.jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
+        self.tempo_api_base = (
+            f"{config.jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
+        )
 
         # Setup auth for Tempo API
         self.tempo_auth_headers = {
@@ -66,7 +66,7 @@ class TempoAccountMigration:
             "Accept": "application/json",
         }
 
-    def extract_tempo_accounts(self) -> List[Dict[str, Any]]:
+    def extract_tempo_accounts(self) -> list[dict[str, Any]]:
         """
         Extract Tempo account information from Jira.
 
@@ -87,7 +87,9 @@ class TempoAccountMigration:
 
             if response.status_code == 200:
                 accounts = response.json()
-                logger.info(f"Retrieved {len(accounts)} Tempo accounts", extra={"markup": True})
+                logger.info(
+                    f"Retrieved {len(accounts)} Tempo accounts", extra={"markup": True}
+                )
 
                 # Save the accounts to a file
                 self.accounts = accounts
@@ -97,17 +99,19 @@ class TempoAccountMigration:
             else:
                 logger.error(
                     f"Failed to get Tempo accounts. Status code: {response.status_code}, Response: {response.text}",
-                    extra={"markup": True}
+                    extra={"markup": True},
                 )
 
                 return []
 
         except Exception as e:
-            logger.error(f"Failed to extract Tempo accounts: {str(e)}", extra={"markup": True})
+            logger.error(
+                f"Failed to extract Tempo accounts: {str(e)}", extra={"markup": True}
+            )
 
             return []
 
-    def extract_openproject_companies(self) -> List[Dict[str, Any]]:
+    def extract_openproject_companies(self) -> list[dict[str, Any]]:
         """
         Extract company information from OpenProject.
 
@@ -120,19 +124,28 @@ class TempoAccountMigration:
         try:
             self.op_companies = self.op_client.get_companies()
         except Exception as e:
-            logger.warning(f"Failed to get companies from OpenProject: {str(e)}", extra={"markup": True})
-            logger.warning("Using an empty list of companies for OpenProject", extra={"markup": True})
+            logger.warning(
+                f"Failed to get companies from OpenProject: {str(e)}",
+                extra={"markup": True},
+            )
+            logger.warning(
+                "Using an empty list of companies for OpenProject",
+                extra={"markup": True},
+            )
             self.op_companies = []
 
         # Log the number of companies found
-        logger.info(f"Extracted {len(self.op_companies)} companies from OpenProject", extra={"markup": True})
+        logger.info(
+            f"Extracted {len(self.op_companies)} companies from OpenProject",
+            extra={"markup": True},
+        )
 
         # Save companies to file for later reference
         self._save_to_json(self.op_companies, "openproject_companies.json")
 
         return self.op_companies
 
-    def create_account_mapping(self) -> Dict[str, Any]:
+    def create_account_mapping(self) -> dict[str, Any]:
         """
         Create a mapping between Tempo accounts and OpenProject companies.
 
@@ -141,7 +154,10 @@ class TempoAccountMigration:
         Returns:
             Dictionary mapping Tempo account IDs to OpenProject company IDs
         """
-        logger.info("Creating Tempo account to OpenProject company mapping...", extra={"markup": True})
+        logger.info(
+            "Creating Tempo account to OpenProject company mapping...",
+            extra={"markup": True},
+        )
 
         # Make sure we have accounts/companies from both systems
         if not self.accounts:
@@ -198,17 +214,20 @@ class TempoAccountMigration:
             (matched_accounts / total_accounts) * 100 if total_accounts > 0 else 0
         )
 
-        logger.info(f"Account mapping created for {total_accounts} Tempo accounts", extra={"markup": True})
+        logger.info(
+            f"Account mapping created for {total_accounts} Tempo accounts",
+            extra={"markup": True},
+        )
         logger.info(
             f"Successfully matched {matched_accounts} accounts ({match_percentage:.1f}%)",
-            extra={"markup": True}
+            extra={"markup": True},
         )
 
         return mapping
 
     def create_company_in_openproject(
-        self, tempo_account: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+        self, tempo_account: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """
         Create a company in OpenProject based on a Tempo account.
 
@@ -239,11 +258,13 @@ class TempoAccountMigration:
 
         logger.info(
             f"Creating company in OpenProject: {name} (Identifier: {identifier})",
-            extra={"markup": True}
+            extra={"markup": True},
         )
 
         if self.dry_run:
-            logger.info(f"DRY RUN: Would create company: {name}", extra={"markup": True})
+            logger.info(
+                f"DRY RUN: Would create company: {name}", extra={"markup": True}
+            )
             # Return a placeholder for dry run
             return {
                 "id": None,
@@ -260,18 +281,27 @@ class TempoAccountMigration:
 
             if company:
                 if was_created:
-                    logger.info(f"Successfully created company: {name}", extra={"markup": True})
+                    logger.info(
+                        f"Successfully created company: {name}", extra={"markup": True}
+                    )
                 else:
-                    logger.info(f"Found existing company with identifier '{identifier}' for: {name}", extra={"markup": True})
+                    logger.info(
+                        f"Found existing company with identifier '{identifier}' for: {name}",
+                        extra={"markup": True},
+                    )
                 return company
             else:
-                logger.error(f"Failed to create company: {name}", extra={"markup": True})
+                logger.error(
+                    f"Failed to create company: {name}", extra={"markup": True}
+                )
                 return None
         except Exception as e:
-            logger.error(f"Error creating company {name}: {str(e)}", extra={"markup": True})
+            logger.error(
+                f"Error creating company {name}: {str(e)}", extra={"markup": True}
+            )
             return None
 
-    def migrate_accounts(self) -> Dict[str, Any]:
+    def migrate_accounts(self) -> dict[str, Any]:
         """
         Migrate Tempo accounts to OpenProject projects.
 
@@ -294,9 +324,14 @@ class TempoAccountMigration:
             if mapping["matched_by"] == "none"
         ]
 
-        logger.info(f"Found {len(accounts_to_process)} accounts that need to be created in OpenProject", extra={"markup": True})
+        logger.info(
+            f"Found {len(accounts_to_process)} accounts that need to be created in OpenProject",
+            extra={"markup": True},
+        )
 
-        with ProgressTracker("Migrating accounts", len(accounts_to_process), "Recent Accounts") as tracker:
+        with ProgressTracker(
+            "Migrating accounts", len(accounts_to_process), "Recent Accounts"
+        ) as tracker:
             for i, (tempo_id, mapping) in enumerate(accounts_to_process):
                 # Find the Tempo account definition
                 tempo_account = next(
@@ -305,8 +340,13 @@ class TempoAccountMigration:
                 )
 
                 if not tempo_account:
-                    logger.warning(f"Could not find Tempo account definition for ID: {tempo_id}", extra={"markup": True})
-                    tracker.add_log_item(f"Skipped: Unknown Tempo account ID {tempo_id}")
+                    logger.warning(
+                        f"Could not find Tempo account definition for ID: {tempo_id}",
+                        extra={"markup": True},
+                    )
+                    tracker.add_log_item(
+                        f"Skipped: Unknown Tempo account ID {tempo_id}"
+                    )
                     tracker.increment()
                     continue
 
@@ -321,7 +361,9 @@ class TempoAccountMigration:
                     mapping["openproject_id"] = op_company.get("id")
                     mapping["openproject_name"] = op_company.get("name")
                     mapping["matched_by"] = "created"
-                    tracker.add_log_item(f"Created: {account_name} (ID: {op_company.get('id')})")
+                    tracker.add_log_item(
+                        f"Created: {account_name} (ID: {op_company.get('id')})"
+                    )
                 else:
                     tracker.add_log_item(f"Failed: {account_name}")
 
@@ -343,17 +385,23 @@ class TempoAccountMigration:
             if account["matched_by"] == "created"
         )
 
-        logger.success(f"Tempo account migration complete for {total_accounts} accounts", extra={"markup": True})
+        logger.success(
+            f"Tempo account migration complete for {total_accounts} accounts",
+            extra={"markup": True},
+        )
         logger.info(
             f"Successfully matched {matched_accounts} accounts ({matched_accounts / total_accounts * 100:.1f}% of total)",
-            extra={"markup": True}
+            extra={"markup": True},
         )
-        logger.info(f"- Existing matches: {matched_accounts - created_accounts}", extra={"markup": True})
+        logger.info(
+            f"- Existing matches: {matched_accounts - created_accounts}",
+            extra={"markup": True},
+        )
         logger.info(f"- Newly created: {created_accounts}", extra={"markup": True})
 
         return self.account_mapping
 
-    def analyze_account_mapping(self) -> Dict[str, Any]:
+    def analyze_account_mapping(self) -> dict[str, Any]:
         """
         Analyze the account mapping to identify potential issues.
 
@@ -363,12 +411,12 @@ class TempoAccountMigration:
         if not self.account_mapping:
             mapping_path = os.path.join(self.data_dir, "tempo_account_mapping.json")
             if os.path.exists(mapping_path):
-                with open(mapping_path, "r") as f:
+                with open(mapping_path) as f:
                     self.account_mapping = json.load(f)
             else:
                 logger.error(
                     "No account mapping found. Run create_account_mapping() first.",
-                    extra={"markup": True}
+                    extra={"markup": True},
                 )
                 return {}
 
@@ -417,15 +465,25 @@ class TempoAccountMigration:
         self._save_to_json(analysis, "tempo_account_mapping_analysis.json")
 
         # Log analysis summary
-        logger.info(f"Account mapping analysis complete", extra={"markup": True})
-        logger.info(f"Total accounts: {analysis['total_accounts']}", extra={"markup": True})
+        logger.info("Account mapping analysis complete", extra={"markup": True})
+        logger.info(
+            f"Total accounts: {analysis['total_accounts']}", extra={"markup": True}
+        )
         logger.info(
             f"Matched accounts: {analysis['matched_accounts']} ({analysis['match_percentage']:.1f}%)",
-            extra={"markup": True}
+            extra={"markup": True},
         )
-        logger.info(f"- Matched by name: {analysis['matched_by_name']}", extra={"markup": True})
-        logger.info(f"- Created in OpenProject: {analysis['matched_by_creation']}", extra={"markup": True})
-        logger.info(f"Unmatched accounts: {analysis['unmatched_accounts']}", extra={"markup": True})
+        logger.info(
+            f"- Matched by name: {analysis['matched_by_name']}", extra={"markup": True}
+        )
+        logger.info(
+            f"- Created in OpenProject: {analysis['matched_by_creation']}",
+            extra={"markup": True},
+        )
+        logger.info(
+            f"Unmatched accounts: {analysis['unmatched_accounts']}",
+            extra={"markup": True},
+        )
 
         return analysis
 
