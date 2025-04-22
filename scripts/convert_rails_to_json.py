@@ -5,9 +5,10 @@ Convert Rails output to JSON.
 This script takes Ruby-formatted output and converts it to valid JSON.
 """
 
-import sys
 import json
 import re
+import sys
+
 
 def convert_ruby_to_json(input_file, output_file):
     """
@@ -18,11 +19,11 @@ def convert_ruby_to_json(input_file, output_file):
         output_file: Path to output JSON file
     """
     # Read the input file
-    with open(input_file, 'r') as f:
+    with open(input_file) as f:
         ruby_str = f.read()
 
     # Extract the array portion
-    match = re.search(r'\[\{.*\}\]', ruby_str, re.DOTALL)
+    match = re.search(r"\[\{.*\}\]", ruby_str, re.DOTALL)
     if not match:
         print("Could not find array in input file")
         return False
@@ -32,10 +33,10 @@ def convert_ruby_to_json(input_file, output_file):
     # Convert Ruby syntax to JSON
 
     # First replace Ruby hash keys (symbol: value) with JSON format ("symbol": value)
-    json_str = re.sub(r'(\w+):', r'"\1":', ruby_array)
+    json_str = re.sub(r"(\w+):", r'"\1":', ruby_array)
 
     # Replace nil with null
-    json_str = json_str.replace('nil', 'null')
+    json_str = json_str.replace("nil", "null")
 
     # Handle special cases for possible_values arrays
     # This specific pattern handles ["5"] format
@@ -46,7 +47,7 @@ def convert_ruby_to_json(input_file, output_file):
         data = json.loads(json_str)
 
         # Write to output file
-        with open(output_file, 'w') as f:
+        with open(output_file, "w") as f:
             json.dump(data, f, indent=2)
 
         print(f"Successfully converted {len(data)} records to JSON")
@@ -55,6 +56,7 @@ def convert_ruby_to_json(input_file, output_file):
     except json.JSONDecodeError as e:
         print(f"Error parsing JSON: {e}")
         return False
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:

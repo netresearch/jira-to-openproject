@@ -6,11 +6,11 @@ This script extracts the custom fields data directly from
 the tmux session output and saves it to a JSON file.
 """
 
-import subprocess
-import re
 import json
-import sys
 import os
+import subprocess
+import sys
+
 
 def capture_tmux_output(session_name="rails_console", lines=1000):
     """Capture output from the tmux session."""
@@ -22,7 +22,7 @@ def capture_tmux_output(session_name="rails_console", lines=1000):
             ["tmux", "capture-pane", "-p", "-S", f"-{lines}", "-t", session_name],
             check=True,
             capture_output=True,
-            text=True
+            text=True,
         )
 
         output = result.stdout
@@ -32,6 +32,7 @@ def capture_tmux_output(session_name="rails_console", lines=1000):
         print(f"Error capturing tmux output: {e}")
         return ""
 
+
 def parse_custom_fields(output):
     """Parse custom fields from the output."""
     # The output appears to be in a format like:
@@ -39,13 +40,13 @@ def parse_custom_fields(output):
     fields = []
 
     # Process each line
-    for line in output.split('\n'):
+    for line in output.split("\n"):
         line = line.strip()
         if not line:
             continue
 
         # Check if the line matches the expected format with pipe delimiters
-        parts = line.split('|')
+        parts = line.split("|")
         if len(parts) >= 6:  # We need at least the essential fields
             try:
                 # Try to convert the ID to an integer to validate it's a real custom field line
@@ -53,12 +54,12 @@ def parse_custom_fields(output):
 
                 # Create a field dictionary
                 field = {
-                    'id': field_id,
-                    'name': parts[1],
-                    'field_format': parts[2],
-                    'type': parts[3],
-                    'is_required': parts[4].lower() == 'true',
-                    'is_for_all': parts[5].lower() == 'true'
+                    "id": field_id,
+                    "name": parts[1],
+                    "field_format": parts[2],
+                    "type": parts[3],
+                    "is_required": parts[4].lower() == "true",
+                    "is_for_all": parts[5].lower() == "true",
                 }
 
                 fields.append(field)
@@ -67,6 +68,7 @@ def parse_custom_fields(output):
                 pass
 
     return fields
+
 
 def main():
     """Main entry point."""
@@ -89,7 +91,7 @@ def main():
         return 1
 
     # Save the fields to the output file
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         json.dump(fields, f, indent=2)
 
     print(f"Successfully saved {len(fields)} custom fields to {output_file}")
@@ -102,6 +104,7 @@ def main():
         print(f"... and {len(fields) - 5} more fields")
 
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

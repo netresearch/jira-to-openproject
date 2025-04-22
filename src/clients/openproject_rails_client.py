@@ -7,20 +7,16 @@ This allows for executing Rails commands in an existing tmux session
 with an already running Rails console.
 """
 
-import os
-import sys
 import json
+import os
 import subprocess
 import time
-import re
-from typing import Dict, List, Any, Union, Optional, Tuple
-
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+from typing import Any
 
 from src import config
 
 logger = config.logger
+
 
 class OpenProjectRailsClient:
     """
@@ -34,19 +30,19 @@ class OpenProjectRailsClient:
     def __new__(cls, *args, **kwargs):
         """Create a singleton instance of the OpenProjectRailsClient."""
         if cls._instance is None:
-            cls._instance = super(OpenProjectRailsClient, cls).__new__(cls)
+            cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
     def __init__(
-            self,
-            window: int = 0,
-            pane: int = 0,
-            marker_prefix: str = "RAILSCMD_",
-            debug: bool = False,
-            command_timeout: int = 600,
-            inactivity_timeout: int = 30
-        ):
+        self,
+        window: int = 0,
+        pane: int = 0,
+        marker_prefix: str = "RAILSCMD_",
+        debug: bool = False,
+        command_timeout: int = 600,
+        inactivity_timeout: int = 30,
+    ):
         """
         Initialize the Rails client.
 
@@ -62,7 +58,9 @@ class OpenProjectRailsClient:
         if self._initialized:
             return
 
-        self.session_name = config.openproject_config.get("tmux_session_name", "rails_console")
+        self.session_name = config.openproject_config.get(
+            "tmux_session_name", "rails_console"
+        )
         logger.debug(f"Using tmux session name from config: {self.session_name}")
 
         self.window = window
@@ -89,7 +87,9 @@ class OpenProjectRailsClient:
             logger.error(f"tmux session '{self.session_name}' does not exist")
             raise ValueError(f"tmux session '{self.session_name}' does not exist")
         else:
-            logger.success(f"Successfully connected to tmux session '{self.session_name}'")
+            logger.success(
+                f"Successfully connected to tmux session '{self.session_name}'"
+            )
 
         # Directly configure IRB settings during initialization
         try:
@@ -106,7 +106,7 @@ class OpenProjectRailsClient:
             result = subprocess.run(
                 ["tmux", "has-session", "-t", self.session_name],
                 check=False,
-                capture_output=True
+                capture_output=True,
             )
             return result.returncode == 0
         except subprocess.SubprocessError:
@@ -116,7 +116,7 @@ class OpenProjectRailsClient:
         """Get the tmux target string for the session, window, and pane."""
         return f"{self.session_name}:{self.window}.{self.pane}"
 
-    def execute(self, command: str, timeout: int = None) -> Dict[str, Any]:
+    def execute(self, command: str, timeout: int = None) -> dict[str, Any]:
         """
         Execute a command in the Rails console and wait for it to complete.
 
@@ -129,16 +129,13 @@ class OpenProjectRailsClient:
             Dictionary with status ('success' or 'error') and output or error message
         """
         if not self._is_connected:
-            return {
-                'status': 'error',
-                'error': 'Not connected to tmux session'
-            }
+            return {"status": "error", "error": "Not connected to tmux session"}
 
         # Use the provided timeout or fall back to the instance's command_timeout
         if timeout is None:
             timeout = self.command_timeout
 
-        target = self._get_target()
+        self._get_target()
         marker_id = str(int(time.time()))
         start_marker = f"RAILSCMD_{marker_id}_START"
         end_marker = f"RAILSCMD_{marker_id}_END"
@@ -185,16 +182,16 @@ class OpenProjectRailsClient:
         if result is None:
             logger.error("Command timed out or markers not found")
             return {
-                'status': 'error',
-                'error': 'Command timed out or markers not found'
+                "status": "error",
+                "error": "Command timed out or markers not found",
             }
 
         # Check if the command execution finished successfully
         if end_marker not in result:
             logger.error(f"End marker not found in result: {result}")
             return {
-                'status': 'error',
-                'error': 'Command did not complete (end marker not found)'
+                "status": "error",
+                "error": "Command did not complete (end marker not found)",
             }
 
         # Check for error messages in the result
@@ -203,60 +200,49 @@ class OpenProjectRailsClient:
             if line.strip().startswith("ERROR: "):
                 error_line = line.strip()
                 logger.error(f"Error executing command: {error_line}")
-                return {
-                    'status': 'error',
-                    'error': error_line
-                }
+                return {"status": "error", "error": error_line}
 
         # Now, transfer the output file from the container to local machine
         import tempfile
-        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as temp_file:
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as temp_file:
             local_output_path = temp_file.name
 
         if self.transfer_file_from_container(output_file, local_output_path):
             try:
                 # Read and parse the JSON output file
-                with open(local_output_path, 'r') as f:
+                with open(local_output_path) as f:
                     result_data = json.load(f)
 
                 # Delete the temporary file
                 os.unlink(local_output_path)
 
                 # Return the parsed results
-                if result_data.get('status') == 'success':
-                    output = result_data.get('output')
+                if result_data.get("status") == "success":
+                    output = result_data.get("output")
                     # Explicitly handle nil values from Ruby
                     if output == "nil":
-                        return {
-                            'status': 'success',
-                            'output': None
-                        }
-                    return {
-                        'status': 'success',
-                        'output': output
-                    }
+                        return {"status": "success", "output": None}
+                    return {"status": "success", "output": output}
                 else:
                     return {
-                        'status': 'error',
-                        'error': result_data.get('error', 'Unknown error')
+                        "status": "error",
+                        "error": result_data.get("error", "Unknown error"),
                     }
             except json.JSONDecodeError as e:
                 return {
-                    'status': 'error',
-                    'error': f'Error parsing JSON output file: {e}'
+                    "status": "error",
+                    "error": f"Error parsing JSON output file: {e}",
                 }
             except Exception as e:
                 return {
-                    'status': 'error',
-                    'error': f'Error reading result file: {str(e)}'
+                    "status": "error",
+                    "error": f"Error reading result file: {str(e)}",
                 }
         else:
             # If we couldn't retrieve the file, return as much from stdout as we have
             logger.warning("Couldn't retrieve output file, returning stdout output")
-            return {
-                'status': 'success',
-                'output': result
-            }
+            return {"status": "success", "output": result}
 
     def _send_command(self, command: str) -> dict:
         """
@@ -308,7 +294,9 @@ class OpenProjectRailsClient:
             self._stabilize_console()
 
             if result.returncode != 0:
-                error_msg = f"Rails console command failed with exit code {result.returncode}"
+                error_msg = (
+                    f"Rails console command failed with exit code {result.returncode}"
+                )
                 logger.error(f"{error_msg}: {result.stderr}")
                 return self._error_result(error_msg, details=result.stderr)
 
@@ -320,11 +308,15 @@ class OpenProjectRailsClient:
 
             lines = output.split("\n")
             if len(lines) > 1 and "SyntaxError" in lines[0]:
-                return self._error_result("Syntax error in Ruby command", details=output)
+                return self._error_result(
+                    "Syntax error in Ruby command", details=output
+                )
 
             return {"success": True, "output": output}
         except subprocess.TimeoutExpired:
-            return self._error_result(f"Command timed out after {self._timeout} seconds")
+            return self._error_result(
+                f"Command timed out after {self._timeout} seconds"
+            )
         except Exception as e:
             return self._error_result(f"Failed to execute command: {str(e)}")
 
@@ -359,9 +351,11 @@ class OpenProjectRailsClient:
 
             # Create a temporary file locally
             import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
+
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".rb", delete=False) as f:
                 # Write a wrapper that captures output and errors
-                f.write(f"""
+                f.write(
+                    f"""
                 begin
                   # Execute the command and capture the result
                   result = (
@@ -386,10 +380,11 @@ class OpenProjectRailsClient:
                     'backtrace' => e.backtrace[0..5]
                   }}.to_json)
                   puts "{start_marker}"
-                  puts "ERROR executing command: \#{{e.message}}"
+                  puts "ERROR executing command: #{{e.message}}"
                   puts "{end_marker}"
                 end
-                """)
+                """
+                )
                 local_file = f.name
 
             # Transfer the file to the container
@@ -404,7 +399,7 @@ class OpenProjectRailsClient:
             target = self._get_target()
             load_cmd = f"puts 'Loading command file...'; load '{script_file}'; nil"
 
-            logger.debug(f"Sending file-based command to tmux")
+            logger.debug("Sending file-based command to tmux")
             send_cmd = ["tmux", "send-keys", "-t", target, load_cmd, "Enter"]
             subprocess.run(send_cmd, check=True)
 
@@ -421,7 +416,9 @@ class OpenProjectRailsClient:
             while time.time() - start_time < max_timeout:
                 # Capture the pane content
                 capture_cmd = ["tmux", "capture-pane", "-p", "-t", target]
-                result = subprocess.run(capture_cmd, check=True, capture_output=True, text=True)
+                result = subprocess.run(
+                    capture_cmd, check=True, capture_output=True, text=True
+                )
                 pane_content = result.stdout
 
                 # Check if output has changed
@@ -435,8 +432,16 @@ class OpenProjectRailsClient:
                 if found_start and end_marker in pane_content:
                     found_end = True
                     # Cleanup remote files
-                    cleanup_cmd = ["ssh", op_server, "docker", "exec", container_name,
-                                 "bash", "-c", f"rm -f {script_file}"]
+                    cleanup_cmd = [
+                        "ssh",
+                        op_server,
+                        "docker",
+                        "exec",
+                        container_name,
+                        "bash",
+                        "-c",
+                        f"rm -f {script_file}",
+                    ]
                     subprocess.run(cleanup_cmd, check=False, capture_output=True)
 
                     # Stabilize console
@@ -449,7 +454,9 @@ class OpenProjectRailsClient:
                 time.sleep(check_interval)
 
             # Timeout occurred
-            logger.warning(f"Command timeout after {int(time.time()-start_time)}s: start_found={found_start}, end_found={found_end}")
+            logger.warning(
+                f"Command timeout after {int(time.time()-start_time)}s: start_found={found_start}, end_found={found_end}"
+            )
 
             # Stabilize console and return None
             self._stabilize_console()
@@ -481,11 +488,11 @@ class OpenProjectRailsClient:
             Number of records or -1 if error
         """
         result = self.execute(f"{model}.count")
-        if result['status'] == 'success' and result['output'] is not None:
-            return result['output']
+        if result["status"] == "success" and result["output"] is not None:
+            return result["output"]
         return -1
 
-    def find_record(self, model: str, id_or_conditions: Union[int, Dict]) -> Optional[Dict]:
+    def find_record(self, model: str, id_or_conditions: int | dict) -> dict | None:
         """
         Find a record by ID or conditions.
 
@@ -499,26 +506,30 @@ class OpenProjectRailsClient:
         if isinstance(id_or_conditions, int):
             command = f"{model}.find_by(id: {id_or_conditions})&.as_json"
         else:
-            conditions = json.dumps(id_or_conditions).replace('"', '\'')
+            conditions = json.dumps(id_or_conditions).replace('"', "'")
             command = f"{model}.find_by({conditions})&.as_json"
 
         result = self.execute(command)
-        if result['status'] == 'success' and result['output']:
+        if result["status"] == "success" and result["output"]:
             try:
                 # Handle the case where output is already parsed into Python types
-                if isinstance(result['output'], dict):
-                    return result['output']
+                if isinstance(result["output"], dict):
+                    return result["output"]
 
                 # Try to parse it as JSON if it's a string
-                if isinstance(result['output'], str):
-                    return json.loads(result['output'].replace("=>", ":").replace("nil", "null"))
+                if isinstance(result["output"], str):
+                    return json.loads(
+                        result["output"].replace("=>", ":").replace("nil", "null")
+                    )
 
                 return None
             except (json.JSONDecodeError, TypeError):
                 return None
         return None
 
-    def create_record(self, model: str, attributes: Dict) -> Tuple[bool, Optional[Dict], Optional[str]]:
+    def create_record(
+        self, model: str, attributes: dict
+    ) -> tuple[bool, dict | None, str | None]:
         """
         Create a record with given attributes.
 
@@ -530,7 +541,7 @@ class OpenProjectRailsClient:
             Tuple of (success, record_data, error_message)
         """
         # Convert Python dict to Ruby hash format
-        ruby_hash = json.dumps(attributes).replace('"', '\'')
+        ruby_hash = json.dumps(attributes).replace('"', "'")
 
         # Build command to create and return the record
         command = f"""
@@ -544,8 +555,8 @@ class OpenProjectRailsClient:
 
         result = self.execute(command)
 
-        if result['status'] == 'success':
-            output = result['output']
+        if result["status"] == "success":
+            output = result["output"]
 
             # Check if the result indicates an error
             if isinstance(output, str) and output.startswith("ERROR:"):
@@ -557,16 +568,20 @@ class OpenProjectRailsClient:
                     return True, output, None
 
                 if isinstance(output, str):
-                    record_data = json.loads(output.replace("=>", ":").replace("nil", "null"))
+                    record_data = json.loads(
+                        output.replace("=>", ":").replace("nil", "null")
+                    )
                     return True, record_data, None
 
                 return True, None, None
             except (json.JSONDecodeError, TypeError):
                 return False, None, "Failed to parse record data"
 
-        return False, None, result.get('error', 'Unknown error')
+        return False, None, result.get("error", "Unknown error")
 
-    def update_record(self, model: str, id: int, attributes: Dict) -> Tuple[bool, Optional[str]]:
+    def update_record(
+        self, model: str, id: int, attributes: dict
+    ) -> tuple[bool, str | None]:
         """
         Update a record with given attributes.
 
@@ -579,7 +594,7 @@ class OpenProjectRailsClient:
             Tuple of (success, error_message)
         """
         # Convert Python dict to Ruby hash format
-        ruby_hash = json.dumps(attributes).replace('"', '\'')
+        ruby_hash = json.dumps(attributes).replace('"', "'")
 
         # Build command to update the record
         command = f"""
@@ -595,8 +610,8 @@ class OpenProjectRailsClient:
 
         result = self.execute(command)
 
-        if result['status'] == 'success':
-            output = result['output']
+        if result["status"] == "success":
+            output = result["output"]
 
             if output == "SUCCESS":
                 return True, None
@@ -606,9 +621,9 @@ class OpenProjectRailsClient:
 
             return True, None
 
-        return False, result.get('error', 'Unknown error')
+        return False, result.get("error", "Unknown error")
 
-    def delete_record(self, model: str, id: int) -> Tuple[bool, Optional[str]]:
+    def delete_record(self, model: str, id: int) -> tuple[bool, str | None]:
         """
         Delete a record.
 
@@ -632,8 +647,8 @@ class OpenProjectRailsClient:
 
         result = self.execute(command)
 
-        if result['status'] == 'success':
-            output = result['output']
+        if result["status"] == "success":
+            output = result["output"]
 
             if output == "SUCCESS":
                 return True, None
@@ -643,9 +658,9 @@ class OpenProjectRailsClient:
 
             return True, None
 
-        return False, result.get('error', 'Unknown error')
+        return False, result.get("error", "Unknown error")
 
-    def get_custom_field_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_custom_field_by_name(self, name: str) -> dict[str, Any] | None:
         """
         Find a custom field by name.
 
@@ -658,7 +673,7 @@ class OpenProjectRailsClient:
         # Use find_record method to get the custom field by name
         return self.find_record("CustomField", {"name": name})
 
-    def get_custom_field_id_by_name(self, name: str) -> Optional[int]:
+    def get_custom_field_id_by_name(self, name: str) -> int | None:
         """
         Find a custom field ID by name.
 
@@ -671,9 +686,9 @@ class OpenProjectRailsClient:
         command = f"CustomField.where(name: '{name}').first&.id"
         result = self.execute(command)
 
-        if result['status'] == 'success' and result['output'] is not None:
+        if result["status"] == "success" and result["output"] is not None:
             # Get the output and sanitize it if it's a string
-            output = result['output']
+            output = result["output"]
 
             # Handle nil value from Ruby
             if output == "nil" or output is None:
@@ -683,12 +698,15 @@ class OpenProjectRailsClient:
                 # Remove any Rails console output or whitespace
                 # Extract just the numeric ID if present
                 import re
-                match = re.search(r'\b(\d+)\b', output)
+
+                match = re.search(r"\b(\d+)\b", output)
                 if match:
                     return int(match.group(1))
                 # If no numeric ID found but it's not nil, log and return None
                 if output.strip() != "nil":
-                    logger.warning(f"Unexpected output format from Rails console: {output}")
+                    logger.warning(
+                        f"Unexpected output format from Rails console: {output}"
+                    )
                 return None
 
             # If it's already a numeric type, return it directly
@@ -698,7 +716,7 @@ class OpenProjectRailsClient:
             return None
         return None
 
-    def execute_transaction(self, commands: List[str]) -> Dict[str, Any]:
+    def execute_transaction(self, commands: list[str]) -> dict[str, Any]:
         """
         Execute multiple commands in a transaction.
 
@@ -793,24 +811,43 @@ class OpenProjectRailsClient:
 
             # First, copy to server using SCP
             logger.info(f"Copying file to server {op_server}")
-            scp_cmd = ["scp", local_path, f"{op_server}:/tmp/{os.path.basename(remote_path)}"]
+            scp_cmd = [
+                "scp",
+                local_path,
+                f"{op_server}:/tmp/{os.path.basename(remote_path)}",
+            ]
             logger.debug(f"Running command: {' '.join(scp_cmd)}")
 
             subprocess.run(scp_cmd, check=True)
 
             # Then copy from server to container
             logger.info(f"Copying file from server to container {container_name}")
-            docker_cp_cmd = ["ssh", op_server, "docker", "cp",
-                          f"/tmp/{os.path.basename(remote_path)}",
-                          f"{container_name}:{remote_path}"]
+            docker_cp_cmd = [
+                "ssh",
+                op_server,
+                "docker",
+                "cp",
+                f"/tmp/{os.path.basename(remote_path)}",
+                f"{container_name}:{remote_path}",
+            ]
             logger.debug(f"Running command: {' '.join(docker_cp_cmd)}")
 
             subprocess.run(docker_cp_cmd, check=True)
 
             # Change permissions to make file readable by all
-            logger.info(f"Setting file permissions to allow reading by all users")
-            chmod_cmd = ["ssh", op_server, "docker", "exec", "-u", "root", container_name,
-                       "chmod", "644", remote_path]
+            logger.info("Setting file permissions to allow reading by all users")
+            chmod_cmd = [
+                "ssh",
+                op_server,
+                "docker",
+                "exec",
+                "-u",
+                "root",
+                container_name,
+                "chmod",
+                "644",
+                remote_path,
+            ]
             logger.debug(f"Running command: {' '.join(chmod_cmd)}")
 
             subprocess.run(chmod_cmd, check=True)
@@ -824,7 +861,9 @@ class OpenProjectRailsClient:
             logger.error(f"Unexpected error during file transfer: {e}")
             return False
 
-    def transfer_file_from_container(self, remote_path: str, local_path: str, retries: int = 3, delay: float = 1.0) -> bool:
+    def transfer_file_from_container(
+        self, remote_path: str, local_path: str, retries: int = 3, delay: float = 1.0
+    ) -> bool:
         """
         Transfer a file from the container to the local machine, with retry logic if the file is not found.
 
@@ -839,7 +878,9 @@ class OpenProjectRailsClient:
         """
         for attempt in range(retries):
             if attempt > 0:
-                logger.warning(f"Retrying file transfer from container: attempt {attempt+1}/{retries}")
+                logger.warning(
+                    f"Retrying file transfer from container: attempt {attempt+1}/{retries}"
+                )
                 # wait attempt * delay seconds
                 time.sleep(delay * attempt)
             try:
@@ -853,8 +894,16 @@ class OpenProjectRailsClient:
 
                 # First check if the file exists in the container
                 logger.debug(f"Checking if file exists in container: {remote_path}")
-                check_cmd = ["ssh", op_server, "docker", "exec", container_name,
-                           "bash", "-c", f"ls -la {remote_path} || echo 'File not found'"]
+                check_cmd = [
+                    "ssh",
+                    op_server,
+                    "docker",
+                    "exec",
+                    container_name,
+                    "bash",
+                    "-c",
+                    f"ls -la {remote_path} || echo 'File not found'",
+                ]
 
                 result = subprocess.run(check_cmd, capture_output=True, text=True)
                 output = result.stdout.strip()
@@ -866,20 +915,31 @@ class OpenProjectRailsClient:
                     return False
 
                 # Copy from container to server
-                logger.debug(f"Copying file from container to server")
-                docker_cp_cmd = ["ssh", op_server, "docker", "cp",
-                              f"{container_name}:{remote_path}", "/tmp/"]
+                logger.debug("Copying file from container to server")
+                docker_cp_cmd = [
+                    "ssh",
+                    op_server,
+                    "docker",
+                    "cp",
+                    f"{container_name}:{remote_path}",
+                    "/tmp/",
+                ]
 
                 subprocess.run(docker_cp_cmd, check=True)
 
                 # Copy from server to local
-                logger.debug(f"Copying file from server to local")
-                scp_cmd = ["scp", f"{op_server}:/tmp/{os.path.basename(remote_path)}",
-                         local_path]
+                logger.debug("Copying file from server to local")
+                scp_cmd = [
+                    "scp",
+                    f"{op_server}:/tmp/{os.path.basename(remote_path)}",
+                    local_path,
+                ]
 
                 subprocess.run(scp_cmd, check=True)
 
-                logger.debug(f"Successfully copied file from container to local: {local_path}")
+                logger.debug(
+                    f"Successfully copied file from container to local: {local_path}"
+                )
                 return True
             except subprocess.SubprocessError as e:
                 logger.error(f"Error transferring file from container: {e}")
@@ -903,15 +963,17 @@ class OpenProjectRailsClient:
         try:
             # Execute a simple Ruby command to verify connectivity
             # Use a command that will complete quickly and reliably
-            result = self.execute("begin; puts 'Rails console connection test'; true; end")
+            result = self.execute(
+                "begin; puts 'Rails console connection test'; true; end"
+            )
 
             # Return success if the command executed without errors
-            return result.get('status') == 'success'
+            return result.get("status") == "success"
         except Exception as e:
             logger.error(f"Rails console connection test failed: {str(e)}")
             return False
 
-    def read_json_from_container(self, remote_path: str) -> Optional[Any]:
+    def read_json_from_container(self, remote_path: str) -> Any | None:
         """
         Read a JSON file from the container.
 
@@ -932,8 +994,15 @@ class OpenProjectRailsClient:
 
             # Read the file content directly with cat
             logger.info(f"Reading JSON from container file: {remote_path}")
-            cat_cmd = ["ssh", op_server, "docker", "exec", container_name,
-                     "cat", remote_path]
+            cat_cmd = [
+                "ssh",
+                op_server,
+                "docker",
+                "exec",
+                container_name,
+                "cat",
+                remote_path,
+            ]
 
             result = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
             content = result.stdout.strip()
@@ -945,7 +1014,7 @@ class OpenProjectRailsClient:
             # Parse the JSON content
             try:
                 data = json.loads(content)
-                logger.info(f"Successfully parsed JSON data from container file")
+                logger.info("Successfully parsed JSON data from container file")
                 return data
             except json.JSONDecodeError as e:
                 logger.error(f"Error parsing JSON from container file: {e}")
@@ -958,7 +1027,9 @@ class OpenProjectRailsClient:
             logger.error(f"Unexpected error reading JSON from container: {e}")
             return None
 
-    def execute_ruby_script(self, script_path: str, in_container: bool = True, output_as_json: bool = True) -> Dict[str, Any]:
+    def execute_ruby_script(
+        self, script_path: str, in_container: bool = True, output_as_json: bool = True
+    ) -> dict[str, Any]:
         """
         Execute a Ruby script in the Rails console and optionally capture structured output.
 
@@ -975,13 +1046,13 @@ class OpenProjectRailsClient:
             if not in_container:
                 # For local files, read the content directly
                 try:
-                    with open(script_path, 'r') as f:
+                    with open(script_path) as f:
                         script_content = f.read()
                 except Exception as e:
                     logger.error(f"Error reading script file: {e}")
                     return {
-                        'status': 'error',
-                        'message': f'Failed to read script file: {str(e)}'
+                        "status": "error",
+                        "message": f"Failed to read script file: {str(e)}",
                     }
             else:
                 # For container files, use docker exec to get content
@@ -991,23 +1062,33 @@ class OpenProjectRailsClient:
                 if not container_name or not op_server:
                     logger.error("Missing container or server configuration")
                     return {
-                        'status': 'error',
-                        'message': 'Missing container or server configuration'
+                        "status": "error",
+                        "message": "Missing container or server configuration",
                     }
 
                 try:
-                    cat_cmd = ["ssh", op_server, "docker", "exec", container_name, "cat", script_path]
-                    result = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
+                    cat_cmd = [
+                        "ssh",
+                        op_server,
+                        "docker",
+                        "exec",
+                        container_name,
+                        "cat",
+                        script_path,
+                    ]
+                    result = subprocess.run(
+                        cat_cmd, capture_output=True, text=True, check=True
+                    )
                     script_content = result.stdout
                 except subprocess.SubprocessError as e:
                     logger.error(f"Error reading script file from container: {e}")
                     return {
-                        'status': 'error',
-                        'message': f'Failed to read script from container: {str(e)}'
+                        "status": "error",
+                        "message": f"Failed to read script from container: {str(e)}",
                     }
 
             # Now execute the script content directly
-            logger.info(f"Executing Ruby script content directly in Rails console")
+            logger.info("Executing Ruby script content directly in Rails console")
 
             # Format for JSON output if needed
             if output_as_json:
@@ -1064,15 +1145,15 @@ class OpenProjectRailsClient:
             # Execute the command in the Rails console
             result = self.execute(command)
 
-            if result['status'] != 'success':
+            if result["status"] != "success":
                 return {
-                    'status': 'error',
-                    'message': result.get('error', 'Unknown error')
+                    "status": "error",
+                    "message": result.get("error", "Unknown error"),
                 }
 
             # Process JSON output if needed
             if output_as_json:
-                output = result.get('output', '')
+                output = result.get("output", "")
                 start_marker = "JSON_OUTPUT_START"
                 end_marker = "JSON_OUTPUT_END"
 
@@ -1080,42 +1161,38 @@ class OpenProjectRailsClient:
                 end_idx = output.find(end_marker)
 
                 if start_idx != -1 and end_idx != -1:
-                    json_content = output[start_idx + len(start_marker):end_idx].strip()
+                    json_content = output[
+                        start_idx + len(start_marker) : end_idx
+                    ].strip()
 
                     try:
                         data = json.loads(json_content)
-                        return {
-                            'status': 'success',
-                            'data': data
-                        }
+                        return {"status": "success", "data": data}
                     except json.JSONDecodeError as e:
                         return {
-                            'status': 'error',
-                            'message': f'Error parsing JSON output: {e}',
-                            'content': json_content
+                            "status": "error",
+                            "message": f"Error parsing JSON output: {e}",
+                            "content": json_content,
                         }
                 else:
                     return {
-                        'status': 'error',
-                        'message': 'JSON output markers not found in response',
-                        'output': output
+                        "status": "error",
+                        "message": "JSON output markers not found in response",
+                        "output": output,
                     }
             else:
-                return {
-                    'status': 'success',
-                    'output': result.get('output', '')
-                }
+                return {"status": "success", "output": result.get("output", "")}
 
         except Exception as e:
             logger.error(f"Error executing Ruby script: {e}")
             import traceback
-            logger.debug(f"Traceback: {traceback.format_exc()}")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }
 
-    def execute_script_with_data(self, script_content: str, data: Any = None, output_as_json: bool = True) -> Dict[str, Any]:
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            return {"status": "error", "message": str(e)}
+
+    def execute_script_with_data(
+        self, script_content: str, data: Any = None, output_as_json: bool = True
+    ) -> dict[str, Any]:
         """
         Execute a Ruby script with provided data and capture the results.
 
@@ -1129,8 +1206,8 @@ class OpenProjectRailsClient:
         """
         try:
             # Create a temporary script file
-            import tempfile
             import os
+            import tempfile
 
             script_path = None
             data_path = None
@@ -1138,7 +1215,9 @@ class OpenProjectRailsClient:
 
             # If data is provided, write it to a separate JSON file
             if data is not None:
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as data_file:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", delete=False
+                ) as data_file:
                     # Ensure data is properly serializable
                     try:
                         json.dump(data, data_file, ensure_ascii=False, indent=2)
@@ -1147,16 +1226,18 @@ class OpenProjectRailsClient:
                         logger.info(f"Created temporary JSON data file: {data_path}")
 
                         # Verify the JSON file is valid
-                        with open(data_path, 'r') as verify_file:
-                            json.load(verify_file)  # This will raise an exception if JSON is invalid
+                        with open(data_path) as verify_file:
+                            json.load(
+                                verify_file
+                            )  # This will raise an exception if JSON is invalid
                             logger.debug("Verified JSON data is valid")
                     except Exception as e:
                         logger.error(f"Error creating JSON data file: {e}")
                         if os.path.exists(data_path):
                             os.unlink(data_path)
                         return {
-                            'status': 'error',
-                            'message': f'Failed to create valid JSON data: {str(e)}'
+                            "status": "error",
+                            "message": f"Failed to create valid JSON data: {str(e)}",
                         }
 
                     # Generate a timestamp-based path for the container
@@ -1165,12 +1246,16 @@ class OpenProjectRailsClient:
                     container_data_path = f"/tmp/j2o_data_{timestamp}_{filename}"
 
                     # Transfer the JSON file to the container
-                    logger.info(f"Transferring JSON data file to container at {container_data_path}")
-                    if not self.transfer_file_to_container(data_path, container_data_path):
+                    logger.info(
+                        f"Transferring JSON data file to container at {container_data_path}"
+                    )
+                    if not self.transfer_file_to_container(
+                        data_path, container_data_path
+                    ):
                         logger.error("Failed to transfer JSON data file to container")
                         return {
-                            'status': 'error',
-                            'message': 'Failed to transfer JSON data file to container'
+                            "status": "error",
+                            "message": "Failed to transfer JSON data file to container",
                         }
 
                     # Verify the file exists in the container and has content
@@ -1178,25 +1263,39 @@ class OpenProjectRailsClient:
                     op_server = config.openproject_config.get("server")
                     if container_name and op_server:
                         try:
-                            verify_cmd = ["ssh", op_server, "docker", "exec", container_name,
-                                        "bash", "-c", f"cat {container_data_path} | head -10"]
-                            result = subprocess.run(verify_cmd, capture_output=True, text=True, check=True)
+                            verify_cmd = [
+                                "ssh",
+                                op_server,
+                                "docker",
+                                "exec",
+                                container_name,
+                                "bash",
+                                "-c",
+                                f"cat {container_data_path} | head -10",
+                            ]
+                            result = subprocess.run(
+                                verify_cmd, capture_output=True, text=True, check=True
+                            )
                             if not result.stdout.strip():
-                                logger.error(f"Container file exists but appears to be empty: {container_data_path}")
+                                logger.error(
+                                    f"Container file exists but appears to be empty: {container_data_path}"
+                                )
                                 return {
-                                    'status': 'error',
-                                    'message': 'Container data file is empty'
+                                    "status": "error",
+                                    "message": "Container data file is empty",
                                 }
-                            logger.debug(f"Verified container data file has content (first few lines): {result.stdout[:100]}...")
+                            logger.debug(
+                                f"Verified container data file has content (first few lines): {result.stdout[:100]}..."
+                            )
                         except Exception as e:
                             logger.error(f"Failed to verify container data file: {e}")
                             return {
-                                'status': 'error',
-                                'message': f'Failed to verify container data file: {str(e)}'
+                                "status": "error",
+                                "message": f"Failed to verify container data file: {str(e)}",
                             }
 
             # Create Ruby script with improved data loading and error handling
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".rb", delete=False) as f:
                 # Header section with Python variable interpolation
                 if data is not None:
                     # Python string interpolation for the path
@@ -1234,8 +1333,10 @@ class OpenProjectRailsClient:
                 script_path = f.name
 
             # Execute the script
-            logger.info(f"Executing Ruby script with data")
-            result = self.execute_ruby_script(script_path, in_container=False, output_as_json=output_as_json)
+            logger.info("Executing Ruby script with data")
+            result = self.execute_ruby_script(
+                script_path, in_container=False, output_as_json=output_as_json
+            )
 
             # Clean up the temporary files
             try:
@@ -1247,14 +1348,27 @@ class OpenProjectRailsClient:
                     logger.debug(f"Removed temporary JSON data file: {data_path}")
                 if container_data_path:
                     # Clean up the remote file after execution
-                    logger.debug(f"Attempting to remove container file: {container_data_path}")
+                    logger.debug(
+                        f"Attempting to remove container file: {container_data_path}"
+                    )
                     container_name = config.openproject_config.get("container")
                     op_server = config.openproject_config.get("server")
                     if container_name and op_server:
                         try:
-                            clean_cmd = ["ssh", op_server, "docker", "exec", container_name, "rm", "-f", container_data_path]
-                            subprocess.run(clean_cmd, check=False, capture_output=True, timeout=10)
-                            logger.debug(f"Container file cleanup attempted")
+                            clean_cmd = [
+                                "ssh",
+                                op_server,
+                                "docker",
+                                "exec",
+                                container_name,
+                                "rm",
+                                "-f",
+                                container_data_path,
+                            ]
+                            subprocess.run(
+                                clean_cmd, check=False, capture_output=True, timeout=10
+                            )
+                            logger.debug("Container file cleanup attempted")
                         except Exception as e:
                             logger.debug(f"Error during container file cleanup: {e}")
             except Exception as e:
@@ -1265,11 +1379,9 @@ class OpenProjectRailsClient:
         except Exception as e:
             logger.error(f"Error executing script with data: {e}")
             import traceback
+
             logger.debug(f"Traceback: {traceback.format_exc()}")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }
+            return {"status": "error", "message": str(e)}
 
     def _stabilize_console(self):
         """

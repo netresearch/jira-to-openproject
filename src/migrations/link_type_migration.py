@@ -3,17 +3,13 @@ Link type migration module for Jira to OpenProject migration.
 Handles the migration of issue link types from Jira to OpenProject.
 """
 
-import os
-import sys
 import json
-from typing import Dict, List, Any, Optional
+import os
+from typing import Any
 
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
+from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src import config
 from src.display import ProgressTracker, console
 
 # Get logger from config
@@ -48,7 +44,9 @@ class LinkTypeMigration:
 
         self.console = console
 
-    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> Dict[str, Any]:
+    def run(
+        self, dry_run: bool = False, force: bool = False, mappings=None
+    ) -> dict[str, Any]:
         """
         Run the link type migration process.
 
@@ -74,7 +72,7 @@ class LinkTypeMigration:
                     "failed_count": 0,
                     "total_count": result.get("total_count", 0),
                     "message": "All link types were already matched, no creation needed",
-                    "details": result
+                    "details": result,
                 }
             else:
                 return {
@@ -83,7 +81,7 @@ class LinkTypeMigration:
                     "failed_count": result.get("failed_count", 0),
                     "total_count": result.get("total_count", 0),
                     "message": result.get("message", ""),
-                    "details": result
+                    "details": result,
                 }
         except Exception as e:
             logger.error(f"Error in link type migration: {str(e)}")
@@ -93,10 +91,10 @@ class LinkTypeMigration:
                 "message": f"Error in link type migration: {str(e)}",
                 "success_count": 0,
                 "failed_count": 0,
-                "total_count": 0
+                "total_count": 0,
             }
 
-    def extract_jira_link_types(self) -> List[Dict[str, Any]]:
+    def extract_jira_link_types(self) -> list[dict[str, Any]]:
         """
         Extract link type definitions from Jira.
 
@@ -121,7 +119,7 @@ class LinkTypeMigration:
             logger.error(f"Failed to get link types from Jira: {str(e)}")
             return []
 
-    def extract_openproject_relation_types(self) -> List[Dict[str, Any]]:
+    def extract_openproject_relation_types(self) -> list[dict[str, Any]]:
         """
         Extract relation types from OpenProject.
 
@@ -133,9 +131,7 @@ class LinkTypeMigration:
         try:
             self.op_link_types = self.op_client.get_relation_types()
         except Exception as e:
-            logger.warning(
-                f"Failed to get relation types from OpenProject: {str(e)}"
-            )
+            logger.warning(f"Failed to get relation types from OpenProject: {str(e)}")
             logger.warning("Using an empty list of relation types for OpenProject")
             self.op_link_types = []
 
@@ -147,7 +143,7 @@ class LinkTypeMigration:
 
         return self.op_link_types
 
-    def create_link_type_mapping(self) -> Dict[str, Any]:
+    def create_link_type_mapping(self) -> dict[str, Any]:
         """
         Create a mapping between Jira link types and OpenProject relation types.
 
@@ -292,8 +288,8 @@ class LinkTypeMigration:
         return mapping
 
     def create_relation_type_in_openproject(
-        self, jira_link_type: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+        self, jira_link_type: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """
         Create a relation type in OpenProject based on a Jira link type.
 
@@ -307,7 +303,7 @@ class LinkTypeMigration:
         inward = jira_link_type.get("inward")
         outward = jira_link_type.get("outward")
 
-        if config.migration_config.get('dry_run'):
+        if config.migration_config.get("dry_run"):
             logger.info(f"DRY RUN: Would create relation type: {name}")
             return {"id": None, "name": name, "inward": inward, "outward": outward}
 
@@ -327,7 +323,7 @@ class LinkTypeMigration:
             logger.error(f"Error creating relation type {name}: {str(e)}")
             return None
 
-    def migrate_link_types(self) -> Dict[str, Any]:
+    def migrate_link_types(self) -> dict[str, Any]:
         """
         Migrate link types from Jira to OpenProject.
 
@@ -346,7 +342,8 @@ class LinkTypeMigration:
             self.create_link_type_mapping()
 
         link_types_to_create = [
-            (jira_id, mapping) for jira_id, mapping in self.link_type_mapping.items()
+            (jira_id, mapping)
+            for jira_id, mapping in self.link_type_mapping.items()
             if mapping["matched_by"] == "none"
         ]
 
@@ -361,7 +358,7 @@ class LinkTypeMigration:
         with ProgressTracker(
             description="Migrating link types",
             total=len(link_types_to_create),
-            log_title="Link Types Being Created"
+            log_title="Link Types Being Created",
         ) as tracker:
             for jira_id, mapping in link_types_to_create:
                 jira_link_type = next(
@@ -369,17 +366,19 @@ class LinkTypeMigration:
                 )
 
                 if not jira_link_type:
-                    logger.warning(f"Could not find Jira link type definition for ID: {jira_id}")
+                    logger.warning(
+                        f"Could not find Jira link type definition for ID: {jira_id}"
+                    )
                     continue
 
                 name = jira_link_type.get("name", "")
                 tracker.update_description(f"Migrating link type: {name[:20]}")
 
-                op_relation_type = self.create_relation_type_in_openproject(jira_link_type)
-
-                link_type_info = (
-                    f"{name} (Inward: {jira_link_type.get('inward')}, Outward: {jira_link_type.get('outward')})"
+                op_relation_type = self.create_relation_type_in_openproject(
+                    jira_link_type
                 )
+
+                link_type_info = f"{name} (Inward: {jira_link_type.get('inward')}, Outward: {jira_link_type.get('outward')})"
                 tracker.add_log_item(link_type_info)
 
                 if op_relation_type:
@@ -398,9 +397,9 @@ class LinkTypeMigration:
 
         self._save_to_json(self.link_type_mapping, "link_type_mapping.json")
 
-        analysis = self.analyze_link_type_mapping()
+        self.analyze_link_type_mapping()
 
-        if config.migration_config.get('dry_run'):
+        if config.migration_config.get("dry_run"):
             logger.info(
                 "DRY RUN: No relation types were actually created in OpenProject"
             )
@@ -408,7 +407,7 @@ class LinkTypeMigration:
         # Return the mapping directly
         return self.link_type_mapping
 
-    def analyze_link_type_mapping(self) -> Dict[str, Any]:
+    def analyze_link_type_mapping(self) -> dict[str, Any]:
         """
         Analyze the link type mapping to identify potential issues.
 
@@ -418,7 +417,7 @@ class LinkTypeMigration:
         if not self.link_type_mapping:
             mapping_path = os.path.join(self.data_dir, "link_type_mapping.json")
             if os.path.exists(mapping_path):
-                with open(mapping_path, "r") as f:
+                with open(mapping_path) as f:
                     self.link_type_mapping = json.load(f)
             else:
                 logger.error(
@@ -485,11 +484,13 @@ class LinkTypeMigration:
         if analysis["unmatched_types"] == 0:
             analysis["message"] = f"All {total} link types are mapped successfully"
         else:
-            analysis["message"] = f"{analysis['matched_types']} of {total} link types mapped ({analysis['match_percentage']:.1f}%), {analysis['unmatched_types']} remaining"
+            analysis["message"] = (
+                f"{analysis['matched_types']} of {total} link types mapped ({analysis['match_percentage']:.1f}%), {analysis['unmatched_types']} remaining"
+            )
 
         self._save_to_json(analysis, "link_type_mapping_analysis.json")
 
-        logger.info(f"Link type mapping analysis complete")
+        logger.info("Link type mapping analysis complete")
         logger.info(f"Total link types: {analysis['total_types']}")
         logger.info(
             f"Matched types: {analysis['matched_types']} ({analysis['match_percentage']:.1f}%)"

@@ -4,22 +4,15 @@ Test module for StatusMigration.
 This module contains test cases for validating the status migration from Jira to OpenProject.
 """
 
-import os
-import sys
 import json
+import os
 import unittest
-from unittest.mock import MagicMock, patch
-
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from src.migrations.status_migration import StatusMigration
+from unittest.mock import MagicMock
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.mappings.mappings import Mappings
-from src import config
-from src.utils import load_json_file, save_json_file
+from src.migrations.status_migration import StatusMigration
 
 
 class TestStatusMigration(unittest.TestCase):
@@ -33,7 +26,7 @@ class TestStatusMigration(unittest.TestCase):
         self.op_rails_client = MagicMock(spec=OpenProjectRailsClient)
 
         # Create a test data directory
-        self.test_data_dir = os.path.join(os.path.dirname(__file__), 'test_data')
+        self.test_data_dir = os.path.join(os.path.dirname(__file__), "test_data")
         os.makedirs(self.test_data_dir, exist_ok=True)
 
         # Create a mock mappings object
@@ -47,20 +40,24 @@ class TestStatusMigration(unittest.TestCase):
             op_rails_client=self.op_rails_client,
             mappings=self.mappings,
             data_dir=self.test_data_dir,
-            dry_run=True
+            dry_run=True,
         )
 
         # Create test data
         self.sample_jira_statuses = [
             {"id": "1", "name": "Open", "statusCategory": {"key": "new"}},
-            {"id": "2", "name": "In Progress", "statusCategory": {"key": "indeterminate"}},
-            {"id": "3", "name": "Done", "statusCategory": {"key": "done"}}
+            {
+                "id": "2",
+                "name": "In Progress",
+                "statusCategory": {"key": "indeterminate"},
+            },
+            {"id": "3", "name": "Done", "statusCategory": {"key": "done"}},
         ]
 
         self.sample_op_statuses = [
             {"id": 1, "name": "New", "isClosed": False},
             {"id": 2, "name": "In Progress", "isClosed": False},
-            {"id": 3, "name": "Closed", "isClosed": True}
+            {"id": 3, "name": "Closed", "isClosed": True},
         ]
 
         # Set up the mock return values
@@ -68,7 +65,7 @@ class TestStatusMigration(unittest.TestCase):
         self.jira_client.get_status_categories.return_value = [
             {"id": "1", "key": "new", "name": "To Do"},
             {"id": "2", "key": "indeterminate", "name": "In Progress"},
-            {"id": "3", "key": "done", "name": "Done"}
+            {"id": "3", "key": "done", "name": "Done"},
         ]
         self.op_client.get_statuses.return_value = self.sample_op_statuses
 
@@ -97,7 +94,7 @@ class TestStatusMigration(unittest.TestCase):
         self.assertTrue(os.path.exists(status_file))
 
         # Verify the file content
-        with open(status_file, "r") as f:
+        with open(status_file) as f:
             saved_statuses = json.load(f)
         self.assertEqual(saved_statuses, self.sample_jira_statuses)
 
@@ -112,7 +109,9 @@ class TestStatusMigration(unittest.TestCase):
         self.assertEqual(len(categories), 3)
 
         # Verify that the data was saved to a file
-        categories_file = os.path.join(self.test_data_dir, "jira_status_categories.json")
+        categories_file = os.path.join(
+            self.test_data_dir, "jira_status_categories.json"
+        )
         self.assertTrue(os.path.exists(categories_file))
 
     def test_get_openproject_statuses(self):
@@ -146,7 +145,9 @@ class TestStatusMigration(unittest.TestCase):
             self.assertIn(status["id"], mapping)
 
         # Check specific mappings based on our sample data - updated to match the actual keys returned
-        self.assertEqual(mapping["2"]["openproject_id"], 2)  # "In Progress" -> "In Progress"
+        self.assertEqual(
+            mapping["2"]["openproject_id"], 2
+        )  # "In Progress" -> "In Progress"
 
         # Verify that the mapping was saved to a file
         mapping_file = os.path.join(self.test_data_dir, "status_mapping.json")
@@ -156,18 +157,16 @@ class TestStatusMigration(unittest.TestCase):
         """Test the status migration process."""
         # Set up test data - an unmapped Jira status that needs to be created in OpenProject
         self.status_migration.jira_statuses = self.sample_jira_statuses.copy()
-        self.status_migration.jira_statuses.append({
-            "id": "4",
-            "name": "Pending",
-            "statusCategory": {"key": "indeterminate"}
-        })
+        self.status_migration.jira_statuses.append(
+            {"id": "4", "name": "Pending", "statusCategory": {"key": "indeterminate"}}
+        )
         self.status_migration.op_statuses = self.sample_op_statuses
 
         # Create a basic mapping with a missing status
         initial_mapping = {
             "1": {"openproject_id": 1, "openproject_name": "New"},
             "2": {"openproject_id": 2, "openproject_name": "In Progress"},
-            "3": {"openproject_id": 3, "openproject_name": "Closed"}
+            "3": {"openproject_id": 3, "openproject_name": "Closed"},
             # "4" is missing (Pending)
         }
 
@@ -179,7 +178,7 @@ class TestStatusMigration(unittest.TestCase):
             "output": """
             SUCCESS: Status created with ID: 4
             #<Status id: 4, name: "Pending", position: 4, is_default: false, is_closed: false>
-            """
+            """,
         }
 
         # Mock the OpenProject client to return updated statuses including the new one
@@ -195,7 +194,9 @@ class TestStatusMigration(unittest.TestCase):
 
         # Verify that the result contains the expected mapping
         self.assertIn("4", result["mapping"])
-        self.assertEqual(result["mapping"]["4"]["openproject_id"], "dry_run_4")  # In dry run mode, it uses this format
+        self.assertEqual(
+            result["mapping"]["4"]["openproject_id"], "dry_run_4"
+        )  # In dry run mode, it uses this format
         self.assertEqual(result["mapping"]["4"]["openproject_name"], "Pending")
 
     def test_analyze_status_mapping(self):
@@ -207,7 +208,7 @@ class TestStatusMigration(unittest.TestCase):
         self.status_migration.status_mapping = {
             "1": {"openproject_id": 1, "openproject_name": "New"},
             "2": {"openproject_id": 2, "openproject_name": "In Progress"},
-            "3": {"openproject_id": 3, "openproject_name": "Closed"}
+            "3": {"openproject_id": 3, "openproject_name": "Closed"},
         }
 
         # Call the analyze method
@@ -222,7 +223,7 @@ class TestStatusMigration(unittest.TestCase):
         # Now test with an incomplete mapping by adding a status with no OpenProject ID
         self.status_migration.status_mapping["4"] = {
             "openproject_id": None,
-            "openproject_name": "Pending"
+            "openproject_name": "Pending",
         }
 
         # Call the analyze method again

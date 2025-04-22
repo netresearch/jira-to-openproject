@@ -99,7 +99,7 @@ begin
   $(cat "$SCRIPT_FILE")
   puts "\nScript execution completed successfully!"
 rescue => e
-  puts "Error during script execution: \#{e.message}"
+  puts "Error during script execution: #{e.message}"
   puts e.backtrace
 ensure
   # Exit pry-remote session

@@ -3,15 +3,12 @@
 Script to clean up var directories or remove old directories after migration.
 """
 
-import os
-import sys
-import shutil
-import logging
 import argparse
+import logging
+import os
+import shutil
 from pathlib import Path
-
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.config import var_dirs
 
 # Configure logging
 logging.basicConfig(
@@ -20,8 +17,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("cleanup_var")
 
-# Import config to use the same paths
-from src.config import var_dirs
 
 def clean_var_directory(dir_name=None, confirm=True):
     """
@@ -49,7 +44,7 @@ def clean_var_directory(dir_name=None, confirm=True):
         dirs_str = ", ".join(dirs_to_clean.keys())
         print(f"\nYou are about to delete all contents from: {dirs_str}")
         response = input("Are you sure you want to proceed? (y/n): ")
-        if response.lower() != 'y':
+        if response.lower() != "y":
             print("Operation cancelled.")
             return False
 
@@ -70,15 +65,22 @@ def clean_var_directory(dir_name=None, confirm=True):
 
     return True
 
+
 def main():
     """Main function to handle directory cleanup."""
-    parser = argparse.ArgumentParser(description="Clean up var directories or remove old directories.")
+    parser = argparse.ArgumentParser(
+        description="Clean up var directories or remove old directories."
+    )
 
     # Add arguments
-    parser.add_argument("--clean", choices=list(k for k in var_dirs.keys() if k != "root") + ["all"],
-                        help="Clean specified var directory or 'all' for all directories")
-    parser.add_argument("--no-confirm", action="store_true",
-                        help="Skip confirmation prompts")
+    parser.add_argument(
+        "--clean",
+        choices=list(k for k in var_dirs.keys() if k != "root") + ["all"],
+        help="Clean specified var directory or 'all' for all directories",
+    )
+    parser.add_argument(
+        "--no-confirm", action="store_true", help="Skip confirmation prompts"
+    )
 
     args = parser.parse_args()
 
@@ -100,6 +102,7 @@ def main():
         return False
 
     return True
+
 
 if __name__ == "__main__":
     main()

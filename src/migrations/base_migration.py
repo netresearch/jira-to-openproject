@@ -1,10 +1,10 @@
-import os
 import json
+import os
 from typing import Any, Optional
 
+from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src import config
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 
 
@@ -16,9 +16,9 @@ class BaseMigration:
 
     def __init__(
         self,
-        jira_client: Optional[JiraClient] = None,
-        op_client: Optional[OpenProjectClient] = None,
-        op_rails_client: Optional['OpenProjectRailsClient'] = None,
+        jira_client: JiraClient | None = None,
+        op_client: OpenProjectClient | None = None,
+        op_rails_client: Optional["OpenProjectRailsClient"] = None,
     ) -> None:
         """
         Initialize the base migration with common attributes.
@@ -37,6 +37,11 @@ class BaseMigration:
 
         self.logger = config.logger
 
+        # Initialize config.mappings if not already set
+        if config.mappings is None:
+            from src.mappings.mappings import Mappings
+            config.mappings = Mappings(data_dir=self.data_dir, jira_client=self.jira_client, op_client=self.op_client)
+
     def _load_from_json(self, filename: str, default: Any = None) -> Any:
         """
         Load data from a JSON file in the data directory.
@@ -51,7 +56,7 @@ class BaseMigration:
         filepath = os.path.join(self.data_dir, filename)
         if os.path.exists(filepath):
             try:
-                with open(filepath, "r") as f:
+                with open(filepath) as f:
                     return json.load(f)
             except Exception as e:
                 self.logger.warning(f"Failed to load {filepath}: {e}")
@@ -78,7 +83,9 @@ class BaseMigration:
         self.logger.debug(f"Saved data to {filepath}")
         return filepath
 
-    def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> dict[str, Any]:
+    def run(
+        self, dry_run: bool = False, force: bool = False, mappings=None
+    ) -> dict[str, Any]:
         """
         Default implementation of the run method that all migration classes should implement.
 
@@ -90,11 +97,13 @@ class BaseMigration:
         Returns:
             Dictionary with migration results
         """
-        self.logger.warning(f"The run method has not been implemented for {self.__class__.__name__}")
+        self.logger.warning(
+            f"The run method has not been implemented for {self.__class__.__name__}"
+        )
         return {
             "status": "failed",
             "error": f"The run method has not been implemented for {self.__class__.__name__}",
             "success_count": 0,
             "failed_count": 0,
-            "total_count": 0
+            "total_count": 0,
         }

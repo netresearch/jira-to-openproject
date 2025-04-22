@@ -3,14 +3,9 @@
 Script to set up the var directory structure for data, logs, backups, and output.
 """
 
-import os
-import sys
-import shutil
 import logging
-from pathlib import Path
 
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.config import var_dirs
 
 # Configure logging
 logging.basicConfig(
@@ -19,8 +14,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("setup_var_dirs")
 
-# Import config to use the same paths
-from src.config import var_dirs
 
 def create_var_directories():
     """Create the var directory structure."""
@@ -37,6 +30,7 @@ def create_var_directories():
 
     return True
 
+
 def main():
     """Main function to set up the var directory structure."""
     try:
@@ -50,13 +44,16 @@ def main():
             if name != "root":
                 print(f"- {name}: {path}")
         print("\nYou may now update your code to use these new paths.")
-        print("After confirming everything works, you can clean up the old directories.")
+        print(
+            "After confirming everything works, you can clean up the old directories."
+        )
 
     except Exception as e:
         logger.error(f"Error setting up var directories: {str(e)}")
         return False
 
     return True
+
 
 if __name__ == "__main__":
     main()

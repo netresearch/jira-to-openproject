@@ -6,12 +6,13 @@ This script parses a custom fields list captured from the Rails console
 and creates a JSON file with the custom field data.
 """
 
-import sys
-import re
 import json
-from typing import List, Dict, Any
+import re
+import sys
+from typing import Any
 
-def parse_custom_fields_list(input_file: str) -> List[Dict[str, Any]]:
+
+def parse_custom_fields_list(input_file: str) -> list[dict[str, Any]]:
     """
     Parse the custom fields list.
 
@@ -24,7 +25,7 @@ def parse_custom_fields_list(input_file: str) -> List[Dict[str, Any]]:
     custom_fields = []
 
     # Read the input file
-    with open(input_file, 'r') as f:
+    with open(input_file) as f:
         lines = f.readlines()
 
     # Find the start and end markers
@@ -32,9 +33,9 @@ def parse_custom_fields_list(input_file: str) -> List[Dict[str, Any]]:
     end_idx = -1
 
     for i, line in enumerate(lines):
-        if 'FIELDS_START' in line:
+        if "FIELDS_START" in line:
             start_idx = i + 1  # Start after the marker
-        elif 'FIELDS_END' in line:
+        elif "FIELDS_END" in line:
             end_idx = i
             break
 
@@ -51,17 +52,16 @@ def parse_custom_fields_list(input_file: str) -> List[Dict[str, Any]]:
             continue
 
         # Parse the line with format: "id: name (field_format)"
-        match = re.match(r'(\d+): (.*) \((.*)\)', line)
+        match = re.match(r"(\d+): (.*) \((.*)\)", line)
         if match:
             field_id, field_name, field_format = match.groups()
 
-            custom_fields.append({
-                'id': int(field_id),
-                'name': field_name,
-                'field_format': field_format
-            })
+            custom_fields.append(
+                {"id": int(field_id), "name": field_name, "field_format": field_format}
+            )
 
     return custom_fields
+
 
 def main():
     """Main entry point."""
@@ -80,7 +80,7 @@ def main():
         return 1
 
     # Save to output file
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         json.dump(custom_fields, f, indent=2)
 
     print(f"Successfully saved {len(custom_fields)} custom fields to {output_file}")
@@ -93,6 +93,7 @@ def main():
         print(f"... and {len(custom_fields) - 5} more fields")
 
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

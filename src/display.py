@@ -3,18 +3,20 @@ Centralized display utilities for console output and progress tracking.
 Provides standardized progress bars and logging displays using rich.
 """
 
-import time
 import logging
 import os
-from typing import List, Dict, Any, Optional, Callable, TypeVar, Iterable, Generic
+import time
 from collections import deque
+from collections.abc import Iterable
+from typing import Generic, TypeVar
+
 from rich.console import Console
-from rich.progress import Progress, TaskID, TextColumn, BarColumn, SpinnerColumn
 from rich.live import Live
-from rich.panel import Panel
-from rich.text import Text
-from rich.table import Table
 from rich.logging import RichHandler
+from rich.panel import Panel
+from rich.progress import BarColumn, Progress, TextColumn
+from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
 # Type variables for generic functions
@@ -22,15 +24,17 @@ T = TypeVar("T")
 U = TypeVar("U")
 
 # Create a custom theme for logging
-LOGGING_THEME = Theme({
-    "logging.level.debug": "dim",
-    "logging.level.info": "blue",
-    "logging.level.notice": "cyan",  # New NOTICE level styling
-    "logging.level.warning": "bold yellow",
-    "logging.level.error": "bold red",
-    "logging.level.critical": "bold red on white",
-    "success": "bold green"
-})
+LOGGING_THEME = Theme(
+    {
+        "logging.level.debug": "dim",
+        "logging.level.info": "blue",
+        "logging.level.notice": "cyan",  # New NOTICE level styling
+        "logging.level.warning": "bold yellow",
+        "logging.level.error": "bold red",
+        "logging.level.critical": "bold red on white",
+        "success": "bold green",
+    }
+)
 
 # Global console instance with theme
 console = Console(theme=LOGGING_THEME)
@@ -44,10 +48,13 @@ rich_handler = RichHandler(
     show_time=True,
     show_level=True,
     enable_link_path=True,
-    log_time_format="[%X.%f]"
+    log_time_format="[%X.%f]",
 )
 
-def configure_logging(level: str = "INFO", log_file: Optional[str] = None) -> logging.Logger:
+
+def configure_logging(
+    level: str = "INFO", log_file: str | None = None
+) -> logging.Logger:
     """
     Configure logging with rich formatting.
 
@@ -98,7 +105,7 @@ def configure_logging(level: str = "INFO", log_file: Optional[str] = None) -> lo
         format="%(message)s",
         datefmt="[%X.%f]",
         handlers=handlers,
-        force=True  # Ensure we can reconfigure logging if needed
+        force=True,  # Ensure we can reconfigure logging if needed
     )
 
     # Get the logger and report configuration
@@ -130,6 +137,7 @@ def configure_logging(level: str = "INFO", log_file: Optional[str] = None) -> lo
 
     return logger
 
+
 class ProgressTracker(Generic[T]):
     """
     Centralized progress tracker that provides standardized rich progress bars
@@ -141,7 +149,7 @@ class ProgressTracker(Generic[T]):
         description: str,
         total: int,
         log_title: str = "Recent Items",
-        max_log_items: int = 5
+        max_log_items: int = 5,
     ):
         """
         Initialize a progress tracker with a progress bar and rolling log.
@@ -160,7 +168,7 @@ class ProgressTracker(Generic[T]):
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TextColumn("({task.completed}/{task.total})"),
-            console=console
+            console=console,
         )
         self.task_id = self.progress.add_task(description, total=total)
         self.recent_items = deque(maxlen=max_log_items)
@@ -193,7 +201,7 @@ class ProgressTracker(Generic[T]):
         self.recent_items.append(item)
         self._update_display()
 
-    def increment(self, advance: int = 1, description: Optional[str] = None):
+    def increment(self, advance: int = 1, description: str | None = None):
         """
         Increment the progress bar.
 
@@ -203,7 +211,9 @@ class ProgressTracker(Generic[T]):
         """
         self.processed_count += advance
         if description:
-            self.progress.update(self.task_id, completed=self.processed_count, description=description)
+            self.progress.update(
+                self.task_id, completed=self.processed_count, description=description
+            )
         else:
             self.progress.update(self.task_id, completed=self.processed_count)
         self._update_display()
@@ -223,15 +233,17 @@ class ProgressTracker(Generic[T]):
             log_table.add_row(f"  - {item}")
 
         # Create a panel with the log table
-        panel = Panel.fit(log_table, title=self.log_title)
+        Panel.fit(log_table, title=self.log_title)
 
         # Update the live display with progress and panel
         self.live.update(self.progress)
         if self.recent_items:
-            self.live.update(Panel.fit(
-                self._create_combined_display(self.progress, log_table),
-                title=self.description
-            ))
+            self.live.update(
+                Panel.fit(
+                    self._create_combined_display(self.progress, log_table),
+                    title=self.description,
+                )
+            )
         else:
             self.live.update(self.progress)
 
