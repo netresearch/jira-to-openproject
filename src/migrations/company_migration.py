@@ -469,173 +469,149 @@ class CompanyMigration(BaseMigration):
         # Prepare and execute the Ruby script
         self.logger.info(f"Executing Rails script to create {len(companies_data)} companies")
 
-        # Head section with f-string for Python variable interpolation
-        head_script = f"""
-        container_temp_path = '{container_temp_path}'
-        result_file_container = '{result_file_container}'
-        """
+        # Ruby script to create companies
+        ruby_script = """
+        container_temp_path = '/tmp/tempo_companies.json'
+        result_file_container = '/tmp/company_creation_result.json'
 
-        # Main section without f-string for Ruby logic
-        main_script = """
-        begin
-          require 'json'
+        require 'json'
 
-          # Load the data from the JSON file
-          companies_data = JSON.parse(File.read(container_temp_path))
-          companies_count = companies_data.size
-          puts "Loaded #{companies_count} companies from JSON file"
+        # Load the data from the JSON file
+        companies_data = JSON.parse(File.read(container_temp_path))
+        companies_count = companies_data.size
+        puts "Loaded #{companies_count} companies from JSON file"
 
-          created_companies = []
-          errors = []
+        created_companies = []
+        errors = []
 
-          # Create each company project
-          companies_data.each do |company|
-            begin
-              # Store Tempo data for mapping
-              tempo_id = company['tempo_id']
-              tempo_key = company['tempo_key']
-              tempo_name = company['tempo_name']
-              tempo_status = company['status'] || 'ACTIVE'
-
-              # Map Tempo status to OpenProject status code
-              status_code = 'on_track'  # Default status
-              if ['CLOSED', 'ARCHIVED'].include?(tempo_status)
-                status_code = 'finished'
-              end
-
-              # Create project object with only the needed attributes
-              project = Project.new(
-                name: company['name'],
-                identifier: company['identifier'],
-                description: company['description'],
-                public: false
-              )
-
-              # Save the project
-              if project.save
-                # Set the project status using appropriate model
-                begin
-                  if defined?(Status)  # Try Status model first (older OpenProject)
-                    begin
-                      # Map status code to name
-                      status_name = 'On track'
-                      if status_code == 'finished'
-                        status_name = 'Finished'
-                      end
-
-                      status = Status.find_or_create_by(name: status_name)
-                      if project.respond_to?(:status=)
-                        project.status = status
-                        project.save
-                        puts "Set project status to #{status_name} using Status model"
-                      else
-                        puts "Project does not respond to status="
-                      end
-                    rescue => e1
-                      puts "Status model error: #{e1.message}"
-
-                      # Try ProjectStatus instead
-                      if defined?(ProjectStatus)
-                        begin
-                          ps = ProjectStatus.find_or_create_by(project_id: project.id)
-                          ps.code = status_code
-                          ps.save
-                          puts "Set project status to #{status_code} using ProjectStatus model"
-                        rescue => e2
-                          puts "ProjectStatus error: #{e2.message}"
-                        end
-                      else
-                        puts "Neither Status nor ProjectStatus models available"
-                      end
-                    end
-                  elsif defined?(ProjectStatus)  # Try ProjectStatus model directly
-                    begin
-                      ps = ProjectStatus.find_or_create_by(project_id: project.id)
-                      ps.code = status_code
-                      ps.save
-                      puts "Set project status to #{status_code} using ProjectStatus model"
-                    rescue => e
-                      puts "ProjectStatus error: #{e.message}"
-                    end
-                  else
-                    puts "No status models available"
-                  end
-                rescue => status_error
-                  puts "Error setting project status for #{project.name}: #{status_error.message}"
-                end
-
-                created_companies << {
-                  'tempo_id' => tempo_id,
-                  'tempo_key' => tempo_key,
-                  'tempo_name' => tempo_name,
-                  'openproject_id' => project.id,
-                  'openproject_identifier' => project.identifier,
-                  'openproject_name' => project.name,
-                  'status' => status_code
-                }
-                puts "Created project #{project.id}: #{project.name} with status #{status_code}"
-              else
-                errors << {
-                  'tempo_id' => tempo_id,
-                  'tempo_key' => tempo_key,
-                  'tempo_name' => tempo_name,
-                  'identifier' => company['identifier'],
-                  'errors' => project.errors.full_messages,
-                  'error_type' => 'validation_error'
-                }
-                puts "Error creating project: #{project.errors.full_messages.join(', ')}"
-              end
-            rescue => e
-              errors << {
-                'tempo_id' => company['tempo_id'],
-                'tempo_key' => company['tempo_key'],
-                'tempo_name' => company['tempo_name'],
-                'identifier' => company['identifier'],
-                'errors' => [e.message],
-                'error_type' => 'exception'
-              }
-              puts "Exception: #{e.message}"
-            end
-          end
-
-          # Write results to result file
-          result = {
-            'status' => 'success',
-            'created' => created_companies,
-            'errors' => errors,
-            'created_count' => created_companies.size,
-            'error_count' => errors.size,
-            'total' => companies_count
-          }
-
-          File.write(result_file_container, result.to_json)
-          puts "Results written to #{result_file_container}"
-
-          # Also return the result for direct capture
-          result
-        rescue => e
-          error_result = {
-            'status' => 'error',
-            'message' => e.message,
-            'backtrace' => e.backtrace[0..5]
-          }
-
-          # Try to save error to file
+        # Create each company project
+        companies_data.each do |company|
           begin
-            File.write(result_file_container, error_result.to_json)
-          rescue => write_error
-            puts "Failed to write error to file: #{write_error.message}"
-          end
+            # Store Tempo data for mapping
+            tempo_id = company['tempo_id']
+            tempo_key = company['tempo_key']
+            tempo_name = company['tempo_name']
+            tempo_status = company['status'] || 'ACTIVE'
 
-          # Return error result
-          error_result
+            # Map Tempo status to OpenProject status code
+            status_code = 'on_track'  # Default status
+            if ['CLOSED', 'ARCHIVED'].include?(tempo_status)
+              status_code = 'finished'
+            end
+
+            # Create project object with only the needed attributes
+            project = Project.new(
+              name: company['name'],
+              identifier: company['identifier'],
+              description: company['description'],
+              public: false
+            )
+
+            # Save the project
+            if project.save
+              # Set the project status using appropriate model
+              begin
+                if defined?(Status)  # Try Status model first (older OpenProject)
+                  begin
+                    # Map status code to name
+                    status_name = 'On track'
+                    if status_code == 'finished'
+                      status_name = 'Finished'
+                    end
+
+                    status = Status.find_or_create_by(name: status_name)
+                    if project.respond_to?(:status=)
+                      project.status = status
+                      project.save
+                      puts "Set project status to #{status_name} using Status model"
+                    else
+                      puts "Project does not respond to status="
+                    end
+                  rescue => e1
+                    puts "Status model error: #{e1.message}"
+
+                    # Try ProjectStatus instead
+                    if defined?(ProjectStatus)
+                      begin
+                        ps = ProjectStatus.find_or_create_by(project_id: project.id)
+                        ps.code = status_code
+                        ps.save
+                        puts "Set project status to #{status_code} using ProjectStatus model"
+                      rescue => e2
+                        puts "ProjectStatus error: #{e2.message}"
+                      end
+                    else
+                      puts "Neither Status nor ProjectStatus models available"
+                    end
+                  end
+                elsif defined?(ProjectStatus)  # Try ProjectStatus model directly
+                  begin
+                    ps = ProjectStatus.find_or_create_by(project_id: project.id)
+                    ps.code = status_code
+                    ps.save
+                    puts "Set project status to #{status_code} using ProjectStatus model"
+                  rescue => e
+                    puts "ProjectStatus error: #{e.message}"
+                  end
+                else
+                  puts "No status models available"
+                end
+              rescue => status_error
+                puts "Error setting project status for #{project.name}: #{status_error.message}"
+              end
+
+              created_companies << {
+                'tempo_id' => tempo_id,
+                'tempo_key' => tempo_key,
+                'tempo_name' => tempo_name,
+                'openproject_id' => project.id,
+                'openproject_identifier' => project.identifier,
+                'openproject_name' => project.name,
+                'status' => status_code
+              }
+              puts "Created project #{project.id}: #{project.name} with status #{status_code}"
+            else
+              errors << {
+                'tempo_id' => tempo_id,
+                'tempo_key' => tempo_key,
+                'tempo_name' => tempo_name,
+                'identifier' => company['identifier'],
+                'errors' => project.errors.full_messages,
+                'error_type' => 'validation_error'
+              }
+              puts "Error creating project: #{project.errors.full_messages.join(', ')}"
+            end
+          rescue => e
+            errors << {
+              'tempo_id' => company['tempo_id'],
+              'tempo_key' => company['tempo_key'],
+              'tempo_name' => company['tempo_name'],
+              'identifier' => company['identifier'],
+              'errors' => [e.message],
+              'error_type' => 'exception'
+            }
+            puts "Exception: #{e.message}"
+          end
         end
+
+        # Write results to result file
+        result = {
+          'status' => 'success',
+          'created' => created_companies,
+          'errors' => errors,
+          'created_count' => created_companies.size,
+          'error_count' => errors.size,
+          'total' => companies_count
+        }
+
+        File.write(result_file_container, result.to_json)
+        puts "Results written to #{result_file_container}"
+
+        # Also return the result for direct capture
+        result
         """
 
-        # Combine the head and main sections
-        ruby_script = head_script + main_script
-
-        # Execute the Ruby script
+        # Execute the Ruby script using file-based approach
         result = self.op_client.rails_client.execute(ruby_script)
         output = result.get("output", "")
 
@@ -743,6 +719,364 @@ class CompanyMigration(BaseMigration):
 
         return self.company_mapping
 
+    def migrate_customer_metadata(self) -> Dict[str, Any]:
+        """
+        Migrate customer metadata (address, contact info, etc.) to OpenProject projects.
+        This enhances company projects with additional metadata from Tempo.
+
+        Returns:
+            Dict with results stats
+        """
+        self.logger.info("Starting migration of customer metadata...")
+
+        results = {
+            "updated": 0,
+            "failed": 0,
+            "errors": [],
+            "warnings": []
+        }
+
+        # Check for valid mappings
+        if not hasattr(self, 'company_mapping') or not self.company_mapping:
+            self.logger.warning("No company mapping available, run create_company_mapping first")
+            results["warnings"].append("No company mapping available")
+            return results
+
+        # Find all Tempo companies with OpenProject mapping
+        companies_to_update = []
+
+        for tempo_id, mapping in self.company_mapping.items():
+            # Only process companies that were matched or created in OpenProject
+            op_project_id = mapping.get("openproject_id")
+            if not op_project_id:
+                continue
+
+            # Get the Tempo company data
+            tempo_company = self.tempo_companies.get(tempo_id)
+            if not tempo_company:
+                continue
+
+            raw_data = tempo_company.get("_raw", {})
+
+            # Base metadata that's always included
+            metadata = {
+                "tempo_id": tempo_id,
+                "openproject_id": op_project_id,
+                "key": tempo_company.get("key", ""),
+                "name": tempo_company.get("name", ""),
+                "status": tempo_company.get("status", "ACTIVE"),
+            }
+
+            # Contact information if available
+            if "lead" in tempo_company:
+                lead = tempo_company.get("lead")
+                if isinstance(lead, dict):
+                    metadata["lead_key"] = lead.get("key", "")
+                    metadata["lead_display_name"] = lead.get("displayName", "")
+                elif isinstance(lead, str):
+                    metadata["lead_key"] = lead
+
+            # Additional information from raw data if available
+            for field in ["addressLine1", "addressLine2", "city", "state", "zipCode", "country",
+                          "phoneNumber", "faxNumber", "email", "website"]:
+                if raw_data and field in raw_data:
+                    metadata[field] = raw_data.get(field, "")
+
+            companies_to_update.append(metadata)
+
+        if not companies_to_update:
+            self.logger.warning("No companies with metadata to update")
+            return results
+
+        # Write data to a temp file
+        temp_file_path = os.path.join(self.data_dir, "company_metadata.json")
+        with open(temp_file_path, "w") as f:
+            json.dump(companies_to_update, f, indent=2)
+
+        # Transfer file to container
+        container_temp_path = "/tmp/company_metadata.json"
+        result_file_container = "/tmp/company_metadata_result.json"
+        result_file_local = os.path.join(self.data_dir, "company_metadata_result.json")
+
+        if not self.op_client.rails_client.transfer_file_to_container(temp_file_path, container_temp_path):
+            self.logger.error("Failed to transfer company metadata to container")
+            results["failed"] = len(companies_to_update)
+            return results
+
+        # Prepare Ruby script to update metadata
+        self.logger.info(f"Updating metadata for {len(companies_to_update)} companies...")
+
+        # Ruby script to execute
+        ruby_script = """
+        metadata_file_path = '/tmp/company_metadata.json'
+        result_file_path = '/tmp/company_metadata_result.json'
+
+        require 'json'
+
+        # Load the metadata from the JSON file
+        companies = JSON.parse(File.read(metadata_file_path))
+        puts "Loaded metadata for #{companies.size} companies"
+
+        updated_companies = []
+        errors = []
+
+        # Check if we have project custom fields available
+        begin
+          has_custom_fields = defined?(CustomField) && CustomField.where(type: 'ProjectCustomField').exists?
+          puts "Project custom fields available: #{has_custom_fields}"
+
+          # Create custom fields if needed
+          if has_custom_fields
+            # Create contact custom fields if they don't exist
+            contact_cf = CustomField.where(type: 'ProjectCustomField', name: 'Customer Contact').first_or_create do |cf|
+              cf.field_format = 'text'
+              cf.is_required = false
+              puts "Created 'Customer Contact' custom field"
+            end
+
+            address_cf = CustomField.where(type: 'ProjectCustomField', name: 'Customer Address').first_or_create do |cf|
+              cf.field_format = 'text'
+              cf.is_required = false
+              puts "Created 'Customer Address' custom field"
+            end
+
+            website_cf = CustomField.where(type: 'ProjectCustomField', name: 'Website').first_or_create do |cf|
+              cf.field_format = 'text'
+              cf.is_required = false
+              puts "Created 'Website' custom field"
+            end
+
+            tempo_id_cf = CustomField.where(type: 'ProjectCustomField', name: 'Tempo ID').first_or_create do |cf|
+              cf.field_format = 'string'
+              cf.is_required = false
+              puts "Created 'Tempo ID' custom field"
+            end
+          end
+        rescue => cf_error
+          puts "Error with custom fields: #{cf_error.message}"
+          has_custom_fields = false
+        end
+
+        # Update each company project
+        companies.each do |metadata|
+          begin
+            op_project_id = metadata['openproject_id']
+            tempo_id = metadata['tempo_id']
+
+            # Find the project
+            project = Project.find_by(id: op_project_id)
+
+            if project.nil?
+              errors << {
+                'tempo_id' => tempo_id,
+                'openproject_id' => op_project_id,
+                'error' => "Project not found"
+              }
+              puts "Error: Project with ID #{op_project_id} not found"
+              next
+            end
+
+            # Update description to include additional metadata
+            description = project.description || ""
+
+            # Add contact information
+            contact_info = []
+            contact_info << "Lead: #{metadata['lead_display_name']} (#{metadata['lead_key']})" if metadata['lead_display_name']
+            contact_info << "Email: #{metadata['email']}" if metadata['email']
+            contact_info << "Phone: #{metadata['phoneNumber']}" if metadata['phoneNumber']
+            contact_info << "Fax: #{metadata['faxNumber']}" if metadata['faxNumber']
+
+            # Add address information
+            address_info = []
+            address_info << metadata['addressLine1'] if metadata['addressLine1']
+            address_info << metadata['addressLine2'] if metadata['addressLine2']
+            address_info << "#{metadata['city']}, #{metadata['state']} #{metadata['zipCode']}" if metadata['city'] || metadata['state'] || metadata['zipCode']
+            address_info << metadata['country'] if metadata['country']
+
+            # Build enhanced description
+            new_description = description
+
+            # Only add metadata section if it doesn't exist already
+            unless description.include?("## Customer Metadata")
+              new_description += "\n\n## Customer Metadata\n"
+              new_description += "\nTempo ID: #{tempo_id}" if tempo_id
+
+              if metadata['status']
+                status_text = metadata['status'].capitalize
+                new_description += "\nStatus: #{status_text}"
+              end
+
+              if contact_info.any?
+                new_description += "\n\n### Contact Information\n"
+                contact_info.each do |line|
+                  new_description += "\n#{line}"
+                end
+              end
+
+              if address_info.any?
+                new_description += "\n\n### Address\n"
+                address_info.each do |line|
+                  new_description += "\n#{line}"
+                end
+              end
+
+              if metadata['website']
+                new_description += "\n\n### Website\n"
+                new_description += "\n#{metadata['website']}"
+              end
+            end
+
+            # Update project description
+            project.description = new_description
+
+            # Set status if applicable
+            begin
+              if metadata['status'] && ['CLOSED', 'ARCHIVED'].include?(metadata['status'])
+                if defined?(ProjectStatus)
+                  status = ProjectStatus.find_or_create_by(project_id: project.id)
+                  status.code = 'finished'
+                  status.save
+                  puts "Set project status to 'finished'"
+                end
+              end
+            rescue => status_error
+              puts "Error setting status: #{status_error.message}"
+            end
+
+            # Set custom fields if available
+            if has_custom_fields
+              begin
+                # Set contact information
+                if contact_cf && contact_info.any?
+                  contact_value = contact_info.join("\n")
+                  custom_value = project.custom_values.find_or_initialize_by(custom_field_id: contact_cf.id)
+                  custom_value.value = contact_value
+                  custom_value.save
+                end
+
+                # Set address
+                if address_cf && address_info.any?
+                  address_value = address_info.join("\n")
+                  custom_value = project.custom_values.find_or_initialize_by(custom_field_id: address_cf.id)
+                  custom_value.value = address_value
+                  custom_value.save
+                end
+
+                # Set website
+                if website_cf && metadata['website']
+                  custom_value = project.custom_values.find_or_initialize_by(custom_field_id: website_cf.id)
+                  custom_value.value = metadata['website']
+                  custom_value.save
+                end
+
+                # Set Tempo ID
+                if tempo_id_cf && tempo_id
+                  custom_value = project.custom_values.find_or_initialize_by(custom_field_id: tempo_id_cf.id)
+                  custom_value.value = tempo_id
+                  custom_value.save
+                end
+              rescue => cf_error
+                puts "Error setting custom field values: #{cf_error.message}"
+              end
+            end
+
+            # Save the project
+            if project.save
+              updated_companies << {
+                'tempo_id' => tempo_id,
+                'openproject_id' => op_project_id,
+                'name' => project.name,
+                'updated_description' => description != new_description,
+                'updated_custom_fields' => has_custom_fields
+              }
+              puts "Updated metadata for project #{op_project_id}: #{project.name}"
+            else
+              errors << {
+                'tempo_id' => tempo_id,
+                'openproject_id' => op_project_id,
+                'error' => project.errors.full_messages.join(', ')
+              }
+              puts "Error updating project: #{project.errors.full_messages.join(', ')}"
+            end
+          rescue => e
+            errors << {
+              'tempo_id' => metadata['tempo_id'],
+              'openproject_id' => metadata['openproject_id'],
+              'error' => e.message
+            }
+            puts "Exception: #{e.message}"
+          end
+        end
+
+        # Write results to file
+        result = {
+          'status' => 'success',
+          'updated' => updated_companies,
+          'errors' => errors,
+          'updated_count' => updated_companies.size,
+          'error_count' => errors.size,
+          'total' => companies.size
+        }
+
+        File.write(result_file_path, result.to_json)
+        puts "Results written to #{result_file_path}"
+
+        # Return the result
+        result
+        """
+
+        # Execute the Ruby script using file-based method to avoid IOError
+        result = self.op_client.rails_client.execute(ruby_script)
+
+        # Process the result
+        if result.get("status") != "success":
+            self.logger.error(f"Error executing Ruby script: {result.get('error', 'Unknown error')}")
+            results["failed"] = len(companies_to_update)
+            results["errors"].append(result.get("error", "Failed to execute Ruby script"))
+            return results
+
+        # Get the result data
+        updated_companies = []
+        errors = []
+
+        output = result.get("output", {})
+        if isinstance(output, dict) and output.get("status") == "success":
+            updated_companies = output.get("updated", [])
+            errors = output.get("errors", [])
+        elif isinstance(output, dict):
+            updated_companies = output.get("updated", [])
+            errors = output.get("errors", [])
+        else:
+            # Try to get result file from container
+            if self.op_client.rails_client.transfer_file_from_container(result_file_container, result_file_local):
+                try:
+                    with open(result_file_local, 'r') as f:
+                        result_data = json.load(f)
+                        if result_data.get("status") == "success":
+                            updated_companies = result_data.get("updated", [])
+                            errors = result_data.get("errors", [])
+                except Exception as e:
+                    self.logger.error(f"Error reading result file: {str(e)}")
+                    results["failed"] = len(companies_to_update)
+                    results["errors"].append(str(e))
+                    return results
+
+        # Update results
+        results["updated"] = len(updated_companies)
+        results["failed"] = len(errors)
+        if errors:
+            results["errors"] = [f"{e.get('tempo_id', 'Unknown')}: {e.get('error', 'Unknown error')}" for e in errors[:10]]
+            if len(errors) > 10:
+                results["errors"].append(f"...and {len(errors) - 10} more errors")
+
+        # Log results
+        if results["updated"] > 0:
+            self.logger.success(f"Updated metadata for {results['updated']} companies")
+        if results["failed"] > 0:
+            self.logger.warning(f"Failed to update metadata for {results['failed']} companies")
+
+        return results
+
     def run(self, dry_run: bool = False, force: bool = False, mappings=None) -> Dict[str, Any]:
         """
         Run the company migration process.
@@ -769,6 +1103,10 @@ class CompanyMigration(BaseMigration):
             if not dry_run:
                 self.logger.info("Using bulk creation for company projects")
                 result = self.migrate_companies_bulk()
+
+                # Migrate additional metadata
+                self.logger.info("Migrating customer metadata...")
+                metadata_result = self.migrate_customer_metadata()
             else:
                 self.logger.warning("Dry run mode - not creating company projects", extra={"markup": True})
                 result = {
@@ -778,6 +1116,13 @@ class CompanyMigration(BaseMigration):
                     "skipped_count": 0,
                     "failed_count": 0,
                     "total_count": len(tempo_companies)
+                }
+                metadata_result = {
+                    "total": len(mapping),
+                    "updated": 0,
+                    "skipped": len(mapping),
+                    "failed": 0,
+                    "errors": []
                 }
 
             # Analyze results
@@ -791,6 +1136,8 @@ class CompanyMigration(BaseMigration):
                 "tempo_companies_count": len(tempo_companies),
                 "op_projects_count": len(op_projects),
                 "mapped_companies_count": len(mapping),
+                "metadata_updated": metadata_result.get("updated", 0),
+                "metadata_failed": metadata_result.get("failed", 0),
                 "analysis": analysis
             }
         except Exception as e:

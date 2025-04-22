@@ -224,8 +224,23 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
 * [ ] **Remove obsolete project API code** (`project_migration.py`)
   * [ ] Remove fallback/obsolete code handling projects added via API
   * [ ] Ensure all project creation occurs through Rails console client
-* [ ] **Migrate Tempo Customer metadata** (`company_migration.py`)
-  * [ ] Migrate meta data from Tempo customer to OpenProject customer main project
+* [x] **Migrate Tempo Customer metadata** (`company_migration.py`)
+  * [x] Migrate meta data from Tempo customer to OpenProject customer main project
+* [ ] **Set Top-Level Project Status from Tempo** (`company_migration.py`)
+  * [ ] Extract Tempo customer status information
+  * [ ] Map Tempo customer status to equivalent OpenProject project status
+  * [ ] Apply status to top-level customer projects during creation/update
+  * [ ] Test status mapping and application accuracy
+* [ ] **Add Tempo Customer Metadata Custom Fields** (`custom_field_migration.py`, `company_migration.py`)
+  * [ ] Create custom fields for Tempo customer metadata:
+    * [ ] Tempo name (string)
+    * [ ] Tempo key (string)
+    * [ ] Tempo ID (integer)
+    * [ ] Tempo accounts (list)
+    * [ ] Tempo URL (string)
+  * [ ] Populate custom fields with Tempo customer data during company migration
+  * [ ] Update custom field mapping to include new Tempo metadata fields
+  * [ ] Test custom field creation and data population
 * [x] **Fix Project Hierarchy Structure** (`project_migration.py`)
   * [x] Implement hierarchical project structure (Tempo Company -> Jira Project relationship)
   * [x] Modify project migration to create Tempo Companies as main projects
@@ -233,19 +248,19 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
   * [x] Update project mapping to reflect hierarchical structure
   * [x] Test hierarchical project creation and relationships
 
-* [ ] **Normalize Issue Types** (`issue_type_migration.py`)
-  * [ ] Identify issue types starting with "Sub:" or "Sub-"
-  * [ ] Map these to their corresponding "normal" issue types
-  * [ ] Update issue type mapping to reflect normalized types
-  * [ ] Test issue type normalization
+* [x] **Normalize Issue Types** (`issue_type_migration.py`)
+  * [x] Identify issue types starting with "Sub:" or "Sub-"
+  * [x] Map these to their corresponding "normal" issue types
+  * [x] Update issue type mapping to reflect normalized types
+  * [x] Test issue type normalization
 
-* [ ] **Complete Work Package Field Migration** (`work_package_migration.py`)
-  * [ ] Add missing meta fields:
-    * [ ] Creation date and update date
-    * [ ] Creator and author
-    * [ ] Watchers
-  * [ ] Implement custom field value migration
-  * [ ] Test complete field migration accuracy
+* [x] **Complete Work Package Field Migration** (`work_package_migration.py`)
+  * [x] Add missing meta fields:
+    * [x] Creation date and update date
+    * [x] Creator and author
+    * [x] Watchers
+  * [x] Implement custom field value migration
+  * [x] Test complete field migration accuracy
 
 * [ ] **Implement Comments, Attachments, Work Log Migration** (`work_package_migration.py`)
   * [ ] Extract and migrate issue comments
@@ -311,7 +326,7 @@ _(Consolidated from PROGRESS.md - Ensure these are detailed in the final runbook
     * Generate Ruby script (`--generate-ruby`).
     * Review script.
     * Run via Rails console.
-    * Update `custom_field_mapping.json` if needed.
+    * Update `custom_field_mapping.json`
 2. **Work Package Types Import (if not using `--direct-migration`):**
     * Generate Ruby script (`--generate-ruby`).
     * Review script.
