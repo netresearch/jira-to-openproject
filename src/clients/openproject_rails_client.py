@@ -180,7 +180,7 @@ class OpenProjectRailsClient:
         """
 
         # Send the command to the tmux session
-        result = self._send_command(file_based_command, start_marker, end_marker, timeout)
+        result = self._send_command(file_based_command)
 
         if result is None:
             logger.error("Command timed out or markers not found")
@@ -198,14 +198,15 @@ class OpenProjectRailsClient:
             }
 
         # Check for error messages in the result
-        # ERROR must be start of line
-        if result.startswith("ERROR: "):
-            error_line = next((line for line in result.splitlines() if "ERROR:" in line), "Unknown error")
-            logger.error(f"Error executing command: {error_line}")
-            return {
-                'status': 'error',
-                'error': error_line
-            }
+        # ERROR must be start of line in one of the lines
+        for line in result.splitlines():
+            if line.strip().startswith("ERROR: "):
+                error_line = line.strip()
+                logger.error(f"Error executing command: {error_line}")
+                return {
+                    'status': 'error',
+                    'error': error_line
+                }
 
         # Now, transfer the output file from the container to local machine
         import tempfile
@@ -257,139 +258,206 @@ class OpenProjectRailsClient:
                 'output': result
             }
 
-    def _send_command(self, command: str, start_marker: str, end_marker: str, timeout: int) -> Optional[str]:
+    def _send_command(self, command: str) -> dict:
         """
-        Send a command to the tmux session and wait for completion.
+        Send a command to the Rails console and return the result.
+
+        For large commands (>2000 characters), automatically uses file-based
+        execution to avoid IO errors with the Ruby Reline library.
 
         Args:
-            command: The command to execute
-            start_marker: The marker to identify start of output
-            end_marker: The marker to identify end of output
-            timeout: Maximum time to wait for completion in seconds
+            command: The Ruby command to execute.
 
         Returns:
-            String containing the captured output, or None if timed out
+            A dictionary with the execution result.
         """
-        if not command:
-            logger.error("Empty command")
-            return None
+        # Determine whether to use direct execution or file-based execution
+        if len(command) > 200:
+            return self._execute_via_file_internal(command)
 
+        # Continue with direct execution for smaller commands
         try:
-            # Send the command to the tmux session
+            # Call _stabilize_console before sending command
+            if not self._console_initialized:
+                self._initialize_console()
+
+            self._stabilize_console()
+
+            cmd = f'echo "{self._escape_command(command)}" | {self._rails_command}'
+            if self._config.get("use_sudo", False):
+                cmd = f"sudo {cmd}"
+
+            if self._config.get("use_docker", False):
+                docker_container = self._config.get("docker_container")
+                if not docker_container:
+                    return self._error_result(
+                        "Docker container not specified in configuration"
+                    )
+                cmd = f'docker exec {docker_container} bash -c "{cmd}"'
+
+            logger.debug(f"Executing Rails console command: {cmd}")
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+            )
+
+            # Call _stabilize_console after sending command
+            self._stabilize_console()
+
+            if result.returncode != 0:
+                error_msg = f"Rails console command failed with exit code {result.returncode}"
+                logger.error(f"{error_msg}: {result.stderr}")
+                return self._error_result(error_msg, details=result.stderr)
+
+            output = result.stdout.strip()
+            if output.startswith("irb(main"):
+                # Remove the leading 'irb(main):001:0>' prompts
+                lines = output.split("\n")[1:]
+                output = "\n".join(lines).strip()
+
+            lines = output.split("\n")
+            if len(lines) > 1 and "SyntaxError" in lines[0]:
+                return self._error_result("Syntax error in Ruby command", details=output)
+
+            return {"success": True, "output": output}
+        except subprocess.TimeoutExpired:
+            return self._error_result(f"Command timed out after {self._timeout} seconds")
+        except Exception as e:
+            return self._error_result(f"Failed to execute command: {str(e)}")
+
+    def _execute_via_file_internal(self, command: str, timeout: int = None) -> dict:
+        """
+        Internal method to execute a command via a file to avoid sending large commands directly to the Rails console.
+        This method is automatically used by _send_command for large commands and should not be called directly.
+
+        Args:
+            command: The Ruby command to execute
+            timeout: Maximum execution timeout
+
+        Returns:
+            Dictionary with execution results
+        """
+        try:
+            # Generate unique filenames
+            timestamp = str(int(time.time()))
+            script_file = f"/tmp/rails_command_{timestamp}.rb"
+            result_file = f"/tmp/rails_result_{timestamp}.json"
+            marker_id = timestamp
+            start_marker = f"RAILSCMD_{marker_id}_START"
+            end_marker = f"RAILSCMD_{marker_id}_END"
+
+            # Get container and server info
+            container_name = config.openproject_config.get("container")
+            op_server = config.openproject_config.get("server")
+
+            if not container_name or not op_server:
+                logger.error("Missing container or server configuration")
+                return None
+
+            # Create a temporary file locally
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
+                # Write a wrapper that captures output and errors
+                f.write(f"""
+                begin
+                  # Execute the command and capture the result
+                  result = (
+                    {command}
+                  )
+
+                  # Write the result to a JSON file
+                  require 'json'
+                  File.write('{result_file}', {{
+                    'status' => 'success',
+                    'output' => result.nil? ? nil : result
+                  }}.to_json)
+                  puts "{start_marker}"
+                  puts "Command executed successfully, result in {result_file}"
+                  puts "{end_marker}"
+                rescue => e
+                  # Write error to file
+                  require 'json'
+                  File.write('{result_file}', {{
+                    'status' => 'error',
+                    'error' => e.message,
+                    'backtrace' => e.backtrace[0..5]
+                  }}.to_json)
+                  puts "{start_marker}"
+                  puts "ERROR executing command: \#{{e.message}}"
+                  puts "{end_marker}"
+                end
+                """)
+                local_file = f.name
+
+            # Transfer the file to the container
+            if not self.transfer_file_to_container(local_file, script_file):
+                os.unlink(local_file)
+                return None
+
+            # Clean up local file
+            os.unlink(local_file)
+
+            # Execute a small command to load and run the file
             target = self._get_target()
+            load_cmd = f"puts 'Loading command file...'; load '{script_file}'; nil"
 
-            logger.debug(f"Sending command to tmux (wrapped): {command}")
-
-            send_cmd = ["tmux", "send-keys", "-t", target, command, "Enter"]
+            logger.debug(f"Sending file-based command to tmux")
+            send_cmd = ["tmux", "send-keys", "-t", target, load_cmd, "Enter"]
             subprocess.run(send_cmd, check=True)
 
-            # Wait for the command to complete (look for end marker in output)
+            # Use same waiting logic as _send_command to find markers in output
             start_time = time.time()
             found_start = False
             found_end = False
-
-            # For checking inactivity
-            last_output_change_time = start_time
             last_output = ""
-
-            # Check more frequently at the beginning
             check_interval = 0.2
-            attempts = 0
-            last_log_time = start_time
 
-            # For debugging long-running commands
-            recovery_attempts = 0
-
-            # Use command_timeout as the overall limit (default to passed timeout if not set)
-            max_timeout = getattr(self, 'command_timeout', timeout)
-
-            # Use inactivity_timeout for detecting stalled output (default 30s if not set)
-            inactivity_timeout = getattr(self, 'inactivity_timeout', 30)
+            # Use provided timeout or default command_timeout
+            max_timeout = timeout if timeout is not None else self.command_timeout
 
             while time.time() - start_time < max_timeout:
-                attempts += 1
-                current_time = time.time()
-
                 # Capture the pane content
                 capture_cmd = ["tmux", "capture-pane", "-p", "-t", target]
-                result = subprocess.run(
-                    capture_cmd,
-                    check=True,
-                    capture_output=True,
-                    text=True
-                )
+                result = subprocess.run(capture_cmd, check=True, capture_output=True, text=True)
                 pane_content = result.stdout
 
                 # Check if output has changed
                 if pane_content != last_output:
                     last_output = pane_content
-                    last_output_change_time = current_time
 
-                # Log captured content periodically
-                if current_time - last_log_time > 5:  # Log every 5 seconds for long-running commands
-                    elapsed = int(current_time - start_time)
-                    inactivity = int(current_time - last_output_change_time)
-                    logger.debug(f"Still waiting after {elapsed}s (inactive: {inactivity}s), start={found_start}, end={found_end}, content sample: {pane_content[-200:] if pane_content else 'None'}")
-                    last_log_time = current_time
-
-                # Check for start marker
+                # Check for start and end markers
                 if start_marker in pane_content:
-                    if not found_start:
-                        logger.debug(f"Found start marker after {int(time.time()-start_time)}s")
                     found_start = True
 
-                # Check for end marker if start marker was found
-                if found_start:
-                    # Only match the end marker when it appears on its own line
-                    lines = pane_content.splitlines()
-                    for line in lines:
-                        if line.strip() == end_marker:
-                            logger.debug(f"Found end marker after {int(time.time()-start_time)}s")
-                            found_end = True
-                            return pane_content
+                if found_start and end_marker in pane_content:
+                    found_end = True
+                    # Cleanup remote files
+                    cleanup_cmd = ["ssh", op_server, "docker", "exec", container_name,
+                                 "bash", "-c", f"rm -f {script_file}"]
+                    subprocess.run(cleanup_cmd, check=False, capture_output=True)
 
-                # Recovery strategy for potentially hanging commands
-                elapsed_time = current_time - start_time
-                inactivity_time = current_time - last_output_change_time
+                    # Stabilize console
+                    self._stabilize_console()
 
-                # After 10 seconds without start marker, try recovery
-                if not found_start and elapsed_time > 10 and recovery_attempts == 0:
-                    logger.warning("Start marker not found after 10s, attempting recovery by sending Ctrl+C")
-                    recovery_attempts += 1
-                    ctrlc_cmd = ["tmux", "send-keys", "-t", target, "C-c"]
-                    subprocess.run(ctrlc_cmd, check=True)
-                    time.sleep(1)
-                    # Retry the command
-                    logger.debug("Retrying command after interruption")
-                    subprocess.run(send_cmd, check=True)
-                    continue
-
-                # If start marker found but no end marker after inactivity timeout with no output change, try interrupting
-                if found_start and not found_end and inactivity_time > inactivity_timeout and recovery_attempts == 0:
-                    logger.warning(f"Command inactive for {inactivity_time:.1f}s without completion, attempting to interrupt...")
-                    recovery_attempts += 1
-                    # Send Ctrl+C to interrupt any running process
-                    ctrlc_cmd = ["tmux", "send-keys", "-t", target, "C-c"]
-                    subprocess.run(ctrlc_cmd, check=True)
-                    # Return partial result
-                    logger.warning("Returning partial result due to inactivity")
+                    # Return output with markers for consistency with direct command execution
                     return pane_content
-
-                # Gradually increase the check interval
-                if attempts > 50:  # After ~10s, slow down polling
-                    check_interval = 0.5
 
                 # Wait before checking again
                 time.sleep(check_interval)
 
+            # Timeout occurred
             logger.warning(f"Command timeout after {int(time.time()-start_time)}s: start_found={found_start}, end_found={found_end}")
+
+            # Stabilize console and return None
+            self._stabilize_console()
             return None
 
-        except subprocess.SubprocessError as e:
-            logger.exception(f"Error sending command: {str(e)}")
-            return None
         except Exception as e:
-            logger.exception(f"Unexpected error sending command: {type(e).__name__}: {str(e)}")
+            logger.error(f"Error in file-based command execution: {str(e)}")
+            self._stabilize_console()
             return None
 
     def _clear_pane(self):
@@ -662,10 +730,29 @@ class OpenProjectRailsClient:
 
     def _configure_irb_settings(self):
         """Configure IRB settings for better output and interaction."""
-        # Disable color output and ensure large objects can be displayed
+        # Disable color output, ensure large objects can be displayed,
+        # and configure readline settings to avoid IO errors
         config_cmd = """
         IRB.conf[:USE_COLORIZE] = false
         IRB.conf[:INSPECT_MODE] = :to_s
+
+        # Additional settings to prevent IO errors with Ruby 3.4's Reline library
+        begin
+          # Handle non-interactive terminals better
+          if defined?(Reline)
+            Reline.output_modifier_proc = nil
+            Reline.completion_proc = nil
+            Reline.prompt_proc = nil
+            puts "Applied Reline configuration"
+          end
+
+          # Configure history behavior to avoid file access issues
+          IRB.conf[:SAVE_HISTORY] = nil
+          IRB.conf[:HISTORY_FILE] = nil
+        rescue => e
+          puts "Error during IRB configuration: #{e.message}"
+        end
+
         puts "IRB configuration commands sent successfully"
         """
 
@@ -676,6 +763,7 @@ class OpenProjectRailsClient:
         try:
             subprocess.run(send_cmd, check=True, capture_output=True)
             logger.debug("IRB configuration commands sent successfully")
+            time.sleep(1)  # Give more time for settings to apply
         except subprocess.SubprocessError as e:
             logger.error(f"Failed to configure IRB settings: {str(e)}")
             raise
@@ -814,7 +902,10 @@ class OpenProjectRailsClient:
         """
         try:
             # Execute a simple Ruby command to verify connectivity
-            result = self.execute("puts 'Rails console connection test'; true")
+            # Use a command that will complete quickly and reliably
+            result = self.execute("begin; puts 'Rails console connection test'; true; end")
+
+            # Return success if the command executed without errors
             return result.get('status') == 'success'
         except Exception as e:
             logger.error(f"Rails console connection test failed: {str(e)}")
@@ -1179,3 +1270,26 @@ class OpenProjectRailsClient:
                 'status': 'error',
                 'message': str(e)
             }
+
+    def _stabilize_console(self):
+        """
+        Send a harmless command to stabilize the console state and prevent IO errors.
+        This is particularly helpful after commands that might leave the console in an
+        unstable state with Ruby 3.4's Reline library.
+        """
+        try:
+            target = self._get_target()
+            # Send a space and Enter to reset terminal state without executing anything meaningful
+            send_cmd = ["tmux", "send-keys", "-t", target, " ", "Enter"]
+            subprocess.run(send_cmd, check=True, capture_output=True)
+            time.sleep(0.5)  # Small delay to let console stabilize
+
+            # Optionally clear the screen to ensure clean state
+            clear_cmd = ["tmux", "send-keys", "-t", target, "C-l"]
+            subprocess.run(clear_cmd, check=True, capture_output=True)
+
+            logger.debug("Console state stabilized")
+            return True
+        except Exception as e:
+            logger.debug(f"Non-critical error when stabilizing console: {str(e)}")
+            return False

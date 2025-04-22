@@ -278,6 +278,99 @@ class IssueTypeMigration(BaseMigration):
 
         return mapping
 
+    def normalize_issue_types(self) -> Dict[str, Any]:
+        """
+        Normalize issue types by mapping sub-types to their corresponding normal types.
+
+        This method identifies issue types starting with "Sub:" or "Sub-" and maps them
+        to their corresponding "normal" issue types. This reduces the number of work
+        package types to create in OpenProject and simplifies the mapping.
+
+        Returns:
+            Updated issue type mapping dictionary
+        """
+        logger.info("Normalizing issue types...")
+
+        if not self.issue_type_mapping:
+            self.create_issue_type_mapping()
+
+        normalized_mapping = self.issue_type_mapping.copy()
+        normalizations_applied = 0
+
+        # Find all possible "normal" types (non-subtypes)
+        normal_types = {}
+        for jira_type_name, type_data in self.issue_type_mapping.items():
+            # Skip if this is a sub-type
+            if jira_type_name.startswith("Sub:") or jira_type_name.startswith("Sub-"):
+                continue
+
+            # Store the normal type data by name
+            normal_types[jira_type_name] = type_data
+
+        # Process all sub-types and map them to normal types
+        for jira_type_name, type_data in list(normalized_mapping.items()):
+            if not (jira_type_name.startswith("Sub:") or jira_type_name.startswith("Sub-")):
+                continue
+
+            # Get the base type name by removing the "Sub:" or "Sub-" prefix
+            if jira_type_name.startswith("Sub:"):
+                base_type_name = jira_type_name[4:].strip()
+            else:  # Sub-
+                base_type_name = jira_type_name[4:].strip()
+
+            # Find the corresponding normal type
+            base_type_data = normal_types.get(base_type_name)
+
+            if base_type_data:
+                # Update the subtype to use the normal type's mapping
+                normalized_mapping[jira_type_name].update({
+                    "openproject_id": base_type_data.get("openproject_id"),
+                    "openproject_name": base_type_data.get("openproject_name"),
+                    "color": base_type_data.get("color"),
+                    "is_milestone": base_type_data.get("is_milestone", False),
+                    "matched_by": "normalized_to_" + base_type_name,
+                    "normalized_from": jira_type_name,
+                    "normalized_to": base_type_name
+                })
+                normalizations_applied += 1
+                logger.info(f"Normalized '{jira_type_name}' to '{base_type_name}'")
+            else:
+                # If no corresponding normal type found, map it to a generic Task
+                normalized_mapping[jira_type_name].update({
+                    "openproject_name": "Task",
+                    "color": "#1A67A3",
+                    "is_milestone": False,
+                    "matched_by": "fallback_to_task",
+                    "normalized_from": jira_type_name,
+                    "normalized_to": "Task"
+                })
+                normalizations_applied += 1
+                logger.info(f"Could not find matching normal type for '{jira_type_name}', mapping to 'Task'")
+
+        # Save the normalized mapping
+        self.issue_type_mapping = normalized_mapping
+        self._save_to_json(normalized_mapping, "issue_type_mapping_normalized.json")
+
+        logger.info(f"Issue type normalization complete: {normalizations_applied} types normalized")
+
+        # Update stats after normalization
+        total_types = len(normalized_mapping)
+        matched_types = sum(
+            1 for type_data in normalized_mapping.values() if type_data["openproject_id"] is not None
+        )
+        to_create_types = sum(
+            1 for type_data in normalized_mapping.values() if type_data["openproject_id"] is None
+        )
+        match_percentage = (matched_types / total_types) * 100 if total_types > 0 else 0
+
+        logger.info(f"After normalization: {total_types} types total")
+        logger.info(
+            f"Successfully matched {matched_types} types ({match_percentage:.1f}%)"
+        )
+        logger.info(f"Need to create {to_create_types} new work package types in OpenProject")
+
+        return normalized_mapping
+
     def prepare_work_package_type_for_ruby(
         self, type_data: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -674,6 +767,8 @@ class IssueTypeMigration(BaseMigration):
         if not self.issue_type_mapping:
             self.create_issue_type_mapping()
 
+        self.normalize_issue_types()
+
         op_types_to_create = {}
         for type_name, mapping in self.issue_type_mapping.items():
             if mapping["openproject_id"] is None:
@@ -857,92 +952,67 @@ class IssueTypeMigration(BaseMigration):
         Run the issue type migration.
 
         Args:
-            dry_run: If True, no changes will be made to OpenProject
-            force: If True, force extraction of data even if it already exists
-            mappings: Optional mappings object that can be used for mapping IDs between systems
+            dry_run: If True, don't actually create or update anything
+            force: If True, force re-extraction of data
+            mappings: Optional mappings object (not used in this migration)
 
         Returns:
             Dictionary with migration results
         """
         logger.info("Starting issue type migration...")
 
-        # Extract data from Jira and OpenProject
+        # 1. Extract and process issue types
         self.extract_jira_issue_types(force=force)
         self.extract_openproject_work_package_types(force=force)
-
-        # Create/update the issue type mapping
         self.create_issue_type_mapping(force=force)
 
-        total_jira_types = len(self.jira_issue_types)
-        matched_types = sum(1 for mapping in self.issue_type_mapping.values()
-                           if mapping.get("openproject_id") is not None)
-        types_to_create = total_jira_types - matched_types
+        # 2. Normalize issue types (map sub-types to normal types)
+        self.normalize_issue_types()
 
-        result = {
-            "status": "success",
-            "component": "issue_types",
-            "total_count": total_jira_types,
-            "matched_count": matched_types,
-            "to_create_count": types_to_create,
-            "match_percentage": (matched_types / total_jira_types * 100) if total_jira_types > 0 else 0,
-            "details": self.analyze_issue_type_mapping()
-        }
+        # 3. Migrate issue types (create if needed)
+        if dry_run:
+            logger.info("DRY RUN: Skipping actual issue type migration")
+            results = {
+                "status": "success",
+                "total_types": len(self.issue_type_mapping),
+                "matched_types": sum(
+                    1
+                    for t in self.issue_type_mapping.values()
+                    if t.get("openproject_id") is not None
+                ),
+                "normalized_types": sum(
+                    1
+                    for t in self.issue_type_mapping.values()
+                    if t.get("matched_by", "").startswith("normalized_to_") or t.get("matched_by") == "fallback_to_task"
+                ),
+                "created_types": 0,
+                "dry_run": True,
+            }
+        else:
+            # Connect to Rails console
+            if self.op_client.rails_client:
+                self.rails_console = self.op_client.rails_client
+                logger.info("Using existing Rails console client")
+            elif not self.connect_to_rails_console():
+                logger.error("Failed to connect to Rails console, aborting migration")
+                return {"status": "error", "message": "Rails console connection failed"}
 
-        # If we're not in dry run mode and there are types to create, create them
-        if not dry_run and types_to_create > 0:
-            logger.info(f"Need to create {types_to_create} work package types in OpenProject")
-            migration_successful = self.migrate_issue_types_via_rails()
+            # Migrate issue types
+            migration_results = self.migrate_issue_types()
+            successful = migration_results.get("created", 0) > 0 or migration_results.get("unchanged", 0) > 0
 
-            if migration_successful:
-                # Update counts after migration
-                matched_types = sum(1 for mapping in self.issue_type_mapping.values()
-                                  if mapping.get("openproject_id") is not None)
-                types_to_create = total_jira_types - matched_types
+            results = {
+                "status": "success" if successful else "error",
+                "total_types": migration_results.get("total", 0),
+                "matched_types": migration_results.get("matched", 0),
+                "normalized_types": migration_results.get("normalized", 0),
+                "created_types": migration_results.get("created", 0),
+                "existing_types": migration_results.get("unchanged", 0),
+                "failed_types": migration_results.get("failed", 0),
+                "message": migration_results.get("message", ""),
+            }
 
-                result.update({
-                    "matched_count": matched_types,
-                    "to_create_count": types_to_create,
-                    "match_percentage": (matched_types / total_jira_types * 100) if total_jira_types > 0 else 0,
-                    "created_count": matched_types - result["matched_count"],
-                })
-            else:
-                result["status"] = "partial_success" if matched_types > 0 else "failed"
-                result["error"] = "Failed to create some or all work package types"
-        elif dry_run and types_to_create > 0:
-            logger.info(f"Dry run: Would create {types_to_create} work package types in OpenProject")
+            # Update mapping file
+            self.update_mapping_file(force=force)
 
-        # Save the final mappings
-        self._save_to_json(self.issue_type_mapping, "issue_type_mapping.json")
-
-        # Create a simplified ID mapping for other components to use
-        final_mapping = {}
-        for type_name, mapping in self.issue_type_mapping.items():
-            jira_id = mapping.get("jira_id")
-            op_id = mapping.get("openproject_id")
-
-            if jira_id and op_id:
-                final_mapping[jira_id] = op_id
-
-        self._save_to_json(final_mapping, "issue_type_id_mapping.json")
-
-        # Update mappings object if provided
-        if mappings is not None:
-            # Check if mappings is a dictionary (direct assignment)
-            if isinstance(mappings, dict):
-                mappings["issue_type_id_mapping"] = final_mapping
-            else:
-                # For Mappings class objects, check if they have a method to update mappings
-                # or access the internal mapping attributes directly
-                try:
-                    if hasattr(mappings, "issue_type_mapping"):
-                        setattr(mappings, "issue_type_mapping", final_mapping)
-                    logger.info("Updated mappings object with issue type ID mapping")
-                except Exception as e:
-                    logger.warning(f"Could not update mappings object: {e}")
-
-        logger.info(f"Issue type migration completed with status: {result['status']}")
-        logger.info(f"Total Jira issue types: {total_jira_types}")
-        logger.info(f"Matched with OpenProject: {matched_types} ({result['match_percentage']:.1f}%)")
-        logger.info(f"Types to create: {types_to_create}")
-
-        return result
+        return results

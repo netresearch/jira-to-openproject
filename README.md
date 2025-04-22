@@ -88,6 +88,10 @@ tmux kill-session -t rails_console
 * Use `Ctrl+b, d` to detach from the session without terminating it
 * If the connection drops, simply reattach using `tmux attach-session -t rails_console`
 * Split panes with `Ctrl+b, "` (horizontal) or `Ctrl+b, %` (vertical) for monitoring multiple processes
+* The migration tool handles Rails 3.4's Reline library compatibility issues with IO handling
+
+**Note on Ruby 3.4 compatibility:**
+If you encounter Rails console errors related to "ungetbyte failed (IOError)" in Ruby 3.4's Reline library, the migration tool now includes workarounds to stabilize console state after command execution. These fixes help prevent IO errors during migration operations.
 
 ### Usage
 

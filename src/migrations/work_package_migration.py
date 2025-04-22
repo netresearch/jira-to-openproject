@@ -309,6 +309,43 @@ class WorkPackageMigration:
             if hasattr(jira_issue.fields, 'assignee') and jira_issue.fields.assignee:
                 assignee_name = getattr(jira_issue.fields.assignee, 'name', None)
 
+            # Extract creator and reporter
+            creator_name = None
+            if hasattr(jira_issue.fields, 'creator') and jira_issue.fields.creator:
+                creator_name = getattr(jira_issue.fields.creator, 'name', None)
+
+            reporter_name = None
+            if hasattr(jira_issue.fields, 'reporter') and jira_issue.fields.reporter:
+                reporter_name = getattr(jira_issue.fields.reporter, 'name', None)
+
+            # Extract dates
+            created_at = None
+            if hasattr(jira_issue.fields, 'created'):
+                created_at = jira_issue.fields.created
+
+            updated_at = None
+            if hasattr(jira_issue.fields, 'updated'):
+                updated_at = jira_issue.fields.updated
+
+            # Extract watchers
+            watchers = []
+            if hasattr(jira_issue.fields, 'watches') and jira_issue.fields.watches:
+                watcher_count = getattr(jira_issue.fields.watches, 'watchCount', 0)
+                if watcher_count > 0:
+                    try:
+                        # Fetch watchers if there are any
+                        watchers_data = self.jira_client.get_issue_watchers(jira_issue.key)
+                        if watchers_data:
+                            watchers = [watcher.get('name') for watcher in watchers_data]
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch watchers for issue {jira_issue.key}: {str(e)}")
+
+            # Extract custom fields
+            custom_fields = {}
+            for field_name, field_value in jira_issue.raw.get('fields', {}).items():
+                if field_name.startswith('customfield_') and field_value is not None:
+                    custom_fields[field_name] = field_value
+
             subject = jira_issue.fields.summary
             description = getattr(jira_issue.fields, 'description', '') or ''
 
@@ -326,6 +363,38 @@ class WorkPackageMigration:
             assignee_name = None
             if "assignee" in jira_issue and jira_issue["assignee"]:
                 assignee_name = jira_issue["assignee"].get("name")
+
+            # Extract creator and reporter
+            creator_name = None
+            if "creator" in jira_issue and jira_issue["creator"]:
+                creator_name = jira_issue["creator"].get("name")
+
+            reporter_name = None
+            if "reporter" in jira_issue and jira_issue["reporter"]:
+                reporter_name = jira_issue["reporter"].get("name")
+
+            # Extract dates
+            created_at = jira_issue.get("created")
+            updated_at = jira_issue.get("updated")
+
+            # Extract watchers
+            watchers = []
+            if "watches" in jira_issue and jira_issue["watches"]:
+                watcher_count = jira_issue["watches"].get("watchCount", 0)
+                if watcher_count > 0:
+                    try:
+                        # Fetch watchers if there are any
+                        watchers_data = self.jira_client.get_issue_watchers(jira_issue["key"])
+                        if watchers_data:
+                            watchers = [watcher.get('name') for watcher in watchers_data]
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch watchers for issue {jira_issue['key']}: {str(e)}")
+
+            # Extract custom fields
+            custom_fields = {}
+            for field_name, field_value in jira_issue.items():
+                if field_name.startswith('customfield_') and field_value is not None:
+                    custom_fields[field_name] = field_value
 
             subject = jira_issue["summary"]
             description = jira_issue.get("description", "")
@@ -376,6 +445,25 @@ class WorkPackageMigration:
         if assignee_name and assignee_name in self.user_mapping:
             assigned_to_id = self.user_mapping[assignee_name]
 
+        # Map creator and reporter (author) users
+        author_id = None
+        if reporter_name and reporter_name in self.user_mapping:
+            author_id = self.user_mapping[reporter_name]
+
+        # If reporter is not available, fall back to creator
+        if not author_id and creator_name and creator_name in self.user_mapping:
+            author_id = self.user_mapping[creator_name]
+
+        # Handle watchers
+        watcher_ids = []
+        for watcher_name in watchers:
+            if watcher_name in self.user_mapping:
+                watcher_id = self.user_mapping[watcher_name]
+                if watcher_id:
+                    watcher_ids.append(watcher_id)
+            else:
+                logger.debug(f"Watcher {watcher_name} not found in user mapping")
+
         # Add Jira issue key to description for reference
         jira_reference = f"\n\n*Imported from Jira issue: {jira_key}*"
         if description:
@@ -398,8 +486,131 @@ class WorkPackageMigration:
             work_package["status_id"] = status_op_id
         if assigned_to_id:
             work_package["assigned_to_id"] = assigned_to_id
+        if author_id:
+            work_package["author_id"] = author_id
+        if watcher_ids:
+            work_package["watcher_ids"] = watcher_ids
+
+        # Handle dates
+        if created_at:
+            work_package["created_at"] = created_at
+        if updated_at:
+            work_package["updated_at"] = updated_at
+
+        # Process custom fields
+        if custom_fields:
+            # Load custom field mappings
+            custom_field_mapping = self._load_custom_field_mapping()
+            if custom_field_mapping:
+                custom_field_values = {}
+
+                for jira_field_id, field_value in custom_fields.items():
+                    if jira_field_id in custom_field_mapping:
+                        op_field = custom_field_mapping[jira_field_id]
+                        op_field_id = op_field.get("openproject_id")
+
+                        if op_field_id:
+                            # Process different field types differently
+                            field_type = op_field.get("field_type", "")
+                            processed_value = self._process_custom_field_value(field_value, field_type)
+                            if processed_value is not None:
+                                custom_field_values[op_field_id] = processed_value
+
+                if custom_field_values:
+                    work_package["custom_fields"] = [
+                        {"id": field_id, "value": field_value}
+                        for field_id, field_value in custom_field_values.items()
+                    ]
 
         return work_package
+
+    def _load_custom_field_mapping(self) -> Dict[str, Any]:
+        """
+        Load custom field mapping from disk.
+
+        Returns:
+            Dictionary mapping Jira custom field IDs to OpenProject custom field IDs
+        """
+        mapping_file = os.path.join(self.data_dir, "custom_field_mapping.json")
+        if os.path.exists(mapping_file):
+            try:
+                with open(mapping_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Error loading custom field mapping: {str(e)}", extra={"markup": True})
+
+        return {}
+
+    def _process_custom_field_value(self, value: Any, field_type: str) -> Any:
+        """
+        Process a custom field value based on its type.
+
+        Args:
+            value: The value to process
+            field_type: The type of the field (e.g., 'text', 'list', 'date')
+
+        Returns:
+            Processed value suitable for OpenProject
+        """
+        if value is None:
+            return None
+
+        if field_type in ("string", "text"):
+            return str(value)
+
+        elif field_type == "date":
+            # Convert to ISO format if it's not already
+            if isinstance(value, str):
+                # Check if already in ISO format
+                if 'T' in value and (value.endswith('Z') or '+' in value):
+                    return value
+
+                # Try to parse different formats
+                try:
+                    from datetime import datetime
+                    # Try parsing various formats
+                    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y'):
+                        try:
+                            date_obj = datetime.strptime(value, fmt)
+                            return date_obj.strftime('%Y-%m-%d')
+                        except ValueError:
+                            continue
+
+                    # If none of the formats worked, return as is
+                    return value
+                except Exception:
+                    return value
+            return value
+
+        elif field_type == "list":
+            # Handle list fields (dropdown/select)
+            if isinstance(value, dict) and 'value' in value:
+                return value['value']
+            elif isinstance(value, list):
+                # If it's a multi-select list, take the first value
+                if value and isinstance(value[0], dict) and 'value' in value[0]:
+                    return [item['value'] for item in value]
+                return value
+            return value
+
+        elif field_type == "user":
+            # Handle user custom fields
+            if isinstance(value, dict) and 'name' in value:
+                user_name = value['name']
+                if user_name in self.user_mapping:
+                    return self.user_mapping[user_name]
+            return None
+
+        elif field_type == "boolean":
+            # Convert to boolean
+            if isinstance(value, bool):
+                return value
+            elif isinstance(value, str):
+                return value.lower() in ('true', 'yes', '1')
+            return bool(value)
+
+        # Default: return as is
+        return value
 
     def migrate_work_packages(self) -> Dict[str, Any]:
         """

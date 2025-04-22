@@ -1,201 +1,112 @@
 # Development Guide
 
-This guide provides instructions for setting up the development environment, running tests, and contributing to the Jira to OpenProject migration tool. It is up to date with the current codebase and practices.
+This document contains information for developers working on the Jira to OpenProject migration tool.
 
 ## Development Environment Setup
 
-Docker is the **required** development environment to ensure consistency and simplify interaction with the OpenProject Rails console if needed.
-
-### Prerequisites
-
-* Docker Desktop or Docker Engine/CLI
-* Docker Compose
-* Git
-* An editor with Python support (like VS Code with the recommended extensions in `.devcontainer/devcontainer.json`)
-
-### Steps
-
-1. **Clone the repository:**
-
-    ```bash
-    git clone <repository-url>
-    cd jira-to-openproject-migration
-    ```
-
-2. **Configure Local Environment:**
-    * Copy `.env` to `.env.local`: `cp .env .env.local`
-    * Edit `.env.local` and provide **test/development** Jira and OpenProject instance details. **Do NOT use production credentials for development.**
-    * If you plan to test the `--direct-migration` feature, configure the SSH/Docker access variables for your **test** OpenProject instance in `.env.local`.
-        * `J2O_OPENPROJECT_SERVER`: Hostname or IP of the server running the OP Docker container.
-        * `J2O_OPENPROJECT_SSH_USER`: SSH username for the server.
-        * `J2O_OPENPROJECT_SSH_KEY_PATH`: Path to your SSH private key (e.g., `~/.ssh/id_rsa`).
-        * `J2O_OPENPROJECT_CONTAINER`: Name of the OpenProject web/app container (often `openproject-web-1` or similar).
-        * `J2O_OPENPROJECT_RAILS_PATH`: Path to the OpenProject app within the container (usually `/app`).
-
-3. **Build and Start Docker Container:**
-
-    ```bash
-    # Build and start the service in detached mode
-    docker compose up -d --build
-    ```
-
-    This uses the `compose.yaml` and `Dockerfile` to create the `j2o-app` service.
-
-4. **Accessing the Container:**
-    * **Shell Access:**
-
-        ```bash
-        docker exec -it j2o-app /bin/bash
-        ```
-
-    * **Running Commands:** Execute commands directly:
-
-        ```bash
-        docker exec -it j2o-app python src/main.py --help
-        ```
-
-    * **VS Code Dev Container:** If using VS Code, open the command palette (Ctrl+Shift+P) and select "Remote-Containers: Reopen in Container". This will automatically build/start the container and connect your editor.
-
-## Running Tests
-
-Tests are run using `pytest` inside the Docker container. The test suite covers environment validation, migration components, utilities, and end-to-end processes. See [tests/README.md](../tests/README.md) for details.
-
+1. Create a Python virtual environment:
 ```bash
-# Run all tests
-docker exec -it j2o-app pytest
-
-# Run specific test file
-docker exec -it j2o-app pytest tests/test_environment.py
-
-# Run tests with verbose output
-docker exec -it j2o-app pytest -v
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
-## Coding Standards & Guidelines
+2. Install the package in development mode:
+```bash
+pip install -e .
+```
 
-* **Language:** Python 3.13. Follow modern Python practices.
-* **Style:**
-  * Use `black` for code formatting.
-  * Use `isort` for import sorting.
-  * Follow PEP 8 guidelines.
-  * Use `ruff` or `flake8` for linting.
-* **Type Hinting:** Use type hints extensively for clarity and static analysis.
-* **Logging:** Use Python's standard `logging` module. Configure levels via environment variables (`J2O_LOG_LEVEL`).
-* **Configuration:** Access all configuration via the `src.config` module. Do not access environment variables directly outside `src.config_loader`.
-* **Error Handling:** Implement robust error handling, especially around API calls and file I/O.
-* **Modularity:** Keep migration components focused and independent where possible.
-* **Dependencies:** Add new dependencies to `requirements.txt` and rebuild the Docker image (`docker compose build`).
-* **Documentation:**
-  * Use docstrings for modules, classes, and functions.
-  * Keep README files (`README.md`, `src/README.md`, etc.) updated.
-  * Update `TASKS.md` as features are developed or bugs fixed.
+3. Install pre-commit hooks:
+```bash
+pre-commit install
+```
 
-## Error Handling Guidelines
+4. Run the Docker container for development:
+```bash
+docker compose up -d
+```
 
-Robust error handling is critical for the migration tool's reliability, especially when dealing with large datasets and external APIs. Follow these practices:
+## Coding Standards
 
-### General Principles
+- PEP 8 style guide for Python code
+- Type annotations for all function parameters and return values
+- Comprehensive docstrings for all modules, classes, and functions
+- Unit tests for all non-trivial functions
+- Log actions appropriately using the configured logger
 
-1. **Graceful Degradation**: Components should continue functioning even if parts fail. Migrations should attempt to complete as much as possible rather than failing completely.
+## Migration Design Principles
 
-2. **Detailed Logging**: All errors should be logged with sufficient context to diagnose the issue. Include relevant IDs, file paths, and operation details.
+### Modular Components
 
-3. **Recovery Mechanisms**: Implement retry logic for transient failures, especially with API calls.
+The migration is divided into components that can be run independently:
 
-4. **State Preservation**: Save state frequently during long operations to allow resuming after interruptions.
+- Users
+- Custom Fields
+- Companies (Tempo Accounts)
+- Projects
+- Link Types
+- Issue Types
+- Status Types
+- Work Packages
 
-5. **Error Categorization**: Distinguish between different error types:
-   * Critical errors (prevent further operations)
-   * Non-critical errors (can continue with reduced functionality)
-   * Warnings (potential issues but operation can proceed)
+### Two-Step Approach for Data Migration
 
-### Implementation
+Several migration components use a two-step approach:
 
-1. **API Calls**:
-   * Implement retry logic with exponential backoff
-   * Handle rate limiting with appropriate waits
-   * Cache results where possible to avoid redundant calls
-   * Example:
+1. **Basic Creation**: First, create the core entity with minimal required attributes
+2. **Metadata Enhancement**: Then, update the entity with additional metadata, relationships, and custom fields
 
-     ```python
-     max_retries = 3
-     retry_count = 0
+**Benefits of this approach:**
 
-     while retry_count < max_retries:
-         try:
-             result = api_client.make_call()
-             break
-         except Exception as e:
-             retry_count += 1
-             if retry_count >= max_retries:
-                 logger.error(f"Failed after {max_retries} attempts: {str(e)}")
-                 # Handle permanent failure
-                 break
-             wait_time = 2 ** retry_count  # Exponential backoff
-             logger.warning(f"Retrying in {wait_time} seconds...")
-             time.sleep(wait_time)
-     ```
+- **Better Error Handling**: If metadata update fails, the basic entity still exists
+- **Cleaner Code Organization**: Separates the core creation logic from enhancement logic
+- **Improved Performance**: Allows bulk creation of entities followed by selective updates
+- **Flexibility**: Makes it possible to re-run just the metadata updates without recreating entities
 
-2. **File Operations**:
-   * Use safe file operations (temp files, atomic writes where possible)
-   * Always handle IOError and similar exceptions
-   * Create backups of important data files before modifications
-   * Example:
+**Example: Company Migration**
 
-     ```python
-     try:
-         with open(filepath, 'w') as f:
-             json.dump(data, f, indent=2)
-     except Exception as e:
-         logger.error(f"Failed to save data: {str(e)}")
-         # Try backup location
-         try:
-             backup_path = f"{filepath}.backup"
-             with open(backup_path, 'w') as f:
-                 json.dump(data, f, indent=2)
-             logger.info(f"Saved to backup location: {backup_path}")
-         except Exception as backup_e:
-             logger.critical(f"Failed to save backup: {str(backup_e)}")
-     ```
+Companies are migrated in two distinct steps:
+1. First, basic company projects are created with minimal attributes (name, identifier, description)
+2. Then, a separate process enhances these projects with:
+   - Customer contact information
+   - Address details
+   - Website links
+   - Custom fields
+   - Status settings
 
-3. **Progress Tracking**:
-   * Update progress indicators frequently
-   * Save intermediate results during batch processing
-   * Add log entries for major milestones
+This allows the migration to recover gracefully if metadata update fails, as the basic company structure is already in place.
 
-4. **Error Documentation**:
-   * Record errors in dedicated log files or databases
-   * Include timestamps and context
-   * Implement `migration_issues.json` for tracking issues across runs
+### Mappings
 
-### Testing Error Scenarios
+- All mappings between Jira and OpenProject IDs are stored in JSON files
+- Mappings are used to establish relationships between entities in both systems
+- Mappings can be reused between migration runs to avoid duplication
 
-Test error handling by simulating failure conditions:
+## Testing
 
-1. Network interruptions during API calls
-2. Invalid data from external systems
-3. Permission issues with file operations
-4. Process interruption in the middle of migration
+- Unit tests are in the `tests/` directory
+- Run tests with: `pytest`
+- Integration tests should be run against test instances, not production
 
-Use the `@pytest.mark.parametrize` decorator to test multiple error scenarios efficiently.
+## Common Issues and Solutions
 
-## Key Development Tasks
+### Rails Console Interaction
 
-Refer to [TASKS.md](TASKS.md) for the list of pending implementation and testing tasks.
+When working with the Rails console:
 
-* **Implementing Test Cases:** Expand the test suite (`tests/`) as new features are added.
-* **Refining Error Handling:** Make the migration process more resilient to API errors, network issues, and unexpected data.
-* **Improving Validation:** Add more automated checks to validate the migrated data.
-* **Optimizing Performance:** Investigate bottlenecks in API interaction and data processing.
+- For large commands, use the `execute_via_file` method to avoid IO errors
+- Use tmux sessions for persistent console connections
+- Ensure proper error handling for all Rails interactions
 
-## Contribution Process
+### API Rate Limiting
 
-1. Ensure you have a development environment setup.
-2. Create a new branch for your feature or bug fix: `git checkout -b feature/my-new-feature` or `fix/issue-123`.
-3. Implement your changes, adhering to coding standards.
-4. Add tests for your changes.
-5. Ensure all tests pass: `docker exec -it j2o-app pytest`.
-6. Update relevant documentation (`TASKS.md`, READMEs, docstrings).
-7. Commit your changes with clear messages.
-8. Push your branch to the repository.
-9. Open a Pull Request for review.
+- Both Jira and OpenProject APIs may have rate limits
+- The migration tool includes rate limiting and pagination support
+- For very large migrations, consider increasing timeouts in the configuration
+
+## Contributing
+
+1. Create a feature branch from `main`
+2. Make your changes
+3. Write or update tests for your changes
+4. Ensure all tests pass
+5. Submit a pull request
