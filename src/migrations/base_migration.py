@@ -6,6 +6,7 @@ from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
+from src.models import ComponentResult
 
 
 class BaseMigration:
@@ -85,7 +86,7 @@ class BaseMigration:
 
     def run(
         self, dry_run: bool = False, force: bool = False, mappings=None
-    ) -> dict[str, Any]:
+    ) -> ComponentResult:
         """
         Default implementation of the run method that all migration classes should implement.
 
@@ -100,10 +101,10 @@ class BaseMigration:
         self.logger.warning(
             f"The run method has not been implemented for {self.__class__.__name__}"
         )
-        return {
-            "status": "failed",
-            "error": f"The run method has not been implemented for {self.__class__.__name__}",
-            "success_count": 0,
-            "failed_count": 0,
-            "total_count": 0,
-        }
+        return ComponentResult(
+            status="failed",
+            error=f"The run method has not been implemented for {self.__class__.__name__}",
+            success_count=0,
+            failed_count=0,
+            total_count=0,
+        )

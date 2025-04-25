@@ -9,6 +9,7 @@ import pathlib
 import time
 from typing import Any, Optional
 
+from src.models import ComponentResult
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 
@@ -545,7 +546,7 @@ class CustomFieldMigration(BaseMigration):
 
         return result
 
-    def migrate_custom_fields_via_json(self, fields_to_migrate):
+    def migrate_custom_fields_via_json(self, fields_to_migrate) -> bool:
         """Migrate custom fields by creating a JSON file and processing it in a Ruby script.
 
         This is a more efficient approach than creating fields one by one via API calls.
@@ -626,8 +627,6 @@ class CustomFieldMigration(BaseMigration):
         ):
             self.logger.error("Failed to transfer custom fields file to container")
             return False
-
-        self.logger.success("Successfully copied custom fields data to container")
 
         # Define result file paths
         result_file_container = f"/tmp/cf_result_{timestamp}.json"
@@ -909,7 +908,7 @@ class CustomFieldMigration(BaseMigration):
             self.logger.error("Failed to create any custom fields")
             return False
 
-    def migrate_custom_fields(self, force=False):
+    def migrate_custom_fields(self, force=False) -> bool:
         """Migrate custom fields from Jira to OpenProject
 
         Args:
@@ -1060,41 +1059,6 @@ class CustomFieldMigration(BaseMigration):
 
         return analysis
 
-    # Helper methods
-    def _load_from_json(self, filename: str, default: Any = None) -> Any:
-        """
-        Load data from a JSON file in the data directory.
-
-        Args:
-            filename: Name of the JSON file
-            default: Default value to return if file doesn't exist
-
-        Returns:
-            Loaded JSON data or default value
-        """
-        filepath = os.path.join(self.data_dir, filename)
-        if os.path.exists(filepath):
-            try:
-                with open(filepath) as f:
-                    return json.load(f)
-            except Exception as e:
-                self.logger.warning(f"Failed to load {filepath}: {e}")
-                return default
-        return default
-
-    def _save_to_json(self, data: Any, filename: str):
-        """
-        Save data to a JSON file in the data directory.
-
-        Args:
-            data: Data to save
-            filename: Name of the file to save to
-        """
-        filepath = os.path.join(self.data_dir, filename)
-        with open(filepath, "w") as f:
-            json.dump(data, f, indent=2)
-        self.logger.debug(f"Saved data to {filepath}")
-
     def update_mapping_file(self, force: bool = False) -> bool:
         """
         Update the mapping file after manual creation of custom fields.
@@ -1156,32 +1120,31 @@ class CustomFieldMigration(BaseMigration):
             # Analyze results
             analysis = self.analyze_custom_field_mapping()
 
-            status = "success" if success else "failed"
-
-            return {
-                "status": status,
-                "jira_fields_count": len(jira_fields),
-                "op_fields_count": len(op_fields),
-                "mapped_fields_count": len(mapping),
-                "success_count": analysis.get("matched_by_name", 0)
+            return ComponentResult(
+                success=success,
+                jira_fields_count=len(jira_fields),
+                op_fields_count=len(op_fields),
+                mapped_fields_count=len(mapping),
+                success_count=analysis.get("matched_by_name", 0)
                 + analysis.get("created_directly", 0),
-                "failed_count": analysis.get("needs_manual_creation_or_script", 0),
-                "total_count": len(jira_fields),
-                "analysis": analysis,
-            }
+                failed_count=analysis.get("needs_manual_creation_or_script", 0),
+                total_count=len(jira_fields),
+                analysis=analysis,
+            )
         except Exception as e:
-            self.logger.error(
+            self.logger.exception(
                 f"Error during custom field migration: {str(e)}",
                 extra={"markup": True, "traceback": True},
             )
-            return {
-                "status": "failed",
-                "error": str(e),
-                "success_count": 0,
-                "failed_count": (
+            return ComponentResult(
+                success=False,
+                error=str(e),
+                success_count=0,
+                failed_count=(
                     len(self.jira_custom_fields) if self.jira_custom_fields else 0
                 ),
-                "total_count": (
+                total_count=(
                     len(self.jira_custom_fields) if self.jira_custom_fields else 0
                 ),
-            }
+            )
+

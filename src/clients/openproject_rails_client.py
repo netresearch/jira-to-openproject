@@ -455,7 +455,8 @@ class OpenProjectRailsClient:
 
             # Timeout occurred
             logger.warning(
-                f"Command timeout after {int(time.time()-start_time)}s: start_found={found_start}, end_found={found_end}"
+                f"Command timeout after {int(time.time()-start_time)}s: "
+                f"start_found={found_start}, end_found={found_end}"
             )
 
             # Stabilize console and return None
@@ -807,10 +808,10 @@ class OpenProjectRailsClient:
                 logger.error("Missing container or server configuration")
                 return False
 
-            logger.info(f"Transferring file to {op_server} container {container_name}")
+            logger.debug(f"Transferring file to {op_server} container {container_name}")
 
             # First, copy to server using SCP
-            logger.info(f"Copying file to server {op_server}")
+            logger.debug(f"Copying file to server {op_server}")
             scp_cmd = [
                 "scp",
                 local_path,
@@ -821,7 +822,7 @@ class OpenProjectRailsClient:
             subprocess.run(scp_cmd, check=True)
 
             # Then copy from server to container
-            logger.info(f"Copying file from server to container {container_name}")
+            logger.debug(f"Copying file from server to container {container_name}")
             docker_cp_cmd = [
                 "ssh",
                 op_server,
@@ -835,7 +836,7 @@ class OpenProjectRailsClient:
             subprocess.run(docker_cp_cmd, check=True)
 
             # Change permissions to make file readable by all
-            logger.info("Setting file permissions to allow reading by all users")
+            logger.debug("Setting file permissions to allow reading by all users")
             chmod_cmd = [
                 "ssh",
                 op_server,
@@ -852,13 +853,13 @@ class OpenProjectRailsClient:
 
             subprocess.run(chmod_cmd, check=True)
 
-            logger.success(f"Successfully copied file to container: {remote_path}")
+            logger.debug(f"Successfully copied file to container: {remote_path}")
             return True
         except subprocess.SubprocessError as e:
-            logger.error(f"Error transferring file to container: {e}")
+            logger.exception(f"Error transferring file to container: {e}")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error during file transfer: {e}")
+            logger.exception(f"Unexpected error during file transfer: {e}")
             return False
 
     def transfer_file_from_container(
@@ -1318,7 +1319,7 @@ class OpenProjectRailsClient:
 
                       begin
                         input_data = JSON.parse(file_content)
-                        puts "Successfully loaded data with " + (input_data.is_a?(Array) ? input_data.size.to_s : "1") + " records"
+                        puts "Successfully loaded data with " + (input_data.size.to_s) + " records"
                       rescue JSON::ParserError => e
                         puts "JSON parse error: " + e.message
                         puts "First 100 chars of file: " + file_content[0..100].inspect

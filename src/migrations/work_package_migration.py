@@ -1,26 +1,28 @@
 """
 Work package migration module for Jira to OpenProject migration.
-Handles the migration of Jira issues to OpenProject work packages.
+Handles the migration of issues from Jira to work packages in OpenProject.
 """
 
 import json
 import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from jira import Issue as JiraIssueType
+from jira import Issue
 
+from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
-from src.config import logger
 from src.display import ProgressTracker
-from src.utils import load_json_file, save_json_file
+from src.utils import data_handler
+from src.migrations.base_migration import BaseMigration
 
 
-class WorkPackageMigration:
+class WorkPackageMigration(BaseMigration):
     """
     Handles the migration of issues from Jira to work packages in OpenProject.
 
@@ -50,13 +52,15 @@ class WorkPackageMigration:
             op_rails_client: Optional OpenProjectRailsClient instance.
             data_dir: Path to data directory for storing mappings.
         """
-        self.jira_client = jira_client
-        self.op_client = op_client
-        self.op_rails_client = op_rails_client
+        super().__init__(jira_client, op_client, op_rails_client)
 
-        # Configure paths
-        self.data_dir = Path(data_dir or config.get_path("data"))
-        os.makedirs(self.data_dir, exist_ok=True)
+        # Override data_dir if specified
+        if data_dir:
+            self.data_dir = Path(data_dir)
+            os.makedirs(self.data_dir, exist_ok=True)
+        else:
+            # Convert string path from BaseMigration to Path object
+            self.data_dir = Path(self.data_dir)
 
         # Setup file paths
         self.jira_issues_file = self.data_dir / "jira_issues.json"
@@ -78,33 +82,49 @@ class WorkPackageMigration:
         self._load_mappings()
 
         # Logging
-        logger.debug(f"WorkPackageMigration initialized with data dir: {self.data_dir}")
+        self.logger.debug(f"WorkPackageMigration initialized with data dir: {self.data_dir}")
 
     def _load_mappings(self):
         """Load all required mappings from files."""
+        from src.utils import data_handler
+
         # Load mappings from disk
-        self.project_mapping = (
-            load_json_file(self.data_dir / "project_mapping.json", logger) or {}
-        )
-        self.user_mapping = (
-            load_json_file(self.data_dir / "user_mapping.json", logger) or {}
-        )
-        self.issue_type_mapping = (
-            load_json_file(self.data_dir / "issue_type_mapping.json", logger) or {}
-        )
-        self.issue_type_id_mapping = (
-            load_json_file(self.data_dir / "issue_type_id_mapping.json", logger) or {}
-        )
-        self.status_mapping = (
-            load_json_file(self.data_dir / "status_mapping.json", logger) or {}
+        self.project_mapping = data_handler.load_dict(
+            filename="project_mapping.json",
+            directory=self.data_dir,
+            default={}
         )
 
-    def extract_jira_issues(
+        self.user_mapping = data_handler.load_dict(
+            filename="user_mapping.json",
+            directory=self.data_dir,
+            default={}
+        )
+
+        self.issue_type_mapping = data_handler.load_dict(
+            filename="issue_type_mapping.json",
+            directory=self.data_dir,
+            default={}
+        )
+
+        self.issue_type_id_mapping = data_handler.load_dict(
+            filename="issue_type_id_mapping.json",
+            directory=self.data_dir,
+            default={}
+        )
+
+        self.status_mapping = data_handler.load_dict(
+            filename="status_mapping.json",
+            directory=self.data_dir,
+            default={}
+        )
+
+    def _extract_jira_issues(
         self,
         project_key: str,
         batch_size: int = 100,
         project_tracker: ProgressTracker = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[Issue]:
         """
         Extract issues from a Jira project.
 
@@ -116,21 +136,22 @@ class WorkPackageMigration:
         Returns:
             List of Jira issue dictionaries
         """
-        logger.info(
+        self.logger.info(
             f"Extracting issues from Jira project {project_key}...",
             extra={"markup": True},
         )
+        all_issues: list[Issue] = []
 
         try:
             # First, get the total number of issues for this project to set up progress bar
             total_issues = self.jira_client.get_issue_count(project_key)
             if total_issues <= 0:
-                logger.warning(
+                self.logger.warning(
                     f"No issues found for project {project_key}", extra={"markup": True}
                 )
-                return []
+                return all_issues
 
-            logger.info(
+            self.logger.info(
                 f"Found {total_issues} issues to extract from project {project_key}",
                 extra={"markup": True},
             )
@@ -139,210 +160,111 @@ class WorkPackageMigration:
             batch_size = min(batch_size, total_issues)
 
             # Get issues in batches with progress tracking
-            all_issues = []
             start_at = 0
 
-            # If we have a parent tracker, update its description
-            if project_tracker:
-                project_tracker.update_description(
-                    f"Fetching issues from {project_key} (0/{total_issues})"
-                )
-                current_batch = 0
+            project_tracker.update_description(
+                f"Fetching issues from {project_key} (0/{total_issues})"
+            )
+            current_batch = 0
 
-                # Using the parent tracker instead of creating a new one
-                while start_at < total_issues:
-                    # Update progress description
-                    current_batch += 1
-                    progress_desc = f"Fetching {project_key} issues {start_at+1}-{min(start_at+batch_size, total_issues)}/{total_issues}"
-                    project_tracker.update_description(progress_desc)
+            # Using the parent tracker instead of creating a new one
+            while start_at < total_issues:
+                # Update progress description
+                current_batch += 1
+                progress_desc = f"Fetching {project_key} issues {start_at+1}-{min(start_at+batch_size, total_issues)}/{total_issues}"
+                project_tracker.update_description(progress_desc)
 
-                    # Fetch a batch of issues with retry logic
-                    max_retries = 3
-                    retry_count = 0
-                    issues = None
+                # Fetch a batch of issues with retry logic
+                max_retries = 3
+                retry_count = 0
+                issues: list[Issue] = []
 
-                    while retry_count < max_retries:
-                        try:
-                            issues = self.jira_client.get_all_issues_for_project(
-                                project_key, expand_changelog=True
-                            )
-                            break
-                        except Exception as e:
-                            retry_count += 1
-                            retry_msg = f"Error fetching issues for {project_key} (attempt {retry_count}/{max_retries}): {str(e)}"
-                            logger.warning(retry_msg, extra={"markup": True})
-                            project_tracker.add_log_item(retry_msg)
+                while retry_count < max_retries:
+                    try:
+                        issues = self.jira_client.get_all_issues_for_project(
+                            project_key, expand_changelog=True
+                        )
+                        break
+                    except Exception as e:
+                        retry_count += 1
+                        retry_msg = f"Error fetching issues for {project_key} (attempt {retry_count}/{max_retries}): {str(e)}"
+                        self.logger.warning(retry_msg, extra={"markup": True})
+                        project_tracker.add_log_item(retry_msg)
 
-                            if retry_count >= max_retries:
-                                logger.error(
-                                    f"Failed to fetch issues after {max_retries} attempts: {str(e)}",
-                                    extra={"markup": True},
-                                )
-                                project_tracker.add_log_item(
-                                    f"Failed to fetch issues after {max_retries} attempts"
-                                )
-                                # Save what we have so far before potentially raising exception
-                                if all_issues:
-                                    self._save_to_json(
-                                        all_issues, f"jira_issues_{project_key}.json"
-                                    )
-                                    logger.info(
-                                        f"Saved {len(all_issues)} issues collected before error occurred",
-                                        extra={"markup": True},
-                                    )
-                                # Continue with next batch instead of failing completely
-                                issues = []
-                                break
-
-                            # Exponential backoff: wait longer with each retry
-                            import time
-
-                            wait_time = 2**retry_count
-                            logger.info(
-                                f"Retrying in {wait_time} seconds...",
+                        if retry_count >= max_retries:
+                            self.logger.error(
+                                f"Failed to fetch issues after {max_retries} attempts: {str(e)}",
                                 extra={"markup": True},
                             )
-                            time.sleep(wait_time)
+                            project_tracker.add_log_item(
+                                f"Failed to fetch issues after {max_retries} attempts"
+                            )
+                            # Save what we have so far before potentially raising exception
+                            if all_issues:
+                                self._save_to_json(
+                                    all_issues, f"jira_issues_{project_key}.json"
+                                )
+                                self.logger.info(
+                                    f"Saved {len(all_issues)} issues collected before error occurred",
+                                    extra={"markup": True},
+                                )
+                            # Continue with next batch instead of failing completely
+                            issues = []
+                            break
 
-                    if not issues:
-                        # Log message and move to next batch instead of breaking completely
-                        logger.warning(
-                            f"No issues retrieved for batch starting at {start_at}. Moving to next batch.",
+                        # Exponential backoff: wait longer with each retry
+                        import time
+
+                        wait_time = 2**retry_count
+                        self.logger.info(
+                            f"Retrying in {wait_time} seconds...",
                             extra={"markup": True},
                         )
-                        project_tracker.add_log_item(
-                            f"Warning: No issues retrieved for batch starting at {start_at}"
-                        )
-                        start_at += batch_size
-                        continue
+                        time.sleep(wait_time)
 
-                    # Add to overall list
-                    all_issues.extend(issues)
-
-                    # Update trackers
-                    retrieved_count = len(issues)
+                if not issues:
+                    # Log message and move to next batch instead of breaking completely
+                    self.logger.warning(
+                        f"No issues retrieved for batch starting at {start_at}. Moving to next batch.",
+                        extra={"markup": True},
+                    )
                     project_tracker.add_log_item(
-                        f"Retrieved {retrieved_count} issues from {project_key} (batch #{current_batch})"
+                        f"Warning: No issues retrieved for batch starting at {start_at}"
+                    )
+                    start_at += batch_size
+                    continue
+
+                # Add to overall list
+                all_issues.extend(issues)
+
+                # Update trackers
+                retrieved_count = len(issues)
+                project_tracker.add_log_item(
+                    f"Retrieved {retrieved_count} issues from {project_key} (batch #{current_batch})"
+                )
+
+                # Only log at the NOTICE level for large projects with multiple batches
+                if total_issues > batch_size:
+                    self.logger.notice(
+                        f"Retrieved {retrieved_count} issues (total: {len(all_issues)}/{total_issues})",
+                        extra={"markup": True},
                     )
 
-                    # Only log at the NOTICE level for large projects with multiple batches
-                    if total_issues > batch_size:
-                        logger.notice(
-                            f"Retrieved {retrieved_count} issues (total: {len(all_issues)}/{total_issues})",
-                            extra={"markup": True},
-                        )
+                if len(issues) < batch_size:
+                    # We got fewer issues than requested, so we're done
+                    break
 
-                    if len(issues) < batch_size:
-                        # We got fewer issues than requested, so we're done
-                        break
-
-                    start_at += batch_size
-            else:
-                # Create a new progress tracker when not running inside another one
-                with ProgressTracker(
-                    f"Fetching issues from {project_key}",
-                    total_issues,
-                    "Recent Batches",
-                ) as tracker:
-                    while start_at < total_issues:
-                        # Update progress description
-                        tracker.update_description(
-                            f"Fetching {project_key} issues {start_at+1}-{min(start_at+batch_size, total_issues)}/{total_issues}"
-                        )
-
-                        # Fetch a batch of issues with retry logic
-                        max_retries = 3
-                        retry_count = 0
-                        issues = None
-
-                        while retry_count < max_retries:
-                            try:
-                                issues = self.jira_client.get_all_issues_for_project(
-                                    project_key, expand_changelog=True
-                                )
-                                break
-                            except Exception as e:
-                                retry_count += 1
-                                retry_msg = f"Error fetching issues for {project_key} (attempt {retry_count}/{max_retries}): {str(e)}"
-                                logger.warning(retry_msg, extra={"markup": True})
-                                tracker.add_log_item(retry_msg)
-
-                                if retry_count >= max_retries:
-                                    logger.error(
-                                        f"Failed to fetch issues after {max_retries} attempts: {str(e)}",
-                                        extra={"markup": True},
-                                    )
-                                    tracker.add_log_item(
-                                        f"Failed to fetch issues after {max_retries} attempts"
-                                    )
-                                    # Save what we have so far before potentially raising exception
-                                    if all_issues:
-                                        self._save_to_json(
-                                            all_issues,
-                                            f"jira_issues_{project_key}.json",
-                                        )
-                                        logger.info(
-                                            f"Saved {len(all_issues)} issues collected before error occurred",
-                                            extra={"markup": True},
-                                        )
-                                    # Continue with next batch instead of failing completely
-                                    issues = []
-                                    break
-
-                                # Exponential backoff: wait longer with each retry
-                                import time
-
-                                wait_time = 2**retry_count
-                                logger.info(
-                                    f"Retrying in {wait_time} seconds...",
-                                    extra={"markup": True},
-                                )
-                                time.sleep(wait_time)
-
-                        if not issues:
-                            # Log message and move to next batch instead of breaking completely
-                            logger.warning(
-                                f"No issues retrieved for batch starting at {start_at}. Moving to next batch.",
-                                extra={"markup": True},
-                            )
-                            tracker.add_log_item(
-                                f"Warning: No issues retrieved for batch starting at {start_at}"
-                            )
-                            start_at += batch_size
-                            continue
-
-                        # Add to overall list
-                        all_issues.extend(issues)
-
-                        # Update trackers
-                        retrieved_count = len(issues)
-                        tracker.add_log_item(
-                            f"Retrieved {retrieved_count} issues (batch #{start_at//batch_size+1})"
-                        )
-                        tracker.increment(retrieved_count)
-
-                        # Only log at the NOTICE level for large projects with multiple batches
-                        if total_issues > batch_size:
-                            logger.notice(
-                                f"Retrieved {retrieved_count} issues (total: {len(all_issues)}/{total_issues})",
-                                extra={"markup": True},
-                            )
-
-                        if len(issues) < batch_size:
-                            # We got fewer issues than requested, so we're done
-                            break
-
-                        start_at += batch_size
+                start_at += batch_size
 
             # Save issues to file for later reference, using safe save
             try:
                 self._save_to_json(all_issues, f"jira_issues_{project_key}.json")
-                logger.info(
+                self.logger.info(
                     f"Extracted and saved {len(all_issues)} issues from project {project_key}",
                     extra={"markup": True},
                 )
             except Exception as e:
-                logger.error(
+                self.logger.error(
                     f"Failed to save issues to file: {str(e)}", extra={"markup": True}
                 )
                 # Try to save to alternate location as backup
@@ -353,12 +275,12 @@ class WorkPackageMigration:
                 try:
                     with open(backup_path, "w") as f:
                         json.dump(all_issues, f, indent=2)
-                    logger.info(
+                    self.logger.info(
                         f"Saved backup of issues to {backup_path}",
                         extra={"markup": True},
                     )
                 except Exception as backup_error:
-                    logger.critical(
+                    self.logger.critical(
                         f"Also failed to save backup: {str(backup_error)}",
                         extra={"markup": True},
                     )
@@ -367,7 +289,7 @@ class WorkPackageMigration:
 
         except Exception as e:
             error_msg = f"Failed to extract issues from project {project_key}: {str(e)}"
-            logger.error(error_msg, extra={"markup": True})
+            self.logger.error(error_msg, extra={"markup": True})
             if project_tracker:
                 project_tracker.add_log_item(error_msg)
             # Reraise with more context
@@ -375,7 +297,7 @@ class WorkPackageMigration:
                 f"Jira issue extraction failed for project {project_key}: {str(e)}"
             ) from e
 
-    def prepare_work_package(
+    def _prepare_work_package(
         self, jira_issue: dict[str, Any], project_id: int
     ) -> dict[str, Any]:
         """
@@ -388,124 +310,66 @@ class WorkPackageMigration:
         Returns:
             Dictionary with work package data
         """
-        # Check if jira_issue is a Jira Issue object or a dictionary
-        if hasattr(jira_issue, "raw"):
-            # Extract the necessary fields from the Jira Issue object
-            issue_type_id = jira_issue.fields.issuetype.id
-            issue_type_name = jira_issue.fields.issuetype.name
+        # Extract the necessary fields from the Jira Issue object
+        issue_type_id = jira_issue.fields.issuetype.id
+        issue_type_name = jira_issue.fields.issuetype.name
 
-            status_id = None
-            if hasattr(jira_issue.fields, "status"):
-                status_id = getattr(jira_issue.fields.status, "id", None)
+        status_id = None
+        if hasattr(jira_issue.fields, "status"):
+            status_id = getattr(jira_issue.fields.status, "id", None)
 
-            assignee_name = None
-            if hasattr(jira_issue.fields, "assignee") and jira_issue.fields.assignee:
-                assignee_name = getattr(jira_issue.fields.assignee, "name", None)
+        assignee_name = None
+        if hasattr(jira_issue.fields, "assignee") and jira_issue.fields.assignee:
+            assignee_name = getattr(jira_issue.fields.assignee, "name", None)
 
-            # Extract creator and reporter
-            creator_name = None
-            if hasattr(jira_issue.fields, "creator") and jira_issue.fields.creator:
-                creator_name = getattr(jira_issue.fields.creator, "name", None)
+        # Extract creator and reporter
+        creator_name = None
+        if hasattr(jira_issue.fields, "creator") and jira_issue.fields.creator:
+            creator_name = getattr(jira_issue.fields.creator, "name", None)
 
-            reporter_name = None
-            if hasattr(jira_issue.fields, "reporter") and jira_issue.fields.reporter:
-                reporter_name = getattr(jira_issue.fields.reporter, "name", None)
+        reporter_name = None
+        if hasattr(jira_issue.fields, "reporter") and jira_issue.fields.reporter:
+            reporter_name = getattr(jira_issue.fields.reporter, "name", None)
 
-            # Extract dates
-            created_at = None
-            if hasattr(jira_issue.fields, "created"):
-                created_at = jira_issue.fields.created
+        # Extract dates
+        created_at = None
+        if hasattr(jira_issue.fields, "created"):
+            created_at = jira_issue.fields.created
 
-            updated_at = None
-            if hasattr(jira_issue.fields, "updated"):
-                updated_at = jira_issue.fields.updated
+        updated_at = None
+        if hasattr(jira_issue.fields, "updated"):
+            updated_at = jira_issue.fields.updated
 
-            # Extract watchers
-            watchers = []
-            if hasattr(jira_issue.fields, "watches") and jira_issue.fields.watches:
-                watcher_count = getattr(jira_issue.fields.watches, "watchCount", 0)
-                if watcher_count > 0:
-                    try:
-                        # Fetch watchers if there are any
-                        watchers_data = self.jira_client.get_issue_watchers(
-                            jira_issue.key
-                        )
-                        if watchers_data:
-                            watchers = [
-                                watcher.get("name") for watcher in watchers_data
-                            ]
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to fetch watchers for issue {jira_issue.key}: {str(e)}"
-                        )
+        # Extract watchers
+        watchers = []
+        if hasattr(jira_issue.fields, "watches") and jira_issue.fields.watches:
+            watcher_count = getattr(jira_issue.fields.watches, "watchCount", 0)
+            if watcher_count > 0:
+                try:
+                    # Fetch watchers if there are any
+                    watchers_data = self.jira_client.get_issue_watchers(
+                        jira_issue.key
+                    )
+                    if watchers_data:
+                        watchers = [
+                            watcher.get("name") for watcher in watchers_data
+                        ]
+                except Exception as e:
+                    self.logger.exception(
+                        f"Failed to fetch watchers for issue {jira_issue.key}: {str(e)}"
+                    )
 
-            # Extract custom fields
-            custom_fields = {}
-            for field_name, field_value in jira_issue.raw.get("fields", {}).items():
-                if field_name.startswith("customfield_") and field_value is not None:
-                    custom_fields[field_name] = field_value
+        # Extract custom fields
+        custom_fields = {}
+        for field_name, field_value in jira_issue.raw.get("fields", {}).items():
+            if field_name.startswith("customfield_") and field_value is not None:
+                custom_fields[field_name] = field_value
 
-            subject = jira_issue.fields.summary
-            description = getattr(jira_issue.fields, "description", "") or ""
+        subject = jira_issue.fields.summary
+        description = getattr(jira_issue.fields, "description", "") or ""
 
-            jira_id = jira_issue.id
-            jira_key = jira_issue.key
-        else:
-            # It's a dictionary (as in the original implementation)
-            issue_type_id = jira_issue["issue_type"]["id"]
-            issue_type_name = jira_issue["issue_type"]["name"]
-
-            status_id = None
-            if "status" in jira_issue and "id" in jira_issue["status"]:
-                status_id = jira_issue["status"]["id"]
-
-            assignee_name = None
-            if "assignee" in jira_issue and jira_issue["assignee"]:
-                assignee_name = jira_issue["assignee"].get("name")
-
-            # Extract creator and reporter
-            creator_name = None
-            if "creator" in jira_issue and jira_issue["creator"]:
-                creator_name = jira_issue["creator"].get("name")
-
-            reporter_name = None
-            if "reporter" in jira_issue and jira_issue["reporter"]:
-                reporter_name = jira_issue["reporter"].get("name")
-
-            # Extract dates
-            created_at = jira_issue.get("created")
-            updated_at = jira_issue.get("updated")
-
-            # Extract watchers
-            watchers = []
-            if "watches" in jira_issue and jira_issue["watches"]:
-                watcher_count = jira_issue["watches"].get("watchCount", 0)
-                if watcher_count > 0:
-                    try:
-                        # Fetch watchers if there are any
-                        watchers_data = self.jira_client.get_issue_watchers(
-                            jira_issue["key"]
-                        )
-                        if watchers_data:
-                            watchers = [
-                                watcher.get("name") for watcher in watchers_data
-                            ]
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to fetch watchers for issue {jira_issue['key']}: {str(e)}"
-                        )
-
-            # Extract custom fields
-            custom_fields = {}
-            for field_name, field_value in jira_issue.items():
-                if field_name.startswith("customfield_") and field_value is not None:
-                    custom_fields[field_name] = field_value
-
-            subject = jira_issue["summary"]
-            description = jira_issue.get("description", "")
-
-            jira_id = jira_issue["id"]
-            jira_key = jira_issue["key"]
+        jira_id = jira_issue.id
+        jira_key = jira_issue.key
 
         # Map the issue type
         type_id = None
@@ -525,14 +389,14 @@ class WorkPackageMigration:
             type_id = config.mappings.issue_type_id_mapping.get(str(issue_type_id))
 
         # Debug mapping information
-        logger.debug(
+        self.logger.debug(
             f"Mapping issue type: {issue_type_name} (ID: {issue_type_id}) -> OpenProject type ID: {type_id}",
             extra={"markup": True},
         )
 
         # If no type mapping exists, default to Task
         if not type_id:
-            logger.warning(
+            self.logger.warning(
                 f"No mapping found for issue type {issue_type_name} (ID: {issue_type_id}), defaulting to Task",
                 extra={"markup": True},
             )
@@ -550,7 +414,7 @@ class WorkPackageMigration:
                 if types:
                     type_id = types[0]["id"]
                 else:
-                    logger.error(
+                    self.logger.error(
                         "No work package types available in OpenProject",
                         extra={"markup": True},
                     )
@@ -583,7 +447,7 @@ class WorkPackageMigration:
                 if watcher_id:
                     watcher_ids.append(watcher_id)
             else:
-                logger.debug(f"Watcher {watcher_name} not found in user mapping")
+                self.logger.debug(f"Watcher {watcher_name} not found in user mapping")
 
         # Add Jira issue key to description for reference
         jira_reference = f"\n\n*Imported from Jira issue: {jira_key}*"
@@ -660,7 +524,7 @@ class WorkPackageMigration:
                 with open(mapping_file) as f:
                     return json.load(f)
             except Exception as e:
-                logger.warning(
+                self.logger.warning(
                     f"Error loading custom field mapping: {str(e)}",
                     extra={"markup": True},
                 )
@@ -739,7 +603,7 @@ class WorkPackageMigration:
         # Default: return as is
         return value
 
-    def migrate_work_packages(self) -> dict[str, Any]:
+    def _migrate_work_packages(self) -> dict[str, Any]:
         """
         Migrate issues from Jira to work packages in OpenProject.
 
@@ -752,11 +616,11 @@ class WorkPackageMigration:
         Returns:
             Dictionary mapping Jira issue IDs to OpenProject work package IDs
         """
-        logger.info("Starting work package migration...", extra={"markup": True})
+        self.logger.info("Starting work package migration...", extra={"markup": True})
 
         # Check if Rails client is available - we need it for bulk imports
         if not self.op_client.rails_client:
-            logger.error(
+            self.logger.error(
                 "Rails client is required for work package migration. Please ensure tmux session is running.",
                 extra={"markup": True},
             )
@@ -772,7 +636,7 @@ class WorkPackageMigration:
         )
 
         if not jira_projects:
-            logger.warning(
+            self.logger.warning(
                 "No Jira projects found in mapping, nothing to migrate",
                 extra={"markup": True},
             )
@@ -796,32 +660,30 @@ class WorkPackageMigration:
                         "last_processed_project"
                     )
 
-                logger.info(
+                self.logger.info(
                     f"Found migration state - {len(processed_projects)} projects already processed",
                     extra={"markup": True},
                 )
                 if last_processed_project and last_processed_project in jira_projects:
-                    logger.info(
+                    self.logger.info(
                         f"Last processed project was {last_processed_project} - will resume from there",
                         extra={"markup": True},
                     )
             except Exception as e:
-                logger.warning(
+                self.logger.warning(
                     f"Error loading migration state: {str(e)}", extra={"markup": True}
                 )
                 # Create a backup of the corrupted state file if it exists
                 if os.path.exists(migration_state_file):
                     backup_file = f"{migration_state_file}.bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                     try:
-                        import shutil
-
                         shutil.copy2(migration_state_file, backup_file)
-                        logger.info(
+                        self.logger.info(
                             f"Created backup of corrupted state file: {backup_file}",
                             extra={"markup": True},
                         )
                     except Exception as backup_err:
-                        logger.warning(
+                        self.logger.warning(
                             f"Failed to create backup of state file: {str(backup_err)}",
                             extra={"markup": True},
                         )
@@ -836,7 +698,7 @@ class WorkPackageMigration:
                 p for p in jira_projects if p not in processed_projects
             ]
 
-        logger.info(
+        self.logger.info(
             f"Found {len(jira_projects)} Jira projects, will process {len(remaining_projects)} remaining projects",
             extra={"markup": True},
         )
@@ -853,7 +715,7 @@ class WorkPackageMigration:
         ) as project_tracker:
             for project_key in remaining_projects:
                 project_tracker.update_description(f"Processing project {project_key}")
-                logger.info(f"Processing project {project_key}", extra={"markup": True})
+                self.logger.info(f"Processing project {project_key}", extra={"markup": True})
 
                 # Update the state file at the start of each project processing
                 try:
@@ -868,7 +730,7 @@ class WorkPackageMigration:
                             indent=2,
                         )
                 except Exception as e:
-                    logger.warning(
+                    self.logger.warning(
                         f"Error saving migration state: {str(e)}",
                         extra={"markup": True},
                     )
@@ -885,12 +747,12 @@ class WorkPackageMigration:
                                 f,
                                 indent=2,
                             )
-                        logger.info(
+                        self.logger.info(
                             f"Saved migration state to alternate location: {alt_file}",
                             extra={"markup": True},
                         )
                     except Exception as alt_err:
-                        logger.error(
+                        self.logger.error(
                             f"Failed to save migration state to alternate location: {str(alt_err)}",
                             extra={"markup": True},
                         )
@@ -905,7 +767,7 @@ class WorkPackageMigration:
                         break
 
                 if not project_mapping_entry:
-                    logger.warning(
+                    self.logger.warning(
                         f"No OpenProject project mapping found for Jira project {project_key}, skipping",
                         extra={"markup": True},
                     )
@@ -923,13 +785,13 @@ class WorkPackageMigration:
 
                 # Extract issues for this project
                 try:
-                    issues = self.extract_jira_issues(
+                    issues = self._extract_jira_issues(
                         project_key, project_tracker=project_tracker
                     )
                     total_issues += len(issues)
 
                     if not issues:
-                        logger.warning(
+                        self.logger.warning(
                             f"No issues found for project {project_key}, skipping",
                             extra={"markup": True},
                         )
@@ -945,7 +807,7 @@ class WorkPackageMigration:
                         )
                         continue
                 except Exception as e:
-                    logger.error(
+                    self.logger.error(
                         f"Failed to extract issues for project {project_key}: {str(e)}",
                         extra={"markup": True},
                     )
@@ -966,7 +828,7 @@ class WorkPackageMigration:
                 # Prepare work packages data
                 work_packages_data = []
                 preparation_errors = 0
-                logger.notice(
+                self.logger.notice(
                     f"Preparing {len(issues)} work packages for project {project_key}",
                     extra={"markup": True},
                 )
@@ -993,7 +855,7 @@ class WorkPackageMigration:
                             )
 
                         if hasattr(self, "dry_run") and self.dry_run:
-                            logger.notice(
+                            self.logger.notice(
                                 f"DRY RUN: Would create work package for {issue_key}",
                                 extra={"markup": True},
                             )
@@ -1009,16 +871,16 @@ class WorkPackageMigration:
 
                         # Prepare work package data
                         try:
-                            wp_data = self.prepare_work_package(issue, op_project_id)
+                            wp_data = self._prepare_work_package(issue, op_project_id)
                             if wp_data:
                                 work_packages_data.append(wp_data)
                         except Exception as e:
                             # Log the error with details about the issue
-                            logger.error(
+                            self.logger.error(
                                 f"Error preparing work package for issue {issue_key}: {str(e)}",
                                 extra={"markup": True},
                             )
-                            logger.debug(
+                            self.logger.debug(
                                 f"Issue type: {type(issue)}", extra={"markup": True}
                             )
                             preparation_errors += 1
@@ -1026,7 +888,7 @@ class WorkPackageMigration:
                             continue
 
                     except Exception as e:
-                        logger.error(
+                        self.logger.error(
                             f"Error processing issue at index {i}: {str(e)}",
                             extra={"markup": True},
                         )
@@ -1034,7 +896,7 @@ class WorkPackageMigration:
                         continue
 
                 if preparation_errors > 0:
-                    logger.warning(
+                    self.logger.warning(
                         f"Encountered {preparation_errors} errors while preparing work packages for {project_key}",
                         extra={"markup": True},
                     )
@@ -1050,7 +912,7 @@ class WorkPackageMigration:
                     continue
 
                 if not work_packages_data:
-                    logger.warning(
+                    self.logger.warning(
                         f"No work package data prepared for project {project_key}, skipping",
                         extra={"markup": True},
                     )
@@ -1072,8 +934,9 @@ class WorkPackageMigration:
                 }
                 if op_project_id and required_type_ids:
                     # A simpler, more direct approach with fewer Rails client calls
-                    logger.info(
-                        f"Enabling types {list(required_type_ids)} for project {op_project_id}",
+                    self.logger.info(
+                        f"Enabling work package types {list(required_type_ids)} "
+                        f"for project {op_project_id}",
                         extra={"markup": True},
                     )
 
@@ -1146,13 +1009,13 @@ class WorkPackageMigration:
                             break
                         except Exception as e:
                             retry_count += 1
-                            logger.warning(
+                            self.logger.warning(
                                 f"Error enabling types (attempt {retry_count}/{max_retries}): {str(e)}",
                                 extra={"markup": True},
                             )
 
                             if retry_count >= max_retries:
-                                logger.error(
+                                self.logger.error(
                                     f"Failed to enable types after {max_retries} attempts: {str(e)}",
                                     extra={"markup": True},
                                 )
@@ -1165,14 +1028,14 @@ class WorkPackageMigration:
                             import time
 
                             wait_time = 2**retry_count
-                            logger.info(
+                            self.logger.info(
                                 f"Retrying in {wait_time} seconds...",
                                 extra={"markup": True},
                             )
                             time.sleep(wait_time)
 
                     if types_result and types_result.get("status") == "success":
-                        logger.info(
+                        self.logger.info(
                             f"Types setup complete for project {op_project_id}",
                             extra={"markup": True},
                         )
@@ -1182,7 +1045,7 @@ class WorkPackageMigration:
                             if types_result
                             else "No result returned"
                         )
-                        logger.error(
+                        self.logger.error(
                             f"Error enabling types: {error_msg}", extra={"markup": True}
                         )
                         project_tracker.add_log_item(
@@ -1191,16 +1054,21 @@ class WorkPackageMigration:
                         # Continue despite errors - the bulk import might still work with default types
 
                 # Bulk create work packages using Rails client
-                logger.notice(
+                self.logger.notice(
                     f"Creating {len(work_packages_data)} work packages for project {project_key}",
                     extra={"markup": True},
                 )
+
+                # First, check custom fields and proactively update them if needed
+                custom_field_values_to_add = self._collect_missing_custom_field_values(work_packages_data)
+                if custom_field_values_to_add:
+                    self._update_custom_field_allowed_values(custom_field_values_to_add)
 
                 # First, write the work packages data to a JSON file that Rails can read
                 temp_file_path = os.path.join(
                     self.data_dir, f"work_packages_{project_key}.json"
                 )
-                logger.info(
+                self.logger.info(
                     f"Writing {len(work_packages_data)} work packages to {temp_file_path}",
                     extra={"markup": True},
                 )
@@ -1239,16 +1107,32 @@ class WorkPackageMigration:
                 # Define the path for the file inside the container
                 container_temp_path = f"/tmp/work_packages_{project_key}.json"
 
+                # Also save a timestamped copy for debugging
+                debug_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                debug_json_path = os.path.join(
+                    self.data_dir, f"work_packages_{project_key}_{debug_timestamp}.json"
+                )
+                debug_script_path = os.path.join(
+                    self.data_dir, f"ruby_script_{project_key}_{debug_timestamp}.rb"
+                )
+
+                # Copy the file for debugging
+                shutil.copy2(temp_file_path, debug_json_path)
+                self.logger.info(
+                    f"Saved debug copy of work packages data to {debug_json_path}",
+                    extra={"markup": True},
+                )
+
                 # Copy the file to the container
                 if self.op_client.rails_client.transfer_file_to_container(
                     temp_file_path, container_temp_path
                 ):
-                    logger.success(
+                    self.logger.success(
                         "Successfully copied work packages data to container",
                         extra={"markup": True},
                     )
                 else:
-                    logger.error(
+                    self.logger.error(
                         "Failed to transfer work packages file to container",
                         extra={"markup": True},
                     )
@@ -1269,6 +1153,9 @@ class WorkPackageMigration:
                 result_file_path = '/tmp/wp_result_{project_key}.json'
                 """
 
+                # Note: The following script contains Ruby variables (like 'values_added' and 'cf')
+                # which may trigger Python linter warnings but are valid in the Ruby context.
+                # These can be safely ignored.
                 main_script = """
                 begin
                   require 'json'
@@ -1279,6 +1166,46 @@ class WorkPackageMigration:
 
                   created_packages = []
                   errors = []
+
+                  # Cache for custom fields we've already updated
+                  updated_custom_fields = {}
+
+                  # Helper method to update custom field allowed values
+                  def update_custom_field_allowed_values(field_name, new_value)
+                    return false unless new_value.present?
+
+                    # Find the custom field by name
+                    custom_field = CustomField.find_by(name: field_name)
+                    return false unless custom_field
+
+                    # Skip if not a list type field
+                    return false unless custom_field.field_format == "list"
+
+                    # Get current values and add the new one if not present
+                    current_values = custom_field.possible_values || []
+                    return true if current_values.include?(new_value)
+
+                    # Add the new value
+                    current_values << new_value
+                    custom_field.possible_values = current_values
+
+                    # Save and return result
+                    if custom_field.save
+                      puts "Updated custom field '#{field_name}' with new value: '#{new_value}'"
+                      return true
+                    else
+                      puts "Failed to update custom field '#{field_name}': " +
+                      "#{custom_field.errors.full_messages.join(', ')}"
+                      return false
+                    end
+                  end
+
+                  # Helper to extract field name and value from validation error
+                  def extract_field_and_value_from_error(error_message)
+                    # Pattern matches errors like "Field Name is not set to one of the allowed values."
+                    match = error_message.match(/^(.*?) is not set to one of the allowed values/)
+                    return match ? match[1] : nil
+                  end
 
                   # Create each work package
                   wp_data.each do |wp_attrs|
@@ -1291,6 +1218,23 @@ class WorkPackageMigration:
                       wp_attrs.delete('jira_id')
                       wp_attrs.delete('jira_key')
 
+                      # Handle watchers - validate watcher IDs
+                      if wp_attrs['watcher_ids'].is_a?(Array)
+                        # Filter out nil values
+                        wp_attrs['watcher_ids'].compact!
+
+                        # Verify each watcher exists
+                        valid_watcher_ids = []
+                        wp_attrs['watcher_ids'].each do |watcher_id|
+                          if User.find_by(id: watcher_id)
+                            valid_watcher_ids << watcher_id
+                          else
+                            puts "Warning: Watcher ID #{watcher_id} does not exist for work package #{jira_key}"
+                          end
+                        end
+                        wp_attrs['watcher_ids'] = valid_watcher_ids
+                      end
+
                       # Create work package object
                       wp = WorkPackage.new(wp_attrs)
 
@@ -1299,70 +1243,129 @@ class WorkPackageMigration:
                       wp.author = User.where(admin: true).first unless wp.author_id
                       wp.status = Status.default unless wp.status_id
 
-                      # Save the work package
-                      if wp.save
-                        created_packages << {
-                          'jira_id' => jira_id,
-                          'jira_key' => jira_key,
-                          'openproject_id' => wp.id,
-                          'subject' => wp.subject
-                        }
-                        puts "Created work package ##{wp.id}: #{wp.subject}"
-                      else
-                        errors << {
-                          'jira_id' => jira_id,
-                          'jira_key' => jira_key,
-                          'subject' => wp_attrs['subject'],
-                          'errors' => wp.errors.full_messages,
-                          'error_type' => 'validation_error'
-                        }
-                        puts "Error creating work package: #{wp.errors.full_messages.join(', ')}"
-                      end
-                    rescue => e
-                      errors << {
-                        'jira_id' => wp_attrs['jira_id'],
-                        'jira_key' => wp_attrs['jira_key'],
-                        'subject' => wp_attrs['subject'],
-                        'errors' => [e.message],
-                        'error_type' => 'exception'
-                      }
-                      puts "Exception: #{e.message}"
-                    end
-                  end
+                      # Try saving the work package
+                      created = false
+                      retry_attempts = 0
+                      max_retries = 3
 
-                  # Write results to result file
-                  result = {
-                    'status' => 'success',
-                    'created' => created_packages,
-                    'errors' => errors,
-                    'created_count' => created_packages.length,
-                    'error_count' => errors.length,
-                    'total' => wp_data.length
-                  }
+                      until created || retry_attempts >= max_retries
+                        if wp.save
+                          created = true
+                        else
+                          retry_attempts += 1
 
-                  File.write(result_file_path, result.to_json)
-                  puts "Results written to #{result_file_path}"
+                          # Check for custom field validation errors
+                          custom_field_errors = wp.errors.full_messages.select { |msg|
+                            msg.include?('is not set to one of the allowed values')
+                          }
 
-                  # Also return the result for direct capture
-                  result
-                rescue => e
-                  error_result = {
-                    'status' => 'error',
-                    'message' => e.message,
-                    'backtrace' => e.backtrace[0..5]
-                  }
+                           if custom_field_errors.any? && retry_attempts < max_retries
+                             # Try to update custom fields and retry
+                             custom_field_errors.each do |error|
+                               field_name = extract_field_and_value_from_error(error)
 
-                  # Try to save error to file
-                  begin
-                    File.write(result_file_path, error_result.to_json)
-                  rescue => write_error
-                    puts "Failed to write error to file: #{write_error.message}"
-                  end
+                               # Get the value attempted from custom values
+                               if field_name && wp.custom_field_values.present?
+                                 cf = CustomField.find_by(name: field_name)
+                                 if cf
+                                   value = wp.custom_value_for(cf).try(:value)
 
-                  # Return error result
-                  error_result
-                end
-                """
+                                   # Update custom field if needed and not already updated
+                                   cache_key = "#{field_name}:#{value}"
+                                   unless updated_custom_fields[cache_key]
+                                     updated = update_custom_field_allowed_values(field_name, value)
+                                     updated_custom_fields[cache_key] = true if updated
+                                     puts "Updated custom field '#{field_name}' with value '#{value}': " +
+                                       "#{updated ? 'success' : 'failed'}"
+                                   end
+                                 end
+                               end
+                             end
+
+                             # Refresh the work package for the next attempt
+                             wp = WorkPackage.new(wp_attrs)
+                             wp.priority = IssuePriority.default unless wp.priority_id
+                             wp.author = User.where(admin: true).first unless wp.author_id
+                             wp.status = Status.default unless wp.status_id
+                           else
+                             # Not fixable with retries or max retries reached
+                             break
+                           end
+                         end
+                       end
+
+                       if created
+                         created_packages << {
+                           'jira_id' => jira_id,
+                           'jira_key' => jira_key,
+                           'openproject_id' => wp.id,
+                           'subject' => wp.subject
+                         }
+                         puts "Created work package ##{wp.id}: #{wp.subject}"
+                       else
+                         errors << {
+                           'jira_id' => jira_id,
+                           'jira_key' => jira_key,
+                           'subject' => wp_attrs['subject'],
+                           'errors' => wp.errors.full_messages,
+                           'error_type' => 'validation_error'
+                         }
+                         puts "Error creating work package: #{wp.errors.full_messages.join(', ')}"
+                       end
+                     rescue => e
+                       errors << {
+                         'jira_id' => wp_attrs['jira_id'],
+                         'jira_key' => wp_attrs['jira_key'],
+                         'subject' => wp_attrs['subject'],
+                         'errors' => [e.message],
+                         'error_type' => 'exception'
+                       }
+                       puts "Exception: #{e.message}"
+                     end
+                   end
+
+                   # Write results to result file
+                   result = {
+                     'status' => 'success',
+                     'created' => created_packages,
+                     'errors' => errors,
+                     'created_count' => created_packages.length,
+                     'error_count' => errors.length,
+                     'total' => wp_data.length,
+                     'updated_custom_fields' => updated_custom_fields.keys
+                   }
+
+                   File.write(result_file_path, result.to_json)
+                   puts "Results written to #{result_file_path}"
+
+                   # Also return the result for direct capture
+                   result
+                 rescue => e
+                   error_result = {
+                     'status' => 'error',
+                     'message' => e.message,
+                     'backtrace' => e.backtrace[0..5]
+                   }
+
+                   # Try to save error to file
+                   begin
+                     File.write(result_file_path, error_result.to_json)
+                   rescue => write_error
+                     puts "Failed to write error to file: #{write_error.message}"
+                   end
+
+                   # Return error result
+                   error_result
+                 end
+                 """
+
+                # Save the Ruby script for debugging
+                with open(debug_script_path, "w") as f:
+                    f.write(header_script + main_script)
+                self.logger.info(
+                    f"Saved debug copy of Ruby script to {debug_script_path}",
+                    extra={"markup": True},
+                )
 
                 # Execute the Ruby script
                 result = self.op_client.rails_client.execute(
@@ -1370,7 +1373,7 @@ class WorkPackageMigration:
                 )
 
                 if result.get("status") != "success":
-                    logger.error(
+                    self.logger.error(
                         f"Rails error during work package creation: {result.get('error', 'Unknown error')}",
                         extra={"markup": True},
                     )
@@ -1400,6 +1403,10 @@ class WorkPackageMigration:
                     created_wps = output.get("created", [])
                     created_count = len(created_wps)
                     errors = output.get("errors", [])
+                    updated_custom_fields = output.get("updated_custom_fields", [])
+
+                    # Log any custom fields that were updated
+                    self.log_custom_field_updates(updated_custom_fields)
 
                     # Update the mapping
                     for wp in created_wps:
@@ -1425,6 +1432,17 @@ class WorkPackageMigration:
                         result_file_container, result_file_local
                     ):
                         try:
+                            # Also save a debug copy with timestamp
+                            debug_result_path = os.path.join(
+                                self.data_dir,
+                                f"wp_result_{project_key}_{debug_timestamp}.json"
+                            )
+                            shutil.copy2(result_file_local, debug_result_path)
+                            self.logger.info(
+                                f"Saved debug copy of result file to {debug_result_path}",
+                                extra={"markup": True},
+                            )
+
                             with open(result_file_local) as f:
                                 result_data = json.load(f)
 
@@ -1432,6 +1450,10 @@ class WorkPackageMigration:
                                     created_wps = result_data.get("created", [])
                                     created_count = len(created_wps)
                                     errors = result_data.get("errors", [])
+                                    updated_custom_fields = result_data.get("updated_custom_fields", [])
+
+                                    # Log any custom fields that were updated
+                                    self.log_custom_field_updates(updated_custom_fields)
 
                                     # Update the mapping
                                     for wp in created_wps:
@@ -1454,13 +1476,13 @@ class WorkPackageMigration:
                                                 "error_type": error.get("error_type"),
                                             }
                         except Exception as e:
-                            logger.error(
+                            self.logger.error(
                                 f"Error processing result file: {str(e)}",
                                 extra={"markup": True},
                             )
                     else:
                         # Last resort - try to parse the console output
-                        logger.warning(
+                        self.logger.warning(
                             "Could not get result file - parsing console output",
                             extra={"markup": True},
                         )
@@ -1471,12 +1493,12 @@ class WorkPackageMigration:
                                 re.MULTILINE,
                             )
                             created_count = len(created_matches)
-                            logger.info(
+                            self.logger.info(
                                 f"Found {created_count} created work packages in console output",
                                 extra={"markup": True},
                             )
 
-                logger.success(
+                self.logger.success(
                     f"Created {created_count} work packages for project {project_key} (errors: {len(errors)})",
                     extra={"markup": True},
                 )
@@ -1494,8 +1516,11 @@ class WorkPackageMigration:
                 )
 
         # Save the work package mapping
-        mapping_file_path = os.path.join(self.data_dir, "work_package_mapping.json")
-        save_json_file(self.work_package_mapping, mapping_file_path)
+        data_handler.save(
+            data=self.work_package_mapping,
+            filename="work_package_mapping.json",
+            directory=self.data_dir
+        )
 
         # Save final migration state
         try:
@@ -1511,13 +1536,13 @@ class WorkPackageMigration:
                     indent=2,
                 )
         except Exception as e:
-            logger.warning(
+            self.logger.warning(
                 f"Error saving final migration state: {str(e)}", extra={"markup": True}
             )
 
-        logger.success("Work package migration completed", extra={"markup": True})
-        logger.info(f"Total issues processed: {total_issues}", extra={"markup": True})
-        logger.info(
+        self.logger.success("Work package migration completed", extra={"markup": True})
+        self.logger.info(f"Total issues processed: {total_issues}", extra={"markup": True})
+        self.logger.info(
             f"Total work packages created: {total_created}", extra={"markup": True}
         )
 
@@ -1530,7 +1555,7 @@ class WorkPackageMigration:
         Returns:
             Dictionary with analysis results
         """
-        logger.info("Analyzing work package mapping...", extra={"markup": True})
+        self.logger.info("Analyzing work package mapping...", extra={"markup": True})
 
         if not self.work_package_mapping:
             try:
@@ -1539,7 +1564,7 @@ class WorkPackageMigration:
                 ) as f:
                     self.work_package_mapping = json.load(f)
             except Exception as e:
-                logger.error(
+                self.logger.error(
                     f"Failed to load work package mapping: {str(e)}",
                     extra={"markup": True},
                 )
@@ -1659,8 +1684,6 @@ class WorkPackageMigration:
             data: The data to save
             filename: The name of the file to save to
         """
-        filepath = os.path.join(self.data_dir, filename)
-
         # Convert Jira Issue objects to dictionaries if needed
         if isinstance(data, list) and data and hasattr(data[0], "raw"):
             # This is a list of jira.Issue objects
@@ -1671,194 +1694,22 @@ class WorkPackageMigration:
                     serializable_data.append(item.raw)
                 else:
                     # Skip this item if it doesn't have 'raw' attribute
-                    logger.warning(f"Skipping non-serializable item in {filename}")
+                    self.logger.warning(f"Skipping non-serializable item in {filename}")
             data = serializable_data
 
-        with open(filepath, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.debug(f"Saved data to {filepath}", extra={"markup": True})
-
-    def import_work_packages_direct(
-        self, issues: list["JiraIssueType"], op_project_id: int = None
-    ) -> dict[str, Any]:
-        """
-        Migrates work packages directly using API or Rails console.
-        Accepts a list of jira.Issue objects.
-
-        Args:
-            issues: List of jira.Issue objects to migrate.
-            op_project_id: OpenProject project ID to use for the work packages.
-
-        Returns:
-            Dictionary with migration summary (created_count, error_count).
-        """
-        logger.info("Starting direct work package import...", extra={"markup": True})
-        created_count = 0
-        error_count = 0
-        processed_count = 0
-
-        # Determine migration method (API or Rails)
-        use_rails = (
-            config.migration_config.get("direct_migration", False)
-            and self.op_rails_client
-        )
-        migration_method = "Rails console" if use_rails else "API"
-        logger.info(f"Using {migration_method} for direct work package creation.")
-
-        total_issues = len(issues)
-        for issue in issues:
-            if self.tracker:
-                self.tracker.update_description(
-                    f"Importing {issue.key} via {migration_method} ({processed_count+1}/{total_issues})"
-                )
-            else:  # Log progress if no tracker available
-                if processed_count % 50 == 0:  # Log every 50 issues
-                    logger.debug(
-                        f"Processing issue {processed_count+1}/{total_issues}: {issue.key}"
-                    )
-
-            jira_key = issue.key
-
-            # Check if already migrated in this run or previous runs
-            if jira_key in self.work_package_mapping and self.work_package_mapping[
-                jira_key
-            ].get("openproject_id"):
-                logger.debug(
-                    f"Skipping issue {jira_key} - already mapped to OP ID {self.work_package_mapping[jira_key]['openproject_id']}"
-                )
-                if self.tracker:
-                    self.tracker.increment()  # Increment progress even if skipped
-                processed_count += 1
-                continue
-
-            if self.dry_run:
-                logger.info(
-                    f"[DRY RUN] Would attempt to create work package for Jira issue {jira_key}"
-                )
-                # Simulate success for dry run
-                self.work_package_mapping[jira_key] = {
-                    "jira_id": issue.id,
-                    "openproject_id": f"dry_run_{issue.id}",
-                    "status": "dry_run_skipped",
-                }
-                created_count += 1
-            else:
-                # --- Create Work Package ---
-                created_wp = None
-                try:
-                    # Prepare payload using the Mappings class method
-                    # This method already handles jira.Issue objects
-                    wp_payload_for_creation = self.prepare_work_package(
-                        issue, op_project_id
-                    )
-
-                    if not wp_payload_for_creation:
-                        logger.warning(
-                            f"Failed to prepare payload for issue {jira_key}. Skipping."
-                        )
-                        error_count += 1
-                    else:
-                        # Add the Jira status name to the payload for status creation
-                        if (
-                            hasattr(issue, "fields")
-                            and hasattr(issue.fields, "status")
-                            and hasattr(issue.fields.status, "name")
-                        ):
-                            wp_payload_for_creation["jira_status_name"] = (
-                                issue.fields.status.name
-                            )
-                            logger.debug(
-                                f"Added Jira status name '{issue.fields.status.name}' to work package payload"
-                            )
-
-                        if use_rails:
-                            # Use the _create_wp_via_rails method with the enhanced payload
-                            created_wp = self._create_wp_via_rails(
-                                wp_payload_for_creation
-                            )
-                        else:
-                            # Use API client
-                            created_wp = self.op_client.create_work_package(
-                                wp_payload_for_creation
-                            )
-
-                        if created_wp and created_wp.get("id"):
-                            op_wp_id = created_wp.get("id")
-                            logger.info(
-                                f"Successfully created work package {op_wp_id} for Jira issue {jira_key}"
-                            )
-                            self.work_package_mapping[jira_key] = {
-                                "jira_id": issue.id,
-                                "openproject_id": op_wp_id,
-                                "status": "created",
-                            }
-                            created_count += 1
-
-                            # --- Migrate Comments, Attachments, Relations (Optional) ---
-                            # These methods also need adapting to take jira.Issue object
-                            # self._migrate_comments(issue, op_wp_id)
-                            # self._migrate_attachments(issue, op_wp_id)
-                            # self._create_relations(issue, op_wp_id)
-
-                        else:
-                            # Log failure if Rails creation didn't return expected dict or API failed
-                            log_message = f"Failed to create work package for Jira issue {jira_key}."
-                            if use_rails and created_wp is None:
-                                log_message += (
-                                    " (Rails creation failed or returned None)"
-                                )
-                            elif not use_rails and created_wp is None:
-                                log_message += " (API creation failed or returned None)"
-                            elif created_wp is not None and not created_wp.get("id"):
-                                log_message += f" (Creation method returned unexpected result: {created_wp})"
-
-                            logger.error(log_message)
-                            self.work_package_mapping[jira_key] = {
-                                "jira_id": issue.id,
-                                "status": "creation_failed",
-                            }
-                            error_count += 1
-
-                except Exception as e:
-                    logger.error(
-                        f"Error migrating Jira issue {jira_key}: {str(e)}",
-                        exc_info=True,
-                    )
-                    self.work_package_mapping[jira_key] = {
-                        "jira_id": issue.id,
-                        "status": "error",
-                    }
-                    error_count += 1
-
-            if self.tracker:
-                self.tracker.increment()
-            processed_count += 1
-
-        # Save the updated mapping for this project
-        mapping_file_path = os.path.join(self.data_dir, "work_package_mapping.json")
-        save_json_file(
-            self.work_package_mapping, mapping_file_path
-        )  # Use the imported utility function
-
-        logger.success(
-            f"Finished direct work package import. Created: {created_count}, Errors/Skipped: {error_count}"
-        )
-        return {
-            "created_count": created_count,
-            "error_count": error_count,
-            "total_processed": processed_count,
-        }
+        # Call parent method to save the data
+        return super()._save_to_json(data, filename)
 
     # --- Helper methods for direct import (Need adaptation for jira.Issue) ---
 
     def _create_wp_via_rails(self, wp_payload: dict[str, Any]) -> dict[str, Any] | None:
         """Creates a work package using the Rails console client via the proper client method."""
         if not self.op_rails_client:
-            logger.error("Rails client not available for direct work package creation.")
+            self.logger.error("Rails client not available for direct work package creation.")
             return None
 
         jira_key = wp_payload.get("jira_key", "UNKNOWN")
-        logger.debug(
+        self.logger.debug(
             f"Attempting to create WP for {jira_key} via Rails client create_record..."
         )
 
@@ -1882,7 +1733,7 @@ class WorkPackageMigration:
         )
 
         if success and record_data and record_data.get("id"):
-            logger.info(
+            self.logger.info(
                 f"Successfully created work package {record_data['id']} for Jira issue {jira_key}"
             )
             return {
@@ -1891,14 +1742,14 @@ class WorkPackageMigration:
                 "subject": record_data.get("subject"),
             }
         else:
-            logger.error(
+            self.logger.error(
                 f"Failed to create WP for {jira_key} via Rails client: {error_message}"
             )
             return None
 
     def run(
         self, dry_run: bool = False, force: bool = False, mappings=None
-    ) -> dict[str, Any]:
+    ) -> ComponentResult:
         """
         Run the work package migration process.
 
@@ -1908,9 +1759,9 @@ class WorkPackageMigration:
             mappings: Optional mappings object for accessing other migration results
 
         Returns:
-            Dictionary with migration results
+            ComponentResult with migration results
         """
-        logger.info("Starting work package migration", extra={"markup": True})
+        self.logger.info("Starting work package migration", extra={"markup": True})
         start_time = datetime.now()
 
         try:
@@ -1949,8 +1800,11 @@ class WorkPackageMigration:
                     missing_mappings.append("status")
 
             if missing_mappings:
-                warning_message = f"Missing critical mappings: {', '.join(missing_mappings)}. Migration may fail or create incomplete data."
-                logger.warning(warning_message, extra={"markup": True})
+                warning_message = (
+                    f"Missing critical mappings: {', '.join(missing_mappings)}. "
+                    f"Migration may fail or create incomplete data."
+                )
+                self.logger.warning(warning_message, extra={"markup": True})
 
                 # Create the var/data directory if it doesn't exist
                 if not os.path.exists(self.data_dir):
@@ -1965,7 +1819,7 @@ class WorkPackageMigration:
                         with open(issues_file) as f:
                             issues_data = json.load(f)
                     except Exception as e:
-                        logger.warning(
+                        self.logger.warning(
                             f"Error loading migration issues file: {str(e)}",
                             extra={"markup": True},
                         )
@@ -1988,7 +1842,7 @@ class WorkPackageMigration:
                     with open(issues_file, "w") as f:
                         json.dump(issues_data, f, indent=2)
                 except Exception as e:
-                    logger.warning(
+                    self.logger.warning(
                         f"Error writing to migration issues file: {str(e)}",
                         extra={"markup": True},
                     )
@@ -1996,10 +1850,10 @@ class WorkPackageMigration:
             # Run the migration with additional error handling
             migration_results = {}
             try:
-                migration_results = self.migrate_work_packages()
+                migration_results = self._migrate_work_packages()
             except Exception as e:
                 error_message = f"Work package migration failed with error: {str(e)}"
-                logger.error(error_message, extra={"markup": True})
+                self.logger.error(error_message, extra={"markup": True})
 
                 # Record the error in the migration issues file
                 issues_file = os.path.join(self.data_dir, "migration_issues.json")
@@ -2010,7 +1864,7 @@ class WorkPackageMigration:
                         with open(issues_file) as f:
                             issues_data = json.load(f)
                     except Exception as read_err:
-                        logger.warning(
+                        self.logger.warning(
                             f"Error loading migration issues file: {str(read_err)}",
                             extra={"markup": True},
                         )
@@ -2036,43 +1890,50 @@ class WorkPackageMigration:
                     with open(issues_file, "w") as f:
                         json.dump(issues_data, f, indent=2)
                 except Exception as write_err:
-                    logger.warning(
+                    self.logger.warning(
                         f"Error writing to migration issues file: {str(write_err)}",
                         extra={"markup": True},
                     )
 
                 # Return error result
-                return {
-                    "status": "error",
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat(),
-                    "duration_seconds": (datetime.now() - start_time).total_seconds(),
-                }
+                return ComponentResult(
+                    status="error",
+                    success=False,
+                    error=str(e),
+                    timestamp=datetime.now().isoformat(),
+                    duration_seconds=(datetime.now() - start_time).total_seconds(),
+                )
 
             # Calculate duration
             end_time = datetime.now()
             duration_seconds = (end_time - start_time).total_seconds()
 
-            # Add duration and timestamps to results
-            migration_results["timestamp"] = end_time.isoformat()
-            migration_results["start_time"] = start_time.isoformat()
-            migration_results["duration_seconds"] = duration_seconds
+            # Create the ComponentResult to return
+            result = ComponentResult(
+                status="success",
+                success=True,
+                timestamp=end_time.isoformat(),
+                start_time=start_time.isoformat(),
+                duration_seconds=duration_seconds,
+                data=migration_results
+            )
 
-            # Add success status
-            migration_results["status"] = "success"
+            # Add any additional data from migration_results
+            if "total_created" in migration_results:
+                result.success_count = migration_results["total_created"]
 
             # Log summary
-            logger.success(
+            self.logger.success(
                 f"Work package migration completed in {duration_seconds:.2f} seconds",
                 extra={"markup": True},
             )
             if "total_created" in migration_results:
-                logger.success(
+                self.logger.success(
                     f"Created {migration_results['total_created']} work packages",
                     extra={"markup": True},
                 )
 
-            return migration_results
+            return result
 
         except Exception as e:
             # Catch any unexpected errors
@@ -2080,7 +1941,7 @@ class WorkPackageMigration:
             duration_seconds = (end_time - start_time).total_seconds()
 
             error_message = f"Unexpected error in work package migration: {str(e)}"
-            logger.critical(error_message, extra={"markup": True})
+            self.logger.critical(error_message, extra={"markup": True})
 
             # Try to save error information
             try:
@@ -2099,18 +1960,370 @@ class WorkPackageMigration:
                         f,
                         indent=2,
                     )
-                logger.info(
+                self.logger.info(
                     f"Error details saved to {error_file}", extra={"markup": True}
                 )
             except Exception as save_err:
-                logger.warning(
+                self.logger.warning(
                     f"Could not save error details: {str(save_err)}",
                     extra={"markup": True},
                 )
 
-            return {
-                "status": "critical_error",
-                "error": str(e),
-                "timestamp": datetime.now().isoformat(),
-                "duration_seconds": duration_seconds,
-            }
+            return ComponentResult(
+                success=False,
+                error=str(e),
+                timestamp=datetime.now().isoformat(),
+                duration_seconds=duration_seconds,
+            )
+
+    def log_custom_field_updates(self, updated_fields):
+        """
+        Log information about custom fields that were updated during migration.
+
+        Args:
+            updated_fields: List of custom field names and values that were updated
+        """
+        if not updated_fields:
+            return
+
+        self.logger.notice(
+            f"Updated {len(updated_fields)} custom field values during migration:",
+            extra={"markup": True},
+        )
+
+        for field_value in updated_fields:
+            parts = field_value.split(":", 1)
+            if len(parts) == 2:
+                field, value = parts
+                self.logger.info(
+                    f"  - Added '{value}' to '{field}'",
+                    extra={"markup": True},
+                )
+            else:
+                self.logger.info(f"  - {field_value}", extra={"markup": True})
+
+    def _collect_missing_custom_field_values(self, work_packages_data):
+        """
+        Collect custom field values from work packages that might need to be added to OpenProject.
+
+        Args:
+            work_packages_data: List of prepared work package dictionaries
+
+        Returns:
+            Dictionary mapping custom field names to sets of values to add
+        """
+        self.logger.info("Checking for missing custom field values...")
+
+        # Check if work_packages_data is valid
+        if not work_packages_data:
+            self.logger.info("No work packages data provided")
+            return {}
+
+        if not isinstance(work_packages_data, list):
+            self.logger.error(
+                f"Expected work_packages_data to be a list, got {type(work_packages_data)}",
+                extra={"markup": True}
+            )
+            return {}
+
+        # Use CustomFieldMigration to get OpenProject custom fields
+        from src.migrations.custom_field_migration import CustomFieldMigration
+
+        try:
+            # Create a temporary instance of CustomFieldMigration
+            cf_migration = CustomFieldMigration(
+                self.jira_client,
+                self.op_client,
+                self.op_client.rails_client if hasattr(self.op_client, "rails_client") else None
+            )
+
+            # Extract custom fields using the existing method
+            custom_fields = cf_migration.extract_openproject_custom_fields(force=False)
+
+            if not custom_fields:
+                self.logger.warning("No custom fields found in OpenProject", extra={"markup": True})
+                return {}
+
+            self.logger.success(
+                f"Successfully retrieved {len(custom_fields)} custom fields",
+                extra={"markup": True}
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Error retrieving custom fields from OpenProject: {str(e)}",
+                extra={"markup": True}
+            )
+            return {}
+
+        # Create a dictionary of custom field ID to name and allowed values
+        field_id_to_info = {}
+        for cf in custom_fields:
+            try:
+                field_id = cf["id"]
+                field_id_to_info[field_id] = {
+                    "name": cf["name"],
+                    "field_format": cf.get("field_format", ""),
+                    "possible_values": cf.get("possible_values", []) or []
+                }
+            except (KeyError, TypeError) as e:
+                self.logger.warning(f"Invalid custom field data: {e}", extra={"markup": True})
+                continue
+
+        self.logger.debug(f"Processed {len(field_id_to_info)} custom fields with IDs")
+
+        # Collect values that need to be added (field_name -> set of values)
+        values_to_add = {}
+
+        # Check each work package for custom field values
+        for i, wp in enumerate(work_packages_data):
+            if "custom_fields" not in wp:
+                continue
+
+            if not isinstance(wp["custom_fields"], list):
+                self.logger.warning(
+                    f"custom_fields in work package {i} is not a list: {type(wp['custom_fields'])}",
+                    extra={"markup": True}
+                )
+                continue
+
+            for cf in wp["custom_fields"]:
+                try:
+                    if not isinstance(cf, dict):
+                        self.logger.warning(
+                            f"Custom field entry in work package {i} is not a dictionary: {type(cf)}",
+                            extra={"markup": True}
+                        )
+                        continue
+
+                    cf_id = cf.get("id")
+                    if not cf_id:
+                        self.logger.debug(f"Custom field in work package {i} has no ID")
+                        continue
+
+                    # Convert to int if it's a string
+                    if isinstance(cf_id, str) and cf_id.isdigit():
+                        cf_id = int(cf_id)
+
+                    if cf_id not in field_id_to_info:
+                        self.logger.debug(f"Custom field ID {cf_id} not found in OpenProject fields")
+                        continue
+
+                    cf_info = field_id_to_info[cf_id]
+                    cf_name = cf_info["name"]
+                    cf_format = cf_info["field_format"]
+
+                    # Only check list-type fields
+                    if cf_format != "list":
+                        continue
+
+                    cf_value = cf.get("value")
+                    if not cf_value or cf_value == "":
+                        continue  # Skip empty values
+
+                    # For both single values and lists
+                    values_to_check = [cf_value] if not isinstance(cf_value, list) else cf_value
+
+                    # Check if values are in the allowed values
+                    for value in values_to_check:
+                        if (value and value != "" and
+                           value not in cf_info["possible_values"]):
+                            if cf_name not in values_to_add:
+                                values_to_add[cf_name] = set()
+                            values_to_add[cf_name].add(value)
+                            self.logger.debug(f"Found missing value '{value}' for field '{cf_name}'")
+                except Exception as e:
+                    self.logger.warning(
+                        f"Error processing custom field in work package {i}: {str(e)}",
+                        extra={"markup": True}
+                    )
+                    continue
+
+        # Convert sets to lists for easier JSON serialization later
+        result = {k: list(v) for k, v in values_to_add.items()}
+
+        if result:
+            self.logger.notice(
+                f"Found {sum(len(values) for values in result.values())} missing custom field values "
+                f"across {len(result)} fields",
+                extra={"markup": True}
+            )
+        else:
+            self.logger.info("No missing custom field values found")
+
+        return result
+
+    def _update_custom_field_allowed_values(self, missing_values):
+        """
+        Update OpenProject custom fields with missing values.
+
+        Args:
+            missing_values: Dictionary mapping field names to lists of values to add
+
+        Returns:
+            Boolean indicating if all updates were successful
+        """
+        # Add detailed debugging of the input
+        self.logger.debug(f"_update_custom_field_allowed_values received: type={type(missing_values)}")
+
+        # Check if missing_values is a dictionary
+        if not isinstance(missing_values, dict):
+            self.logger.error(
+                f"Expected missing_values to be a dictionary, got {type(missing_values)}",
+                extra={"markup": True}
+            )
+            # Try to handle it if it's a string that might be JSON
+            if isinstance(missing_values, str):
+                try:
+                    self.logger.debug(f"Attempting to parse string as JSON. First 100 chars: {missing_values[:100]}")
+                    missing_values = json.loads(missing_values)
+                    self.logger.info("Successfully parsed string as JSON", extra={"markup": True})
+                except json.JSONDecodeError:
+                    self.logger.error("Failed to parse string as JSON", extra={"markup": True})
+                    return False
+            else:
+                # If it's not a string or dict, we can't proceed
+                return False
+
+        if not missing_values:
+            self.logger.info("No custom field values to add")
+            return True
+
+        self.logger.info(f"Adding values to {len(missing_values)} custom fields...")
+
+        # Debug the structure of missing_values
+        for field_name, values in missing_values.items():
+            self.logger.debug(f"Field: {field_name}, Values type: {type(values)}, Content: {values}")
+
+        all_success = True
+
+        for field_name, values in missing_values.items():
+            if not values:
+                continue
+
+            # Ensure values is a list
+            if not isinstance(values, list):
+                self.logger.warning(
+                    f"Values for field '{field_name}' is not a list, attempting to convert",
+                    extra={"markup": True}
+                )
+                if isinstance(values, str):
+                    # Try to parse as JSON if it's a string
+                    try:
+                        values = json.loads(values)
+                    except json.JSONDecodeError:
+                        # If it's just a string, make it a single-item list
+                        values = [values]
+                else:
+                    # For other types, try to make a list
+                    try:
+                        values = list(values)
+                    except TypeError:
+                        values = [values]
+
+            self.logger.info(f"Adding {len(values)} values to custom field '{field_name}'")
+
+            # Create Ruby script to update the field
+            ruby_header = f"""
+            # Ruby variables from Python
+            field_name = '{field_name}'
+            values_to_add = {json.dumps(values)}
+            """
+
+            ruby_script = """
+            # Find the custom field by name
+            cf = CustomField.find_by(name: field_name)
+
+            if cf.nil?
+              puts "ERROR: Custom field '#{field_name}' not found"
+              next
+            end
+
+            # Skip if not a list type field
+            unless cf.field_format == "list"
+              puts "SKIP: Custom field '#{field_name}' is not a list type"
+              next
+            end
+
+            # Get current values and add new ones
+            current_values = cf.possible_values || []
+            added_values = []
+
+            values_to_add.each do |value|
+              unless current_values.include?(value)
+                current_values << value
+                added_values << value
+              end
+            end
+
+            if added_values.empty?
+              puts "INFO: No new values to add for '#{field_name}'"
+              next
+            end
+
+            # Update the custom field
+            cf.possible_values = current_values
+
+            if cf.save
+              puts "SUCCESS: Added #{added_values.length} values to '#{field_name}'"
+              puts added_values.inspect
+            else
+              puts "ERROR: Failed to update '#{field_name}': #{cf.errors.full_messages.join(', ')}"
+            end
+            """
+
+            # Execute the script
+            result = self.op_client.rails_client.execute(ruby_header + ruby_script)
+
+            if result.get("status") != "success":
+                self.logger.error(
+                    f"Failed to update custom field '{field_name}': {result.get('error', 'Unknown error')}",
+                    extra={"markup": True}
+                )
+                all_success = False
+                continue
+
+            output = result.get("output", "")
+
+            if "SUCCESS:" in output:
+                self.logger.success(
+                    f"Successfully added values to custom field '{field_name}'",
+                    extra={"markup": True}
+                )
+            elif "ERROR:" in output:
+                error_msg = output.split("ERROR:", 1)[1].strip()
+                self.logger.error(
+                    f"Failed to update custom field '{field_name}': {error_msg}",
+                    extra={"markup": True}
+                )
+                all_success = False
+            elif "SKIP:" in output:
+                self.logger.warning(
+                    f"Skipped updating custom field '{field_name}': not a list type",
+                    extra={"markup": True}
+                )
+            elif "INFO:" in output:
+                self.logger.info(
+                    f"No new values needed for custom field '{field_name}'",
+                    extra={"markup": True}
+                )
+
+        return all_success
+
+    def _format_values_list(self, values):
+        """
+        Format a list of values for logging.
+
+        Args:
+            values: List of values to format
+
+        Returns:
+            Formatted string of values
+        """
+        if not values:
+            return ""
+
+        formatted = ", ".join(str(value) for value in values)
+        # Truncate if too long for display
+        if len(formatted) > 60:
+            return formatted[:57] + "..."
+        return formatted

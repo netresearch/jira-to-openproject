@@ -3,3 +3,12 @@
 .env.development.local
 .env.test.local
 .env.production.local
+build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.repomix/
+dist/
+MagicMock/
+__pycache__/
+var/

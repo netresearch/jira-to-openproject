@@ -4,7 +4,7 @@ from typing import Any
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.config import logger
-from src.utils import load_json_file
+from src.utils import data_handler
 
 # We might need other clients or migration classes later
 
@@ -92,11 +92,13 @@ class Mappings:
     def _load_mapping(self, filename: str) -> dict[str, Any]:
         """Loads a specific mapping file from the data directory."""
         file_path = os.path.join(self.data_dir, filename)
-        mapping = load_json_file(file_path)
+        mapping = data_handler.load_dict(file_path)
         if mapping is None:
             logger.warning(f"Mapping file not found or invalid: {filename}")
             return {}
-        logger.notice(f"Loaded mapping '{filename}' with {len(mapping)} entries.")
+        logger.notice(
+            f"Loaded mapping '{filename}' with {len(mapping)} entries."
+        )
         return mapping
 
     def get_op_project_id(self, jira_project_key: str) -> int | None:
@@ -208,103 +210,3 @@ class Mappings:
                 f"Error extracting issues for project {project_key}: {e}", exc_info=True
             )
             return []
-
-    def prepare_work_package(
-        self, issue: Any, op_project_id: int
-    ) -> dict[str, Any] | None:
-        """
-        Transforms a Jira issue object (from python-jira library) into an OpenProject
-        work package payload suitable for the Rails bulk import script.
-
-        Args:
-            issue: The jira.Issue object.
-            op_project_id: The target OpenProject project ID.
-
-        Returns:
-            A dictionary for the work package payload or None if essential mapping fails.
-        """
-        # Adapt to use jira.Issue object attributes instead of dict.get()
-        try:
-            fields = issue.fields
-            jira_key = issue.key
-            jira_id = issue.id
-        except AttributeError as e:
-            logger.warning(
-                f"Skipping issue due to missing essential attributes (not a jira.Issue object?): {e}"
-            )
-            return None
-
-        if not jira_key or not fields:
-            logger.warning(f"Skipping issue due to missing key or fields: {jira_id}")
-            return None
-
-        # --- Essential Mappings ---
-        # Type
-        jira_type_name = (
-            fields.issuetype.name
-            if hasattr(fields, "issuetype") and fields.issuetype
-            else None
-        )
-        op_type_id = self.get_op_type_id(jira_type_name) if jira_type_name else None
-        if op_type_id is None:
-            logger.warning(
-                f"Skipping issue {jira_key}: No mapped OpenProject type ID found for Jira type '{jira_type_name}'."
-            )
-            return None  # Strict: skip if type not mapped
-
-        # Status
-        jira_status_name = (
-            fields.status.name if hasattr(fields, "status") and fields.status else None
-        )
-        op_status_id = (
-            self.get_op_status_id(jira_status_name) if jira_status_name else None
-        )
-
-        # Assignee
-        op_assignee_id = None
-        if hasattr(fields, "assignee") and fields.assignee:
-            jira_assignee_id = getattr(
-                fields.assignee, "accountId", getattr(fields.assignee, "name", None)
-            )
-            if jira_assignee_id:
-                op_assignee_id = self.get_op_user_id(jira_assignee_id)
-
-        # Reporter (Author in OpenProject)
-        # op_author_id = None
-        # if hasattr(fields, 'reporter') and fields.reporter:
-        #     jira_reporter_id = getattr(fields.reporter, 'accountId', getattr(fields.reporter, 'name', None))
-        #     if jira_reporter_id:
-        #         op_author_id = self.get_op_user_id(jira_reporter_id)
-
-        # --- Basic Fields ---
-        subject = getattr(fields, "summary", "No Subject")
-        description = getattr(fields, "description", None) or ""  # Ensure it's a string
-
-        wp_payload = {
-            "jira_id": jira_id,
-            "jira_key": jira_key,
-            "project_id": op_project_id,
-            "type_id": op_type_id,
-            "subject": subject,
-            "description": description,
-            "status_id": op_status_id,  # May be None
-            "assigned_to_id": op_assignee_id,  # May be None
-            # "author_id": op_author_id, # If needed
-            # Add other fields accessed via fields.xxx or fields.customfield_xxxxx
-        }
-
-        # TODO: Add remaining mapping logic using issue object attributes (fields.priority, fields.parent, fields.customfield_xxxxx, etc.)
-        # TODO: Handle changelog/history from issue.changelog if needed
-
-        return wp_payload
-
-    # --- Helper methods for getting default/fallback IDs (implement if needed) ---
-    # def _get_default_type_id(self, project_id: int) -> Optional[int]: ...
-    # def get_default_op_user_id(self) -> Optional[int]: ...
-    # def get_op_priority_id(self, jira_priority_name: str) -> Optional[int]: ...
-    # def get_op_parent_wp_id(self, jira_parent_key: str) -> Optional[int]: ...
-
-    # Add methods for specific mapping lookups if needed, e.g.:
-    # def get_work_package_map_for_project(self, jira_project_key: str) -> Dict[str, Any]:
-    #     filename = WORK_PACKAGE_MAPPING_FILE_PATTERN.format(jira_project_key)
-    #     return self._load_mapping(filename)

@@ -10,6 +10,7 @@ import subprocess
 import time
 from typing import Any, Optional
 
+from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
@@ -545,7 +546,8 @@ class IssueTypeMigration(BaseMigration):
 
             if not op_server:
                 logger.error(
-                    "OpenProject server hostname is not configured (J2O_OPENPROJECT_SERVER). Cannot run remote docker commands."
+                    "OpenProject server hostname is not configured "
+                    "(J2O_OPENPROJECT_SERVER). Cannot run remote docker commands."
                 )
                 return []
 
@@ -561,7 +563,8 @@ class IssueTypeMigration(BaseMigration):
                 if ls_result.returncode != 0:
                     error_details = ls_result.stderr.strip()
                     logger.error(
-                        f"File {temp_file_path} check failed (exit code {ls_result.returncode}). ls stderr: {error_details}; stdout: {ls_result.stdout}"
+                        f"File {temp_file_path} check failed (exit code {ls_result.returncode}). "
+                        f"ls stderr: {error_details}; stdout: {ls_result.stdout}"
                     )
                     return []
                 logger.info(f"File {temp_file_path} confirmed to exist in container.")
@@ -640,12 +643,14 @@ class IssueTypeMigration(BaseMigration):
                         )
                     else:
                         logger.warning(
-                            f"Skipping final removal of temporary file {temp_file_path} due to missing server or container config."
+                            f"Skipping final removal of temporary file {temp_file_path} "
+                            "due to missing server or container config."
                         )
 
                 else:
                     logger.debug(
-                        f"Skipping final removal of temporary file {temp_file_path} as container_name was not defined."
+                        f"Skipping final removal of temporary file {temp_file_path} "
+                        "as container_name was not defined."
                     )
             except Exception as final_e:
                 try:
@@ -814,11 +819,13 @@ class IssueTypeMigration(BaseMigration):
                                 )
                             else:
                                 logger.warning(
-                                    f"Could not find mapping entry for Jira ID {jira_id} to update existing type '{op_type_name}'."
+                                    f"Could not find mapping entry for Jira ID {jira_id} "
+                                    f"to update existing type '{op_type_name}'."
                                 )
                         else:
                             logger.warning(
-                                f"Could not find Jira ID for existing type '{op_type_name}' to update mapping."
+                                f"Could not find Jira ID for existing type '{op_type_name}' "
+                                "to update mapping."
                             )
                     continue
 
@@ -854,7 +861,8 @@ class IssueTypeMigration(BaseMigration):
                             ] = result["id"]
                         else:
                             logger.warning(
-                                f"Could not update mapping for newly created type {op_type_name} (Jira ID: {jira_id}). Mapping key missing."
+                                f"Could not update mapping for newly created type {op_type_name} "
+                                f"(Jira ID: {jira_id}). Mapping key missing."
                             )
                 else:
                     error_message = result.get("error", "Unknown error")
@@ -998,7 +1006,9 @@ class IssueTypeMigration(BaseMigration):
 
         if analysis["types_to_create"] > 0:
             logger.warning(
-                f"Action required: {analysis['types_to_create']} work package types need creation via Rails console (direct or script). Details in issue_type_analysis.json"
+                f"Action required: {analysis['types_to_create']} work package types "
+                "need creation via Rails console (direct or script). "
+                "Details in issue_type_analysis.json"
             )
 
         return analysis
@@ -1139,51 +1149,36 @@ class IssueTypeMigration(BaseMigration):
         # 3. Migrate issue types (create if needed)
         if dry_run:
             logger.info("DRY RUN: Skipping actual issue type migration")
-            results = {
-                "status": "success",
-                "total_types": len(self.issue_type_mapping),
-                "matched_types": sum(
+            results = ComponentResult(
+                success=True,
+                total_types=len(self.issue_type_mapping),
+                matched_types=sum(
                     1
                     for t in self.issue_type_mapping.values()
                     if t.get("openproject_id") is not None
                 ),
-                "normalized_types": sum(
+                normalized_types=sum(
                     1
                     for t in self.issue_type_mapping.values()
                     if t.get("matched_by", "").startswith("normalized_to_")
                     or t.get("matched_by") == "fallback_to_task"
                 ),
-                "created_types": 0,
-                "dry_run": True,
-            }
+                created_types=0,
+                dry_run=True,
+            )
         else:
-            # Connect to Rails console
-            if self.op_client.rails_client:
-                self.rails_console = self.op_client.rails_client
-                logger.info("Using existing Rails console client")
-            elif not self.connect_to_rails_console():
-                logger.error("Failed to connect to Rails console, aborting migration")
-                return {"status": "error", "message": "Rails console connection failed"}
-
             # Migrate issue types
             migration_results = self.migrate_issue_types()
-            successful = (
-                migration_results.get("created", 0) > 0
-                or migration_results.get("unchanged", 0) > 0
+
+            results = ComponentResult(
+                success=self.update_mapping_file(force=force),
+                total_types=migration_results.get("total", 0),
+                matched_types=migration_results.get("matched", 0),
+                normalized_types=migration_results.get("normalized", 0),
+                created_types=migration_results.get("created", 0),
+                existing_types=migration_results.get("unchanged", 0),
+                failed_types=migration_results.get("failed", 0),
+                message=migration_results.get("message", ""),
             )
-
-            results = {
-                "status": "success" if successful else "error",
-                "total_types": migration_results.get("total", 0),
-                "matched_types": migration_results.get("matched", 0),
-                "normalized_types": migration_results.get("normalized", 0),
-                "created_types": migration_results.get("created", 0),
-                "existing_types": migration_results.get("unchanged", 0),
-                "failed_types": migration_results.get("failed", 0),
-                "message": migration_results.get("message", ""),
-            }
-
-            # Update mapping file
-            self.update_mapping_file(force=force)
 
         return results

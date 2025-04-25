@@ -7,7 +7,8 @@ import sys
 import time
 from typing import Any
 
-from jira import JIRA
+from jira import JIRA, Issue
+from jira.client import ResultList
 from requests import Response
 
 from src import config
@@ -142,7 +143,7 @@ class JiraClient:
 
     def get_all_issues_for_project(
         self, project_key: str, expand_changelog: bool = True
-    ) -> list[Any] | None:
+    ) -> list[Issue]:
         """Gets all issues for a specific project, handling pagination.
 
         Args:
@@ -150,7 +151,7 @@ class JiraClient:
             expand_changelog: Whether to expand the changelog for history.
 
         Returns:
-            A list of Jira issue objects, or None if an error occurs.
+            A list of Jira issue objects.
         """
         all_issues = []
         start_at = 0
@@ -158,7 +159,6 @@ class JiraClient:
         # Surround project key with quotes to handle reserved words
         jql = f'project = "{project_key}" ORDER BY created ASC'
         # Specify fields needed, or use None to get all (can be slower)
-        # fields = ["summary", "description", "issuetype", "status", "assignee", "reporter", "created", "updated", "parent", "priority", "components", "versions", "labels"] # Example list
         fields = None  # Get all fields for simplicity, though might be less efficient
         expand = "changelog" if expand_changelog else None
 
@@ -169,7 +169,8 @@ class JiraClient:
                 logger.debug(
                     f"Fetching issues for {project_key}: startAt={start_at}, maxResults={max_results}"
                 )
-                issues_page = self.jira.search_issues(
+
+                issues_page: ResultList[Issue] = self.jira.search_issues(
                     jql,
                     startAt=start_at,
                     maxResults=max_results,
@@ -198,11 +199,11 @@ class JiraClient:
                 # time.sleep(0.1)
 
             except Exception as e:
-                logger.error(
+                logger.exception(
                     f"Failed to get issues page for project {project_key} at startAt={start_at}: {str(e)}",
                     exc_info=True,
                 )
-                return None  # Return None on error
+                return all_issues
 
         logger.info(
             f"Finished fetching {len(all_issues)} issues for project '{project_key}'."
@@ -334,6 +335,38 @@ class JiraClient:
             )
             return 0
 
+    def get_issue_watchers(self, issue_key: str) -> list[dict[str, Any]]:
+        """
+        Get the watchers for a specific Jira issue.
+
+        Args:
+            issue_key: The key of the issue to get watchers for (e.g., 'PROJECT-123')
+
+        Returns:
+            List of watcher dictionaries containing at least the 'name' field
+        """
+        try:
+            # Use the JIRA library's watchers() method
+            result = self.jira.watchers(issue_key)
+
+            if not result:
+                logger.debug(f"No watchers found for issue {issue_key}")
+                return []
+
+            # Convert watchers to dictionaries
+            return [
+                {
+                    "name": getattr(watcher, "name", None),
+                    "displayName": getattr(watcher, "displayName", None),
+                    "emailAddress": getattr(watcher, "emailAddress", None),
+                    "active": getattr(watcher, "active", True),
+                }
+                for watcher in result.watchers
+            ]
+        except Exception as e:
+            logger.error(f"Failed to get watchers for issue {issue_key}: {str(e)}")
+            return []
+
     def get_all_statuses(self) -> list[dict[str, Any]]:
         """
         Get all statuses from Jira.
@@ -398,7 +431,8 @@ class JiraClient:
                     response = self._make_request(path)
                     if not response or response.status_code != 200:
                         logger.warning(
-                            f"Failed to get status categories: HTTP {response.status_code if response else 'No response'}"
+                            f"Failed to get status categories: HTTP "
+                            f"{response.status_code if response else 'No response'}"
                         )
                         return []
 
@@ -527,7 +561,8 @@ class JiraClient:
                     # Use the createmeta endpoint with expansion for fields
                     path = f"/rest/api/2/issue/createmeta/{project_key}/issuetypes/{issue_type_id}"
                     logger.debug(
-                        f"Trying to get field metadata using project {project_key} and issue type {issue_type.get('name')}"
+                        f"Trying to get field metadata using project {project_key}"
+                        f" and issue type {issue_type.get('name')}"
                     )
 
                     meta_response = self._make_request(path)
@@ -753,16 +788,45 @@ class JiraClient:
         # Use the Tempo account-by-project endpoint for project-specific account lookup
         path = f"/rest/tempo-accounts/1/account/project/{project_id}"
 
-        logger.info(f"Fetching Tempo account links for project '{project_id}'")
+        logger.debug(f"Fetching Tempo account links for project '{project_id}'")
         response = self._make_request(path)
         links = response.json() if response and response.status_code == 200 else None
 
         if links is not None:
-            logger.info(
+            logger.debug(
                 f"Successfully retrieved {len(links)} account links for project {project_id}."
             )
         else:
             logger.warning(
-                f"Failed to retrieve account links for project {project_id}. This might be expected if the endpoint is incorrect or no links exist."
+                f"Failed to retrieve account links for project {project_id}. "
+                f"This might be expected if the endpoint is incorrect or no links exist."
             )
         return links
+
+    def get_issue_link_types(self) -> list[dict[str, Any]] | None:
+        """
+        Retrieves all issue link types configured in Jira.
+
+        Returns:
+            A list of issue link types or None if an error occurred.
+        """
+        try:
+            logger.info("Fetching Jira issue link types")
+            result = self.jira.issue_link_types()
+            logger.info(f"Successfully retrieved {len(result)} issue link types")
+
+            # Convert issue link type objects to dictionaries
+            result = [
+                {
+                    "id": link_type.id,
+                    "name": link_type.name,
+                    "inward": link_type.inward,
+                    "outward": link_type.outward,
+                    "self": getattr(link_type, "self", None),
+                }
+                for link_type in result
+            ]
+
+            return result
+        except Exception as e:
+            logger.error(f"Failed to retrieve issue link types: {str(e)}")

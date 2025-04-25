@@ -12,21 +12,26 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Literal, TypedDict
 
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.mappings.mappings import Mappings
-from src.migrations.account_migration import AccountMigration
-from src.migrations.company_migration import CompanyMigration
-from src.migrations.custom_field_migration import CustomFieldMigration
-from src.migrations.issue_type_migration import IssueTypeMigration
-from src.migrations.link_type_migration import LinkTypeMigration
-from src.migrations.project_migration import ProjectMigration
-from src.migrations.status_migration import StatusMigration
+from src.migrations.base_migration import BaseMigration
+from src.models import ComponentResult, MigrationResult
 from src.migrations.user_migration import UserMigration
+from src.migrations.custom_field_migration import CustomFieldMigration
+from src.migrations.company_migration import CompanyMigration
+from src.migrations.project_migration import ProjectMigration
+from src.migrations.link_type_migration import LinkTypeMigration
+from src.migrations.issue_type_migration import IssueTypeMigration
+from src.migrations.status_migration import StatusMigration
+from src.migrations.work_package_migration import WorkPackageMigration
+from src.migrations.account_migration import AccountMigration
+from src.utils import data_handler
+
 
 # PEP 695 Type aliases
 type BackupDir = str | None
@@ -44,21 +49,11 @@ type ComponentName = Literal[
 ]
 
 
-# TypedDict for structured results
-class ComponentResult(TypedDict):
-    status: ComponentStatus
-    time: NotRequired[float]
-    error: NotRequired[str]
-    message: NotRequired[str]
-    # Additional fields that might come from component migrations
-    success_count: NotRequired[int]
-    failed_count: NotRequired[int]
-    total_count: NotRequired[int]
-
-
-class MigrationResult(TypedDict):
-    components: dict[str, ComponentResult]
-    overall: dict[str, Any]
+class AvailableComponents(TypedDict):
+    """
+    Available components for the migration.
+    """
+    dict[ComponentName, BaseMigration]
 
 
 def print_component_header(component_name: str) -> None:
@@ -78,7 +73,8 @@ def create_backup(backup_dir: BackupDir = None) -> BackupDir:
     Create a backup of the data directory before running the migration.
 
     Args:
-        backup_dir: Directory to store the backup. If None, a timestamp directory is created.
+        backup_dir: Directory to store the backup.
+        If None, a timestamp directory is created.
 
     Returns:
         Path to the created backup directory
@@ -173,7 +169,7 @@ def restore_backup(backup_dir: str) -> bool:
 
 def run_migration(
     dry_run: bool = False,
-    components: list[str] | None = None,
+    components: list[ComponentName] | None = None,
     no_backup: bool = False,
     force: bool = False,
     direct_migration: bool = False,
@@ -186,7 +182,8 @@ def run_migration(
         components: List of specific components to run (if None, run all)
         no_backup: If True, skip creating a backup before migration
         force: If True, force extraction of data even if it already exists
-        direct_migration: If True, use direct Rails console execution for supported operations, including work packages
+        direct_migration: If True, use direct Rails console execution for supported
+        operations, including work packages
 
     Returns:
         Dictionary with migration results
@@ -213,7 +210,6 @@ def run_migration(
 
         # Results object
         results = MigrationResult(
-            components={},
             overall={
                 "timestamp": migration_timestamp,
                 "status": "success",  # Will be updated if any component fails
@@ -236,7 +232,7 @@ def run_migration(
             )
             backup_path = create_backup()
             if backup_path:
-                results["overall"]["backup_path"] = backup_path
+                results.overall["backup_path"] = backup_path
                 config.logger.success(
                     f"Backup created at: {backup_path}", extra={"markup": True}
                 )
@@ -278,13 +274,11 @@ def run_migration(
                 )
 
                 # Mark overall status as failed
-                results["overall"]["status"] = "failed"
-                results["overall"][
-                    "error"
-                ] = f"Rails client initialization failed: {str(e)}"
+                results.overall["status"] = "failed"
+                results.overall["error"] = f"Rails client initialization failed: {str(e)}"
 
                 # Add end time
-                results["overall"]["end_time"] = datetime.now().isoformat()
+                results.overall["end_time"] = datetime.now().isoformat()
                 return results
 
         # Initialize mappings
@@ -295,18 +289,18 @@ def run_migration(
         )
 
         # Define all available migration components
-        available_components = {
-            "users": UserMigration(jira_client, op_client),
-            "custom_fields": CustomFieldMigration(
+        available_components = AvailableComponents(
+            users=UserMigration(jira_client, op_client),
+            custom_fields=CustomFieldMigration(
                 jira_client, op_client, op_rails_client
             ),
-            "companies": CompanyMigration(jira_client, op_client),
-            "projects": ProjectMigration(jira_client, op_client),
-            "link_types": LinkTypeMigration(jira_client, op_client),
-            "issue_types": IssueTypeMigration(jira_client, op_client, op_rails_client),
-            "status_types": StatusMigration(jira_client, op_client, op_rails_client),
-            "work_packages": None,  # Initialized later if needed
-        }
+            companies=CompanyMigration(jira_client, op_client),
+            projects=ProjectMigration(jira_client, op_client),
+            link_types=LinkTypeMigration(jira_client, op_client),
+            issue_types=IssueTypeMigration(jira_client, op_client, op_rails_client),
+            status_types=StatusMigration(jira_client, op_client, op_rails_client),
+            work_packages=None,  # Initialized later if needed
+        )
 
         # Add accounts component only if Rails client is available
         if op_rails_client:
@@ -350,7 +344,6 @@ def run_migration(
 
         # Initialize work package migration if it's in the components list
         if "work_packages" in components:
-            from src.migrations.work_package_migration import WorkPackageMigration
 
             available_components["work_packages"] = WorkPackageMigration(
                 jira_client,
@@ -363,14 +356,7 @@ def run_migration(
         try:
             for component_name in components:
                 # Get the component instance
-                component = available_components.get(component_name)
-
-                if not component:
-                    config.logger.warning(
-                        f"Component {component_name} not found or not initialized, skipping",
-                        extra={"markup": True},
-                    )
-                    continue
+                component: BaseMigration = available_components.get(component_name)
 
                 # Header for this component in logs
                 print_component_header(component_name)
@@ -380,53 +366,50 @@ def run_migration(
 
                 # Run the component
                 try:
-                    result = component.run(
+                    component_result = component.run(
                         dry_run=dry_run, force=force, mappings=config.mappings
                     )
 
-                    if result:
+                    if component_result:
                         # Add timing information (if not already present)
-                        if "time" not in result:
-                            result["time"] = time.time() - component_start_time
+                        if "time" not in component_result:
+                            component_result["time"] = time.time() - component_start_time
 
                         # Store result in the results dictionary
-                        results["components"][component_name] = result
+                        results.components[component_name] = component_result
 
                         # Update overall status if component failed
-                        if result.get("status") == "failed":
-                            results["overall"]["status"] = "failed"
+                        if not component_result.success:
+                            results.overall["status"] = "failed"
 
-                        # Print component summary based on status
-                        status = result.get("status", "unknown")
-                        success_count = result.get("success_count", 0)
-                        failed_count = result.get("failed_count", 0)
-                        total_count = result.get("total_count", 0)
+                        # Print component summary based on details dictionary
+                        details = component_result.details or {}
+                        success_count = details.get("success_count", 0)
+                        failed_count = details.get("failed_count", 0)
+                        total_count = details.get("total_count", 0)
+                        component_time = details.get("time", 0)
 
-                        if status == "success":
+                        if component_result.success:
                             config.logger.success(
                                 f"Component '{component_name}' completed successfully "
                                 f"({success_count}/{total_count} items migrated), "
-                                f"took {result.get('time', 0):.2f} seconds",
+                                f"took {component_time:.2f} seconds",
                                 extra={"markup": True},
                             )
                         else:
                             config.logger.error(
                                 f"Component '{component_name}' failed or had errors "
                                 f"({success_count}/{total_count} items migrated, {failed_count} failed), "
-                                f"took {result.get('time', 0):.2f} seconds",
+                                f"took {component_time:.2f} seconds",
                                 extra={"markup": True},
                             )
                     else:
-                        # Handle case where component didn't return a result
+                        # Handle case where component didn't return a result (should not happen with dataclass)
                         config.logger.warning(
                             f"Component '{component_name}' did not return a result",
                             extra={"markup": True},
                         )
-                        results["components"][component_name] = {
-                            "status": "unknown",
-                            "time": time.time() - component_start_time,
-                            "message": "Component did not return a result",
-                        }
+                        results.components[component_name] = component_result
 
                 except KeyboardInterrupt:
                     # Handle user interruption within a component
@@ -434,33 +417,46 @@ def run_migration(
                         f"Component '{component_name}' was interrupted by user",
                         extra={"markup": True},
                     )
-                    results["components"][component_name] = {
-                        "status": "interrupted",
-                        "time": time.time() - component_start_time,
-                        "message": "Component was interrupted by user",
-                    }
-                    results["overall"]["status"] = "interrupted"
+                    # Create a basic result reflecting interruption
+                    interrupted_result = ComponentResult(
+                        success=False,
+                        message="Component was interrupted by user",
+                        details={
+                            "status": "interrupted",
+                            "time": time.time() - component_start_time
+                        }
+                    )
+                    results.components[component_name] = interrupted_result
+                    results.overall["status"] = "interrupted"
                     break
 
                 except Exception as e:
                     # Handle unexpected errors during component execution
-                    config.logger.error(
+                    config.logger.exception(
                         f"Error during '{component_name}' migration: {str(e)}",
                         extra={"markup": True, "traceback": True},
                     )
-                    results["components"][component_name] = {
-                        "status": "failed",
-                        "time": time.time() - component_start_time,
-                        "error": str(e),
-                        "message": f"Error during component execution: {str(e)}",
-                    }
-                    results["overall"]["status"] = "failed"
+                    # Create a basic result reflecting the error
+                    error_result = ComponentResult(
+                        success=False,
+                        message=f"Error during component execution: {str(e)}",
+                        errors=[str(e)],
+                        details={
+                            "status": "failed",
+                            "time": time.time() - component_start_time,
+                            "error": str(e)  # Keep error in details for compatibility
+                        }
+                    )
+                    results.components[component_name] = error_result
+                    results.overall["status"] = "failed"
 
                 # Break out if the component failed and it's critical
-                if (
-                    results["components"].get(component_name, {}).get("status")
-                    == "failed"
-                ):
+                component_result_data = results.components
+                current_component_result = component_result_data.get(
+                    component_name, ComponentResult()
+                )
+                current_component_status = current_component_result.details.get("status")
+                if current_component_status == "failed":
                     if component_name in ["users", "projects"]:
                         config.logger.error(
                             f"Critical component '{component_name}' failed, aborting migration",
@@ -473,38 +469,36 @@ def run_migration(
             config.logger.warning(
                 "Migration interrupted by user", extra={"markup": True}
             )
-            results["overall"]["status"] = "interrupted"
-            results["overall"]["message"] = "Migration was interrupted by user"
+            results.overall["status"] = "interrupted"
+            results.overall["message"] = "Migration was interrupted by user"
 
         # Add end time to results
-        results["overall"]["end_time"] = datetime.now().isoformat()
+        results.overall["end_time"] = datetime.now().isoformat()
 
         # Calculate total time
-        start_time = datetime.fromisoformat(results["overall"]["start_time"])
-        end_time = datetime.fromisoformat(results["overall"]["end_time"])
+        start_time = datetime.fromisoformat(results.overall["start_time"])
+        end_time = datetime.fromisoformat(results.overall["end_time"])
         total_seconds = (end_time - start_time).total_seconds()
-        results["overall"]["total_time_seconds"] = total_seconds
+        results.overall["total_time_seconds"] = total_seconds
 
         # Print final status
-        if results["overall"]["status"] == "success":
+        if results.overall["status"] == "success":
             config.logger.success(
                 f"Migration completed successfully in {total_seconds:.2f} seconds.",
                 extra={"markup": True},
             )
         else:
             config.logger.error(
-                f"Migration completed with status '{results['overall']['status']}' in {total_seconds:.2f} seconds.",
+                f"Migration completed with status '{results.overall['status']}' in {total_seconds:.2f} seconds.",
                 extra={"markup": True},
             )
 
         # Save results to file
-        results_dir = config.ensure_subdir(config.get_path("results"))
-        results_file = os.path.join(
-            results_dir, f"migration_results_{migration_timestamp}.json"
+        results_file = f"migration_results_{migration_timestamp}.json"
+        data_handler.save_results(
+            results,
+            filename=results_file,
         )
-
-        with open(results_file, "w") as f:
-            json.dump(results, f, indent=2)
 
         config.logger.info(
             f"Migration results saved to {results_file}", extra={"markup": True}
@@ -522,7 +516,6 @@ def run_migration(
 
         # Create a basic result object
         return MigrationResult(
-            components={},
             overall={
                 "status": "failed",
                 "error": str(e),
@@ -781,7 +774,8 @@ def main():
             # Print component results
             config.logger.info("Component results:", extra={"markup": True})
             for component, comp_result in result.get("components", {}).items():
-                status = comp_result.get("status", "unknown")
+                # Access status from details
+                status = comp_result.details.get("status", "unknown") if comp_result.details else "unknown"
                 if status == "success":
                     config.logger.success(
                         f"✓ {component}: {status}", extra={"markup": True}

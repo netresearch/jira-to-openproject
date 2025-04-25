@@ -14,7 +14,8 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
-from src.utils import load_json_file
+from src.models import ComponentResult
+from src.utils import data_handler
 
 
 class CompanyMigration(BaseMigration):
@@ -79,8 +80,8 @@ class CompanyMigration(BaseMigration):
         Returns:
             Dictionary of Tempo companies.
         """
-        if load_json_file(self.tempo_companies_file):
-            loaded_data = load_json_file(self.tempo_companies_file)
+        if data_handler.load_dict(self.tempo_companies_file):
+            loaded_data = data_handler.load_dict(self.tempo_companies_file)
 
             # If loaded data is a dictionary, use it directly
             if isinstance(loaded_data, dict):
@@ -1204,31 +1205,33 @@ class CompanyMigration(BaseMigration):
             # Analyze results
             analysis = self.analyze_company_mapping()
 
-            return {
-                "status": result.get("status", "success"),
-                "success_count": result.get("created_count", 0)
+            return ComponentResult(
+                success=True if "success" == result.get("status", "success") else False,
+                success_count=result.get("created_count", 0)
                 + result.get("matched_count", 0),
-                "failed_count": result.get("failed_count", 0),
-                "total_count": len(tempo_companies),
-                "tempo_companies_count": len(tempo_companies),
-                "op_projects_count": len(op_projects),
-                "mapped_companies_count": len(mapping),
-                "metadata_updated": metadata_result.get("updated", 0),
-                "metadata_failed": metadata_result.get("failed", 0),
-                "analysis": analysis,
-            }
+                failed_count=result.get("failed_count", 0),
+                total_count=len(tempo_companies),
+                tempo_companies_count=len(tempo_companies),
+                op_projects_count=len(op_projects),
+                mapped_companies_count=len(mapping),
+                metadata_updated=metadata_result.get("updated", 0),
+                metadata_failed=metadata_result.get("failed", 0),
+                analysis=analysis,
+            )
         except Exception as e:
             self.logger.error(
                 f"Error during company migration: {str(e)}",
                 extra={"markup": True, "traceback": True},
             )
             self.logger.exception(e)
-            return {
-                "status": "failed",
-                "error": str(e),
-                "success_count": 0,
-                "failed_count": (
+            return ComponentResult(
+                success=False,
+                error=str(e),
+                success_count=0,
+                failed_count=(
                     len(self.tempo_companies) if self.tempo_companies else 0
                 ),
-                "total_count": len(self.tempo_companies) if self.tempo_companies else 0,
-            }
+                total_count=(
+                    len(self.tempo_companies) if self.tempo_companies else 0
+                ),
+            )

@@ -15,6 +15,7 @@ import os
 import re
 from typing import Any
 
+from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
@@ -340,7 +341,8 @@ class StatusMigration(BaseMigration):
 
             else:
                 logger.error(
-                    f"Rails command execution failed for status '{name}'. Status: {result.get('status')}, Error: {result.get('error')}"
+                    f"Rails command execution failed for status '{name}'. "
+                    f"Status: {result.get('status')}, Error: {result.get('error')}"
                 )
                 return None
 
@@ -484,7 +486,8 @@ class StatusMigration(BaseMigration):
                     # Use existing status
                     op_status_id = existing_op_status.get("id")
                     logger.debug(
-                        f"Using existing OpenProject status '{existing_op_status.get('name')}' (ID: {op_status_id}) for Jira status '{name}'"
+                        f"Using existing OpenProject status '{existing_op_status.get('name')}' "
+                        f"(ID: {op_status_id}) for Jira status '{name}'"
                     )
                     already_exists_count += 1
                 elif self.dry_run:
@@ -623,7 +626,7 @@ class StatusMigration(BaseMigration):
 
     def run(
         self, dry_run: bool = False, force: bool = False, mappings=None
-    ) -> dict[str, Any]:
+    ) -> ComponentResult:
         """
         Run the status migration process.
 
@@ -633,7 +636,7 @@ class StatusMigration(BaseMigration):
             mappings: Optional mappings object that can be used for mapping IDs between systems
 
         Returns:
-            Dictionary with migration results
+            ComponentResult with migration results
         """
         logger.info("Running status migration...")
 
@@ -705,42 +708,42 @@ class StatusMigration(BaseMigration):
                 if self.mappings:
                     self.mappings.status_mapping = self.status_mapping
 
-                return {
-                    "status": "success",
-                    "message": "[DRY RUN] Simulated status migration",
-                    "success_count": len(self.jira_statuses),
-                    "failed_count": 0,
-                    "total_count": len(self.jira_statuses),
-                    "details": {
+                return ComponentResult(
+                    success=True,
+                    message="[DRY RUN] Simulated status migration",
+                    success_count=len(self.jira_statuses),
+                    failed_count=0,
+                    total_count=len(self.jira_statuses),
+                    details={
                         "status": "success",
                         "total_processed": len(self.jira_statuses),
                         "already_exists_count": 0,
                         "created_count": len(self.jira_statuses),
                         "error_count": 0,
                     },
-                }
+                )
             else:
                 # Real migration
                 migration_result = self.migrate_statuses()
 
-                return {
-                    "status": migration_result.get("status", "failed"),
-                    "message": migration_result.get(
+                return ComponentResult(
+                    success=True if "success" == migration_result.get("status", "success") else False,
+                    message=migration_result.get(
                         "message", "Status migration completed"
                     ),
-                    "success_count": migration_result.get("created_count", 0)
+                    success_count=migration_result.get("created_count", 0)
                     + migration_result.get("already_exists_count", 0),
-                    "failed_count": migration_result.get("error_count", 0),
-                    "total_count": migration_result.get("total_processed", 0),
-                    "details": migration_result,
-                }
+                    failed_count=migration_result.get("error_count", 0),
+                    total_count=migration_result.get("total_processed", 0),
+                    details=migration_result,
+                )
 
         except Exception as e:
             logger.error(f"Error during status migration: {str(e)}")
-            return {
-                "status": "failed",
-                "error": f"Error during status migration: {str(e)}",
-                "success_count": 0,
-                "failed_count": 0,
-                "total_count": 0,
-            }
+            return ComponentResult(
+                success=False,
+                error=f"Error during status migration: {str(e)}",
+                success_count=0,
+                failed_count=0,
+                total_count=0,
+            )

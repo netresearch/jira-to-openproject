@@ -8,6 +8,7 @@ import os
 import re
 from typing import Any, Optional
 
+from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
@@ -323,7 +324,7 @@ class ProjectMigration(BaseMigration):
 
         return company
 
-    def bulk_migrate_projects(self) -> dict[str, Any]:
+    def bulk_migrate_projects(self) -> bool:
         """
         Migrate projects from Jira to OpenProject in bulk using Rails console.
         This is more efficient than creating each project individually with API calls.
@@ -332,15 +333,6 @@ class ProjectMigration(BaseMigration):
             Dictionary mapping Jira project keys to OpenProject project IDs
         """
         logger.info("Starting bulk project migration using Rails client...")
-        if config.migration_config.get("dry_run", False):
-            logger.info("DRY RUN: skipping bulk project migration via Rails console")
-            return {}
-
-        if not self.op_client.rails_client:
-            logger.error(
-                "Rails client is required for bulk project migration. Aborting."
-            )
-            return {}
 
         if not self.jira_projects:
             self.extract_jira_projects()
@@ -421,7 +413,10 @@ class ProjectMigration(BaseMigration):
 
         if not projects_data:
             logger.info("No new projects to create")
-            return {}
+            return ComponentResult(
+                success=True,
+                message="No new projects to create",
+            )
 
         # Write projects data to a temp file
         temp_file_path = os.path.join(self.data_dir, "projects_data.json")
@@ -436,7 +431,10 @@ class ProjectMigration(BaseMigration):
             logger.error(
                 "Failed to transfer projects data file to container. Aborting."
             )
-            return {}
+            return ComponentResult(
+                success=False,
+                message="Failed to transfer projects data file to container. Aborting.",
+            )
 
         # Check for dry run
         if config.migration_config.get("dry_run", False):
@@ -465,7 +463,10 @@ class ProjectMigration(BaseMigration):
             self.project_mapping = mapping
             self._save_to_json(mapping, Mappings.PROJECT_MAPPING_FILE)
             logger.success(f"DRY RUN: Would have created {len(projects_data)} projects")
-            return mapping
+            return ComponentResult(
+                success=True,
+                message=f"DRY RUN: Would have created {len(projects_data)} projects",
+            )
 
         # Create Ruby script for bulk project creation
         header_script = f"""
@@ -616,7 +617,10 @@ class ProjectMigration(BaseMigration):
                 f"Rails error during bulk project creation: {result.get('error', 'Unknown error')}"
             )
             logger.error("Bulk project migration failed. Aborting.")
-            return {}
+            return ComponentResult(
+                success=False,
+                message=f"Rails error during bulk project creation: {result.get('error', 'Unknown error')}",
+            )
 
         # Get the results
         created_projects = []
@@ -692,7 +696,13 @@ class ProjectMigration(BaseMigration):
         logger.success(
             f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors"
         )
-        return mapping
+        return ComponentResult(
+            success=True,
+            success_count=len(created_projects),
+            failed_count=len(errors),
+            total_count=len(created_projects) + len(errors),
+            message=f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors",
+        )
 
     def analyze_project_mapping(self) -> dict[str, Any]:
         """
@@ -782,7 +792,7 @@ class ProjectMigration(BaseMigration):
 
     def run(
         self, dry_run: bool = False, force: bool = False, mappings: Mappings = None
-    ) -> dict[str, Any]:
+    ) -> ComponentResult:
         """
         Run the project migration.
 
@@ -792,7 +802,7 @@ class ProjectMigration(BaseMigration):
             mappings: Optional mappings reference for cross-reference during migration
 
         Returns:
-            Dictionary with migration results
+            ComponentResult with migration results
         """
         # Set dry run in config
         if dry_run:
@@ -821,10 +831,4 @@ class ProjectMigration(BaseMigration):
                 "DRY RUN: no projects will be created or modified in OpenProject"
             )
         logger.info("Running bulk project migration via Rails console")
-        result = self.bulk_migrate_projects()
-
-        if not result:
-            logger.error("Migration failed")
-            return {"status": "error", "message": "Migration failed"}
-
-        return {"status": "success", "result": result}
+        return self.bulk_migrate_projects()
