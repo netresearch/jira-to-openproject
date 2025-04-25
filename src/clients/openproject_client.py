@@ -95,7 +95,8 @@ class OpenProjectClient:
                     "To use direct Rails console features, please start the tmux session first."
                 )
                 logger.warning(
-                    "You can continue with API-only operations, but direct Rails console functions will not be available."
+                    "You can continue with API-only operations, "
+                    "but direct Rails console functions will not be available."
                 )
                 self.rails_client = None
             except RuntimeError as e:
@@ -105,13 +106,15 @@ class OpenProjectClient:
                     "Make sure tmux is installed and available in your PATH."
                 )
                 logger.warning(
-                    "You can continue with API-only operations, but direct Rails console functions will not be available."
+                    "You can continue with API-only operations, "
+                    "but direct Rails console functions will not be available."
                 )
                 self.rails_client = None
             except Exception as e:
                 logger.warning(f"Could not initialize Rails client: {str(e)}")
                 logger.warning(
-                    "You can continue with API-only operations, but direct Rails console functions will not be available."
+                    "You can continue with API-only operations, "
+                    "but direct Rails console functions will not be available."
                 )
                 self.rails_client = None
 
@@ -210,10 +213,10 @@ class OpenProjectClient:
                 logger.debug(f"Unexpected response for /users/me: {response}")
                 self.connected = False
         except requests.exceptions.RequestException as e:
-            logger.error(f"Connection to OpenProject failed: {e}")
+            logger.exception(f"Connection to OpenProject failed: {e}")
             self.connected = False
         except Exception as e:
-            logger.error(f"An unexpected error occurred during connection: {e}")
+            logger.exception(f"An unexpected error occurred during connection: {e}")
             self.connected = False
 
     def _get_auth_token(self) -> str:
@@ -286,7 +289,7 @@ class OpenProjectClient:
             except requests.HTTPError as e:
                 # Attach the response to the exception for error handling
                 e.response = response
-                logger.error(f"Error making {method} request to {url}: {str(e)}")
+                logger.exception(f"Error making {method} request to {url}: {str(e)}")
                 raise
 
             if response.status_code == 204:
@@ -297,7 +300,7 @@ class OpenProjectClient:
             # This is already logged above
             raise
         except Exception as e:
-            logger.error(f"Error making {method} request to {url}: {str(e)}")
+            logger.exception(f"Error making {method} request to {url}: {str(e)}")
             raise
 
     def get_projects(self, force_refresh: bool = False) -> list[dict[str, Any]]:
@@ -348,7 +351,7 @@ class OpenProjectClient:
             self._projects_cache = all_projects
             return all_projects
         except Exception as e:
-            logger.error(f"Failed to get projects: {str(e)}")
+            logger.exception(f"Failed to get projects: {str(e)}")
             return self._projects_cache if self._projects_cache else []
 
     def get_project_by_identifier(self, identifier: str) -> dict[str, Any] | None:
@@ -375,7 +378,7 @@ class OpenProjectClient:
             logger.debug(f"No project found with identifier '{identifier}'")
             return None
         except Exception as e:
-            logger.debug(
+            logger.exception(
                 f"Failed to get project by identifier '{identifier}': {str(e)}"
             )
             return None
@@ -393,7 +396,7 @@ class OpenProjectClient:
             self._work_package_types_cache = types
             return types
         except Exception as e:
-            logger.error(f"Failed to get work package types: {str(e)}")
+            logger.exception(f"Failed to get work package types: {str(e)}")
             return (
                 self._work_package_types_cache if self._work_package_types_cache else []
             )
@@ -409,7 +412,7 @@ class OpenProjectClient:
             self._statuses_cache = statuses
             return statuses
         except Exception as e:
-            logger.error(f"Failed to get statuses: {str(e)}")
+            logger.exception(f"Failed to get statuses: {str(e)}")
             return self._statuses_cache if self._statuses_cache else []
 
     def get_users(self, force_refresh: bool = False) -> list[dict[str, Any]]:
@@ -419,7 +422,7 @@ class OpenProjectClient:
 
         try:
             all_users = []
-            page_size = 100  # Use a consistent page size
+            page_size = 500  # Use a consistent page size
 
             logger.info(f"Fetching all OpenProject users with page size {page_size}")
 
@@ -484,8 +487,136 @@ class OpenProjectClient:
             self._users_cache = all_users
             return all_users
         except Exception as e:
-            logger.error(f"Failed to get users: {str(e)}")
+            logger.exception(f"Failed to get users: {str(e)}")
             return self._users_cache if self._users_cache else []
+
+    def get_user_by_email(self, email: str) -> dict[str, Any] | None:
+        """
+        Find a user by their email address.
+
+        Args:
+            email: Email address to search for
+
+        Returns:
+            User dictionary if found, None otherwise
+        """
+        if not email:
+            logger.warning("No email provided to get_user_by_email")
+            return None
+
+        email = email.lower().strip()
+
+        # Make sure we have the users
+        users = self.get_users()
+
+        # Try to find the user by email
+        for user in users:
+            user_email = user.get("email", "").lower().strip()
+            if user_email == email:
+                logger.debug(f"Found user with email {email}: {user.get('login')}")
+                return user
+
+        # If not found, try to search with the API directly
+        try:
+            # OpenProject API doesn't directly support email search, but we can use a filter
+            params = {
+                "filters": json.dumps([
+                    {"email": {"operator": "=", "values": [email]}}
+                ])
+            }
+
+            response = self._request("GET", "/users", params=params)
+            if response and response.get("_embedded", {}).get("elements", []):
+                user = response.get("_embedded", {}).get("elements", [])[0]
+                logger.debug(f"Found user with email {email} via API search: {user.get('login')}")
+                return user
+
+        except Exception as e:
+            logger.exception(f"Error searching for user by email {email}: {str(e)}")
+
+        # If still not found, try using the Rails client if available
+        if self.rails_client:
+            try:
+                script = f"""
+                user = User.find_by(mail: "{email}")
+                if user
+                  {{
+                    id: user.id,
+                    login: user.login,
+                    email: user.mail,
+                    firstName: user.firstname,
+                    lastName: user.lastname,
+                    admin: user.admin,
+                    status: user.status
+                  }}
+                else
+                  nil
+                end
+                """
+                result = self.rails_client.execute(script)
+                if result.get("status") == "success" and result.get("output"):
+                    user_data = result.get("output")
+                    if user_data and isinstance(user_data, dict) and "id" in user_data:
+                        logger.debug(f"Found user with email {email} via Rails: {user_data.get('login')}")
+                        return user_data
+            except Exception as e:
+                logger.exception(f"Error searching for user with Rails client: {str(e)}")
+
+        logger.debug(f"No user found with email {email}")
+        return None
+
+    def create_user(self, user_data: dict[str, Any]) -> dict[str, Any] | None:
+        """
+        Create a new user in OpenProject.
+
+        Args:
+            user_data: Dictionary with user data (login, email, firstName, lastName, etc.)
+
+        Returns:
+            Created user dictionary if successful, None otherwise
+        """
+        if not user_data:
+            logger.warning("No user data provided to create_user")
+            return None
+
+        # Required fields
+        required_fields = ["login", "email", "firstName", "lastName", "password"]
+        for field in required_fields:
+            if field not in user_data:
+                logger.warning(f"Missing required field '{field}' for user creation")
+                return None
+
+        try:
+            # Check if user with this login or email already exists
+            existing_users = self.get_users()
+            for user in existing_users:
+                if user.get("login", "").lower() == user_data["login"].lower():
+                    logger.warning(f"User with login '{user_data['login']}' already exists")
+                    return user
+                if user.get("email", "").lower() == user_data["email"].lower():
+                    logger.warning(f"User with email '{user_data['email']}' already exists")
+                    return user
+
+            # Create the user
+            logger.info(f"Creating user with login '{user_data['login']}' and email '{user_data['email']}'")
+            response = self._request("POST", "/users", data=user_data)
+
+            if response and response.get("id"):
+                logger.success(f"User '{user_data['login']}' created successfully with ID {response.get('id')}")
+                # Clear users cache
+                self._users_cache = []
+                return response
+            else:
+                logger.warning(f"Failed to create user: {response}")
+                return None
+
+        except requests.exceptions.HTTPError as e:
+            logger.exception(f"HTTP error creating user: {str(e)}")
+            # Re-raise the exception for the caller to handle
+            raise
+        except Exception as e:
+            logger.exception(f"Error creating user: {str(e)}")
+            return None
 
     def clear_cache(self):
         """Clear all cached data to force fresh retrieval."""
@@ -558,13 +689,13 @@ class OpenProjectClient:
             if hasattr(e, "response") and e.response is not None:
                 try:
                     error_details = e.response.json()
-                    logger.error(
+                    logger.exception(
                         f"Server response for project update {project_id}: {json.dumps(error_details)}"
                     )
                 except Exception:
-                    logger.error(f"Server response text: {e.response.text}")
+                    logger.exception(f"Server response text: {e.response.text}")
 
-            logger.error(f"Failed to update project {project_id}: {str(e)}")
+            logger.exception(f"Failed to update project {project_id}: {str(e)}")
             return None
 
     def create_type(
@@ -618,7 +749,7 @@ class OpenProjectClient:
                 "data": result,
             }
         except Exception as e:
-            logger.error(f"Failed to create work package type {name}: {str(e)}")
+            logger.exception(f"Failed to create work package type {name}: {str(e)}")
             return {"success": False, "message": str(e)}
 
     def create_status(
@@ -664,7 +795,7 @@ class OpenProjectClient:
                 "data": result,
             }
         except Exception as e:
-            logger.error(f"Failed to create status {name}: {str(e)}")
+            logger.exception(f"Failed to create status {name}: {str(e)}")
             return {"success": False, "message": str(e)}
 
     def create_work_package(
@@ -698,7 +829,7 @@ class OpenProjectClient:
             return self._request("POST", "/work_packages", data=data)
         except requests.exceptions.HTTPError as e:
             # Log details of the request that failed
-            logger.debug(
+            logger.exception(
                 f"Failed work package creation request data for {subject}: {json.dumps(data)}"
             )
 
@@ -733,7 +864,7 @@ class OpenProjectClient:
                 except json.JSONDecodeError:
                     # If we can't parse the response as JSON, just log the text
                     if e.response.text:
-                        logger.error(f"Server response text: {e.response.text}")
+                        logger.exception(f"Server response text: {e.response.text}")
 
             # Return error information for the caller to handle
             return {
@@ -746,7 +877,7 @@ class OpenProjectClient:
                 "details": error_details,
             }
         except Exception as e:
-            logger.error(f"Failed to create work package {subject}: {str(e)}")
+            logger.exception(f"Failed to create work package {subject}: {str(e)}")
             return {"error": True, "message": str(e)}
 
     def get_relation_types(self) -> list[dict[str, Any]]:
@@ -787,7 +918,7 @@ class OpenProjectClient:
                             )
                             return types
             except Exception as e:
-                logger.debug(f"Could not access relations endpoint: {str(e)}")
+                logger.exception(f"Could not access relations endpoint: {str(e)}")
 
             # If we couldn't get data, return common relation types as defaults
             logger.warning(
@@ -827,7 +958,7 @@ class OpenProjectClient:
                 },
             ]
         except Exception as e:
-            logger.error(f"Failed to get relation types: {str(e)}")
+            logger.exception(f"Failed to get relation types: {str(e)}")
             return []
 
     def get_companies(self) -> list[dict[str, Any]]:
@@ -848,7 +979,7 @@ class OpenProjectClient:
                 if response and "_embedded" in response:
                     return response.get("_embedded", {}).get("elements", [])
             except Exception as e:
-                logger.debug(f"Could not access companies endpoint: {str(e)}")
+                logger.exception(f"Could not access companies endpoint: {str(e)}")
 
             # Then try the organizations endpoint (sometimes used)
             try:
@@ -856,7 +987,7 @@ class OpenProjectClient:
                 if response and "_embedded" in response:
                     return response.get("_embedded", {}).get("elements", [])
             except Exception as e:
-                logger.debug(f"Could not access organizations endpoint: {str(e)}")
+                logger.exception(f"Could not access organizations endpoint: {str(e)}")
 
             # If all fails, but we're testing, return some dummy data
             logger.warning(
@@ -879,7 +1010,7 @@ class OpenProjectClient:
                 },
             ]
         except Exception as e:
-            logger.error(f"Failed to get companies: {str(e)}")
+            logger.exception(f"Failed to get companies: {str(e)}")
             return []
 
     def get_company_by_identifier(self, identifier: str) -> dict[str, Any] | None:

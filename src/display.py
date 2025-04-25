@@ -32,7 +32,7 @@ LOGGING_THEME = Theme(
         "logging.level.warning": "bold yellow",
         "logging.level.error": "bold red",
         "logging.level.critical": "bold red on white",
-        "success": "bold green",
+        "logging.level.success": "bold green",
     }
 )
 
@@ -116,14 +116,14 @@ def configure_logging(
         if self.isEnabledFor(25):
             kwargs["extra"] = kwargs.get("extra", {})
             kwargs["extra"]["markup"] = True
-            self._log(25, f"[success]{message}[/]", args, **kwargs)
+            self._log(25, f"[success]{message}[/]", args, stacklevel=2, **kwargs)
 
     # Define a notice method for the logger (less prominent than INFO)
     def notice(self, message, *args, **kwargs):
         if self.isEnabledFor(21):
             kwargs["extra"] = kwargs.get("extra", {})
             kwargs["extra"]["markup"] = True
-            self._log(21, message, args, **kwargs)
+            self._log(21, message, args, stacklevel=2, **kwargs)
 
     # Add the success method to the logger class
     logging.Logger.success = success
@@ -178,7 +178,12 @@ class ProgressTracker(Generic[T]):
 
     def __enter__(self):
         """Start the live display when entering context."""
-        self.live = Live(console=console, refresh_per_second=4)
+        self.live = Live(
+            console=console,
+            refresh_per_second=2,
+            auto_refresh=True,
+            vertical_overflow="ellipsis"
+        )
         self.live.__enter__()
         return self
 
@@ -223,29 +228,27 @@ class ProgressTracker(Generic[T]):
         if not self.live:
             return
 
-        # Create the rolling log table
-        log_table = Table.grid(padding=(0, 1))
-        log_table.add_column()
-        log_table.add_row(Text(f"{self.log_title}:", style="bold yellow"))
+        try:
+            # Create the rolling log table
+            log_table = Table.grid(padding=(0, 1))
+            log_table.add_column()
+            log_table.add_row(Text(f"{self.log_title}:", style="bold yellow"))
 
-        # Add the recent items to the table
-        for item in self.recent_items:
-            log_table.add_row(f"  - {item}")
+            # Add the recent items to the table
+            for item in self.recent_items:
+                log_table.add_row(f"  - {item}")
 
-        # Create a panel with the log table
-        Panel.fit(log_table, title=self.log_title)
-
-        # Update the live display with progress and panel
-        self.live.update(self.progress)
-        if self.recent_items:
-            self.live.update(
-                Panel.fit(
-                    self._create_combined_display(self.progress, log_table),
-                    title=self.description,
-                )
-            )
-        else:
-            self.live.update(self.progress)
+            # Update the live display with progress and panel
+            if self.recent_items:
+                content = self._create_combined_display(self.progress, log_table)
+                panel = Panel.fit(content, title=self.description, border_style="blue")
+                self.live.update(panel)
+            else:
+                self.live.update(self.progress)
+        except Exception:
+            # If there's any issue updating the display, just continue
+            # This helps prevent disrupting the main migration process
+            pass
 
     def _create_combined_display(self, progress, log_table):
         """Create a combined display with progress and log table."""

@@ -6,6 +6,7 @@ Handles the migration of users and their accounts from Jira to OpenProject.
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -13,12 +14,13 @@ from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker
-
+from src.migrations.base_migration import BaseMigration
+from src.models import ComponentResult
 # Get logger from config
 logger = config.logger
 
 
-class UserMigration:
+class UserMigration(BaseMigration):
     """
     Handles the migration of users from Jira to OpenProject.
 
@@ -28,21 +30,43 @@ class UserMigration:
     3. Creating a mapping between Jira and OpenProject user IDs for later use
     """
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient):
+    def __init__(
+        self,
+        jira_client: JiraClient,
+        op_client: OpenProjectClient,
+        data_dir: str = None,
+    ):
         """
         Initialize the user migration tools.
 
         Args:
             jira_client: Initialized Jira client instance.
             op_client: Initialized OpenProject client instance.
+            data_dir: Path to data directory for storing mappings.
         """
-        self.jira_client = jira_client
-        self.op_client = op_client
+        super().__init__(jira_client, op_client, None)
+
+        # Configure paths
+        self.data_dir = Path(data_dir or config.get_path("data"))
+        os.makedirs(self.data_dir, exist_ok=True)
+
+        # Data storage
         self.jira_users = []
         self.op_users = []
         self.user_mapping = {}
 
-        self.data_dir = config.get_path("data")
+        # Setup file paths
+        self.jira_users_file = self.data_dir / "jira_users.json"
+        self.op_users_file = self.data_dir / "op_users.json"
+        self.user_mapping_file = self.data_dir / "user_mapping.json"
+
+        # Logging
+        self.logger.debug(f"UserMigration initialized with data dir: {self.data_dir}")
+
+        # Load existing data if available
+        self.jira_users = self._load_from_json("jira_users.json") or []
+        self.op_users = self._load_from_json("op_users.json") or []
+        self.user_mapping = self._load_from_json("user_mapping.json") or {}
 
     def extract_jira_users(self) -> list[dict[str, Any]]:
         """
@@ -51,15 +75,15 @@ class UserMigration:
         Returns:
             List of Jira users
         """
-        logger.info("Extracting users from Jira...", extra={"markup": True})
+        self.logger.info("Extracting users from Jira...", extra={"markup": True})
 
         self.jira_users = self.jira_client.get_users()
 
         if not self.jira_users:
-            logger.error("Failed to extract users from Jira", extra={"markup": True})
+            self.logger.error("Failed to extract users from Jira", extra={"markup": True})
             return []
 
-        logger.info(
+        self.logger.info(
             f"Extracted {len(self.jira_users)} users from Jira", extra={"markup": True}
         )
 
@@ -74,11 +98,11 @@ class UserMigration:
         Returns:
             List of OpenProject users
         """
-        logger.info("Extracting users from OpenProject...", extra={"markup": True})
+        self.logger.info("Extracting users from OpenProject...", extra={"markup": True})
 
         self.op_users = self.op_client.get_users()
 
-        logger.info(
+        self.logger.info(
             f"Extracted {len(self.op_users)} users from OpenProject",
             extra={"markup": True},
         )
@@ -94,7 +118,7 @@ class UserMigration:
         Returns:
             Dictionary mapping Jira user keys to OpenProject user IDs
         """
-        logger.info("Creating user mapping...", extra={"markup": True})
+        self.logger.info("Creating user mapping...", extra={"markup": True})
 
         if not self.jira_users:
             self.extract_jira_users()
@@ -182,10 +206,10 @@ class UserMigration:
         )
         match_percentage = (matched_users / total_users) * 100 if total_users > 0 else 0
 
-        logger.info(
+        self.logger.info(
             f"User mapping created for {total_users} users", extra={"markup": True}
         )
-        logger.info(
+        self.logger.info(
             f"Successfully matched {matched_users} users ({match_percentage:.1f}%)",
             extra={"markup": True},
         )
@@ -207,13 +231,13 @@ class UserMigration:
         ]
 
         if not unmatched_users:
-            logger.info(
+            self.logger.info(
                 "All users have a match in OpenProject, no need to create new users",
                 extra={"markup": True},
             )
             return self.user_mapping
 
-        logger.info(
+        self.logger.info(
             f"Creating {len(unmatched_users)} missing users in OpenProject...",
             extra={"markup": True},
         )
@@ -235,7 +259,7 @@ class UserMigration:
                 tracker.update_description(f"Creating user: {jira_display_name}")
 
                 if not jira_name or not jira_email:
-                    logger.warning(
+                    self.logger.warning(
                         f"Skipping user {jira_display_name} - missing username or email",
                         extra={"markup": True},
                     )
@@ -245,301 +269,168 @@ class UserMigration:
                     continue
 
                 cleaned_display_name = jira_display_name
-                original_display_name = cleaned_display_name
                 has_special_handling = False
 
-                if "[" in cleaned_display_name and "]" in cleaned_display_name:
-                    cleaned_display_name = cleaned_display_name.replace(
-                        "[", "("
-                    ).replace("]", ")")
-                    has_special_handling = True
-
-                if ":" in cleaned_display_name:
-                    cleaned_display_name = cleaned_display_name.replace(":", " -")
-                    has_special_handling = True
-
-                old_display_name = cleaned_display_name
-                cleaned_display_name = re.sub(
-                    r"[^\w\s\'\-\(\)]", " ", cleaned_display_name
-                )
-                if old_display_name != cleaned_display_name:
-                    has_special_handling = True
-
-                cleaned_name_parts = cleaned_display_name.split()
-                first_name = cleaned_name_parts[0] if cleaned_name_parts else "(none)"
-                last_name = (
-                    " ".join(cleaned_name_parts[1:])
-                    if len(cleaned_name_parts) > 1
-                    else "(none)"
-                )
-
-                if (
-                    has_special_handling
-                    or first_name == "(none)"
-                    or last_name == "(none)"
-                ):
-                    logger.info(
-                        f"Special name handling for {jira_display_name}: "
-                        f"original='{original_display_name}', "
-                        f"cleaned='{cleaned_display_name}', "
-                        f"first_name='{first_name}', last_name='{last_name}'"
-                    )
-                else:
-                    logger.debug(
-                        f"Name parsing for {jira_display_name}: first_name='{first_name}', last_name='{last_name}'"
-                    )
-
-                try:
-                    data = {"login": jira_name, "email": jira_email, "status": "active"}
-
-                    if first_name:
-                        data["firstName"] = first_name
-
-                    if last_name:
-                        data["lastName"] = last_name
-
-                    import random
-                    import string
-
-                    password = "".join(
-                        random.choice(string.ascii_letters + string.digits)
-                        for _ in range(12)
-                    )
-                    data["password"] = password
-
+                # Handle special cases
+                if "(" in cleaned_display_name:
+                    # Try to clean the display name if it contains parentheses
                     try:
-                        created_user = self.op_client._request(
-                            "POST", "/users", data=data
-                        )
-                    except requests.exceptions.HTTPError as e:
-                        created_user = None
-                        logger.debug(
-                            f"Failed user creation request data for {jira_display_name}: {json.dumps(data)}"
-                        )
+                        cleaned_display_name = re.sub(r'\s*\([^)]*\)', '', cleaned_display_name).strip()
+                        has_special_handling = True
+                    except Exception as e:
+                        self.logger.warning(f"Failed to clean display name {cleaned_display_name}: {str(e)}")
 
-                        if e.response.status_code == 422:
-                            try:
-                                error_details = e.response.json()
-                                error_message = error_details.get("message", str(e))
-
-                                has_username_taken = False
-                                has_email_taken = False
-
-                                if (
-                                    "_embedded" in error_details
-                                    and "errors" in error_details["_embedded"]
-                                ):
-                                    for error in error_details["_embedded"]["errors"]:
-                                        error_msg = error.get(
-                                            "message", "Unknown error"
-                                        )
-                                        logger.warning(
-                                            f"Validation error for {jira_display_name}: {error_msg}",
-                                            extra={"markup": True},
-                                        )
-
-                                        if "embedded" in error_details:
-                                            logger.debug(
-                                                f"Full error details for {jira_display_name}: {json.dumps(error_details)}"
-                                            )
-
-                                        if (
-                                            "username" in error_msg.lower()
-                                            and "already been taken"
-                                            in error_msg.lower()
-                                        ):
-                                            has_username_taken = True
-                                        if (
-                                            "email" in error_msg.lower()
-                                            and "already been taken"
-                                            in error_msg.lower()
-                                        ):
-                                            has_email_taken = True
-                                else:
-                                    logger.warning(
-                                        f"Error creating user {jira_display_name}: {error_message}",
-                                        extra={"markup": True},
-                                    )
-
-                                if (
-                                    "admin" in error_message.lower()
-                                    and "can't be blank" in error_message.lower()
-                                ):
-                                    logger.info(
-                                        f"Retrying user creation with admin=true for {jira_display_name}",
-                                        extra={"markup": True},
-                                    )
-                                    data["admin"] = True
-                                    created_user = self.op_client._request(
-                                        "POST", "/users", data=data
-                                    )
-                                elif has_username_taken or has_email_taken:
-                                    logger.info(
-                                        f"User appears to already exist in OpenProject, searching for {jira_display_name}",
-                                        extra={"markup": True},
-                                    )
-                                    all_users = self.op_client.get_users(
-                                        force_refresh=True
-                                    )
-                                    logger.info(
-                                        f"Retrieved {len(all_users)} users from OpenProject for matching",
-                                        extra={"markup": True},
-                                    )
-
-                                    existing_user = None
-                                    matched_by = None
-                                    jira_name_lower = jira_name.lower()
-                                    jira_email_lower = (
-                                        jira_email.lower() if jira_email else None
-                                    )
-
-                                    for user in all_users:
-                                        op_login = user.get("login", "").lower()
-                                        if op_login == jira_name_lower:
-                                            logger.info(
-                                                f"Found existing user with login: {jira_name}",
-                                                extra={"markup": True},
-                                            )
-                                            existing_user = user
-                                            matched_by = "username"
-                                            break
-
-                                        if jira_email_lower:
-                                            op_email = user.get("email", "").lower()
-                                            if op_email == jira_email_lower:
-                                                logger.info(
-                                                    f"Found existing user with email: {jira_email}",
-                                                    extra={"markup": True},
-                                                )
-                                                existing_user = user
-                                                matched_by = "email"
-                                                break
-
-                                    if existing_user:
-                                        self.user_mapping[jira_key].update(
-                                            {
-                                                "openproject_id": existing_user.get(
-                                                    "id"
-                                                ),
-                                                "openproject_login": existing_user.get(
-                                                    "login"
-                                                ),
-                                                "openproject_email": existing_user.get(
-                                                    "email"
-                                                ),
-                                                "matched_by": "found_after_error",
-                                            }
-                                        )
-                                        found_existing_count += 1
-                                        tracker.add_log_item(
-                                            f"Found existing: {jira_display_name} → {existing_user.get('login')} (by {matched_by})"
-                                        )
-                                        tracker.increment()
-                                        continue
-                                    else:
-                                        logger.warning(
-                                            f"User reported as duplicate but couldn't be found: {jira_display_name}",
-                                            extra={"markup": True},
-                                        )
-                                        self.user_mapping[jira_key].update(
-                                            {
-                                                "openproject_id": None,
-                                                "openproject_login": None,
-                                                "openproject_email": None,
-                                                "matched_by": "duplicate_but_not_found",
-                                            }
-                                        )
-                                        skipped_count += 1
-                                        tracker.add_log_item(
-                                            f"Skipped (duplicate but not found): {jira_display_name}"
-                                        )
-                                        tracker.increment()
-                                        continue
-                            except json.JSONDecodeError:
-                                raise e
-                        else:
-                            raise e
-
-                    if not created_user and self.op_client.rails_client:
-                        logger.info(
-                            f"API user creation failed for {jira_name}, trying Rails",
+                # First, check if a user with this email already exists
+                existing_user = None
+                try:
+                    existing_user = self.op_client.get_user_by_email(jira_email)
+                    if existing_user:
+                        self.logger.info(
+                            f"Found existing user with email {jira_email}: {existing_user.get('login')}",
                             extra={"markup": True},
                         )
-
-                        attributes = {
-                            "login": jira_name,
-                            "mail": jira_email,
-                            "password": password,
+                        # Update mapping
+                        self.user_mapping[jira_key] = {
+                            "jira_key": jira_key,
+                            "jira_name": jira_name,
+                            "jira_email": jira_email,
+                            "jira_display_name": jira_display_name,
+                            "openproject_id": existing_user.get("id"),
+                            "openproject_login": existing_user.get("login"),
+                            "openproject_email": existing_user.get("email"),
+                            "matched_by": "email_existing",
                         }
-
-                        if first_name:
-                            attributes["firstname"] = first_name
-
-                        if last_name:
-                            attributes["lastname"] = last_name
-
-                        success, record_data, error = (
-                            self.op_client.rails_client.create_record(
-                                "User", attributes
-                            )
+                        tracker.add_log_item(
+                            f"Found existing user: {jira_display_name} → {existing_user.get('login')}"
                         )
-                        created_user = record_data if success and record_data else None
+                        found_existing_count += 1
+                        tracker.increment()
+                        continue
+                except Exception as e:
+                    self.logger.warning(
+                        f"Error checking for existing user with email {jira_email}: {str(e)}",
+                        extra={"markup": True},
+                    )
 
-                        if error:
-                            logger.warning(
-                                f"Rails user creation error: {error}",
-                                extra={"markup": True},
-                            )
+                # If in dry run mode, skip the actual creation
+                if config.migration_config.get("dry_run"):
+                    self.logger.info(
+                        f"DRY RUN: Would create user {jira_name} ({jira_email})",
+                        extra={"markup": True},
+                    )
+                    tracker.add_log_item(f"Would create: {jira_display_name}")
+                    skipped_count += 1
+                    tracker.increment()
+                    continue
+
+                # Format first/last name from display name
+                first_name = ""
+                last_name = ""
+
+                # Use special handling to split the name based on spaces
+                if has_special_handling and " " in cleaned_display_name:
+                    name_parts = cleaned_display_name.split()
+                    if len(name_parts) >= 2:
+                        first_name = name_parts[0]
+                        last_name = " ".join(name_parts[1:])
+                    else:
+                        first_name = cleaned_display_name
+                        last_name = "."
+                else:
+                    # Otherwise use the regular display name
+                    if " " in jira_display_name:
+                        name_parts = jira_display_name.split()
+                        if len(name_parts) >= 2:
+                            first_name = name_parts[0]
+                            last_name = " ".join(name_parts[1:])
+                        else:
+                            first_name = jira_display_name
+                            last_name = "."
+                    else:
+                        first_name = jira_display_name
+                        last_name = "."
+
+                # Create the user in OpenProject
+                try:
+                    # Prepare user data
+                    user_data = {
+                        "login": jira_name,
+                        "email": jira_email,
+                        "firstName": first_name,
+                        "lastName": last_name,
+                        "admin": False,
+                        "status": "active",
+                        "language": "en",
+                    }
+
+                    # Create user with a fake password (since LDAP will be used for authentication)
+                    user_data["password"] = "ChangeMe123!"
+
+                    created_user = self.op_client.create_user(user_data)
 
                     if created_user:
-                        self.user_mapping[jira_key].update(
-                            {
-                                "openproject_id": created_user.get("id"),
-                                "openproject_login": created_user.get("login"),
-                                "openproject_email": created_user.get("email"),
-                                "matched_by": "created",
-                            }
-                        )
-                        created_count += 1
+                        # Update the mapping with the newly created user
+                        self.user_mapping[jira_key] = {
+                            "jira_key": jira_key,
+                            "jira_name": jira_name,
+                            "jira_email": jira_email,
+                            "jira_display_name": jira_display_name,
+                            "openproject_id": created_user.get("id"),
+                            "openproject_login": created_user.get("login"),
+                            "openproject_email": created_user.get("email"),
+                            "matched_by": "created",
+                        }
                         tracker.add_log_item(
                             f"Created: {jira_display_name} → {created_user.get('login')}"
                         )
+                        created_count += 1
                     else:
-                        failed_count += 1
                         tracker.add_log_item(f"Failed to create: {jira_display_name}")
+                        failed_count += 1
+                except requests.exceptions.HTTPError as e:
+                    error_msg = str(e)
+                    if "422" in error_msg:  # Validation error
+                        # Try to extract error details
+                        error_details = "Unknown validation error"
+                        try:
+                            if hasattr(e, "response") and e.response is not None:
+                                error_json = e.response.json()
+                                if "_embedded" in error_json and "errors" in error_json["_embedded"]:
+                                    errors = error_json["_embedded"]["errors"]
+                                    error_details = "; ".join([
+                                        error.get("message", "") for error in errors
+                                    ])
+                        except Exception:
+                            pass
+
+                        self.logger.warning(
+                            f"Validation error creating user {jira_display_name}: {error_details}",
+                            extra={"markup": True},
+                        )
+                        tracker.add_log_item(f"Validation error: {jira_display_name} - {error_details}")
+                    else:
+                        self.logger.warning(
+                            f"HTTP error creating user {jira_display_name}: {str(e)}",
+                            extra={"markup": True},
+                        )
+                        tracker.add_log_item(f"HTTP error: {jira_display_name} - {str(e)}")
+                    failed_count += 1
                 except Exception as e:
-                    logger.error(
+                    self.logger.warning(
                         f"Error creating user {jira_display_name}: {str(e)}",
                         extra={"markup": True},
                     )
+                    tracker.add_log_item(f"Error: {jira_display_name} - {str(e)}")
                     failed_count += 1
-                    tracker.add_log_item(
-                        f"Failed to create: {jira_display_name} (error: {str(e)})"
-                    )
 
                 tracker.increment()
 
-        if created_count > 0:
-            self.op_client._users_cache = []
-
+        # Save the updated mapping
         self._save_to_json(self.user_mapping, "user_mapping.json")
 
-        logger.info("User creation complete", extra={"markup": True})
-        logger.info(f"Created: {created_count} users", extra={"markup": True})
-        logger.info(
-            f"Found existing: {found_existing_count} users", extra={"markup": True}
-        )
-        logger.info(f"Skipped: {skipped_count} users", extra={"markup": True})
-        logger.info(f"Failed: {failed_count} users", extra={"markup": True})
-
-        total_users = len(self.user_mapping)
-        matched_users = sum(
-            1 for user in self.user_mapping.values() if user["matched_by"] != "none"
-        )
-        match_percentage = (matched_users / total_users) * 100 if total_users > 0 else 0
-
-        logger.info(
-            f"Updated user mapping: {matched_users}/{total_users} users matched ({match_percentage:.1f}%)",
+        self.logger.info(
+            f"Created {created_count} users, found {found_existing_count} existing users, "
+            f"skipped {skipped_count}, failed {failed_count}",
             extra={"markup": True},
         )
 
@@ -553,19 +444,20 @@ class UserMigration:
             Dictionary with analysis results
         """
         if not self.user_mapping:
-            if os.path.exists(os.path.join(self.data_dir, "user_mapping.json")):
-                with open(os.path.join(self.data_dir, "user_mapping.json")) as f:
+            mapping_path = os.path.join(self.data_dir, "user_mapping.json")
+            if os.path.exists(mapping_path):
+                with open(mapping_path) as f:
                     self.user_mapping = json.load(f)
             else:
-                self.create_user_mapping()
+                self.logger.error(
+                    "No user mapping found. Run create_user_mapping() first."
+                )
+                return {}
 
         analysis = {
             "total_users": len(self.user_mapping),
             "matched_users": sum(
                 1 for user in self.user_mapping.values() if user["matched_by"] != "none"
-            ),
-            "unmatched_users": sum(
-                1 for user in self.user_mapping.values() if user["matched_by"] == "none"
             ),
             "matched_by_username": sum(
                 1
@@ -577,20 +469,18 @@ class UserMigration:
                 for user in self.user_mapping.values()
                 if user["matched_by"] == "email"
             ),
-            "created_users": sum(
+            "matched_by_existing_email": sum(
+                1
+                for user in self.user_mapping.values()
+                if user["matched_by"] == "email_existing"
+            ),
+            "matched_by_creation": sum(
                 1
                 for user in self.user_mapping.values()
                 if user["matched_by"] == "created"
             ),
-            "found_after_error": sum(
-                1
-                for user in self.user_mapping.values()
-                if user["matched_by"] == "found_after_error"
-            ),
-            "duplicate_but_not_found": sum(
-                1
-                for user in self.user_mapping.values()
-                if user["matched_by"] == "duplicate_but_not_found"
+            "unmatched_users": sum(
+                1 for user in self.user_mapping.values() if user["matched_by"] == "none"
             ),
             "unmatched_details": [
                 {
@@ -604,61 +494,28 @@ class UserMigration:
             ],
         }
 
-        analysis["match_percentage"] = (
-            (analysis["matched_users"] / analysis["total_users"]) * 100
-            if analysis["total_users"] > 0
-            else 0
-        )
+        total = analysis["total_users"]
+        if total > 0:
+            analysis["match_percentage"] = (analysis["matched_users"] / total) * 100
+        else:
+            analysis["match_percentage"] = 0
 
         self._save_to_json(analysis, "user_mapping_analysis.json")
 
-        logger.info("User mapping analysis complete", extra={"markup": True})
-        logger.info(f"Total users: {analysis['total_users']}", extra={"markup": True})
-        logger.info(
-            f"Matched users: {analysis['matched_users']} ({analysis['match_percentage']:.1f}%)",
-            extra={"markup": True},
+        self.logger.info("User mapping analysis complete")
+        self.logger.info(f"Total users: {analysis['total_users']}")
+        self.logger.info(
+            f"Matched users: {analysis['matched_users']} ({analysis['match_percentage']:.1f}%)"
         )
-        logger.info(
-            f"- Matched by username: {analysis['matched_by_username']}",
-            extra={"markup": True},
+        self.logger.info(f"- Matched by username: {analysis['matched_by_username']}")
+        self.logger.info(f"- Matched by email: {analysis['matched_by_email']}")
+        self.logger.info(
+            f"- Matched by email (existing): {analysis['matched_by_existing_email']}"
         )
-        logger.info(
-            f"- Matched by email: {analysis['matched_by_email']}",
-            extra={"markup": True},
-        )
-        logger.info(
-            f"- Created in OpenProject: {analysis['created_users']}",
-            extra={"markup": True},
-        )
-        logger.info(
-            f"- Found after error: {analysis['found_after_error']}",
-            extra={"markup": True},
-        )
-        logger.info(
-            f"- Duplicate but not found: {analysis['duplicate_but_not_found']}",
-            extra={"markup": True},
-        )
-        logger.info(
-            f"Unmatched users: {analysis['unmatched_users']}", extra={"markup": True}
-        )
+        self.logger.info(f"- Created in OpenProject: {analysis['matched_by_creation']}")
+        self.logger.info(f"Unmatched users: {analysis['unmatched_users']}")
 
         return analysis
-
-    def _save_to_json(self, data: Any, filename: str):
-        """
-        Save data to a JSON file.
-
-        Args:
-            data: Data to save.
-            filename: Name of the file to save to (will be stored in data_dir).
-        """
-        file_path = os.path.join(self.data_dir, filename)
-        try:
-            with open(file_path, "w") as f:
-                json.dump(data, f, indent=2)
-            logger.debug(f"Data saved to {file_path}")
-        except OSError as e:
-            logger.error(f"Error saving data to {file_path}: {str(e)}")
 
     def run(
         self, dry_run: bool = False, force: bool = False, mappings=None
@@ -667,44 +524,54 @@ class UserMigration:
         Run the user migration process.
 
         Args:
-            dry_run: If True, don't actually create or update anything
+            dry_run: If True, don't actually create users in OpenProject
             force: If True, force extraction of data even if it already exists
             mappings: Optional mappings object (not used in this migration)
 
         Returns:
             Dictionary with migration results
         """
-        logger.info("Starting user migration", extra={"markup": True})
+        self.logger.info("Starting user migration", extra={"markup": True})
 
         try:
             # Extract data
             jira_users = self.extract_jira_users()
             op_users = self.extract_openproject_users()
 
+            # Create mapping
+            self.create_user_mapping()
+
+            # Create missing users if not in dry run mode
+            if not dry_run:
+                self.create_missing_users()
+            else:
+                self.logger.warning(
+                    "Dry run mode - not creating missing users",
+                    extra={"markup": True},
+                )
+
             # Analyze results
             analysis = self.analyze_user_mapping()
 
-            return {
-                "status": "success",
-                "jira_users_count": len(jira_users),
-                "op_users_count": len(op_users),
-                "mapped_users_count": analysis["matched_users"],
-                "unmapped_users_count": analysis["unmatched_users"],
-                "match_percentage": analysis["match_percentage"],
-                "success_count": analysis["matched_users"],
-                "failed_count": analysis["unmatched_users"],
-                "total_count": len(jira_users),
-                "analysis": analysis,
-            }
+            return ComponentResult(
+                success=True,
+                success_count=analysis["matched_users"],
+                failed_count=analysis["unmatched_users"],
+                total_count=analysis["total_users"],
+                jira_users_count=len(jira_users),
+                op_users_count=len(op_users),
+                analysis=analysis,
+            )
         except Exception as e:
-            logger.error(
+            self.logger.error(
                 f"Error during user migration: {str(e)}",
                 extra={"markup": True, "traceback": True},
             )
-            return {
-                "status": "failed",
-                "error": str(e),
-                "success_count": 0,
-                "failed_count": 0,
-                "total_count": 0,
-            }
+            self.logger.exception(e)
+            return ComponentResult(
+                success=False,
+                error=str(e),
+                success_count=0,
+                failed_count=len(self.jira_users) if self.jira_users else 0,
+                total_count=len(self.jira_users) if self.jira_users else 0,
+            )

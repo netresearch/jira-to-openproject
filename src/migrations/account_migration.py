@@ -7,6 +7,7 @@ import json
 import os
 from typing import Any
 
+from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
@@ -801,27 +802,27 @@ class AccountMigration(BaseMigration):
             # Analyze results
             analysis = self.analyze_account_mapping()
 
-            return {
-                "status": result.get("status", "success"),
-                "success_count": result.get("matched_count", 0)
+            return ComponentResult(
+                success=True if "success" == result.get("status", "success") else False,
+                success_count=result.get("matched_count", 0)
                 + result.get("created_count", 0),
-                "failed_count": result.get("failed_count", 0),
-                "total_count": len(tempo_accounts),
-                "tempo_accounts_count": len(tempo_accounts),
-                "op_projects_count": len(op_projects),
-                "mapped_accounts_count": len(mapping),
-                "custom_field_id": self.account_custom_field_id,
-                "analysis": analysis,
-            }
+                failed_count=result.get("failed_count", 0),
+                total_count=len(tempo_accounts),
+                tempo_accounts_count=len(tempo_accounts),
+                op_projects_count=len(op_projects),
+                mapped_accounts_count=len(mapping),
+                custom_field_id=self.account_custom_field_id,
+                analysis=analysis,
+            )
         except Exception as e:
             self.logger.error(
                 f"Error during account migration: {str(e)}",
                 extra={"markup": True, "traceback": True},
             )
-            return {
-                "status": "failed",
-                "error": str(e),
-                "success_count": 0,
-                "failed_count": len(self.tempo_accounts) if self.tempo_accounts else 0,
-                "total_count": len(self.tempo_accounts) if self.tempo_accounts else 0,
-            }
+            return ComponentResult(
+                success=False,
+                error=str(e),
+                success_count=0,
+                failed_count=len(self.tempo_accounts) if self.tempo_accounts else 0,
+                total_count=len(self.tempo_accounts) if self.tempo_accounts else 0,
+            )

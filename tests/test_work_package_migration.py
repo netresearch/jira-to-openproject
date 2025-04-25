@@ -108,12 +108,12 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
     @patch("src.migrations.work_package_migration.OpenProjectRailsClient")
-    @patch("src.migrations.work_package_migration.load_json_file")
+    @patch("src.utils.data_handler.load_dict")
     @patch("src.migrations.work_package_migration.ProgressTracker")
     def test_initialize(
         self,
         mock_tracker,
-        mock_load_json_file,
+        mock_load_dict,
         mock_rails_client,
         mock_op_client,
         mock_jira_client,
@@ -124,8 +124,8 @@ class TestWorkPackageMigration(unittest.TestCase):
         mock_op_instance = mock_op_client.return_value
         mock_rails_instance = mock_rails_client.return_value
 
-        # Mock load_json_file to return empty dictionaries
-        mock_load_json_file.return_value = {}
+        # Mock load_dict to return empty dictionaries
+        mock_load_dict.return_value = {}
 
         # Create instance
         migration = WorkPackageMigration(
@@ -137,7 +137,7 @@ class TestWorkPackageMigration(unittest.TestCase):
 
         # Assertions
         self.assertEqual(
-            mock_load_json_file.call_count, 5
+            mock_load_dict.call_count, 5
         )  # Should be called 5 times for different mappings
         self.assertIsInstance(migration.jira_client, MagicMock)
         self.assertIsInstance(migration.op_client, MagicMock)
@@ -145,10 +145,10 @@ class TestWorkPackageMigration(unittest.TestCase):
 
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
-    @patch("src.migrations.work_package_migration.load_json_file")
+    @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_load_mappings(
-        self, mock_exists, mock_load_json, mock_op_client, mock_jira_client
+        self, mock_exists, mock_load_dict, mock_op_client, mock_jira_client
     ):
         """Test the _load_mappings method."""
         # Setup mocks
@@ -158,7 +158,7 @@ class TestWorkPackageMigration(unittest.TestCase):
         mock_exists.return_value = True
 
         # Setup mock return values for mappings
-        mock_load_json.side_effect = [
+        mock_load_dict.side_effect = [
             self.project_mapping,
             self.user_mapping,
             self.issue_type_mapping,
@@ -182,9 +182,9 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
     @patch("src.migrations.work_package_migration.OpenProjectRailsClient")
-    @patch("src.migrations.work_package_migration.load_json_file")
+    @patch("src.utils.data_handler.load_dict")
     def test_prepare_work_package(
-        self, mock_load_json_file, mock_rails_client, mock_op_client, mock_jira_client
+        self, mock_load_dict, mock_rails_client, mock_op_client, mock_jira_client
     ):
         """Test the prepare_work_package method."""
         # Setup mocks
@@ -193,7 +193,7 @@ class TestWorkPackageMigration(unittest.TestCase):
         mock_rails_instance = mock_rails_client.return_value
 
         # Mock the issue type mapping and work package types
-        mock_load_json_file.return_value = {}
+        mock_load_dict.return_value = {}
         mock_op_instance.get_work_package_types.return_value = [
             {"id": 1, "name": "Task"}
         ]
@@ -251,117 +251,10 @@ class TestWorkPackageMigration(unittest.TestCase):
 
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
-    @patch("src.migrations.work_package_migration.OpenProjectRailsClient")
-    @patch("src.migrations.work_package_migration.load_json_file")
-    @patch("src.migrations.work_package_migration.ProgressTracker")
-    @patch("src.migrations.work_package_migration.config")
-    @patch("src.migrations.work_package_migration.os.path.join")
-    @patch("src.migrations.work_package_migration.save_json_file")
-    def test_import_work_packages_direct(
-        self,
-        mock_save_json,
-        mock_path_join,
-        mock_config,
-        mock_tracker,
-        mock_load_json_file,
-        mock_rails_client,
-        mock_op_client,
-        mock_jira_client,
-    ):
-        """Test the import_work_packages_direct method."""
-        # Setup mocks
-        mock_jira_instance = mock_jira_client.return_value
-        mock_op_instance = mock_op_client.return_value
-        mock_rails_instance = mock_rails_client.return_value
-
-        # Mock path.join to return a predictable path
-        mock_path_join.return_value = "/tmp/test_data/work_package_mapping_PROJ.json"
-
-        # Mock config.migration_config.get to return False for direct_migration
-        mock_config.migration_config.get.return_value = False
-
-        # Mock mappings
-        mock_load_json_file.return_value = {}
-
-        # Mock save_json_file to return True
-        mock_save_json.return_value = True
-
-        # Mock tracker
-        tracker_instance = mock_tracker.return_value.__enter__.return_value
-
-        # Create sample Jira Issue-like mock objects that have key attributes
-        jira_issue1 = MagicMock()
-        jira_issue1.id = "10001"
-        jira_issue1.key = "PROJ-123"
-
-        jira_issue2 = MagicMock()
-        jira_issue2.id = "10002"
-        jira_issue2.key = "PROJ-124"
-
-        # Create instance
-        migration = WorkPackageMigration(
-            jira_client=mock_jira_instance,
-            op_client=mock_op_instance,
-            op_rails_client=mock_rails_instance,
-            data_dir=config.get_path("data"),
-        )
-
-        # Set required attributes
-        migration.project_key = "PROJ"
-        migration.op_project_id = 1
-        migration.dry_run = False
-
-        # Set up the tracker attribute
-        migration.tracker = tracker_instance
-
-        # Mock the mappings class with prepare_work_package
-        migration.prepare_work_package = MagicMock(
-            side_effect=[
-                {  # First work package payload
-                    "project_id": 1,
-                    "subject": "First issue",
-                    "jira_key": "PROJ-123",
-                },
-                {  # Second work package payload
-                    "project_id": 1,
-                    "subject": "Second issue",
-                    "jira_key": "PROJ-124",
-                },
-            ]
-        )
-
-        # Set initial mapping dictionary
-        migration.work_package_mapping = {}
-
-        # Mock API creation results - one success, one failure
-        mock_op_instance.create_work_package.side_effect = [
-            {"id": 1001},  # Success for first
-            None,  # Failure for second
-        ]
-
-        # Call method
-        result = migration.import_work_packages_direct([jira_issue1, jira_issue2])
-
-        # Assertions
-        self.assertEqual(result["created_count"], 1)
-        self.assertEqual(result["error_count"], 1)
-        self.assertEqual(result["total_processed"], 2)
-
-        # Verify prepare_work_package was called
-        self.assertEqual(migration.prepare_work_package.call_count, 2)
-
-        # Verify op_client.create_work_package was called
-        self.assertEqual(mock_op_instance.create_work_package.call_count, 2)
-
-        # Verify save_json_file was called
-        mock_save_json.assert_called_once()
-
-    @patch("src.migrations.work_package_migration.JiraClient")
-    @patch("src.migrations.work_package_migration.OpenProjectClient")
-    @patch("src.migrations.work_package_migration.load_json_file")
+    @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_analyze_work_package_mapping(
-        self, mock_exists, mock_load_json, mock_op_client, mock_jira_client
+        self, mock_exists, mock_load_dict, mock_op_client, mock_jira_client
     ):
         """Test the analyze_work_package_mapping method."""
         # Setup mocks

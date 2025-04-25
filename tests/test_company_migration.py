@@ -13,7 +13,7 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.migrations.company_migration import CompanyMigration
-from src.utils import save_json_file
+from src.utils import data_handler
 
 
 class TestCompanyMigration(unittest.TestCase):
@@ -159,9 +159,10 @@ class TestCompanyMigration(unittest.TestCase):
     def test_extract_tempo_companies_from_list_format(self):
         """Test extracting tempo companies when the cached data is in list format."""
         # Save the list format data to the cache file
-        save_json_file(
-            self.sample_tempo_companies_list,
-            os.path.join(self.test_data_dir, "tempo_companies.json"),
+        data_handler.save(
+            data=self.sample_tempo_companies_list,
+            filename="tempo_companies.json",
+            directory=self.test_data_dir
         )
 
         # Reset the client
@@ -186,6 +187,8 @@ class TestCompanyMigration(unittest.TestCase):
 
     def test_alternative_company_id_formats(self):
         """Test handling of companies with both 'id' and 'tempo_id' formats."""
+        from src.utils import data_handler
+
         # Create a mixed list of company formats
         mixed_companies = [
             {"id": "1", "key": "ACME", "name": "ACME Corporation"},
@@ -193,8 +196,10 @@ class TestCompanyMigration(unittest.TestCase):
         ]
 
         # Save to cache file
-        save_json_file(
-            mixed_companies, os.path.join(self.test_data_dir, "tempo_companies.json")
+        data_handler.save(
+            data=mixed_companies,
+            filename="tempo_companies.json",
+            directory=self.test_data_dir
         )
 
         # Load companies

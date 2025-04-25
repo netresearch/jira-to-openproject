@@ -262,6 +262,12 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
   * [x] Implement custom field value migration
   * [x] Test complete field migration accuracy
 
+* [ ] **Enhance ScriptRunner Integration** (`jira_client.py`)
+  * [ ] Update ScriptRunner 'search' endpoint to include watchers in results
+  * [ ] Update watchers extraction in work package migration
+  * [ ] Test watchers extraction via both ScriptRunner and native API
+  * [ ] Optimize issue fetching when watchers are needed
+
 * [ ] **Implement Comments, Attachments, Work Log Migration** (`work_package_migration.py`)
   * [ ] Extract and migrate issue comments
   * [ ] Handle attachment downloading and uploading
