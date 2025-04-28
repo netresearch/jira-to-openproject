@@ -202,80 +202,62 @@ class ProjectMigration(BaseMigration):
             )
             return self.project_account_mapping
 
-        logger.info("Extracting project-account mapping...")
+        logger.info("Extracting project-account mapping from Tempo account data...")
 
-        # Load account mapping data
-        self.load_account_mapping()
+        # Create a new mapping dictionary
+        mapping: dict[str, list[dict[str, Any]]] = {}
 
-        if not self.jira_projects:
-            logger.warning("No Jira projects found - extract Jira projects first")
+        # Load Tempo accounts from file
+        tempo_accounts = self._load_from_json(TEMPO_ACCOUNTS_FILE)
+        if not tempo_accounts:
+            logger.warning("No Tempo accounts found. Cannot create project-account mapping.")
             return {}
 
-        # Get accounts for each project
-        mapping = {}
+        # Process each account and its project links
+        for account in tempo_accounts:
+            acct_id = account.get("id")
+            acct_key = account.get("key")
+            acct_name = account.get("name")
 
-        try:
-            # Build project-account mapping by querying Tempo per-project accounts endpoint
-            for jira_project in self.jira_projects:
-                project_key = jira_project.get("key")
-                project_id = jira_project.get("id")
-                if not project_id:
-                    logger.warning(
-                        f"Skipping project {project_key}: missing Jira project ID"
-                    )
+            if not acct_id:
+                continue
+
+            # Get all project links for this account
+            links = account.get("links", [])
+            for link in links:
+                # Only process project links (not customer links, etc.)
+                if link.get("scopeType") != "PROJECT":
                     continue
 
-                # Fetch accounts linked to this Jira project by project ID
-                accounts = self.jira_client.get_tempo_account_links_for_project(
-                    project_id
-                )
-                if not accounts:
-                    logger.warning(
-                        f"No Tempo account links found for project {project_key} (ID {project_id})"
-                    )
+                # Get project key
+                project_key = link.get("key")
+                if not project_key:
                     continue
 
-                mapping[project_key] = []
-                for account in accounts:
-                    # Extract account fields (accountId or id)
-                    acct_id = account.get("accountId") or account.get("id")
-                    acct_key = account.get("accountKey") or account.get("key")
-                    acct_name = account.get("accountName") or account.get("name")
-                    acct_default = account.get("default", False) or account.get(
-                        "isDefault", False
-                    )
+                # Create project entry if it doesn't exist
+                if project_key not in mapping:
+                    mapping[project_key] = []
 
-                    if not acct_id:
-                        continue
+                # Add account info to this project
+                mapping[project_key].append({
+                    "id": str(acct_id),
+                    "key": acct_key,
+                    "name": acct_name,
+                    "default": link.get("defaultAccount", False)
+                })
 
-                    mapping[project_key].append(
-                        {
-                            "id": str(acct_id),
-                            "key": acct_key,
-                            "name": acct_name,
-                            "default": acct_default,
-                        }
-                    )
+        # For each project, prioritize default accounts
+        for proj, accts in mapping.items():
+            # Sort to put default accounts first
+            mapping[proj] = sorted(accts, key=lambda a: not a.get("default"))
 
-            logger.info(f"Mapped {len(mapping)} projects to Tempo accounts")
+        logger.info(f"Mapped {len(mapping)} projects to Tempo accounts from account data")
 
-            # Filter to only the default Tempo account per project if available
-            for proj, accts in mapping.items():
-                # A default flag might be set on account entries
-                defaults = [a for a in accts if a.get("default")]
-                if defaults:
-                    mapping[proj] = defaults
-            # Save the mapping
-            self.project_account_mapping = mapping
-            self._save_to_json(mapping, PROJECT_ACCOUNT_MAPPING_FILE)
+        # Save the mapping
+        self.project_account_mapping = mapping
+        self._save_to_json(mapping, PROJECT_ACCOUNT_MAPPING_FILE)
 
-            return mapping
-
-        except Exception as e:
-            logger.error(
-                f"Error extracting project-account mapping: {str(e)}", exc_info=True
-            )
-            return {}
+        return mapping
 
     def find_parent_company_for_project(
         self, jira_project: dict[str, Any]
@@ -465,7 +447,7 @@ class ProjectMigration(BaseMigration):
 
             self.project_mapping = mapping
             self._save_to_json(mapping, Mappings.PROJECT_MAPPING_FILE)
-            logger.success(f"DRY RUN: Would have created {len(projects_data)} projects")
+            logger.info(f"DRY RUN: Would have created {len(projects_data)} projects")
             return ComponentResult(
                 success=True,
                 message=f"DRY RUN: Would have created {len(projects_data)} projects",
@@ -696,7 +678,7 @@ class ProjectMigration(BaseMigration):
         self.project_mapping = mapping
         self._save_to_json(mapping, Mappings.PROJECT_MAPPING_FILE)
 
-        logger.success(
+        logger.info(
             f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors"
         )
         return ComponentResult(
