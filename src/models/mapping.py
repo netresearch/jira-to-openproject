@@ -3,56 +3,12 @@ Data mapping module for Jira to OpenProject migration.
 Defines the mapping strategies between Jira and OpenProject data models.
 """
 
-from dataclasses import dataclass
-from typing import Any
-
 # Add the logger import
 from src import config
-
-# PEP 695 Type Aliases
-type JiraData = dict[str, Any]
-type OpenProjectData = dict[str, Any]
-type MappingResult = dict[str, Any]
-type TypeMapping = dict[str, int]
-type StatusMapping = dict[str, int]
+from src.types import JiraData, OpenProjectData, TypeMapping, StatusMapping
 
 # Get logger from config
 logger = config.logger
-
-
-@dataclass(slots=True)
-class JiraIssueType:
-    id: str
-    name: str
-    description: str | None = None
-
-
-@dataclass(slots=True)
-class OpenProjectWorkPackageType:
-    name: str
-    color: str = "#0000FF"
-    is_milestone: bool = False
-    is_default: bool = False
-    position: int = 1
-    is_in_roadmap: bool = True
-    jira_id: str | None = None
-    description: str | None = None
-
-
-@dataclass(slots=True)
-class JiraStatus:
-    id: str
-    name: str
-    description: str | None = None
-
-
-@dataclass(slots=True)
-class OpenProjectStatus:
-    name: str
-    description: str | None = None
-    is_closed: bool = False
-    color: str = "#0000FF"
-    jira_id: str | None = None
 
 
 class JiraToOPMapping:

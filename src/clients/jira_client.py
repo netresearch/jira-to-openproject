@@ -24,22 +24,7 @@ class JiraClient:
     This class provides methods for interacting with the Jira API,
     including project/issue operations and Tempo plugin integration.
     """
-
-    _instance = None
-
-    @classmethod
-    def get_instance(cls):
-        """
-        Get singleton instance of JiraClient.
-
-        Returns:
-            JiraClient: The singleton instance
-        """
-        if cls._instance is None:
-            cls._instance = JiraClient()
-        return cls._instance
-
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the Jira client."""
         # Only initialize once
         if getattr(self, "_initialized", False):
@@ -61,30 +46,29 @@ class JiraClient:
         ).get("custom_field_options_endpoint", "")
 
         # Initialize client
-        self.jira = None
+        self.jira: JIRA | None = None
         self.request_count = 0
         self.period_start = time.time()
         self.base_url = self.jira_url.rstrip("/")
 
         # Cache fields
-        self.server_info = {}
         self.captcha_challenge = False
 
-        self.project_cache = None
-        self.issue_type_cache = None
-        self.field_options_cache = {}
+        self.project_cache: list[dict[str, Any]] | None = None
+        self.issue_type_cache: list[dict[str, Any]] | None = None
+        self.field_options_cache: dict[str, Any] = {}
 
         self.__connect()
         self._patch_jira_client()
 
-    def __connect(self):
+    def __connect(self) -> bool:
         """Connect to the Jira API and set the connected status."""
         try:
             # Try to connect using token auth (Jira Cloud and Server PAT)
             logger.info("Attempting to connect to Jira using token authentication")
             self.jira = JIRA(server=self.jira_url, token_auth=self.jira_api_token)
-            # Verify connection by getting server info or current user
             server_info = self.jira.server_info()
+            # Verify connection by getting server info or current user
             logger.success(
                 f"Successfully connected to Jira server: {server_info.get('baseUrl')} ({server_info.get('version')})"
             )
@@ -457,7 +441,7 @@ class JiraClient:
             logger.error(f"Failed to get statuses: {str(e)}")
             return []
 
-    def _handle_response(self, response):
+    def _handle_response(self, response: Response) -> None:
         """
         Check response for CAPTCHA challenge and raise appropriate exception if found.
 
@@ -831,3 +815,4 @@ class JiraClient:
             return result
         except Exception as e:
             logger.error(f"Failed to retrieve issue link types: {str(e)}")
+            return None

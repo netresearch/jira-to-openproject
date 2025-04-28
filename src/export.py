@@ -376,7 +376,7 @@ def export_work_packages(
         )
 
         mappings = Mappings(
-            data_dir=get_path("data"), jira_client=jira_client, op_client=op_client
+            data_dir=get_path("data")
         )
 
         # Extract all necessary data (users, projects, custom fields, etc.)
