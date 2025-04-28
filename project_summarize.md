@@ -87,3 +87,16 @@ The primary objective of this project is to migrate business data from a Jira Se
 * Check `PROGRESS.md` for current tasks and status.
 * Use the specified Docker commands for execution and environment management.
 * Remember that `.env.local` overrides `.env` and is not version controlled.
+
+## OpenProject API Limitations
+
+The project has identified several limitations in the OpenProject API that require workarounds:
+
+1. **Custom Fields Creation** - Cannot be done via the API; requires Ruby/Rails scripting
+2. **Issue Type (Work Package Type) Creation** - Cannot be done via the API; requires Ruby/Rails scripting
+3. **Status Creation and Workflows** - Limited API support; may require manual configuration
+4. **Link Types (Relations)** - No API to retrieve relation types and cannot add or edit relation types; requires mapping to default types and using custom fields for unmapped types
+
+## Rails Console Integration
+
+To overcome OpenProject API limitations, the project incorporates:

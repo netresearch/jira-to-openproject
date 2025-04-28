@@ -131,7 +131,13 @@ python src/main.py --dry-run
 
 ## API Limitations & Workarounds
 
-* **OpenProject:** Custom fields and work package types are created via Rails console integration. Some fields (e.g., author/creation date) cannot be set via API.
+* **OpenProject:**
+  * Custom fields and work package types are created via Rails console integration.
+  * Some fields (e.g., author/creation date) cannot be set via API.
+  * Link types (relations) cannot be retrieved via API or created/modified. The migration tool:
+    * Maps Jira link types to OpenProject's five default relation types (relates, blocks, duplicates, precedes, includes)
+    * Allows users to customize mappings via a JSON configuration file
+    * Falls back to creating custom fields for unmapped link types
 * **Jira:** For large instances, use the ScriptRunner Add-On for efficient custom field option extraction.
 
 ## Development

@@ -129,13 +129,24 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
 
 * **Link Types (Relations)** (`link_type_migration.py`)
   * [x] Extract Jira issue link types
-  * [x] Extract OpenProject relation types
-  * [x] Define Link Type Mapping Strategy (Jira Link -> OP Relation)
+  * [ ] ~~Extract OpenProject relation types~~ **(BLOCKED: No OpenProject API to retrieve link types)**
+  * [x] Define Link Type Mapping Strategy
+    * [ ] Provide default mapping to standard OpenProject relation types:
+      * relates to
+      * duplicates/duplicated by
+      * blocks/blocked by
+      * precedes/follows
+      * includes/part of
+    * [ ] Implement user-configurable mapping via JSON file
+    * [ ] Add custom field fallback for unmapped link types
   * [x] Map Jira link types to OpenProject relation types (`var/data/link_type_mapping.json`)
-  * [x] Create/Update relation types in OpenProject via API (if needed, based on mapping)
+  * [ ] ~~Create/Update relation types in OpenProject~~ **(BLOCKED: OpenProject doesn't allow adding/editing relation types)**
+  * [ ] Create custom fields for unmapped link types that cannot be represented with standard relation types
+  * [ ] Implement user mapping template generation (`--generate-mapping-template`)
   * [x] Define testing steps for link type/relation migration
-  * [x] Test relation type creation/mapping
+  * [x] Test relation type mapping
   * [x] Test relation usage in work package migration
+  * [ ] Test custom field implementation for unmapped link types
 
 * **Issue Types (Work Package Types)** (`issue_type_migration.py`)
   * [x] Extract Jira issue types
