@@ -221,6 +221,7 @@ def run_migration(
                     "force": force,
                     "direct_migration": direct_migration,
                 },
+                "confirm_after_component": True,  # Enable confirmation between components
             },
         )
 
@@ -449,6 +450,44 @@ def run_migration(
                     )
                     results.components[component_name] = error_result
                     results.overall["status"] = "failed"
+
+                # Pause for user confirmation between components
+                if component_name != components[-1]:  # Skip after the last component
+                    try:
+                        print("\n" + "-" * 50)
+                        print(f"Component '{component_name}' has completed.")
+                        print("-" * 50)
+
+                        current_result = results.components.get(component_name)
+                        if current_result and hasattr(current_result, 'success'):
+                            if current_result.success:
+                                print("Status: SUCCESS")
+                            else:
+                                print("Status: FAILED")
+                                if hasattr(current_result, 'errors') and current_result.errors:
+                                    print(f"Errors: {current_result.errors}")
+
+                        next_component = components[components.index(component_name) + 1]
+                        print(f"\nNext component: {next_component}")
+
+                        if results.overall["status"] != "success":
+                            print("\nWARNING: Previous component had errors.")
+
+                        user_input = input("\nContinue to next component? [Y/n]: ").strip().lower()
+                        if user_input and user_input not in ('y', 'yes'):
+                            config.logger.warning(
+                                "Migration paused by user", extra={"markup": True}
+                            )
+                            results.overall["status"] = "interrupted"
+                            results.overall["message"] = "Migration was paused by user"
+                            break
+                    except KeyboardInterrupt:
+                        config.logger.warning(
+                            "Migration interrupted by user", extra={"markup": True}
+                        )
+                        results.overall["status"] = "interrupted"
+                        results.overall["message"] = "Migration was interrupted by user"
+                        break
 
                 # Break out if the component failed and it's critical
                 component_result_data = results.components
