@@ -72,7 +72,7 @@ class CustomFieldMigration(BaseMigration):
             f"Loaded analysis with {len(self.analysis)} keys: {list(self.analysis.keys())}"
         )
 
-    def extract_jira_custom_fields(self, force=False) -> list[dict[str, Any]]:
+    def extract_jira_custom_fields(self, force: bool = False) -> list[dict[str, Any]]:
         """
         Extract custom field information from Jira.
 
@@ -124,7 +124,7 @@ class CustomFieldMigration(BaseMigration):
 
                 if is_select_list:
                     try:
-                        self.logger.notice(
+                        self.logger.debug(
                             f"Retrieving options for field: {field.get('name')}"
                         )
                         meta_data = self.jira_client.get_field_metadata(field_id)
@@ -139,7 +139,7 @@ class CustomFieldMigration(BaseMigration):
                                     allowed_values.append(value["name"])
 
                         if allowed_values:
-                            self.logger.notice(
+                            self.logger.debug(
                                 f"Found {len(allowed_values)} options for field '{field.get('name')}' (ID: {field_id})"
                             )
                             enhanced_field["allowed_values"] = allowed_values

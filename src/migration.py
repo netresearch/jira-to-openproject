@@ -525,7 +525,7 @@ def run_migration(
         )
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Run Jira to OpenProject migration")
     parser.add_argument(
@@ -571,7 +571,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def setup_tmux_session():
+def setup_tmux_session() -> bool:
     """Create and set up a tmux session for Rails console."""
     from src import config  # Import config here to make it available
 
@@ -680,7 +680,7 @@ def setup_tmux_session():
         return False
 
 
-def main():
+def main() -> None:
     """Run the migration tool."""
     args = parse_args()
 
@@ -711,10 +711,10 @@ def main():
                     custom_field_migration = CustomFieldMigration(
                         jira_client, op_client
                     )
-                    result = custom_field_migration.update_mapping_file(
+                    mapping_update_result = custom_field_migration.update_mapping_file(
                         force=args.force
                     )
-                    if result:
+                    if mapping_update_result:
                         config.logger.success(
                             "Custom field mapping updated successfully."
                         )
@@ -724,8 +724,8 @@ def main():
                         )
                 elif choice == "2":
                     issue_type_migration = IssueTypeMigration(jira_client, op_client)
-                    result = issue_type_migration.update_mapping_file(force=args.force)
-                    if result:
+                    issue_type_mapping_update_result = issue_type_migration.update_mapping_file(force=args.force)
+                    if issue_type_mapping_update_result:
                         config.logger.success(
                             "Issue type mapping updated successfully."
                         )
@@ -744,7 +744,7 @@ def main():
         config.logger.debug(f"Args: {args}", extra={"markup": True})
 
         # Run migration with provided arguments
-        result = run_migration(
+        migration_result = run_migration(
             dry_run=args.dry_run,
             components=args.components,
             no_backup=args.no_backup,
@@ -753,8 +753,8 @@ def main():
         )
 
         # Display migration results summary
-        if result:
-            overall_status = result.get("overall", {}).get("status", "unknown")
+        if migration_result:
+            overall_status = migration_result.get("overall", {}).get("status", "unknown")
 
             # Show summary header based on status
             if overall_status == "success":
@@ -773,7 +773,7 @@ def main():
 
             # Print component results
             config.logger.info("Component results:", extra={"markup": True})
-            for component, comp_result in result.get("components", {}).items():
+            for component, comp_result in migration_result.get("components", {}).items():
                 # Access status from details
                 status = comp_result.details.get("status", "unknown") if comp_result.details else "unknown"
                 if status == "success":

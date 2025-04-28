@@ -652,7 +652,7 @@ class JiraClient:
         self.field_options_cache[field_id] = result
         return result
 
-    def _patch_jira_client(self):
+    def _patch_jira_client(self) -> None:
         """
         Patch the JIRA client to catch CAPTCHA challenges.
         This adds CAPTCHA detection to all API requests made through the JIRA library.
@@ -661,7 +661,7 @@ class JiraClient:
         original_request = self.jira._session.request
 
         # Create patched method that checks for CAPTCHA
-        def patched_request(method, url, **kwargs):
+        def patched_request(method: str, url: str, **kwargs: Any) -> Response | None:
             try:
                 self.request_count += 1
                 # dump requestcount
@@ -682,7 +682,7 @@ class JiraClient:
         path: str,
         method: str = "GET",
         content_type: str = "application/json",
-        **kwargs,
+        **kwargs: Any,
     ) -> Response | None:
         """
         Generic method to make API requests with proper error handling and CAPTCHA detection.

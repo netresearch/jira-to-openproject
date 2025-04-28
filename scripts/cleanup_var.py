@@ -8,6 +8,8 @@ import logging
 import os
 import shutil
 from pathlib import Path
+from typing import Optional
+
 from src.config import var_dirs
 
 # Configure logging
@@ -18,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger("cleanup_var")
 
 
-def clean_var_directory(dir_name=None, confirm=True):
+def clean_var_directory(dir_name: Optional[str] = None, confirm: bool = True) -> bool:
     """
     Clean up files in the specified var directory or all var directories.
 
