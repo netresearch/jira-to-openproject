@@ -171,7 +171,10 @@ class WorkPackageMigration(BaseMigration):
             while start_at < total_issues:
                 # Update progress description
                 current_batch += 1
-                progress_desc = f"Fetching {project_key} issues {start_at+1}-{min(start_at+batch_size, total_issues)}/{total_issues}"
+                progress_desc = (
+                    f"Fetching {project_key} issues "
+                    f"{start_at+1}-{min(start_at+batch_size, total_issues)}/{total_issues}"
+                )
                 project_tracker.update_description(progress_desc)
 
                 # Fetch a batch of issues with retry logic
@@ -187,7 +190,10 @@ class WorkPackageMigration(BaseMigration):
                         break
                     except Exception as e:
                         retry_count += 1
-                        retry_msg = f"Error fetching issues for {project_key} (attempt {retry_count}/{max_retries}): {str(e)}"
+                        retry_msg = (
+                            f"Error fetching issues for {project_key} "
+                            f"(attempt {retry_count}/{max_retries}): {str(e)}"
+                        )
                         self.logger.warning(retry_msg, extra={"markup": True})
                         project_tracker.add_log_item(retry_msg)
 
@@ -374,7 +380,8 @@ class WorkPackageMigration(BaseMigration):
         # Map the issue type
         type_id = None
 
-        # First try to look up directly in issue_type_id_mapping, which is keyed by ID and has a direct OpenProject ID as value
+        # First try to look up directly in issue_type_id_mapping, which is keyed by ID
+        # and has a direct OpenProject ID as value
         if (
             self.issue_type_id_mapping
             and str(issue_type_id) in self.issue_type_id_mapping
