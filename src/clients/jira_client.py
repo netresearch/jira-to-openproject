@@ -737,9 +737,10 @@ class JiraClient:
             A list of Tempo accounts or None if an error occurred.
         """
         path = "/rest/tempo-accounts/1/account"
-        params = {}
-        if expand:
-            params["expand"] = "true"
+        params = {
+            "expand": "true",
+            "skipArchived": "false",
+        }
 
         logger.info("Fetching Tempo accounts")
         response = self._make_request(path, params=params)
