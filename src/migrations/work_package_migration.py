@@ -1845,7 +1845,7 @@ class WorkPackageMigration(BaseMigration):
             return None
 
     def run(
-        self, dry_run: bool = False, force: bool = False, mappings=None
+        self, dry_run: bool = False, force: bool = False
     ) -> ComponentResult:
         """
         Run the work package migration process.

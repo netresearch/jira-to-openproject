@@ -773,7 +773,7 @@ class ProjectMigration(BaseMigration):
         return analysis
 
     def run(
-        self, dry_run: bool = False, force: bool = False, mappings: Optional[Mappings] = None
+        self, dry_run: bool = False, force: bool = False
     ) -> ComponentResult:
         """
         Run the project migration.

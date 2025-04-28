@@ -724,8 +724,8 @@ class AccountMigration(BaseMigration):
         self.account_custom_field_id = cf_id
 
     def run(
-        self, dry_run: bool = False, force: bool = False, mappings=None
-    ) -> dict[str, Any]:
+        self, dry_run: bool = False, force: bool = False
+    ) -> ComponentResult:
         """
         Run the account migration process.
 
@@ -739,7 +739,7 @@ class AccountMigration(BaseMigration):
         """
         self.logger.info("Starting account migration", extra={"markup": True})
 
-        self.mappings = mappings
+        self.mappings = config.mappings
 
         try:
             # Load existing data

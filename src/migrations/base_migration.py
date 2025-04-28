@@ -85,7 +85,7 @@ class BaseMigration:
         return filepath
 
     def run(
-        self, dry_run: bool = False, force: bool = False, mappings=None
+        self, dry_run: bool = False, force: bool = False
     ) -> ComponentResult:
         """
         Default implementation of the run method that all migration classes should implement.
