@@ -111,3 +111,65 @@ These configuration settings directly affect migration behavior:
 * `J2O_SSL_VERIFY`: May need to be disabled in test environments
 
 For details on running migrations, see [TASKS.md](../TASKS.md).
+
+## Mapping Files
+
+The following mapping files are generated and used during migration:
+
+* `var/data/user_mapping.json` - Maps Jira users to OpenProject users
+* `var/data/project_mapping.json` - Maps Jira projects to OpenProject projects
+* `var/data/issue_type_mapping.json` - Maps Jira issue types to OpenProject work package types
+* `var/data/status_mapping.json` - Maps Jira statuses to OpenProject statuses
+* `var/data/link_type_mapping.json` - Maps Jira link types to OpenProject relation types
+* `var/data/custom_field_mapping.json` - Maps Jira custom fields to OpenProject custom fields
+* `var/data/workflow_mapping.json` - Maps Jira workflows to OpenProject workflows
+* `var/data/company_mapping.json` - Maps Tempo companies to OpenProject top-level projects
+* `var/data/account_mapping.json` - Maps Tempo accounts to OpenProject custom field values
+
+### User-Configurable Mappings
+
+Some mappings can be manually configured to improve matching:
+
+#### Link Type Mapping
+
+Due to OpenProject API limitations (no ability to retrieve, add, or edit relation types), you need to map Jira link types to OpenProject's default relation types:
+
+1. Generate a template with all Jira link types:
+   ```bash
+   python src/main.py --components link_types --generate-mapping-template
+   ```
+
+2. Edit the generated template file at `var/data/link_type_user_mapping_template.json` and save it as `var/data/link_type_user_mapping.json`.
+
+3. For each Jira link type, either:
+   - Specify an `openproject_id` from the available defaults: "relates", "duplicates", "blocks", "precedes", "includes"
+   - Set `create_custom_field` to `true` to create a custom field for unmapped types
+
+4. Run the link type migration again to apply your mappings:
+   ```bash
+   python src/main.py --components link_types
+   ```
+
+The migration will automatically use your custom mappings and create custom fields for the unmapped types.
+
+**Example `link_type_user_mapping.json`:**
+```json
+{
+  "10000": {
+    "jira_id": "10000",
+    "jira_name": "Blocks",
+    "jira_outward": "blocks",
+    "jira_inward": "is blocked by",
+    "openproject_id": "blocks",
+    "create_custom_field": false
+  },
+  "10001": {
+    "jira_id": "10001",
+    "jira_name": "Clones",
+    "jira_outward": "clones",
+    "jira_inward": "is cloned by",
+    "openproject_id": "",
+    "create_custom_field": true
+  }
+}
+```
