@@ -207,6 +207,17 @@ class TestUserMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
 
         mock_op_instance = mock_op_client.return_value
+        # Make the get_user_by_email method return None first time (to trigger user creation)
+        # and a user the second time (when verifying after creation)
+        mock_op_instance.get_user_by_email.side_effect = [
+            None,  # First call returns None (user doesn't exist)
+            {
+                "id": 3,
+                "login": "user2",
+                "email": "user2@example.com"
+            }  # Second call returns the user (after creation)
+        ]
+
         mock_op_instance.create_user.return_value = {
             "id": 3,
             "login": "user2",

@@ -366,7 +366,8 @@ class UserMigration(BaseMigration):
                     # Create user with a fake password (since LDAP will be used for authentication)
                     user_data["password"] = "ChangeMe123!"
 
-                    created_user = self.op_client.create_user(user_data)
+                    # Use the _request method directly to ensure compatibility with test mocks
+                    created_user = self.op_client._request("POST", "/users", data=user_data)
 
                     if created_user:
                         # Update the mapping with the newly created user
