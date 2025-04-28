@@ -27,7 +27,7 @@ j2o = "src.main:main"
 packages = ["src"]
 
 [tool.black]
-line-length = 88
+line-length = 120
 target-version = ["py312", "py313"]
 skip-string-normalization = false
 exclude = '''
@@ -48,8 +48,10 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 ignore_missing_imports = true
 strict = true
-exclude = 'tests/.*'
+# Limit type-checking to exactly these directories
+files   = ["src", "scripts", "tests"]
+exclude = ['^build/', '^dist/', '^\\.venv/']
 
 [tool.isort]
 profile = "black"
-line_length = 88
+line_length = 120
