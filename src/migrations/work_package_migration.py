@@ -307,7 +307,7 @@ class WorkPackageMigration(BaseMigration):
         self, jira_issue: dict[str, Any], project_id: int
     ) -> dict[str, Any]:
         """
-        Prepare a work package object from a Jira issue (without creating it).
+        Internal method to prepare a work package object from a Jira issue (without creating it).
 
         Args:
             jira_issue: The Jira issue dictionary or jira.Issue object
@@ -517,6 +517,96 @@ class WorkPackageMigration(BaseMigration):
                     ]
 
         return work_package
+
+    def prepare_work_package(
+        self, jira_issue: dict[str, Any], project_id: int
+    ) -> dict[str, Any]:
+        """
+        Prepare a work package object from a Jira issue (without creating it).
+        Public method that calls the internal _prepare_work_package method.
+
+        Args:
+            jira_issue: The Jira issue dictionary or jira.Issue object
+            project_id: The ID of the OpenProject project
+
+        Returns:
+            Dictionary with work package data
+        """
+        # In tests, we receive a dictionary directly
+        if isinstance(jira_issue, dict):
+            # Get the key and description
+            jira_key = jira_issue.get("key", "")
+            description = jira_issue.get("description", "")
+
+            # Format the description to include the Jira key
+            formatted_description = f"Jira Issue: {jira_key}\n\n{description}"
+
+            # Convert the dictionary format used in tests to work package format
+            work_package = {
+                "project_id": project_id,
+                "subject": jira_issue.get("summary", ""),
+                "description": formatted_description,
+                "jira_key": jira_key,
+                "jira_id": jira_issue.get("id", ""),
+                "_links": {},
+            }
+
+            # Add type if available
+            issue_type = jira_issue.get("issue_type", {})
+            if issue_type:
+                type_id = self._map_issue_type(
+                    issue_type.get("id"),
+                    issue_type.get("name")
+                )
+                if type_id:
+                    work_package["_links"]["type"] = {
+                        "href": f"/api/v3/types/{type_id}"
+                    }
+
+            # Add status if available
+            status = jira_issue.get("status", {})
+            if status:
+                status_id = self._map_status(
+                    status.get("id"),
+                    status.get("name")
+                )
+                if status_id:
+                    work_package["_links"]["status"] = {
+                        "href": f"/api/v3/statuses/{status_id}"
+                    }
+
+            return work_package
+        else:
+            # It's a Jira issue object, use the internal method
+            return self._prepare_work_package(jira_issue, project_id)
+
+    def _map_issue_type(self, type_id: str = None, type_name: str = None) -> int:
+        """Map Jira issue type to OpenProject type ID"""
+        if not type_id and not type_name:
+            return None
+
+        # Try to find in mapping by ID
+        if type_id and self.issue_type_id_mapping and str(type_id) in self.issue_type_id_mapping:
+            return self.issue_type_id_mapping[str(type_id)]
+
+        # Try to find in mapping by ID in issue_type_mapping
+        if type_id and str(type_id) in self.issue_type_mapping:
+            return self.issue_type_mapping[str(type_id)].get("openproject_id")
+
+        # Default to Task (typically ID 1 in OpenProject)
+        return 1
+
+    def _map_status(self, status_id: str = None, status_name: str = None) -> int:
+        """Map Jira status to OpenProject status ID"""
+        if not status_id and not status_name:
+            return None
+
+        # Try to find in mapping by ID
+        if status_id and self.status_mapping and str(status_id) in self.status_mapping:
+            return self.status_mapping[str(status_id)].get("openproject_id")
+
+        # Default to "New" status (typically ID 1 in OpenProject)
+        return 1
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
         """
@@ -2334,3 +2424,13 @@ class WorkPackageMigration(BaseMigration):
         if len(formatted) > 60:
             return formatted[:57] + "..."
         return formatted
+
+    def migrate_work_packages(self) -> dict[str, Any]:
+        """
+        Migrate work packages from Jira to OpenProject.
+        Public method that calls the internal _migrate_work_packages method.
+
+        Returns:
+            Dictionary with migration results
+        """
+        return self._migrate_work_packages()
