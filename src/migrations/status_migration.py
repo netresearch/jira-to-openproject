@@ -625,7 +625,7 @@ class StatusMigration(BaseMigration):
         }
 
     def run(
-        self, dry_run: bool = False, force: bool = False, mappings=None
+        self, dry_run: bool = False, force: bool = False
     ) -> ComponentResult:
         """
         Run the status migration process.
@@ -633,7 +633,6 @@ class StatusMigration(BaseMigration):
         Args:
             dry_run: If True, no changes will be made to OpenProject
             force: If True, force extraction of data even if it already exists
-            mappings: Optional mappings object that can be used for mapping IDs between systems
 
         Returns:
             ComponentResult with migration results
@@ -642,11 +641,10 @@ class StatusMigration(BaseMigration):
 
         # Update instance variables
         self.dry_run = dry_run
-        if mappings:
-            self.mappings = mappings
-            self.status_mapping = (
-                mappings.status_mapping if hasattr(mappings, "status_mapping") else {}
-            )
+        self.mappings = config.mappings
+        self.status_mapping = (
+            config.mappings.status_mapping if hasattr(config.mappings, "status_mapping") else {}
+        )
 
         try:
             # Step 1: Extract Jira statuses

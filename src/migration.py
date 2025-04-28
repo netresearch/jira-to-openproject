@@ -351,7 +351,7 @@ def run_migration(
                 # Run the component
                 try:
                     component_result = component.run(
-                        dry_run=dry_run, force=force, mappings=config.mappings
+                        dry_run=dry_run, force=force
                     )
 
                     if component_result:

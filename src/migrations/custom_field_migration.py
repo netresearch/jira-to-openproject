@@ -1074,8 +1074,8 @@ class CustomFieldMigration(BaseMigration):
         return self.create_custom_field_mapping(force=force) is not None
 
     def run(
-        self, dry_run: bool = False, force: bool = False, mappings=None
-    ) -> dict[str, Any]:
+        self, dry_run: bool = False, force: bool = False
+    ) -> ComponentResult:
         """
         Run the custom field migration process.
 

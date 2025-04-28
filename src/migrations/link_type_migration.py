@@ -48,7 +48,7 @@ class LinkTypeMigration:
         self.console = console
 
     def run(
-        self, dry_run: bool = False, force: bool = False, mappings=None
+        self, dry_run: bool = False, force: bool = False
     ) -> ComponentResult:
         """
         Run the link type migration process.
@@ -56,7 +56,6 @@ class LinkTypeMigration:
         Args:
             dry_run: If True, no changes will be made to OpenProject
             force: If True, force extraction of data even if it already exists
-            mappings: Optional mappings object that can be used for mapping IDs between systems
 
         Returns:
             ComponentResult dictionary with migration status and counts

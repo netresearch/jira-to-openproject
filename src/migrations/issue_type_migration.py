@@ -1123,8 +1123,8 @@ class IssueTypeMigration(BaseMigration):
         return updated_count > 0 or already_mapped_count > 0
 
     def run(
-        self, dry_run: bool = False, force: bool = False, mappings=None
-    ) -> dict[str, Any]:
+        self, dry_run: bool = False, force: bool = False
+    ) -> ComponentResult:
         """
         Run the issue type migration.
 
