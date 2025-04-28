@@ -41,7 +41,7 @@ class BaseMigration:
         # Initialize config.mappings if not already set
         if config.mappings is None:
             from src.mappings.mappings import Mappings
-            config.mappings = Mappings(data_dir=self.data_dir, jira_client=self.jira_client, op_client=self.op_client)
+            config.mappings = Mappings(data_dir=self.data_dir)
 
     def _load_from_json(self, filename: str, default: Any = None) -> Any:
         """

@@ -19,9 +19,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
-# Type variables for generic functions
 T = TypeVar("T")
-U = TypeVar("U")
 
 # Create a custom theme for logging
 LOGGING_THEME = Theme(

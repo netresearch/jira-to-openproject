@@ -58,12 +58,12 @@ class ProjectMigration(BaseMigration):
             op_rails_client: Optional instance of OpenProjectRailsClient for direct migration.
         """
         super().__init__(jira_client, op_client, op_rails_client)
-        self.jira_projects = []
-        self.op_projects = []
-        self.project_mapping = {}
-        self.account_mapping = {}
-        self.project_account_mapping = {}
-        self.company_mapping = {}
+        self.jira_projects: list[dict[str, Any]] = []
+        self.op_projects: list[dict[str, Any]] = []
+        self.project_mapping: dict[str, Any] = {}
+        self.account_mapping: dict[str, Any] = {}
+        self.project_account_mapping: dict[str, list[dict[str, Any]]] = {}
+        self.company_mapping: dict[str, Any] = {}
         self._created_projects = 0
 
         self.account_custom_field_id = None
@@ -180,7 +180,10 @@ class ProjectMigration(BaseMigration):
 
     def extract_project_account_mapping(self, force: bool = False) -> dict[str, Any]:
         """
-        Extract the mapping between Jira projects and Tempo accounts.
+        Extract the mapping between Jira projects and Tempo accounts using already fetched Tempo account data.
+
+        Instead of making individual API calls for each project, this method processes the account links
+        already available in the Tempo accounts data from account migration.
 
         Args:
             force: If True, re-extract data even if it exists locally.
@@ -324,7 +327,7 @@ class ProjectMigration(BaseMigration):
 
         return company
 
-    def bulk_migrate_projects(self) -> bool:
+    def bulk_migrate_projects(self) -> ComponentResult:
         """
         Migrate projects from Jira to OpenProject in bulk using Rails console.
         This is more efficient than creating each project individually with API calls.
@@ -654,7 +657,7 @@ class ProjectMigration(BaseMigration):
             jira_key = project.get("jira_key")
             if jira_key:
                 jira_project = next(
-                    (p for p in self.jira_projects if p.get("key") == jira_key), None
+                    (p for p in self.jira_projects if p.get("key") == jira_key), {}
                 )
                 mapping[jira_key] = {
                     "jira_key": jira_key,
@@ -674,7 +677,7 @@ class ProjectMigration(BaseMigration):
             jira_key = error.get("jira_key")
             if jira_key:
                 jira_project = next(
-                    (p for p in self.jira_projects if p.get("key") == jira_key), None
+                    (p for p in self.jira_projects if p.get("key") == jira_key), {}
                 )
                 mapping[jira_key] = {
                     "jira_key": jira_key,
@@ -698,9 +701,6 @@ class ProjectMigration(BaseMigration):
         )
         return ComponentResult(
             success=True,
-            success_count=len(created_projects),
-            failed_count=len(errors),
-            total_count=len(created_projects) + len(errors),
             message=f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors",
         )
 
@@ -761,13 +761,13 @@ class ProjectMigration(BaseMigration):
             ],
         }
 
-        total = analysis["total_projects"]
+        total = int(analysis["total_projects"])
         if total > 0:
             analysis["migration_percentage"] = (
-                analysis["migrated_projects"] / total
+                int(analysis["migrated_projects"]) / total
             ) * 100
             analysis["hierarchical_percentage"] = (
-                analysis["projects_with_parent"] / total
+                int(analysis["projects_with_parent"]) / total
             ) * 100
         else:
             analysis["migration_percentage"] = 0
@@ -791,7 +791,7 @@ class ProjectMigration(BaseMigration):
         return analysis
 
     def run(
-        self, dry_run: bool = False, force: bool = False, mappings: Mappings = None
+        self, dry_run: bool = False, force: bool = False, mappings: Optional[Mappings] = None
     ) -> ComponentResult:
         """
         Run the project migration.
@@ -808,7 +808,7 @@ class ProjectMigration(BaseMigration):
         if dry_run:
             logger.info("Running in dry run mode - no changes will be made")
             if not config.migration_config.get("dry_run", False):
-                config.migration_config["dry_run"] = True
+                config.migration_config["dry_run"] = dry_run
 
         # Extract Jira projects
         self.extract_jira_projects(force=force)

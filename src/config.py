@@ -4,16 +4,11 @@ Provides a centralized configuration interface using ConfigLoader.
 """
 
 import os
-from typing import Any, Literal
+from typing import Any
 
-from .config_loader import ConfigDict, ConfigLoader
-from .display import configure_logging
-
-# PEP 695 Type Aliases
-type DirType = Literal[
-    "root", "data", "logs", "output", "backups", "temp", "exports", "results"
-]
-type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+from src.config_loader import ConfigLoader
+from src.display import configure_logging
+from src.types import ConfigDict, DirType, LogLevel, SectionName
 
 # Create a singleton instance of ConfigLoader
 _config_loader = ConfigLoader()
@@ -74,7 +69,7 @@ def get_config() -> ConfigDict:
     return _config_loader.get_config()
 
 
-def get_value(section: str, key: str, default: Any = None) -> Any:
+def get_value(section: SectionName, key: str, default: Any = None) -> Any:
     """Get a specific configuration value."""
     return _config_loader.get_value(section, key, default)
 
@@ -98,7 +93,7 @@ def get_path(dir_type: DirType) -> str:
 
 
 def ensure_subdir(
-    parent_dir_type: DirType | str, subdir_name: str | None = None
+    parent_dir_type: DirType, subdir_name: str | None = None
 ) -> str:
     """
     Ensure a subdirectory exists under one of the var directories.
@@ -110,21 +105,7 @@ def ensure_subdir(
     Returns:
         Path to the created subdirectory
     """
-    # Handle the case where parent_dir_type is a DirType
-    if isinstance(parent_dir_type, str) and parent_dir_type in [
-        "data",
-        "logs",
-        "output",
-        "backups",
-        "temp",
-        "exports",
-        "results",
-        "root",
-    ]:
-        parent_dir = get_path(parent_dir_type)
-    else:
-        # Handle the case where parent_dir_type is directly a path
-        parent_dir = parent_dir_type
+    parent_dir = get_path(parent_dir_type)
 
     if subdir_name:
         subdir_path = os.path.join(parent_dir, subdir_name)

@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from src import config
 from src.clients.jira_client import JiraClient
@@ -30,23 +30,8 @@ from src.migrations.issue_type_migration import IssueTypeMigration
 from src.migrations.status_migration import StatusMigration
 from src.migrations.work_package_migration import WorkPackageMigration
 from src.migrations.account_migration import AccountMigration
+from src.types import ComponentName, BackupDir
 from src.utils import data_handler
-
-
-# PEP 695 Type aliases
-type BackupDir = str | None
-type ComponentStatus = Literal["success", "failed", "interrupted"]
-type ComponentName = Literal[
-    "users",
-    "custom_fields",
-    "companies",
-    "accounts",
-    "projects",
-    "link_types",
-    "issue_types",
-    "status_types",
-    "work_packages",
-]
 
 
 class AvailableComponents(TypedDict):
@@ -284,9 +269,7 @@ def run_migration(
 
         # Initialize mappings
         config.mappings = Mappings(
-            data_dir=config.get_path("data"),
-            jira_client=jira_client,
-            op_client=op_client,
+            data_dir=config.get_path("data")
         )
 
         # Define all available migration components

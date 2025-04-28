@@ -1,8 +1,6 @@
 import os
 from typing import Any
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.config import logger
 from src.utils import data_handler
 
@@ -31,11 +29,10 @@ class Mappings:
     TEMPO_COMPANIES_FILE = "tempo_companies.json"
 
     def __init__(
-        self, data_dir: str, jira_client: JiraClient, op_client: OpenProjectClient
+        self,
+        data_dir: str,
     ):
         self.data_dir = data_dir
-        self.jira_client = jira_client
-        self.op_client = op_client
 
         # Load all mappings using class attributes for filenames
         self.user_mapping = self._load_mapping(self.USER_MAPPING_FILE)
@@ -172,41 +169,3 @@ class Mappings:
             return getattr(self, mapping_attr)
         logger.warning(f"Mapping '{mapping_name}' not found")
         return {}
-
-    # --- Methods needed by export_work_packages ---
-
-    def extract_jira_issues(
-        self, project_key: str, project_tracker=None
-    ) -> list[dict[str, Any]]:
-        """Extracts all issues for a given Jira project key."""
-        logger.notice(f"Extracting Jira issues for project: {project_key}")
-        try:
-            # Use the updated Jira client method that handles pagination
-            issues = self.jira_client.get_all_issues_for_project(
-                project_key, expand_changelog=True
-            )
-
-            if issues is not None:
-                logger.notice(
-                    f"Retrieved {len(issues)} issues for project {project_key}"
-                )
-                # The client returns jira.Issue objects, convert them to dicts if needed by prepare_work_package
-                # For now, assume prepare_work_package can handle jira.Issue objects or we adapt it later.
-                # If dicts are strictly needed:
-                # return [issue.raw for issue in issues]
-                return issues  # Return the list of jira.Issue objects
-            else:
-                logger.error(
-                    f"Failed to retrieve issues for project {project_key} from Jira client."
-                )
-                return []
-        except AttributeError:
-            logger.error(
-                "JiraClient does not have the expected 'get_all_issues_for_project' method."
-            )
-            return []
-        except Exception as e:
-            logger.error(
-                f"Error extracting issues for project {project_key}: {e}", exc_info=True
-            )
-            return []

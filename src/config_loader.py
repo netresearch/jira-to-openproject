@@ -5,29 +5,16 @@ Handles loading and accessing configuration settings.
 
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Any, Literal, TypeVar, Union
+from typing import Any
 
 import yaml
 from dotenv import load_dotenv
 
+from src.types import ConfigDict, ConfigValue, SectionName
+
 # Set up basic logging for configuration loading phase
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 config_logger = logging.getLogger("config_loader")
-
-# Type aliases
-T = TypeVar("T")
-ConfigValue = Union[str, int, bool, dict[str, Any], list[Any]]
-ConfigDict = dict[str, dict[str, ConfigValue]]
-SectionName = Literal["jira", "openproject", "migration"]
-
-
-@dataclass(slots=True)
-class ConfigSection:
-    """Configuration section with its settings"""
-
-    name: str
-    settings: dict[str, Any] = field(default_factory=dict)
 
 
 class ConfigLoader:

@@ -9,12 +9,9 @@ import json
 import os
 from typing import TypeVar, Type, Any, Optional, Dict, List
 
-from pydantic import BaseModel
-
 from src import config
 
-# Type variable for generic model handling
-T = TypeVar('T', bound=BaseModel)
+T = TypeVar("T")
 
 
 def save_results(
