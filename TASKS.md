@@ -281,25 +281,46 @@ Each component migration involves extraction, mapping, creation/update in OpenPr
   * [ ] Test work package relationship accuracy
   * [ ] Ensure proper hierarchy and links between work packages
 
-## Phase 3: Refinement, Testing & Validation
+## Phase 3: Bugfixes and Improvements
 
-* [ ] **Refine Migration Scripts:**
-  * [x] Enhance error handling and resilience
-  * [ ] Improve logging and progress reporting
-  * [ ] Optimize performance (API calls, data processing)
-  * [ ] Refine mapping logic and add configuration options
-* [x] **Implement Comprehensive Testing & Validation:**
-  * [x] Define Data Validation Strategy
-  * [x] Implement Automated Validation Checks (counts, key fields, use `src/cleanup_openproject.py`?)
-  * [ ] Perform Manual Spot Checks across all migrated components
-  * [ ] Validate Migrated Data (Component-wise & End-to-End)
-* [ ] **Perform User Acceptance Testing (UAT):**
-  * [ ] Define UAT Scenarios covering key migration aspects
-  * [ ] Schedule and conduct UAT Sessions with stakeholders
-  * [ ] Collect and Address UAT Feedback
-* [ ] **Refine & Test Rollback Strategy:**
-  * [ ] Refine Rollback Procedures based on testing
-  * [ ] Test Rollback Procedures thoroughly in the test environment
+* [ ] **Improve User Migration Process** (`user_migration.py`)
+  * [ ] Refactor to use JSON file method for user import like other components
+  * [ ] Implement consistent extraction/transformation/loading pattern
+  * [ ] Ensure proper caching of user data to avoid redundant API calls
+  * [ ] Update data storage to use centralized file storage mechanism
+  * [ ] Test improved user migration process for consistency with other components
+
+* [ ] **Fix Custom Field Migration Warnings** (`custom_field_migration.py`)
+  * [ ] Address "WARNING: Action required: 170 custom fields need manual creation or script execution" issue
+  * [ ] Ensure custom fields are properly created as part of the component's task
+  * [ ] Implement automatic creation of all required custom fields
+  * [ ] Remove manual intervention requirements where possible
+  * [ ] Add better error handling for custom field creation failures
+  * [ ] Test complete end-to-end custom field migration without manual steps
+
+* [ ] **Optimize API Request Caching** (`openproject_client.py`, `company_migration.py`)
+  * [ ] Fix excessive cached API requests issue during company/customer migration
+  * [ ] Ensure requests come from stored migration data instead of live API calls
+  * [ ] Implement better caching strategy for OpenProject client
+  * [ ] Reduce redundant API calls for projects when migrating companies
+  * [ ] Add efficient data retrieval patterns for all components
+  * [ ] Test reduced API call volume during migration
+
+* [ ] **Unify Customer/Company Terminology** (multiple files)
+  * [ ] Refactor code to consistently use "customer" instead of "company"
+  * [ ] Update class and file names to reflect consistent terminology
+  * [ ] Update documentation to clarify that companies = customers
+  * [ ] Ensure consistent naming in logs and user messages
+  * [ ] Test that all references are updated correctly
+
+* [ ] **Fix Component Migration Counters** (multiple files)
+  * [ ] Fix incorrect success/failure counters in migration components
+  * [ ] Address "wrong numbers in SUCCESS Component 'companies' completed successfully (0/0 items migrated)" issue
+  * [ ] Address "wrong numbers in SUCCESS Component 'accounts' completed successfully (0/0 items migrated)" issue
+  * [ ] Address "wrong numbers in SUCCESS Component 'projects' completed successfully (0/0 items migrated)" issue
+  * [ ] Ensure accurate counting of processed, successful, and failed items
+  * [ ] Implement consistent counter tracking across all components
+  * [ ] Test counter accuracy with various data sets
 
 ## Phase 4: Documentation & Production Migration
 
