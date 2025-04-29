@@ -9,13 +9,13 @@ from dotenv import load_dotenv
 from jira import JIRA
 
 
-def test_python_version():
+def test_python_version() -> None:
     """Test Python version is 3.12.x"""
     assert sys.version_info.major == 3
     assert sys.version_info.minor == 12
 
 
-def _test_required_packages():
+def _test_required_packages() -> None:
     """Test all required packages are installed"""
     # Test requests
     response = requests.get("https://httpbin.org/get")
@@ -30,7 +30,7 @@ def _test_required_packages():
     assert test_yaml["key"] == "value"
 
 
-def test_env_file():
+def test_env_file() -> None:
     """Test .env file exists and can be loaded"""
     # Try loading from .env first, then .env.test if needed
     load_dotenv()
@@ -63,7 +63,7 @@ def test_env_file():
 
 
 @pytest.mark.skip(reason="No Jira instance available in test environment")
-def test_jira_client_creation():
+def test_jira_client_creation() -> None:
     """Test JIRA client can be instantiated"""
     load_dotenv()
 
@@ -71,5 +71,13 @@ def test_jira_client_creation():
     if os.getenv("JIRA_URL") is None:
         load_dotenv(".env.test")
 
-    jira = JIRA(server=os.getenv("JIRA_URL"), token_auth=os.getenv("JIRA_API_TOKEN"))
+    # Get URL and token, asserting they exist
+    jira_url = os.getenv("JIRA_URL")
+    jira_token = os.getenv("JIRA_API_TOKEN")
+
+    assert jira_url is not None, "JIRA_URL environment variable is not set"
+    assert jira_token is not None, "JIRA_API_TOKEN environment variable is not set"
+
+    # Create JIRA client with valid strings
+    jira = JIRA(server=jira_url, token_auth=jira_token)
     assert jira is not None

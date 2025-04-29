@@ -13,21 +13,21 @@ from src.models import ComponentResult
 class TestDataHandler(unittest.TestCase):
     """Test cases for the data_handler module."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up test fixtures."""
         # Create a temporary directory for test files
         self.temp_dir = tempfile.mkdtemp()
         self.test_filename = "test_data.json"
         self.test_filepath = os.path.join(self.temp_dir, self.test_filename)
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         """Clean up after tests."""
         # Remove test files
         if os.path.exists(self.test_filepath):
             os.remove(self.test_filepath)
         os.rmdir(self.temp_dir)
 
-    def test_save_and_load_pydantic_model(self):
+    def test_save_and_load_pydantic_model(self) -> None:
         """Test saving and loading a Pydantic model."""
         # Create a test model
         test_result = ComponentResult(
@@ -58,7 +58,7 @@ class TestDataHandler(unittest.TestCase):
         self.assertEqual(loaded_result.message, test_result.message)
         self.assertEqual(loaded_result.details, test_result.details)
 
-    def test_save_and_load_dict(self):
+    def test_save_and_load_dict(self) -> None:
         """Test saving and loading a dictionary."""
         test_data = {"key1": "value1", "key2": 123, "nested": {"a": 1, "b": 2}}
 
@@ -79,7 +79,7 @@ class TestDataHandler(unittest.TestCase):
         # Verify loaded data matches original
         self.assertEqual(loaded_data, test_data)
 
-    def test_save_and_load_list(self):
+    def test_save_and_load_list(self) -> None:
         """Test saving and loading a list."""
         test_data = [1, 2, 3, {"key": "value"}, [4, 5, 6]]
 
@@ -100,7 +100,7 @@ class TestDataHandler(unittest.TestCase):
         # Verify loaded data matches original
         self.assertEqual(loaded_data, test_data)
 
-    def test_save_and_load_with_path(self):
+    def test_save_and_load_with_path(self) -> None:
         """Test saving and loading using direct file paths."""
         # Create a test model
         test_result = ComponentResult(
@@ -128,7 +128,7 @@ class TestDataHandler(unittest.TestCase):
         self.assertEqual(loaded_result.message, test_result.message)
         self.assertEqual(loaded_result.errors, test_result.errors)
 
-    def test_load_nonexistent_file(self):
+    def test_load_nonexistent_file(self) -> None:
         """Test loading a file that doesn't exist."""
         # Try to load a nonexistent file
         result = data_handler.load(
@@ -148,7 +148,7 @@ class TestDataHandler(unittest.TestCase):
         )
         self.assertEqual(result, default)
 
-    def test_handling_invalid_json(self):
+    def test_handling_invalid_json(self) -> None:
         """Test handling invalid JSON data."""
         # Create an invalid JSON file
         with open(self.test_filepath, "w") as f:

@@ -6,6 +6,8 @@ import json
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
+from typing import Any
+
 from src import config
 from src.migrations.project_migration import ProjectMigration
 
@@ -13,7 +15,7 @@ from src.migrations.project_migration import ProjectMigration
 class TestProjectMigration(unittest.TestCase):
     """Test cases for the ProjectMigration class."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up test fixtures."""
         # Sample Jira projects data
         self.jira_projects = [
@@ -105,8 +107,8 @@ class TestProjectMigration(unittest.TestCase):
     @patch("src.migrations.project_migration.config.migration_config")
     @patch("os.path.exists")
     def test_extract_jira_projects(
-        self, mock_exists, mock_migration_config, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test extracting projects from Jira."""
         # Create instance with mocked clients
         jira_client = mock_jira_client.return_value
@@ -142,8 +144,8 @@ class TestProjectMigration(unittest.TestCase):
     @patch("src.migrations.project_migration.config.migration_config")
     @patch("os.path.exists")
     def test_extract_openproject_projects(
-        self, mock_exists, mock_migration_config, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test extracting projects from OpenProject."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -173,8 +175,8 @@ class TestProjectMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_analyze_project_mapping(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the analyze_project_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -204,7 +206,7 @@ class TestProjectMigration(unittest.TestCase):
             result["projects_with_accounts"], 2
         )  # PROJ1 and PROJ2 have accounts
 
-    def test_find_parent_company_for_project(self):
+    def test_find_parent_company_for_project(self) -> None:
         """Test that we resolve parent company via default Tempo account"""
         migration = ProjectMigration(MagicMock(), MagicMock())
         # Stub mappings
@@ -227,7 +229,7 @@ class TestProjectMigration(unittest.TestCase):
         self.assertEqual(parent.get("openproject_id"), 123)
         self.assertEqual(parent.get("tempo_name"), "AcmeCorp")
 
-    def test_find_parent_company_warns_on_missing(self):
+    def test_find_parent_company_warns_on_missing(self) -> None:
         """Test that missing mappings return None and log a warning"""
         migration = ProjectMigration(MagicMock(), MagicMock())
         migration.project_account_mapping = {}
@@ -247,7 +249,7 @@ class TestProjectMigration(unittest.TestCase):
 # Define testing steps for project migration validation
 
 
-def project_migration_test_steps():
+def project_migration_test_steps() -> Any:
     """
     Testing steps for project migration validation.
 

@@ -127,7 +127,7 @@ def analyze_project_hierarchy() -> dict[str, Any]:
     return analysis
 
 
-def run_hierarchy_test():
+def run_hierarchy_test() -> Any:
     """Run the project hierarchy test"""
     logger.info("Running project hierarchy test...")
     analysis = analyze_project_hierarchy()

@@ -5,13 +5,15 @@ Tests for the workflow migration component.
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
+from typing import Any
+
 from src.migrations.workflow_migration import WorkflowMigration
 
 
 class TestWorkflowMigration(unittest.TestCase):
     """Test cases for the WorkflowMigration class."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up test fixtures."""
         # Sample Jira statuses data
         self.jira_statuses = [
@@ -133,8 +135,8 @@ class TestWorkflowMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_statuses(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the extract_jira_statuses method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -165,8 +167,8 @@ class TestWorkflowMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_openproject_statuses(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the extract_openproject_statuses method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -193,13 +195,7 @@ class TestWorkflowMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_create_status_mapping(
         self,
-        mock_file,
-        mock_exists,
-        mock_progress_tracker,
-        mock_get_path,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_progress_tracker: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the create_status_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -244,8 +240,8 @@ class TestWorkflowMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_status_in_openproject(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the create_status_in_openproject method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -283,13 +279,7 @@ class TestWorkflowMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_migrate_statuses(
         self,
-        mock_file,
-        mock_exists,
-        mock_progress_tracker,
-        mock_get_path,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_progress_tracker: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the migrate_statuses method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -335,8 +325,8 @@ class TestWorkflowMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_workflow_configuration(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the create_workflow_configuration method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -362,8 +352,8 @@ class TestWorkflowMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_analyze_status_mapping(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the analyze_status_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -403,8 +393,8 @@ class TestWorkflowMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_workflows(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the extract_jira_workflows method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -437,7 +427,7 @@ class TestWorkflowMigration(unittest.TestCase):
 # Define testing steps for workflow migration validation
 
 
-def workflow_migration_test_steps():
+def workflow_migration_test_steps() -> Any:
     """
     Testing steps for workflow migration validation.
 
