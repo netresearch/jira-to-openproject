@@ -682,64 +682,88 @@ def setup_tmux_session() -> bool:
 
 def main() -> None:
     """Run the migration tool."""
+
+    # Parse command-line arguments
     args = parse_args()
 
+    # Initialize clients
+    jira_client = JiraClient()
+    op_client = OpenProjectClient()
+    op_rails_client = None
+
     try:
-        # Handle tmux setup if requested
+        # Initialize OpenProject Rails client if needed
+        try:
+            op_rails_client = OpenProjectRailsClient()
+            op_rails_client.connect()
+        except Exception as e:
+            config.logger.warning(
+                f"Could not initialize Rails client: {str(e)}"
+            )
+            config.logger.warning(
+                "Some components requiring Rails console will be skipped"
+            )
+
         if args.setup_tmux:
             setup_tmux_session()
+            config.logger.success("tmux session setup complete.")
             return
 
-        # Handle backup restoration if requested
         if args.backup_dir:
-            restore_backup(args.backup_dir)
+            success = restore_backup(args.backup_dir)
+            if success:
+                config.logger.success("Backup restoration completed successfully.")
+            else:
+                config.logger.error("Backup restoration failed.")
             return
 
-        # Handle update mapping if requested
         if args.update_mapping:
-            jira_client = JiraClient()
-            op_client = OpenProjectClient()
+            # List options to choose which mapping to update
+            print("\nSelect mapping to update:")
+            print("1. Custom Field mapping")
+            print("2. Issue Type mapping")
 
-            # Ask the user which mapping to update
-            print("\nWhich mapping would you like to update?")
-            print("1. Custom Fields")
-            print("2. Issue Types (Work Package Types)")
-
-            try:
-                choice = input("Enter choice (1 or 2): ")
-                if choice == "1":
-                    custom_field_migration = CustomFieldMigration(
-                        jira_client, op_client
-                    )
-                    mapping_update_result = custom_field_migration.update_mapping_file()
-                    if mapping_update_result:
-                        config.logger.success(
-                            "Custom field mapping updated successfully."
+            while True:
+                try:
+                    choice = input("Enter choice (1-2): ")
+                    if choice == "1":
+                        custom_field_migration = CustomFieldMigration(
+                            jira_client, op_client, op_rails_client
                         )
+                        cf_mapping_update_result = custom_field_migration.update_mapping_file()
+                        if cf_mapping_update_result:
+                            config.logger.success(
+                                "Custom field mapping updated successfully."
+                            )
+                        else:
+                            config.logger.warning(
+                                "No updates were made to custom field mapping."
+                            )
+                        break
+                    elif choice == "2":
+                        issue_type_migration = IssueTypeMigration(jira_client, op_client)
+                        issue_type_mapping_update_result = issue_type_migration.update_mapping_file()
+                        if issue_type_mapping_update_result:
+                            config.logger.success(
+                                "Issue type mapping updated successfully."
+                            )
+                        else:
+                            config.logger.warning(
+                                "No updates were made to issue type mapping."
+                            )
+                        break
                     else:
-                        config.logger.warning(
-                            "No updates were made to custom field mapping."
-                        )
-                elif choice == "2":
-                    issue_type_migration = IssueTypeMigration(jira_client, op_client)
-                    issue_type_mapping_update_result = issue_type_migration.update_mapping_file()
-                    if issue_type_mapping_update_result:
-                        config.logger.success(
-                            "Issue type mapping updated successfully."
-                        )
-                    else:
-                        config.logger.warning(
-                            "No updates were made to issue type mapping."
-                        )
-                else:
-                    config.logger.error("Invalid choice. Please enter 1 or 2.")
-            except KeyboardInterrupt:
-                config.logger.warning("Operation cancelled by user.")
-
+                        config.logger.error("Invalid choice. Please enter 1 or 2.")
+                except KeyboardInterrupt:
+                    config.logger.warning("Operation cancelled by user.")
+                    return
             return
 
         # dump args
         config.logger.debug(f"Args: {args}", extra={"markup": True})
+
+        # Update configuration with CLI arguments
+        config.update_from_cli_args(args)
 
         # Run migration with provided arguments
         migration_result = run_migration(components=args.components)

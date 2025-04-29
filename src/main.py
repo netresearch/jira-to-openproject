@@ -9,7 +9,7 @@ and export operations from a single command-line tool.
 import argparse
 import sys
 
-from src.config import logger
+from src.config import logger, update_from_cli_args
 
 # Import migration functions from the new modules
 from src.migration import restore_backup, run_migration, setup_tmux_session
@@ -67,6 +67,9 @@ def main() -> None:
 
     # Execute the appropriate command
     if args.command == "migrate":
+        # Update configuration with CLI arguments
+        update_from_cli_args(args)
+
         # Check if we're restoring from a backup
         if args.restore:
             success = restore_backup(args.restore)

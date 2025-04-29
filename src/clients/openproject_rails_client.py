@@ -11,6 +11,8 @@ import json
 import os
 import subprocess
 import time
+import random
+import string
 from typing import Any, Optional
 
 from src import config
@@ -214,8 +216,15 @@ class OpenProjectRailsClient:
                 with open(local_output_path) as f:
                     result_data = json.load(f)
 
-                # Delete the temporary file
-                os.unlink(local_output_path)
+                # Preserve the file instead of deleting it
+                debug_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "var", "debug")
+                os.makedirs(debug_dir, exist_ok=True)
+                preserved_path = os.path.join(debug_dir, f"rails_output_{marker_id}.json")
+                import shutil
+                shutil.copy2(local_output_path, preserved_path)
+                logger.info(f"Preserved Rails output JSON to: {preserved_path}")
+                # We keep the temporary file, don't delete it
+                # os.unlink(local_output_path)
 
                 # Return the parsed results
                 if result_data.get("status") == "success":
@@ -320,153 +329,183 @@ class OpenProjectRailsClient:
         except Exception as e:
             return self._error_result(f"Failed to execute command: {str(e)}")
 
-    def _execute_via_file_internal(self, command: str, timeout: int = None) -> dict:
+    def _execute_via_file_internal(
+        self, script_body: str, params: Optional[dict] = None, timeout: int = None
+    ) -> dict[str, Any]:
         """
-        Internal method to execute a command via a file to avoid sending large commands directly to the Rails console.
-        This method is automatically used by _send_command for large commands and should not be called directly.
+        Execute a ruby command via a file to avoid sending large commands directly
+        to the rails console.
+
+        This method is internal and used by execute_via_file. It handles the logic for
+        file-based execution.
 
         Args:
-            command: The Ruby command to execute
-            timeout: Maximum execution timeout
+            script_body: The Ruby script body to execute
+            params: Optional parameters to pass to the script
+            timeout: Optional timeout override (in seconds)
 
         Returns:
-            Dictionary with execution results
+            Dictionary with status ('success' or 'error') and output or error message
         """
+        if not self._is_connected:
+            return {"status": "error", "error": "Not connected to tmux session"}
+
+        # Use the provided timeout or fall back to the instance's execute_file_timeout
+        if timeout is None:
+            timeout = self.execute_file_timeout
+
+        # Generate unique filenames for our script and result files
+        timestamp = int(time.time())
+        random_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        filename_base = f"j2o_script_{timestamp}_{random_suffix}"
+        script_filename = f"{filename_base}.rb"
+        result_filename = f"{filename_base}_result.json"
+
+        # Local file paths (for creating and uploading files)
+        local_script_path = os.path.join("/tmp", script_filename)
+        local_result_path = os.path.join("/tmp", result_filename)
+
+        # Container file paths (where files will be in the container)
+        container_script_path = os.path.join("/tmp", script_filename)
+        container_result_path = os.path.join("/tmp", result_filename)
+
+        # Create the debug directory if it doesn't exist
+        debug_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "var", "debug")
+        os.makedirs(debug_dir, exist_ok=True)
+
+        # Path for preserving the script file in the debug directory
+        preserved_script_path = os.path.join(debug_dir, script_filename)
+
+        # Prepare the script with wrapper code to handle params and write results to a file
+        script_with_wrapper = self._prepare_script_with_wrapper(
+            script_body, params, container_result_path
+        )
+
+        # Write the script to a local file
+        with open(local_script_path, "w") as f:
+            f.write(script_with_wrapper)
+
+        # Copy the script to the debug directory for preservation
+        import shutil
+        shutil.copy2(local_script_path, preserved_script_path)
+        logger.info(f"Preserved Ruby script to: {preserved_script_path}")
+
         try:
-            # Generate unique filenames
-            timestamp = str(int(time.time()))
-            script_file = f"/tmp/rails_command_{timestamp}.rb"
-            result_file = f"/tmp/rails_result_{timestamp}.json"
-            marker_id = timestamp
+            # Transfer the script file to the container
+            if not self.transfer_file_to_container(local_script_path, container_script_path):
+                return {
+                    "status": "error",
+                    "error": f"Failed to transfer script file to container",
+                }
+
+            self._get_target()
+
+            # Marker to find the command output in the Rails console
+            marker_id = str(int(time.time()))
             start_marker = f"RAILSCMD_{marker_id}_START"
             end_marker = f"RAILSCMD_{marker_id}_END"
 
-            # Get container and server info
-            container_name = config.openproject_config.get("container")
-            op_server = config.openproject_config.get("server")
+            # Command to execute the script file in the Rails console
+            file_execute_command = f"""
+            begin
+              puts "{start_marker}"
+              begin
+                load '{container_script_path}'
+                puts "Script executed successfully, results in {container_result_path}"
+              rescue => e
+                puts "ERROR: #{{e.class.name}}: #{{e.message}}"
+                puts e.backtrace
+              end
+              puts "{end_marker}"
+            end
+            """
 
-            if not container_name or not op_server:
-                logger.error("Missing container or server configuration")
-                return None
+            # Send the command to execute the script
+            result = self._send_command(file_execute_command, timeout=timeout)
 
-            # Create a temporary file locally
-            import tempfile
+            if result is None:
+                logger.error("Execution timed out or markers not found")
+                return {
+                    "status": "error",
+                    "error": "Execution timed out or markers not found",
+                }
 
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".rb", delete=False) as f:
-                # Write a wrapper that captures output and errors
-                f.write(
-                    f"""
-                begin
-                  # Execute the command and capture the result
-                  result = (
-                    {command}
-                  )
+            # Check if execution finished successfully
+            if end_marker not in result:
+                logger.error(f"End marker not found in result: {result}")
+                return {
+                    "status": "error",
+                    "error": "Execution did not complete (end marker not found)",
+                }
 
-                  # Write the result to a JSON file
-                  require 'json'
-                  File.write('{result_file}', {{
-                    'status' => 'success',
-                    'output' => result.nil? ? nil : result
-                  }}.to_json)
-                  puts "{start_marker}"
-                  puts "Command executed successfully, result in {result_file}"
-                  puts "{end_marker}"
-                rescue => e
-                  # Write error to file
-                  require 'json'
-                  File.write('{result_file}', {{
-                    'status' => 'error',
-                    'error' => e.message,
-                    'backtrace' => e.backtrace[0..5]
-                  }}.to_json)
-                  puts "{start_marker}"
-                  puts "ERROR executing command: #{{e.message}}"
-                  puts "{end_marker}"
-                end
-                """
-                )
-                local_file = f.name
+            # Check for errors in the execution output
+            # Errors will start with "ERROR:" at the beginning of a line
+            for line in result.splitlines():
+                if line.strip().startswith("ERROR: "):
+                    error_line = line.strip()
+                    logger.error(f"Error executing script: {error_line}")
+                    # Continue checking for more detailed error information
+                    error_info = "\n".join(
+                        [l for l in result.splitlines() if l.strip()]
+                    )
+                    return {"status": "error", "error": error_info}
 
-            # Transfer the file to the container
-            if not self.transfer_file_to_container(local_file, script_file):
-                os.unlink(local_file)
-                return None
+            # Now, transfer the result file from the container to local machine
+            if not self.transfer_file_from_container(container_result_path, local_result_path):
+                logger.error(f"Failed to transfer result file from container")
+                return {
+                    "status": "error",
+                    "error": "Failed to transfer result file from container",
+                }
 
-            # Clean up local file
-            os.unlink(local_file)
+            # Path for preserving the result file in the debug directory
+            preserved_result_path = os.path.join(debug_dir, result_filename)
 
-            # Execute a small command to load and run the file
-            target = self._get_target()
-            load_cmd = f"puts 'Loading command file...'; load '{script_file}'; nil"
+            # Copy the result file to the debug directory for preservation
+            shutil.copy2(local_result_path, preserved_result_path)
+            logger.info(f"Preserved result file to: {preserved_result_path}")
 
-            logger.debug("Sending file-based command to tmux")
-            send_cmd = ["tmux", "send-keys", "-t", target, load_cmd, "Enter"]
-            subprocess.run(send_cmd, check=True)
+            try:
+                # Read and parse the JSON result file
+                with open(local_result_path) as f:
+                    result_data = json.load(f)
 
-            # Use same waiting logic as _send_command to find markers in output
-            start_time = time.time()
-            found_start = False
-            found_end = False
-            last_output = ""
-            check_interval = 0.2
+                # Process the result
+                if result_data.get("status") == "success":
+                    output = result_data.get("output")
+                    # Explicitly handle nil values from Ruby
+                    if output == "nil":
+                        return {"status": "success", "output": None}
+                    return {"status": "success", "output": output}
+                else:
+                    error_msg = result_data.get("error", "Unknown error")
+                    backtrace = result_data.get("backtrace", [])
+                    error_with_trace = f"{error_msg}\n" + "\n".join(backtrace) if backtrace else error_msg
+                    return {"status": "error", "error": error_with_trace}
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing JSON result file: {e}")
+                return {
+                    "status": "error",
+                    "error": f"Error parsing JSON result file: {e}",
+                }
+            except Exception as e:
+                logger.error(f"Error reading result file: {str(e)}")
+                return {"status": "error", "error": f"Error reading result file: {str(e)}"}
+        finally:
+            # We don't remove the files - keeping them for debugging
+            logger.debug(f"Script file preserved at: {preserved_script_path}")
+            logger.debug(f"Result file preserved at: {preserved_result_path if 'preserved_result_path' in locals() else 'N/A'}")
 
-            # Use provided timeout or default command_timeout
-            max_timeout = timeout if timeout is not None else self.command_timeout
+            # Comment out file cleanup - preserve temporary files for debugging
+            # try:
+            #     if os.path.exists(local_script_path):
+            #         os.remove(local_script_path)
+            #     if os.path.exists(local_result_path):
+            #         os.remove(local_result_path)
+            # except Exception as e:
+            #     logger.warning(f"Error cleaning up temporary files: {str(e)}")
 
-            while time.time() - start_time < max_timeout:
-                # Capture the pane content
-                capture_cmd = ["tmux", "capture-pane", "-p", "-t", target]
-                result = subprocess.run(
-                    capture_cmd, check=True, capture_output=True, text=True
-                )
-                pane_content = result.stdout
-
-                # Check if output has changed
-                if pane_content != last_output:
-                    last_output = pane_content
-
-                # Check for start and end markers
-                if start_marker in pane_content:
-                    found_start = True
-
-                if found_start and end_marker in pane_content:
-                    found_end = True
-                    # Cleanup remote files
-                    cleanup_cmd = [
-                        "ssh",
-                        op_server,
-                        "docker",
-                        "exec",
-                        container_name,
-                        "bash",
-                        "-c",
-                        f"rm -f {script_file}",
-                    ]
-                    subprocess.run(cleanup_cmd, check=False, capture_output=True)
-
-                    # Stabilize console
-                    self._stabilize_console()
-
-                    # Return output with markers for consistency with direct command execution
-                    return pane_content
-
-                # Wait before checking again
-                time.sleep(check_interval)
-
-            # Timeout occurred
-            logger.warning(
-                f"Command timeout after {int(time.time()-start_time)}s: "
-                f"start_found={found_start}, end_found={found_end}"
-            )
-
-            # Stabilize console and return None
-            self._stabilize_console()
-            return None
-
-        except Exception as e:
-            logger.error(f"Error in file-based command execution: {str(e)}")
-            self._stabilize_console()
-            return None
+            logger.info(f"Local temporary files preserved at: {local_script_path}, {local_result_path}")
 
     def _clear_pane(self):
         """Clear the tmux pane to prepare for command output."""
@@ -819,7 +858,7 @@ class OpenProjectRailsClient:
             ]
             logger.debug(f"Running command: {' '.join(scp_cmd)}")
 
-            subprocess.run(scp_cmd, check=True)
+            subprocess.run(scp_cmd, check=True, capture_output=True)
 
             # Then copy from server to container
             logger.debug(f"Copying file from server to container {container_name}")
@@ -1043,12 +1082,25 @@ class OpenProjectRailsClient:
             Dictionary with execution results
         """
         try:
+            # Create debug directory
+            debug_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "var", "debug")
+            os.makedirs(debug_dir, exist_ok=True)
+            timestamp = int(time.time())
+
             # Read the content of the script file regardless of location
             if not in_container:
                 # For local files, read the content directly
                 try:
                     with open(script_path) as f:
                         script_content = f.read()
+
+                    # Save a copy of the script to debug directory
+                    script_basename = os.path.basename(script_path)
+                    debug_script_path = os.path.join(debug_dir, f"ruby_script_{timestamp}_{script_basename}")
+                    import shutil
+                    shutil.copy2(script_path, debug_script_path)
+                    logger.info(f"Preserved Ruby script to: {debug_script_path}")
+
                 except Exception as e:
                     logger.error(f"Error reading script file: {e}")
                     return {
@@ -1081,6 +1133,14 @@ class OpenProjectRailsClient:
                         cat_cmd, capture_output=True, text=True, check=True
                     )
                     script_content = result.stdout
+
+                    # Save a copy of the container script content
+                    script_basename = os.path.basename(script_path)
+                    debug_script_path = os.path.join(debug_dir, f"container_script_{timestamp}_{script_basename}")
+                    with open(debug_script_path, 'w') as f:
+                        f.write(script_content)
+                    logger.info(f"Preserved container script content to: {debug_script_path}")
+
                 except subprocess.SubprocessError as e:
                     logger.error(f"Error reading script file from container: {e}")
                     return {
@@ -1143,8 +1203,21 @@ class OpenProjectRailsClient:
                 # Combine the sections
                 command = header + main_section
 
+            # Save the final combined command
+            debug_command_path = os.path.join(debug_dir, f"final_command_{timestamp}.rb")
+            with open(debug_command_path, 'w') as f:
+                f.write(command)
+            logger.info(f"Preserved final Ruby command to: {debug_command_path}")
+
             # Execute the command in the Rails console
             result = self.execute(command)
+
+            # Save the raw result
+            debug_result_path = os.path.join(debug_dir, f"ruby_result_{timestamp}.json")
+            import json
+            with open(debug_result_path, 'w') as f:
+                json.dump(result, f, indent=2)
+            logger.info(f"Preserved Ruby execution result to: {debug_result_path}")
 
             if result["status"] != "success":
                 return {
@@ -1165,6 +1238,12 @@ class OpenProjectRailsClient:
                     json_content = output[
                         start_idx + len(start_marker) : end_idx
                     ].strip()
+
+                    # Save the extracted JSON content
+                    debug_json_path = os.path.join(debug_dir, f"extracted_json_{timestamp}.json")
+                    with open(debug_json_path, 'w') as f:
+                        f.write(json_content)
+                    logger.info(f"Preserved extracted JSON to: {debug_json_path}")
 
                     try:
                         data = json.loads(json_content)
@@ -1206,174 +1285,326 @@ class OpenProjectRailsClient:
             Dictionary with execution results
         """
         try:
-            # Create a temporary script file
+            # Create variables for paths and timestamps
             import os
             import tempfile
+            import shutil
+            import datetime
+            import traceback
+            import json
 
             script_path = None
             data_path = None
             container_data_path = None
+            debug_timestamp = int(time.time())
 
-            # If data is provided, write it to a separate JSON file
+            # Create debug directory paths
+            var_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "var")
+            debug_dir = os.path.join(var_dir, "debug")
+            debug_session_dir = os.path.join(debug_dir, f"rails_debug_{debug_timestamp}")
+
+            # Ensure debug directories exist
+            os.makedirs(var_dir, exist_ok=True)
+            os.makedirs(debug_dir, exist_ok=True)
+            os.makedirs(debug_session_dir, exist_ok=True)
+
+            # Create a debug log file for this session
+            debug_log_path = os.path.join(debug_session_dir, "debug_log.txt")
+            with open(debug_log_path, 'w') as debug_log:
+                debug_log.write(f"=== Rails Debug Session {datetime.datetime.now()} ===\n")
+                debug_log.write(f"Script execution started at {time.time()}\n\n")
+                debug_log.write("=== Script Content ===\n")
+                debug_log.write(script_content)
+                debug_log.write("\n\n")
+
+            # If data is provided, write it directly to the debug directory
             if data is not None:
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".json", delete=False
-                ) as data_file:
-                    # Ensure data is properly serializable
-                    try:
+                # Use consistent naming scheme with timestamp
+                data_filename = f"rails_data_{debug_timestamp}.json"
+                data_path = os.path.join(debug_session_dir, data_filename)
+
+                # Write data directly to debug directory
+                try:
+                    with open(data_path, 'w') as data_file:
                         json.dump(data, data_file, ensure_ascii=False, indent=2)
-                        data_file.flush()  # Ensure all data is written to disk
-                        data_path = data_file.name
-                        logger.info(f"Created temporary JSON data file: {data_path}")
+                    logger.info(f"Created JSON data file directly in debug directory: {data_path}")
 
-                        # Verify the JSON file is valid
-                        with open(data_path) as verify_file:
-                            json.load(
-                                verify_file
-                            )  # This will raise an exception if JSON is invalid
-                            logger.debug("Verified JSON data is valid")
-                    except Exception as e:
-                        logger.error(f"Error creating JSON data file: {e}")
-                        if os.path.exists(data_path):
-                            os.unlink(data_path)
-                        return {
-                            "status": "error",
-                            "message": f"Failed to create valid JSON data: {str(e)}",
-                        }
+                    with open(debug_log_path, 'a') as debug_log:
+                        debug_log.write("=== Input Data ===\n")
+                        with open(data_path, 'r') as df:
+                            data_content = df.read()
+                            debug_log.write(data_content)
+                        debug_log.write("\n\n")
+                        debug_log.write(f"Data file size: {os.path.getsize(data_path)} bytes\n\n")
 
-                    # Generate a timestamp-based path for the container
-                    timestamp = int(time.time())
-                    filename = os.path.basename(data_path)
-                    container_data_path = f"/tmp/j2o_data_{timestamp}_{filename}"
+                    # Verify the JSON file is valid and not empty
+                    with open(data_path) as verify_file:
+                        json_data = json.load(verify_file)
+                        if not json_data and isinstance(json_data, (dict, list)):
+                            logger.warning("JSON data parsed successfully but appears to be empty")
+                        else:
+                            logger.debug(f"Verified JSON data is valid and contains data ({len(str(json_data))} characters)")
+                except Exception as e:
+                    logger.error(f"Error creating JSON data file: {e}")
+                    with open(debug_log_path, 'a') as debug_log:
+                        debug_log.write(f"ERROR creating JSON data file: {str(e)}\n")
+                        debug_log.write(traceback.format_exc())
+                        debug_log.write("\n\n")
+                    if os.path.exists(data_path):
+                        logger.warning(f"Removing invalid data file: {data_path}")
+                    return {
+                        "status": "error",
+                        "message": f"Failed to create valid JSON data: {str(e)}",
+                    }
 
-                    # Transfer the JSON file to the container
-                    logger.info(
-                        f"Transferring JSON data file to container at {container_data_path}"
-                    )
-                    if not self.transfer_file_to_container(
-                        data_path, container_data_path
-                    ):
-                        logger.error("Failed to transfer JSON data file to container")
-                        return {
-                            "status": "error",
-                            "message": "Failed to transfer JSON data file to container",
-                        }
+                # Use consistent path for container
+                container_filename = data_filename  # Keep the same name in container
+                container_data_path = f"/tmp/{container_filename}"
 
-                    # Verify the file exists in the container and has content
-                    container_name = config.openproject_config.get("container")
-                    op_server = config.openproject_config.get("server")
-                    if container_name and op_server:
-                        try:
-                            verify_cmd = [
-                                "ssh",
-                                op_server,
-                                "docker",
-                                "exec",
-                                container_name,
-                                "bash",
-                                "-c",
-                                f"cat {container_data_path} | head -10",
-                            ]
-                            result = subprocess.run(
-                                verify_cmd, capture_output=True, text=True, check=True
-                            )
-                            if not result.stdout.strip():
-                                logger.error(
-                                    f"Container file exists but appears to be empty: {container_data_path}"
-                                )
-                                return {
-                                    "status": "error",
-                                    "message": "Container data file is empty",
-                                }
+                # Transfer the JSON file to the container
+                logger.info(f"Transferring JSON data file to container at {container_data_path}")
+                with open(debug_log_path, 'a') as debug_log:
+                    debug_log.write(f"Transferring data file to container at: {container_data_path}\n")
+                    debug_log.write(f"Local data file size: {os.path.getsize(data_path)} bytes\n")
+
+                if not self.transfer_file_to_container(data_path, container_data_path):
+                    logger.error("Failed to transfer JSON data file to container")
+                    with open(debug_log_path, 'a') as debug_log:
+                        debug_log.write("ERROR: Failed to transfer JSON data file to container\n\n")
+                    return {
+                        "status": "error",
+                        "message": "Failed to transfer JSON data file to container",
+                    }
+
+                # Verify the file exists in the container and has content
+                container_name = config.openproject_config.get("container")
+                op_server = config.openproject_config.get("server")
+                if container_name and op_server:
+                    try:
+                        # Save server and container info to debug log
+                        with open(debug_log_path, 'a') as debug_log:
+                            debug_log.write(f"Server: {op_server}\n")
+                            debug_log.write(f"Container: {container_name}\n\n")
+
+                        # First check if file exists with ls -la
+                        ls_cmd = [
+                            "ssh",
+                            op_server,
+                            "docker",
+                            "exec",
+                            container_name,
+                            "ls",
+                            "-la",
+                            container_data_path,
+                        ]
+                        ls_result = subprocess.run(
+                            ls_cmd, capture_output=True, text=True
+                        )
+                        with open(debug_log_path, 'a') as debug_log:
+                            debug_log.write("=== File Status Check ===\n")
+                            debug_log.write(f"Command: {' '.join(ls_cmd)}\n")
+                            debug_log.write(f"Return code: {ls_result.returncode}\n")
+                            debug_log.write(f"Stdout: {ls_result.stdout}\n")
+                            debug_log.write(f"Stderr: {ls_result.stderr}\n\n")
+
+                        # Verify file content
+                        verify_cmd = [
+                            "ssh",
+                            op_server,
+                            "docker",
+                            "exec",
+                            container_name,
+                            "bash",
+                            "-c",
+                            f"wc -c {container_data_path} && head -50 {container_data_path}",
+                        ]
+                        result = subprocess.run(
+                            verify_cmd, capture_output=True, text=True
+                        )
+
+                        # Save verification command and results
+                        debug_verify_path = os.path.join(debug_session_dir, "verify_cmd.txt")
+                        with open(debug_verify_path, 'w') as f:
+                            f.write(f"Command: {' '.join(verify_cmd)}\n\n")
+                            f.write(f"Return code: {result.returncode}\n")
+                            f.write(f"Output:\n{result.stdout}\n")
+                            f.write(f"Error output:\n{result.stderr}\n")
+                        logger.info(f"Saved verification command and results to: {debug_verify_path}")
+
+                        # Log container file content verification
+                        with open(debug_log_path, 'a') as debug_log:
+                            debug_log.write("=== File Content Verification ===\n")
+                            debug_log.write(f"Command: {' '.join(verify_cmd)}\n")
+                            debug_log.write(f"Return code: {result.returncode}\n")
+                            debug_log.write(f"Content preview:\n{result.stdout}\n")
+                            debug_log.write(f"Error output:\n{result.stderr}\n\n")
+
+                            # Check if the file has content
+                            if "0 " in result.stdout.strip().split('\n')[0]:
+                                logger.error(f"Container file exists but is empty: {container_data_path}")
+                                with open(debug_log_path, 'a') as debug_log:
+                                    debug_log.write("ERROR: Container file exists but is empty\n\n")
+
+                                # Try to create a non-empty file with echo
+                                logger.warning("Attempting to create a non-empty file via direct echo command")
+                                echo_cmd = [
+                                    "ssh",
+                                    op_server,
+                                    "docker",
+                                    "exec",
+                                    container_name,
+                                    "bash",
+                                    "-c",
+                                    f"cp {data_path} {container_data_path} && cat {container_data_path} | wc -c"
+                                ]
+                                echo_result = subprocess.run(echo_cmd, capture_output=True, text=True)
+                                with open(debug_log_path, 'a') as debug_log:
+                                    debug_log.write("=== Fallback File Creation ===\n")
+                                    debug_log.write(f"Command: {' '.join(echo_cmd)}\n")
+                                    debug_log.write(f"Return code: {echo_result.returncode}\n")
+                                    debug_log.write(f"Output: {echo_result.stdout}\n")
+                                    debug_log.write(f"Error: {echo_result.stderr}\n\n")
+
+                                if echo_result.returncode != 0 or "0" in echo_result.stdout.strip():
+                                    return {
+                                        "status": "error",
+                                        "message": "Container data file is empty",
+                                    }
+
                             logger.debug(
-                                f"Verified container data file has content (first few lines): {result.stdout[:100]}..."
+                                f"Verified container data file has content: {result.stdout.split('\n')[0]} bytes"
                             )
-                        except Exception as e:
-                            logger.error(f"Failed to verify container data file: {e}")
-                            return {
-                                "status": "error",
-                                "message": f"Failed to verify container data file: {str(e)}",
-                            }
+                    except Exception as e:
+                        logger.error(f"Failed to verify container data file: {e}")
+                        with open(debug_log_path, 'a') as debug_log:
+                            debug_log.write(f"ERROR verifying container file: {str(e)}\n")
+                            debug_log.write(traceback.format_exc())
+                            debug_log.write("\n\n")
+                        return {
+                            "status": "error",
+                            "message": f"Failed to verify container data file: {str(e)}",
+                        }
 
-            # Create Ruby script with improved data loading and error handling
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".rb", delete=False) as f:
+            # Create Ruby script directly in debug directory
+            script_filename = f"rails_script_{debug_timestamp}.rb"
+            script_path = os.path.join(debug_session_dir, script_filename)
+
+            with open(script_path, 'w') as f:
                 # Header section with Python variable interpolation
                 if data is not None:
                     # Python string interpolation for the path
                     data_file_path = container_data_path
 
-                    # Write Ruby header with plain string instead of f-string to avoid interpolation issues
+                    # Write Ruby header to load data from JSON file
                     header = f"""
                     # Load data from separate JSON file
                     require "json"
                     begin
                       # Check if the file exists and has content
+                      puts "Attempting to load data from: {data_file_path}"
                       unless File.exist?("{data_file_path}")
+                        puts "ERROR: Data file not found at {data_file_path}"
                         raise "Data file not found at {data_file_path}"
                       end
 
+                      file_size = File.size("{data_file_path}")
+                      puts "File size: #{file_size} bytes"
+
+                      if file_size == 0
+                        puts "ERROR: Data file is empty (0 bytes)"
+                        raise "Data file is empty (0 bytes)"
+                      end
+
                       file_content = File.read("{data_file_path}")
+                      puts "Read file size: #{file_content.size} bytes"
+
                       if file_content.nil? || file_content.empty?
-                        raise "Data file is empty"
+                        puts "ERROR: Data file content is empty"
+                        raise "Data file content is empty"
                       end
 
                       begin
                         input_data = JSON.parse(file_content)
                         puts "Successfully loaded data with " + (input_data.size.to_s) + " records"
+
+                        # Show a sample of the data for debugging
+                        if input_data.is_a?(Array) && input_data.first.is_a?(Hash)
+                          puts "Sample data (first record): #{input_data.first.inspect}"
+                        end
                       rescue JSON::ParserError => e
                         puts "JSON parse error: " + e.message
                         puts "First 100 chars of file: " + file_content[0..100].inspect
+                        puts "File permissions: #{File.stat('{data_file_path}').mode.to_s(8)}"
                         raise "Failed to parse JSON data: " + e.message
                       end
+
+                      puts "Beginning execution of main script..."
 
                     """
                     f.write(header)
 
                 # Main section - just the script content without interpolation
                 f.write(script_content)
-                script_path = f.name
+
+            logger.info(f"Created Ruby script in debug directory: {script_path}")
+            with open(debug_log_path, 'a') as debug_log:
+                debug_log.write("=== Ruby Script ===\n")
+                with open(script_path, 'r') as sf:
+                    debug_log.write(sf.read())
+                debug_log.write("\n\n")
 
             # Execute the script
             logger.info("Executing Ruby script with data")
+            with open(debug_log_path, 'a') as debug_log:
+                debug_log.write("=== Executing Ruby Script ===\n")
+                debug_log.write(f"Time: {datetime.datetime.now()}\n\n")
+
             result = self.execute_ruby_script(
                 script_path, in_container=False, output_as_json=output_as_json
             )
 
-            # Clean up the temporary files
-            try:
-                if script_path:
-                    os.unlink(script_path)
-                    logger.debug(f"Removed temporary script file: {script_path}")
+            # Save the complete result for debugging
+            debug_result_path = os.path.join(debug_session_dir, "result.json")
+            with open(debug_result_path, 'w') as f:
+                json.dump(result, f, indent=2)
+            logger.info(f"Saved complete result to: {debug_result_path}")
+
+            # Log the result
+            with open(debug_log_path, 'a') as debug_log:
+                debug_log.write("=== Script Execution Result ===\n")
+                debug_log.write(f"Status: {result.get('status', 'unknown')}\n")
+                if 'message' in result:
+                    debug_log.write(f"Message: {result['message']}\n")
+                if 'data' in result:
+                    debug_log.write(f"Data summary: {type(result['data'])} ")
+                    debug_log.write(f"with {len(str(result['data']))} characters\n")
+                debug_log.write("\n\n")
+
+            # Save the output from the script separately
+            if 'output' in result:
+                debug_output_path = os.path.join(debug_session_dir, "output.txt")
+                with open(debug_output_path, 'w') as f:
+                    f.write(str(result['output']))
+                logger.info(f"Saved script output to: {debug_output_path}")
+
+                with open(debug_log_path, 'a') as debug_log:
+                    debug_log.write("=== Script Output ===\n")
+                    debug_log.write(str(result['output']))
+                    debug_log.write("\n\n")
+
+            # Finalize the debug log
+            with open(debug_log_path, 'a') as debug_log:
+                debug_log.write(f"=== Debug Session Completed at {datetime.datetime.now()} ===\n")
+                debug_log.write("Files used during execution:\n")
+                debug_log.write(f"  - Debug directory: {debug_session_dir}\n")
+                debug_log.write(f"  - Ruby script: {script_path}\n")
                 if data_path:
-                    os.unlink(data_path)
-                    logger.debug(f"Removed temporary JSON data file: {data_path}")
-                if container_data_path:
-                    # Clean up the remote file after execution
-                    logger.debug(
-                        f"Attempting to remove container file: {container_data_path}"
-                    )
-                    container_name = config.openproject_config.get("container")
-                    op_server = config.openproject_config.get("server")
-                    if container_name and op_server:
-                        try:
-                            clean_cmd = [
-                                "ssh",
-                                op_server,
-                                "docker",
-                                "exec",
-                                container_name,
-                                "rm",
-                                "-f",
-                                container_data_path,
-                            ]
-                            subprocess.run(
-                                clean_cmd, check=False, capture_output=True, timeout=10
-                            )
-                            logger.debug("Container file cleanup attempted")
-                        except Exception as e:
-                            logger.debug(f"Error during container file cleanup: {e}")
-            except Exception as e:
-                logger.debug(f"Error cleaning up temporary files: {e}")
+                    debug_log.write(f"  - Local data file: {data_path}\n")
+                    debug_log.write(f"  - Container data path: {container_data_path}\n")
+
+            logger.info(f"Debug session saved to: {debug_session_dir}")
+            if data_path:
+                logger.info(f"Files used: script={script_path}, data={data_path}, container={container_data_path}")
 
             return result
 

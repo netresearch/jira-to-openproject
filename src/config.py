@@ -74,22 +74,12 @@ def get_value(section: SectionName, key: str, default: Any = None) -> Any:
     return _config_loader.get_value(section, key, default)
 
 
-def get_path(dir_type: DirType) -> str:
-    """Get the path to a directory based on its type.
+def get_path(path_type: DirType) -> str:
+    """Get a specific path from var_dirs."""
+    if path_type not in var_dirs:
+        raise ValueError(f"Invalid path type: {path_type}")
 
-    Args:
-        dir_type: The type of directory to get the path for.
-
-    Returns:
-        Path to the directory.
-
-    Raises:
-        ValueError: If the directory type is not supported.
-    """
-    if dir_type in var_dirs:
-        return var_dirs[dir_type]
-    else:
-        raise ValueError(f"Unknown directory type: dir_type='{dir_type}'")
+    return var_dirs[path_type]
 
 
 def ensure_subdir(
@@ -156,3 +146,25 @@ def validate_config() -> bool:
         return False
 
     return True
+
+
+def update_from_cli_args(args: Any) -> None:
+    """
+    Update migration configuration from CLI arguments.
+
+    Args:
+        args: An object containing CLI arguments (typically from argparse)
+    """
+    if hasattr(args, 'dry_run') and args.dry_run:
+        migration_config['dry_run'] = True
+        logger.debug("Setting dry_run=True from CLI arguments")
+
+    if hasattr(args, 'no_backup') and args.no_backup:
+        migration_config['no_backup'] = True
+        logger.debug("Setting no_backup=True from CLI arguments")
+
+    if hasattr(args, 'force') and args.force:
+        migration_config['force'] = True
+        logger.debug("Setting force=True from CLI arguments")
+
+    # Add any other CLI arguments that should affect configuration here
