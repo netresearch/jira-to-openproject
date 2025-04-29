@@ -12,7 +12,6 @@ Implementation is now complete, including:
 
 import json
 import os
-import re
 from typing import Any
 
 from src.models import ComponentResult
@@ -66,12 +65,12 @@ class StatusMigration(BaseMigration):
         self.tracker = tracker
 
         # Initialize empty lists
-        self.jira_statuses = []
-        self.jira_status_categories = []
-        self.op_statuses = []
+        self.jira_statuses: list[dict[str, Any]] = []
+        self.jira_status_categories: list[dict[str, Any]] = []
+        self.op_statuses: list[dict[str, Any]] = []
 
         # Load existing status mappings
-        self.status_mapping = (
+        self.status_mapping: dict[str, Any] = (
             self.mappings.status_mapping.copy()
             if hasattr(self.mappings, "status_mapping")
             else {}
@@ -94,7 +93,7 @@ class StatusMigration(BaseMigration):
 
     def extract_jira_statuses(self) -> list[dict[str, Any]]:
         """
-        Extract all statuses from Jira.
+        Extract all statuses from Jira using the Jira statuses API endpoint.
 
         Returns:
             List of Jira status dictionaries
@@ -112,7 +111,10 @@ class StatusMigration(BaseMigration):
         logger.info("Extracting statuses from Jira...")
 
         try:
-            statuses = self.jira_client.get_all_statuses()
+            # Use the REST API endpoint for status retrieval
+            response = self.jira_client.jira._get_json('status')
+            statuses = response if response else []
+
             if not statuses:
                 logger.warning("No statuses found in Jira")
                 return []
@@ -197,148 +199,139 @@ class StatusMigration(BaseMigration):
             logger.error(f"Failed to get statuses from OpenProject: {str(e)}")
             return []
 
-    def create_status_via_rails(
-        self,
-        name: str,
-        is_closed: bool = False,
-        is_default: bool = False,
-        color: str = None,
-    ) -> dict[str, Any] | None:
+    def create_statuses_bulk_via_rails(
+        self, statuses_to_create: list[dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
         """
-        Create a status in OpenProject using the Rails console.
+        Create multiple statuses in OpenProject using a single Rails console command.
 
         Args:
-            name: Name of the status
-            is_closed: Whether the status is considered 'closed'
-            is_default: Whether the status is the default status
-            color: Hex color code (optional)
+            statuses_to_create: List of status dictionaries with keys:
+                - jira_id: Jira status ID
+                - name: Status name
+                - is_closed: Whether the status is considered 'closed'
+                - is_default: Whether the status is the default status
+                - color: Optional hex color code
 
         Returns:
-            Dictionary with created status information or None if creation failed
+            Dictionary mapping Jira status IDs to created OpenProject status info
         """
         if not self.op_rails_client:
-            logger.error("Rails client not available for status creation")
-            return None
+            logger.error("Rails client not available for bulk status creation")
+            return {}
 
-        logger.debug(f"Attempting to create status '{name}' via Rails...")
+        if not statuses_to_create:
+            logger.warning("No statuses provided for bulk creation")
+            return {}
 
-        # Escape single quotes in name
-        safe_name = name.replace("'", "\\'")
+        logger.info(f"Creating {len(statuses_to_create)} statuses in bulk via Rails...")
 
-        # Header section with Python f-string variables
-        header_script = f"""
-        # Status configuration variables
-        status_name = '{safe_name}'
-        is_closed_flag = {str(is_closed).lower()}
-        is_default_flag = {str(is_default).lower()}
-        """
-
-        # Add color to header if provided
-        if color:
-            header_script += f"status_color = '{color}'\n"
-
-        # Main Ruby section without f-strings
-        main_script = """
+        # Create Ruby script that processes the data passed in
+        ruby_script = """
         begin
-          puts "Starting command execution..."
+          puts "Starting bulk status creation..."
 
-          # Check if status already exists
-          existing_status = Status.find_by(name: status_name)
+          # Results will be stored here
+          results = {}
 
-          if existing_status
-            puts "Status already exists with ID: #{existing_status.id}"
-            existing_status
-          else
-            # Create new status
-            new_status = Status.new(
-              name: status_name,
-              is_closed: is_closed_flag,
-              is_default: is_default_flag
-            )
+          # Process each status definition
+          input_data.each do |status_def|
+            jira_id = status_def["jira_id"]
+            name = status_def["name"]
+            is_closed = status_def["is_closed"] || false
+            is_default = status_def["is_default"] || false
+            color = status_def["color"]
 
-            # Set position as the highest existing position + 1
-            new_status.position = Status.maximum(:position).to_i + 1
-        """
+            puts "Processing status '\#{name}' (Jira ID: \#{jira_id})..."
 
-        # Add color handling to main script if color was provided
-        if color:
-            main_script += """
-            # Set color
-            new_status.color = status_color
-            """
+            # Check if status already exists
+            existing_status = Status.find_by(name: name)
 
-        main_script += """
-            if new_status.save
-              puts "SUCCESS: Status created with ID: #{new_status.id}"
-              new_status
+            if existing_status
+              puts "Status '\#{name}' already exists with ID: \#{existing_status.id}"
+              results[jira_id] = {
+                "id" => existing_status.id,
+                "name" => existing_status.name,
+                "is_closed" => existing_status.is_closed,
+                "already_existed" => true
+              }
             else
-              puts "ERROR: Failed to save status. Validation errors:"
-              new_status.errors.full_messages.each do |msg|
-                puts "  - #{msg}"
+              # Create new status
+              new_status = Status.new(
+                name: name,
+                is_closed: is_closed,
+                is_default: is_default
+              )
+
+              # Set position as the highest existing position + 1
+              new_status.position = Status.maximum(:position).to_i + 1
+
+              # Set color if provided
+              new_status.color = color if color
+
+              if new_status.save
+                puts "SUCCESS: Created status '\#{name}' with ID: \#{new_status.id}"
+                results[jira_id] = {
+                  "id" => new_status.id,
+                  "name" => new_status.name,
+                  "is_closed" => new_status.is_closed,
+                  "already_existed" => false
+                }
+              else
+                puts "ERROR: Failed to create status '\#{name}'. Validation errors:"
+                new_status.errors.full_messages.each do |msg|
+                  puts "  - \#{msg}"
+                end
+                results[jira_id] = {
+                  "error" => new_status.errors.full_messages.join("; "),
+                  "already_existed" => false
+                }
               end
-              nil
             end
           end
+
+          # Output the results for validation
+          puts "Bulk status creation completed."
+          puts "Created or found \#{results.size} statuses"
+
+          # Return results in JSON format
+          puts "JSON_OUTPUT_START"
+          puts results.to_json
+          puts "JSON_OUTPUT_END"
+
+          results
         rescue => e
-          puts "EXCEPTION: #{e.class.name}: #{e.message}"
-          nil
+          puts "EXCEPTION: \#{e.class.name}: \#{e.message}"
+          puts "Backtrace: \#{e.backtrace.join('\\n')}"
+          puts "JSON_OUTPUT_START"
+          puts {error: e.message}.to_json
+          puts "JSON_OUTPUT_END"
         end
         """
 
-        # Combine the scripts
-        command = header_script + main_script
-
         try:
-            result = self.op_rails_client.execute(command, timeout=60)
+            # Execute the script with the statuses data
+            logger.debug("Executing bulk status creation via Rails with data")
+            result = self.op_rails_client.execute_script_with_data(
+                script_content=ruby_script,
+                data=statuses_to_create,
+                output_as_json=True
+            )
 
-            if result and "output" in result:
-                output_str = result.get("output", "")
-
-                # Check for success message with ID
-                id_match = re.search(
-                    r"Status already exists with ID: (\d+)|SUCCESS: Status created with ID: (\d+)",
-                    output_str,
-                )
-                if id_match:
-                    status_id = int(id_match.group(1) or id_match.group(2))
-                    logger.debug(
-                        f"Rails successfully found/created status '{name}' with ID: {status_id}"
-                    )
-
-                    return {
-                        "id": status_id,
-                        "name": name,
-                        "is_closed": is_closed,
-                        "is_default": is_default,
-                    }
-
-                # Log detailed error messages
-                if "ERROR:" in output_str:
-                    error_lines = re.findall(r"ERROR:.*|  - .*", output_str)
-                    logger.error(f"Failed to create status '{name}'. Errors:")
-                    for error in error_lines:
-                        logger.error(f"  {error.strip()}")
-
-                # Check for exception
-                if "EXCEPTION:" in output_str:
-                    exception_match = re.search(r"EXCEPTION: (.*)", output_str)
-                    if exception_match:
-                        logger.error(f"Exception in Rails: {exception_match.group(1)}")
-
-                return None
-
+            if result.get("status") == "success" and "data" in result:
+                created_statuses = result["data"]
+                logger.info(f"Successfully processed {len(created_statuses)} statuses via Rails")
+                return created_statuses
             else:
-                logger.error(
-                    f"Rails command execution failed for status '{name}'. "
-                    f"Status: {result.get('status')}, Error: {result.get('error')}"
-                )
-                return None
+                error_msg = result.get("message", "Unknown error")
+                logger.error(f"Failed to create statuses: {error_msg}")
+                if "output" in result:
+                    logger.debug(f"Rails output: {result['output'][:500]}...")
+                return {}
 
         except Exception as e:
-            logger.error(
-                f"Exception during Rails execution for status '{name}': {str(e)}"
-            )
-            return None
+            logger.error(f"Exception during Rails bulk execution: {str(e)}")
+            return {}
 
     def create_status_mapping(self) -> dict[str, Any]:
         """
@@ -366,7 +359,7 @@ class StatusMigration(BaseMigration):
             self.get_openproject_statuses()
 
         # Create mapping based on name
-        mapping = {}
+        mapping: dict[str, dict[str, Any]] = {}
         op_statuses_by_name = {s.get("name", "").lower(): s for s in self.op_statuses}
 
         for jira_status in self.jira_statuses:
@@ -433,112 +426,142 @@ class StatusMigration(BaseMigration):
         # Initialize status mapping
         status_mapping = {}
 
-        # Process each Jira status
-        with ProgressTracker(
-            "Migrating statuses", len(self.jira_statuses), "Recent Statuses"
-        ) as progress:
+        # If in dry run mode, simulate success for all statuses
+        if config.migration_config.get("dry_run", False):
+            logger.info("[DRY RUN] Simulating status migration success")
+
             for jira_status in self.jira_statuses:
                 jira_id = jira_status.get("id")
-                name = jira_status.get("name")
+                name = jira_status.get("name", "")
 
-                if not jira_id or not name:
-                    logger.warning(
-                        f"Skipping status with missing ID or name: {jira_status}"
+                # Check if it already exists in OpenProject
+                for op_name, op_status in op_statuses_by_name.items():
+                    if op_name.lower() == name.lower():
+                        status_mapping[jira_id] = {
+                            "openproject_id": op_status.get("id"),
+                            "openproject_name": op_status.get("name"),
+                        }
+                        already_exists_count += 1
+                        break
+                else:
+                    # Not found, simulate creation
+                    status_mapping[jira_id] = {
+                        "openproject_id": f"dry_run_{jira_id}",
+                        "openproject_name": name,
+                    }
+                    created_count += 1
+
+            # Save status mapping
+            self._save_to_json(status_mapping, "status_mapping.json")
+            logger.info(
+                f"[DRY RUN] Found {already_exists_count} existing statuses, would create {created_count} new statuses"
+            )
+
+            # Update the mappings instance
+            if self.mappings:
+                self.mappings.status_mapping = status_mapping
+
+            return {
+                "status": "success",
+                "total_processed": len(self.jira_statuses),
+                "already_exists_count": already_exists_count,
+                "created_count": created_count,
+                "error_count": 0,
+                "mapping": status_mapping,
+            }
+
+        # Prepare statuses to create in bulk
+        statuses_to_create = []
+        for jira_status in self.jira_statuses:
+            jira_id = jira_status.get("id")
+            name = jira_status.get("name")
+
+            if not jira_id or not name:
+                logger.warning(f"Skipping status with missing ID or name: {jira_status}")
+                continue
+
+            # Check if a similar status already exists in OpenProject
+            exists = False
+            for op_name, op_status in op_statuses_by_name.items():
+                if op_name.lower() == name.lower():
+                    # Use existing status
+                    op_status_id = op_status.get("id")
+                    logger.debug(
+                        f"Using existing OpenProject status '{op_status.get('name')}' "
+                        f"(ID: {op_status_id}) for Jira status '{name}'"
                     )
-                    progress.increment()
-                    continue
+                    status_mapping[jira_id] = {
+                        "openproject_id": op_status_id,
+                        "openproject_name": op_status.get("name"),
+                    }
+                    already_exists_count += 1
+                    exists = True
+                    break
 
-                progress.update_description(
-                    f"Processing status: {name} (ID: {jira_id})"
-                )
-
+            if not exists:
                 # Determine if status should be considered 'closed'
                 is_closed = False
                 if "statusCategory" in jira_status:
                     category_key = jira_status.get("statusCategory", {}).get("key", "")
                     is_closed = category_key.upper() == "DONE"
 
-                # Check if a similar status already exists in OpenProject
-                existing_op_status = None
-                for op_name, op_status in op_statuses_by_name.items():
-                    if op_name.lower() == name.lower():
-                        existing_op_status = op_status
-                        break
-
-                op_status_id = None
-
-                if existing_op_status:
-                    # Use existing status
-                    op_status_id = existing_op_status.get("id")
-                    logger.debug(
-                        f"Using existing OpenProject status '{existing_op_status.get('name')}' "
-                        f"(ID: {op_status_id}) for Jira status '{name}'"
+                # Determine a suitable color (optional)
+                color = None
+                if "statusCategory" in jira_status:
+                    category_color = jira_status.get("statusCategory", {}).get(
+                        "colorName", ""
                     )
-                    already_exists_count += 1
-                elif config.migration_config.get("dry_run", False):
-                    logger.info(
-                        f"[DRY RUN] Would create status '{name}' (is_closed: {is_closed})"
-                    )
-                    # Simulate ID for dry run
-                    op_status_id = f"dry_run_{jira_id}"
-                    created_count += 1
-                else:
-                    # Create new status in OpenProject
-                    # Use Rails console since API doesn't support status creation
-                    if self.op_rails_client:
-                        # Determine a suitable color (optional)
-                        color = None
-                        if "statusCategory" in jira_status:
-                            category_color = jira_status.get("statusCategory", {}).get(
-                                "colorName", ""
-                            )
-                            if category_color:
-                                # Map Jira category colors to hex codes
-                                color_mapping = {
-                                    "blue-gray": "#4a6785",
-                                    "yellow": "#f6c342",
-                                    "green": "#14892c",
-                                    "red": "#d04437",
-                                    "medium-gray": "#8993a4",
-                                }
-                                color = color_mapping.get(category_color.lower())
+                    if category_color:
+                        # Map Jira category colors to hex codes
+                        color_mapping = {
+                            "blue-gray": "#4a6785",
+                            "yellow": "#f6c342",
+                            "green": "#14892c",
+                            "red": "#d04437",
+                            "medium-gray": "#8993a4",
+                        }
+                        color = color_mapping.get(category_color.lower())
 
-                        # Create status via Rails
-                        created_status = self.create_status_via_rails(
-                            name=name,
-                            is_closed=is_closed,
-                            is_default=False,  # Default to False for imported statuses
-                            color=color,
-                        )
+                # Add to list for bulk creation
+                statuses_to_create.append({
+                    "jira_id": jira_id,
+                    "name": name,
+                    "is_closed": is_closed,
+                    "is_default": False,  # Default to False for imported statuses
+                    "color": color,
+                })
 
-                        if created_status:
-                            op_status_id = created_status.get("id")
-                            logger.info(
-                                f"Created new OpenProject status '{name}' (ID: {op_status_id}, is_closed: {is_closed})"
-                            )
-                            created_count += 1
+        # Create statuses in bulk if there are any to create
+        if statuses_to_create:
+            logger.info(f"Creating {len(statuses_to_create)} statuses in bulk")
 
-                            # Add to local cache of OP statuses
-                            op_statuses_by_name[name.lower()] = created_status
+            # Use the bulk creation method
+            if self.op_rails_client:
+                creation_results = self.create_statuses_bulk_via_rails(statuses_to_create)
+
+                # Process results
+                for jira_id, result in creation_results.items():
+                    if "id" in result:
+                        status_mapping[jira_id] = {
+                            "openproject_id": result["id"],
+                            "openproject_name": result["name"],
+                        }
+
+                        if result.get("already_existed", False):
+                            # Count as already existing if not counted above
+                            # (shouldn't happen in normal flow but included for safety)
+                            pass
                         else:
-                            logger.error(
-                                f"Failed to create status '{name}' in OpenProject"
-                            )
-                            error_count += 1
+                            created_count += 1
                     else:
                         logger.error(
-                            "Rails client not available, cannot create statuses"
+                            f"Failed to create status for Jira ID {jira_id}: "
+                            f"{result.get('error', 'Unknown error')}"
                         )
                         error_count += 1
-
-                # Update mapping if we got an OpenProject status ID
-                if op_status_id:
-                    status_mapping[jira_id] = {
-                        "openproject_id": op_status_id,
-                        "openproject_name": name,
-                    }
-
-                progress.increment()
+            else:
+                logger.error("Rails client not available, cannot create statuses")
+                error_count += len(statuses_to_create)
 
         # Save status mapping
         if status_mapping:
@@ -550,7 +573,7 @@ class StatusMigration(BaseMigration):
             if self.mappings:
                 self.mappings.status_mapping = status_mapping
 
-        logger.success("Status migration completed")
+        logger.info("Status migration completed")
         logger.info(f"Total Jira statuses processed: {len(self.jira_statuses)}")
         logger.info(
             f"OpenProject statuses: {already_exists_count} existing, {created_count} created, {error_count} errors"
@@ -628,13 +651,13 @@ class StatusMigration(BaseMigration):
             # Step 1: Extract Jira statuses
             self.jira_statuses = self.extract_jira_statuses()
             if not self.jira_statuses:
-                return {
-                    "status": "failed",
-                    "error": "Failed to extract Jira statuses",
-                    "success_count": 0,
-                    "failed_count": 0,
-                    "total_count": 0,
-                }
+                return ComponentResult(
+                    success=False,
+                    errors=["Failed to extract Jira statuses"],
+                    success_count=0,
+                    failed_count=0,
+                    total_count=0,
+                )
 
             # Step 2: Extract Jira status categories
             self.jira_status_categories = self.extract_status_categories()
@@ -655,8 +678,8 @@ class StatusMigration(BaseMigration):
                     s.get("name", "").lower(): s for s in self.op_statuses
                 }
                 for jira_status in self.jira_statuses:
-                    jira_id = jira_status.get("id")
-                    name = jira_status.get("name", "")
+                    jira_id: str = jira_status.get("id", "")
+                    name: str = jira_status.get("name", "")
 
                     # Check if it already exists in OpenProject
                     existing = False
@@ -718,7 +741,7 @@ class StatusMigration(BaseMigration):
             logger.error(f"Error during status migration: {str(e)}")
             return ComponentResult(
                 success=False,
-                error=f"Error during status migration: {str(e)}",
+                errors=[f"Error during status migration: {str(e)}"],
                 success_count=0,
                 failed_count=0,
                 total_count=0,

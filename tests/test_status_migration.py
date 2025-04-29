@@ -22,6 +22,10 @@ class TestStatusMigration(unittest.TestCase):
         """Set up the test environment."""
         # Create mock clients
         self.jira_client = MagicMock(spec=JiraClient)
+
+        # Add jira attribute to JiraClient mock
+        self.jira_client.jira = MagicMock()
+
         self.op_client = MagicMock(spec=OpenProjectClient)
         self.op_rails_client = MagicMock(spec=OpenProjectRailsClient)
 
@@ -68,7 +72,7 @@ class TestStatusMigration(unittest.TestCase):
         ]
 
         # Set up the mock return values
-        self.jira_client.get_all_statuses.return_value = self.sample_jira_statuses
+        self.jira_client.jira._get_json.return_value = self.sample_jira_statuses
         self.jira_client.get_status_categories.return_value = [
             {"id": "1", "key": "new", "name": "To Do"},
             {"id": "2", "key": "indeterminate", "name": "In Progress"},
@@ -97,10 +101,13 @@ class TestStatusMigration(unittest.TestCase):
             "force": True,
         }.get(key, default)
 
+        # Mock the Jira API response for statuses
+        self.jira_client.jira._get_json.return_value = self.sample_jira_statuses
+
         statuses = self.status_migration.extract_jira_statuses()
 
-        # Verify that get_all_statuses was called
-        self.jira_client.get_all_statuses.assert_called_once()
+        # Verify that _get_json was called with 'status'
+        self.jira_client.jira._get_json.assert_called_once_with('status')
 
         # Verify that the correct data was returned
         self.assertEqual(statuses, self.sample_jira_statuses)
@@ -206,12 +213,16 @@ class TestStatusMigration(unittest.TestCase):
 
         self.status_migration.status_mapping = initial_mapping
 
-        # Mock the Rails client to return a successful status creation - updated to use execute instead of execute_ruby
+        # Mock the Rails client to return successful bulk status creation
         self.op_rails_client.execute.return_value = {
             "status": "success",
             "output": """
-            SUCCESS: Status created with ID: 4
-            #<Status id: 4, name: "Pending", position: 4, is_default: false, is_closed: false>
+            Processing status 'Pending' (Jira ID: 4)...
+            SUCCESS: Created status 'Pending' with ID: 4
+            RESULTS_JSON_START
+            {"4":{"id":4,"name":"Pending","is_closed":false,"already_existed":false}}
+            RESULTS_JSON_END
+            Bulk status creation completed.
             """,
         }
 

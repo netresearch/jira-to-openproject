@@ -23,6 +23,16 @@ class ComponentResult(BaseModel):
     created_types: int = 0
     failed_types: int = 0
     existing_types: int = 0
+    total_issues: int = 0
+    matched_issues: int = 0
+    normalized_issues: int = 0
+    created_issues: int = 0
+    failed_issues: int = 0
+    existing_issues: int = 0
+    success_count: int = 0
+    failed_count: int = 0
+    total_count: int = 0
+
 
     # Helper methods to make the class more usable
     def add_error(self, error: str) -> None:
