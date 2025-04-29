@@ -33,9 +33,9 @@ class IssueTypeMigration(BaseMigration):
 
     def __init__(
         self,
-        jira_client: JiraClient | None = None,
-        op_client: OpenProjectClient | None = None,
-        rails_console: Optional["OpenProjectRailsClient"] = None,
+        jira_client: JiraClient,
+        op_client: OpenProjectClient,
+        rails_console: "OpenProjectRailsClient",
     ) -> None:
         """
         Initialize the issue type migration process.
@@ -47,13 +47,14 @@ class IssueTypeMigration(BaseMigration):
         """
         super().__init__(jira_client, op_client)
 
-        self.jira_issue_types: list[dict] = []
-        self.op_work_package_types: list[dict] = []
-        self.issue_type_mapping: dict[str, dict] = {}
+        self.jira_issue_types: list[dict[str, Any]] = []
+        self.op_work_package_types: list[dict[str, Any]] = []
+        self.issue_type_mapping: dict[str, dict[str, Any]] = {}
         self.issue_type_id_mapping: dict[str, int] = {}
         self.rails_console = rails_console
 
-        self.default_mappings = {
+        # Default mappings for default jira issue types to default openproject work package types
+        self.default_mappings: dict[str, dict[str, str]] = {
             "Bug": {"name": "Bug", "color": "#D35400"},
             "Task": {"name": "Task", "color": "#1A67A3"},
             "User Story": {"name": "User Story", "color": "#27AE60"},
@@ -198,9 +199,9 @@ class IssueTypeMigration(BaseMigration):
 
         mapping = {}
         for jira_type in self.jira_issue_types:
-            jira_type_id = jira_type.get("id")
-            jira_type_name = jira_type.get("name", "")
-            jira_type_description = jira_type.get("description", "")
+            jira_type_id: int = jira_type.get("id", 0)
+            jira_type_name: str = jira_type.get("name", "")
+            jira_type_description: str = jira_type.get("description", "")
 
             mapping[jira_type_name] = {
                 "jira_id": jira_type_id,
@@ -226,9 +227,9 @@ class IssueTypeMigration(BaseMigration):
                 )
                 continue
 
-            default_mapping = self.default_mappings.get(jira_type_name)
+            default_mapping: dict[str, str] | None = self.default_mappings.get(jira_type_name)
             if default_mapping:
-                default_name = default_mapping.get("name")
+                default_name: str = default_mapping.get("name", "")
                 op_type = op_types_by_name.get(default_name.lower())
 
                 if op_type:
@@ -532,8 +533,8 @@ class IssueTypeMigration(BaseMigration):
 
             time.sleep(0.5)
 
-            container_name = config.openproject_config.get("container")
-            op_server = config.openproject_config.get("server")
+            container_name: str = config.openproject_config.get("container", None)
+            op_server: str = config.openproject_config.get("server", None)
 
             if not op_server:
                 logger.error(
@@ -582,7 +583,7 @@ class IssueTypeMigration(BaseMigration):
             logger.debug(f"Content read from {temp_file_path}:\\n{json_content}")
 
             try:
-                types = json.loads(json_content)
+                types: list[dict[str, Any]] = json.loads(json_content)
                 logger.info(
                     f"Successfully parsed {len(types)} work package types from file"
                 )
@@ -950,7 +951,7 @@ class IssueTypeMigration(BaseMigration):
         if not self.issue_type_mapping:
             self.create_issue_type_mapping()
 
-        analysis = {
+        analysis: dict[str, Any] = {
             "total_jira_types": len(self.issue_type_mapping),
             "matched_op_types": sum(
                 1

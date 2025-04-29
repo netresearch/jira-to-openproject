@@ -50,6 +50,10 @@ type ConfigValue = Union[str, int, bool, dict[str, Any], list[Any]]
 
 type ConfigDict = dict[str, dict[str, ConfigValue]]
 
+type OpenProjectConfig = dict[str, str | bool | int | None]
+type JiraConfig = dict[str, str | bool | int | None]
+type MigrationConfig = dict[str, str | bool | int | None]
+
 type SectionName = Literal["jira", "openproject", "migration"]
 
 type BackupDir = str | None

@@ -10,7 +10,14 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
-from src.types import ConfigDict, ConfigValue, SectionName
+from src.types import (
+    ConfigDict,
+    ConfigValue,
+    JiraConfig,
+    MigrationConfig,
+    OpenProjectConfig,
+    SectionName,
+)
 
 # Set up basic logging for configuration loading phase
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -22,7 +29,7 @@ class ConfigLoader:
     Loads and provides access to configuration settings from YAML files and environment variables.
     """
 
-    def __init__(self, config_file_path="config/config.yaml"):
+    def __init__(self, config_file_path: str = "config/config.yaml"):
         """
         Initialize the configuration loader.
 
@@ -164,7 +171,7 @@ class ConfigLoader:
         """
         return self.config
 
-    def get_jira_config(self) -> ConfigDict:
+    def get_jira_config(self) -> JiraConfig:
         """
         Get Jira-specific configuration.
 
@@ -173,7 +180,7 @@ class ConfigLoader:
         """
         return self.config.get("jira", {})
 
-    def get_openproject_config(self) -> ConfigDict:
+    def get_openproject_config(self) -> OpenProjectConfig:
         """
         Get OpenProject-specific configuration.
 
@@ -182,7 +189,7 @@ class ConfigLoader:
         """
         return self.config.get("openproject", {})
 
-    def get_migration_config(self) -> ConfigDict:
+    def get_migration_config(self) -> MigrationConfig:
         """
         Get migration-specific configuration.
 
