@@ -15,7 +15,7 @@ class TestMainEntryPoint(unittest.TestCase):
     @patch("src.main.argparse.ArgumentParser.parse_args")
     @patch("src.main.run_migration")
     @patch("src.main.migration_config")
-    def test_migrate_command(self, mock_migration_config, mock_run_migration, mock_parse_args):
+    def test_migrate_command(self, mock_migration_config: MagicMock, mock_run_migration: MagicMock, mock_parse_args: MagicMock) -> None:
         """Test the 'migrate' command."""
         # Set up mock args
         mock_args = argparse.Namespace(
@@ -63,13 +63,7 @@ class TestMainEntryPoint(unittest.TestCase):
     @patch("src.main.migration_config")
     def test_export_command(
         self,
-        mock_migration_config,
-        mock_rails_client,
-        mock_op_client,
-        mock_jira_client,
-        mock_export_wp,
-        mock_parse_args,
-    ):
+        mock_migration_config: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock, mock_export_wp: MagicMock, mock_parse_args: MagicMock) -> None:
         """Test the 'export' command."""
         # Set up mock args
         mock_args = argparse.Namespace(
@@ -111,7 +105,7 @@ class TestMainEntryPoint(unittest.TestCase):
 
     @patch("src.main.argparse.ArgumentParser.parse_args")
     @patch("src.main.import_work_packages_to_rails")
-    def test_import_command(self, mock_import_wp, mock_parse_args):
+    def test_import_command(self, mock_import_wp: MagicMock, mock_parse_args: MagicMock) -> None:
         """Test the 'import' command."""
         # Set up mock args
         mock_args = argparse.Namespace(
@@ -139,7 +133,7 @@ class TestMainEntryPoint(unittest.TestCase):
 
     @patch("src.main.argparse.ArgumentParser.parse_args")
     @patch("src.main.argparse.ArgumentParser.print_help")
-    def test_no_command(self, mock_print_help, mock_parse_args):
+    def test_no_command(self, mock_print_help: MagicMock, mock_parse_args: MagicMock) -> None:
         """Test behavior when no command is provided."""
         # Set up mock args with no command
         mock_args = argparse.Namespace(command=None)

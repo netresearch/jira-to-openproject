@@ -6,13 +6,15 @@ import json
 import unittest
 from unittest.mock import MagicMock, call, mock_open, patch
 
+from typing import Any
+
 from src.migrations.issue_type_migration import IssueTypeMigration
 
 
 class TestIssueTypeMigration(unittest.TestCase):
     """Test cases for the IssueTypeMigration class."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up test fixtures."""
         # Sample Jira issue types data
         self.jira_issue_types = [
@@ -135,8 +137,8 @@ class TestIssueTypeMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_issue_types(
-        self, mock_file, mock_exists, mock_migration_config, mock_get_path, mock_rails_client, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test extracting Jira issue types."""
         # Setup
         mock_jira_instance = mock_jira_client.return_value
@@ -168,8 +170,8 @@ class TestIssueTypeMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_openproject_work_package_types(
-        self, mock_file, mock_exists, mock_migration_config, mock_get_path, mock_rails_client, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test extracting OpenProject work package types."""
         # Setup
         mock_jira_instance = mock_jira_client.return_value
@@ -203,8 +205,8 @@ class TestIssueTypeMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_issue_type_mapping(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the create_issue_type_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -251,14 +253,7 @@ class TestIssueTypeMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_migrate_issue_types_via_rails(
         self,
-        mock_file,
-        mock_exists,
-        mock_progress_tracker,
-        mock_get_path,
-        mock_rails_client,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_progress_tracker: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the migrate_issue_types_via_rails method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -326,8 +321,8 @@ class TestIssueTypeMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_migrate_issue_types(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the migrate_issue_types method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -374,8 +369,8 @@ class TestIssueTypeMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_analyze_issue_type_mapping(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the analyze_issue_type_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -408,8 +403,8 @@ class TestIssueTypeMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_update_mapping_file(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the update_mapping_file method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -484,7 +479,7 @@ class TestIssueTypeMigration(unittest.TestCase):
 # Define testing steps for issue type migration validation
 
 
-def issue_type_migration_test_steps():
+def issue_type_migration_test_steps() -> Any:
     """
     Testing steps for issue type migration validation.
 

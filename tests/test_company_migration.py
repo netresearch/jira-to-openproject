@@ -19,7 +19,7 @@ from src.utils import data_handler
 class TestCompanyMigration(unittest.TestCase):
     """Test cases for the CompanyMigration class."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up the test environment."""
         # Create mock clients
         self.jira_client = MagicMock(spec=JiraClient)
@@ -116,7 +116,7 @@ class TestCompanyMigration(unittest.TestCase):
         ]
         self.op_client.get_projects.return_value = self.sample_op_projects
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         """Clean up after each test."""
         # Remove test data files
         for filename in os.listdir(self.test_data_dir):
@@ -126,7 +126,7 @@ class TestCompanyMigration(unittest.TestCase):
         if os.path.exists(self.test_data_dir) and not os.listdir(self.test_data_dir):
             os.rmdir(self.test_data_dir)
 
-    def test_extract_tempo_companies(self):
+    def test_extract_tempo_companies(self) -> None:
         """Test extracting companies from Tempo."""
         companies = self.company_migration.extract_tempo_companies()
 
@@ -156,7 +156,7 @@ class TestCompanyMigration(unittest.TestCase):
         self.jira_client.get_tempo_customers.assert_not_called()
         self.assertEqual(len(companies), 2)
 
-    def test_extract_tempo_companies_from_list_format(self):
+    def test_extract_tempo_companies_from_list_format(self) -> None:
         """Test extracting tempo companies when the cached data is in list format."""
         # Save the list format data to the cache file
         data_handler.save(
@@ -185,7 +185,7 @@ class TestCompanyMigration(unittest.TestCase):
         self.assertEqual(companies["4"]["id"], "4")
         self.assertEqual(companies["4"]["name"], "Umbrella Corp")
 
-    def test_alternative_company_id_formats(self):
+    def test_alternative_company_id_formats(self) -> None:
         """Test handling of companies with both 'id' and 'tempo_id' formats."""
         from src.utils import data_handler
 
@@ -222,7 +222,7 @@ class TestCompanyMigration(unittest.TestCase):
         self.assertIn("1", mapping)
         self.assertIn("2", mapping)
 
-    def test_extract_openproject_projects(self):
+    def test_extract_openproject_projects(self) -> None:
         """Test extracting projects from OpenProject."""
         projects = self.company_migration.extract_openproject_projects()
 
@@ -236,7 +236,7 @@ class TestCompanyMigration(unittest.TestCase):
         projects_file = os.path.join(self.test_data_dir, "openproject_projects.json")
         self.assertTrue(os.path.exists(projects_file))
 
-    def test_create_company_mapping(self):
+    def test_create_company_mapping(self) -> None:
         """Test creating a mapping between Tempo companies and OpenProject projects."""
         # Set up test data
         self.company_migration.tempo_companies = self.sample_tempo_companies
@@ -267,7 +267,7 @@ class TestCompanyMigration(unittest.TestCase):
         mapping_file = os.path.join(self.test_data_dir, "company_mapping.json")
         self.assertTrue(os.path.exists(mapping_file))
 
-    def test_analyze_company_mapping(self):
+    def test_analyze_company_mapping(self) -> None:
         """Test analyzing the company mapping."""
         # Set up test data - a mapping with different match types
         self.company_migration.company_mapping = {
@@ -312,7 +312,7 @@ class TestCompanyMigration(unittest.TestCase):
         self.assertEqual(analysis["actually_created"], 1)
 
     @patch("src.migrations.company_migration.config.migration_config")
-    def test_migrate_companies_bulk(self, mock_migration_config):
+    def test_migrate_companies_bulk(self, mock_migration_config: MagicMock) -> None:
         """Test the bulk migration of companies."""
         # Configure the mock to return False for dry_run
         mock_migration_config.get.return_value = False

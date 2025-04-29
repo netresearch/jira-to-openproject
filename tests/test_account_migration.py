@@ -6,13 +6,15 @@ import json
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
+from typing import Any
+
 from src.migrations.account_migration import AccountMigration
 
 
 class TestAccountMigration(unittest.TestCase):
     """Test cases for the AccountMigration class."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up test fixtures."""
         # Sample Tempo accounts data
         self.tempo_accounts = [
@@ -93,13 +95,7 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_tempo_accounts(
         self,
-        mock_file,
-        mock_exists,
-        mock_get_path,
-        mock_rails_client,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the extract_tempo_accounts method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -134,13 +130,7 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_openproject_projects(
         self,
-        mock_file,
-        mock_exists,
-        mock_get_path,
-        mock_rails_client,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the extract_openproject_projects method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -175,14 +165,7 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_create_account_mapping(
         self,
-        mock_file,
-        mock_exists,
-        mock_migration_config,
-        mock_get_path,
-        mock_rails_client,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the create_account_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -243,14 +226,7 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_create_account_custom_field(
         self,
-        mock_file,
-        mock_exists,
-        mock_migration_config,
-        mock_get_path,
-        mock_rails_client,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the create_account_custom_field method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -302,15 +278,7 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_migrate_accounts(
         self,
-        mock_file,
-        mock_exists,
-        mock_tracker,
-        mock_migration_config,
-        mock_get_path,
-        mock_rails_client,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_tracker: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the migrate_accounts method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -347,7 +315,7 @@ class TestAccountMigration(unittest.TestCase):
         migration.create_account_mapping = MagicMock(return_value=account_mapping)
 
         # Define a side effect for _save_to_json to update the account_mapping with custom_field_id
-        def save_to_json_side_effect(data, filename):
+        def save_to_json_side_effect(data: Any, filename: Any) -> Any:
             if filename == "account_mapping.json":
                 # Update the account mapping with custom field ID
                 for account_id in account_mapping:

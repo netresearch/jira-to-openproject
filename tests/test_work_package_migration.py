@@ -5,6 +5,8 @@ Tests for the work package migration component.
 import unittest
 from unittest.mock import MagicMock, patch
 
+from typing import Any
+
 from src import config
 from src.migrations.work_package_migration import WorkPackageMigration
 
@@ -12,7 +14,7 @@ from src.migrations.work_package_migration import WorkPackageMigration
 class TestWorkPackageMigration(unittest.TestCase):
     """Test cases for the WorkPackageMigration class."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up test fixtures."""
         # Sample Jira issues data
         self.jira_issues = [
@@ -112,12 +114,7 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.migrations.work_package_migration.ProgressTracker")
     def test_initialize(
         self,
-        mock_tracker,
-        mock_load_dict,
-        mock_rails_client,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_tracker: MagicMock, mock_load_dict: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the initialization of WorkPackageMigration class."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -148,8 +145,8 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_load_mappings(
-        self, mock_exists, mock_load_dict, mock_op_client, mock_jira_client
-    ):
+        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the _load_mappings method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -184,8 +181,8 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.migrations.work_package_migration.OpenProjectRailsClient")
     @patch("src.utils.data_handler.load_dict")
     def test_prepare_work_package(
-        self, mock_load_dict, mock_rails_client, mock_op_client, mock_jira_client
-    ):
+        self, mock_load_dict: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the prepare_work_package method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -225,7 +222,7 @@ class TestWorkPackageMigration(unittest.TestCase):
         self.assertIn("PROJ-123", result["description"])
         self.assertEqual(result["jira_key"], "PROJ-123")
 
-    def test_migrate_work_packages(self):
+    def test_migrate_work_packages(self) -> None:
         """Test the migrate_work_packages method exists."""
         # This is a simplified test that only verifies the method exists
         # The actual implementation is too complex to test directly without
@@ -233,7 +230,7 @@ class TestWorkPackageMigration(unittest.TestCase):
 
         # Create a class with mocked _load_mappings to avoid the initialization error
         class MockedWorkPackageMigration(WorkPackageMigration):
-            def _load_mappings(self):
+            def _load_mappings(self: Any) -> Any:
                 # Skip the problematic method
                 pass
 
@@ -254,8 +251,8 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_analyze_work_package_mapping(
-        self, mock_exists, mock_load_dict, mock_op_client, mock_jira_client
-    ):
+        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the analyze_work_package_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -284,7 +281,7 @@ class TestWorkPackageMigration(unittest.TestCase):
 # Define testing steps for work package migration validation
 
 
-def work_package_migration_test_steps():
+def work_package_migration_test_steps() -> Any:
     """
     Testing steps for work package migration validation.
 

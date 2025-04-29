@@ -11,7 +11,7 @@ from src.migrations.user_migration import UserMigration
 class TestUserMigration(unittest.TestCase):
     """Test cases for the UserMigration class."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up test fixtures."""
         # Sample Jira users data
         self.jira_users = [
@@ -81,8 +81,8 @@ class TestUserMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_users(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the extract_jira_users method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -112,8 +112,8 @@ class TestUserMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_openproject_users(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
-    ):
+        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+    ) -> None:
         """Test the extract_openproject_users method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -145,13 +145,7 @@ class TestUserMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_create_user_mapping(
         self,
-        mock_file,
-        mock_exists,
-        mock_tracker,
-        mock_get_path,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_tracker: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the create_user_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -194,14 +188,7 @@ class TestUserMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_create_missing_users(
         self,
-        mock_file,
-        mock_exists,
-        mock_logger,
-        mock_tracker,
-        mock_get_path,
-        mock_op_client,
-        mock_jira_client,
-    ):
+        mock_file: MagicMock, mock_exists: MagicMock, mock_logger: MagicMock, mock_tracker: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test the create_missing_users method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
