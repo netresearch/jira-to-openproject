@@ -217,9 +217,12 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Mock file exists check - file does not exist so we'll create a new mapping
         mock_exists.return_value = False
 
+        # Create a mock for rails_console
+        mock_rails_console = MagicMock()
+
         # Create instance and set data
         migration = IssueTypeMigration(
-            jira_client=mock_jira_instance, op_client=mock_op_instance
+            jira_client=mock_jira_instance, op_client=mock_op_instance, rails_console=mock_rails_console
         )
         migration.jira_issue_types = self.jira_issue_types
         migration.op_work_package_types = self.op_work_package_types
@@ -248,7 +251,7 @@ class TestIssueTypeMigration(unittest.TestCase):
     @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.OpenProjectRailsClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
-    @patch("src.migrations.issue_type_migration.ProgressTracker")
+    @patch("src.display.ProgressTracker")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_migrate_issue_types_via_rails(
@@ -264,18 +267,19 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_progress_tracker.return_value.__enter__.return_value
 
         # Mock rails client execute script
-        mock_rails_instance.execute_ruby_script.return_value = {
-            "created": [
-                {"id": 4, "name": "Epic", "color": "#9B59B6", "is_milestone": False}
-            ],
-            "existing": [],
+        mock_rails_instance.execute.return_value = {
+            "status": "success",
+            "output": "BULK_CREATE_COMPLETED: Created 1 types, Errors: 0\nCREATED_TYPE: 4 - Epic (created)"
         }
 
-        # Mock the connection to Rails console
-        mock_rails_instance.connect_to_rails_console = MagicMock(return_value=True)
-        mock_rails_instance.check_existing_work_package_types = MagicMock(
-            return_value=[]
-        )
+        # Mock file transfer and file existence checks
+        mock_rails_instance.transfer_file_to_container.return_value = True
+        mock_rails_instance.transfer_file_from_container.return_value = True
+        mock_exists.side_effect = lambda path: "work_package_types_created.json" in path
+
+        # Mock file reading for results
+        mock_file_contents = '{"created": [{"id": 4, "name": "Epic", "status": "created", "jira_type_name": "Epic"}], "errors": []}'
+        mock_file.return_value.__enter__.return_value.read.return_value = mock_file_contents
 
         mock_get_path.return_value = "/tmp/test_data"
 
@@ -286,7 +290,6 @@ class TestIssueTypeMigration(unittest.TestCase):
             rails_console=mock_rails_instance,
         )
 
-        # Set up issue type mapping
         # Create a dictionary with simple values instead of MagicMock objects
         migration.issue_type_mapping = {
             "Epic": {
@@ -298,10 +301,10 @@ class TestIssueTypeMigration(unittest.TestCase):
             }
         }
 
-        # Add methods needed for the test that we'll mock
-        migration.connect_to_rails_console = MagicMock(return_value=True)
-        migration.check_existing_work_package_types = MagicMock(return_value=[])
-        migration.create_work_package_type_via_rails = MagicMock(
+        # Set up the rails_console mock to handle the method calls
+        migration.rails_console.connect_to_rails_console = MagicMock(return_value=True)
+        migration.rails_console.check_existing_work_package_types = MagicMock(return_value=[])
+        migration.rails_console.create_work_package_type_via_rails = MagicMock(
             return_value={"status": "success", "id": 4}
         )
 
@@ -310,10 +313,11 @@ class TestIssueTypeMigration(unittest.TestCase):
 
         # Assertions
         self.assertTrue(result)  # Should return True for success
+
+        # Verify that we're saving the issue_type_id_mapping.json file
         mock_file.assert_called_with(
-            "/tmp/test_data/issue_type_migration_results.json", "w"
+            "/tmp/test_data/issue_type_id_mapping.json", "w"
         )
-        mock_file().write.assert_called()
 
     @patch("src.migrations.issue_type_migration.JiraClient")
     @patch("src.migrations.issue_type_migration.OpenProjectClient")
@@ -331,9 +335,12 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_get_path.return_value = "/tmp/test_data"
         mock_exists.return_value = True
 
+        # Create a mock for rails_console
+        mock_rails_console = MagicMock()
+
         # Create instance and set data for the test
         migration = IssueTypeMigration(
-            jira_client=mock_jira_instance, op_client=mock_op_instance
+            jira_client=mock_jira_instance, op_client=mock_op_instance, rails_console=mock_rails_console
         )
         migration.jira_issue_types = self.jira_issue_types
         migration.op_work_package_types = self.op_work_package_types
@@ -379,9 +386,12 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_get_path.return_value = "/tmp/test_data"
         mock_exists.return_value = True
 
+        # Create a mock for rails_console
+        mock_rails_console = MagicMock()
+
         # Create instance
         migration = IssueTypeMigration(
-            jira_client=mock_jira_instance, op_client=mock_op_instance
+            jira_client=mock_jira_instance, op_client=mock_op_instance, rails_console=mock_rails_console
         )
         migration.issue_type_mapping = self.expected_mapping
 
@@ -410,6 +420,17 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
 
+        mock_get_path.return_value = "/tmp/test_data"
+        mock_exists.return_value = True
+
+        # Create a mock for rails_console
+        mock_rails_console = MagicMock()
+
+        # Create instance and set data for the test
+        migration = IssueTypeMigration(
+            jira_client=mock_jira_instance, op_client=mock_op_instance, rails_console=mock_rails_console
+        )
+
         # Mock existing mapping file
         mock_exists.return_value = True
         mock_file.return_value.__enter__.return_value.read.return_value = json.dumps(
@@ -437,13 +458,6 @@ class TestIssueTypeMigration(unittest.TestCase):
             {"id": 1, "name": "Bug", "color": "#FF0000"},
             {"id": 2, "name": "Task", "color": "#00FF00"},
         ]
-
-        mock_get_path.return_value = "/tmp/test_data"
-
-        # Create instance and call method
-        migration = IssueTypeMigration(
-            jira_client=mock_jira_instance, op_client=mock_op_instance
-        )
 
         # Set the mapping attribute directly to match what was mocked in the file
         migration.issue_type_mapping = {
