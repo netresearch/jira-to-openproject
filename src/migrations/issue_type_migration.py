@@ -93,19 +93,16 @@ class IssueTypeMigration(BaseMigration):
         logger.info(f"Loaded {len(self.issue_type_mapping)=} issue type mappings")
         logger.info(f"Loaded {len(self.issue_type_id_mapping)=} issue type ID mappings")
 
-    def extract_jira_issue_types(self, force=False) -> list[dict[str, Any]]:
+    def extract_jira_issue_types(self) -> list[dict[str, Any]]:
         """
         Extract issue types from Jira.
-
-        Args:
-            force: If True, extract again even if data already exists
 
         Returns:
             List of Jira issue type dictionaries
         """
         issue_types_file = os.path.join(self.data_dir, "jira_issue_types.json")
 
-        if os.path.exists(issue_types_file) and not force:
+        if os.path.exists(issue_types_file) and not config.migration_config.get("force", False):
             logger.info(
                 "Jira issue types data already exists, skipping extraction (use --force to override)"
             )
@@ -129,13 +126,10 @@ class IssueTypeMigration(BaseMigration):
             return []
 
     def extract_openproject_work_package_types(
-        self, force=False
+        self
     ) -> list[dict[str, Any]]:
         """
         Extract work package types from OpenProject.
-
-        Args:
-            force: If True, extract again even if data already exists
 
         Returns:
             List of OpenProject work package type dictionaries
@@ -144,7 +138,7 @@ class IssueTypeMigration(BaseMigration):
             self.data_dir, "openproject_work_package_types.json"
         )
 
-        if os.path.exists(work_package_types_file) and not force:
+        if os.path.exists(work_package_types_file) and not config.migration_config.get("force", False):
             logger.info(
                 "OpenProject work package types data already exists, skipping extraction (use --force to override)"
             )
@@ -173,18 +167,15 @@ class IssueTypeMigration(BaseMigration):
 
         return self.op_work_package_types
 
-    def create_issue_type_mapping(self, force=False) -> dict[str, Any]:
+    def create_issue_type_mapping(self) -> dict[str, Any]:
         """
         Create a mapping between Jira issue types and OpenProject work package types.
-
-        Args:
-            force: If True, create the mapping again even if it already exists
 
         Returns:
             Dictionary mapping Jira issue types to OpenProject work package types
         """
         mapping_file = os.path.join(self.data_dir, "issue_type_mapping_template.json")
-        if os.path.exists(mapping_file) and not force:
+        if os.path.exists(mapping_file) and not config.migration_config.get("force", False):
             logger.info(
                 "Issue type mapping already exists, loading from file (use --force to recreate)"
             )
@@ -1034,7 +1025,7 @@ class IssueTypeMigration(BaseMigration):
                 return default
         return default
 
-    def _save_to_json(self, data: Any, filename: str):
+    def _save_to_json(self, data: Any, filename: str) -> str:
         """
         Save data to a JSON file in the data directory.
 
@@ -1047,15 +1038,12 @@ class IssueTypeMigration(BaseMigration):
             json.dump(data, f, indent=2)
         logger.debug(f"Saved data to {filepath}")
 
-    def update_mapping_file(self, force: bool = False) -> bool:
+    def update_mapping_file(self) -> bool:
         """
         Update the issue type mapping file with IDs from OpenProject.
 
         This method is useful when work package types were created manually via a Ruby script
         execution and the mapping file needs to be updated with the created type IDs.
-
-        Args:
-            force: If True, force refresh of OpenProject work package types
 
         Returns:
             True if mapping was updated successfully, False otherwise
@@ -1063,7 +1051,7 @@ class IssueTypeMigration(BaseMigration):
         logger.info("Updating issue type mapping file with IDs from OpenProject...")
 
         # Get all work package types from OpenProject
-        op_types = self.op_client.get_work_package_types(force_refresh=force)
+        op_types = self.op_client.get_work_package_types()
         if not op_types:
             logger.error("Failed to retrieve work package types from OpenProject")
             return False
@@ -1122,16 +1110,9 @@ class IssueTypeMigration(BaseMigration):
 
         return updated_count > 0 or already_mapped_count > 0
 
-    def run(
-        self, dry_run: bool = False, force: bool = False
-    ) -> ComponentResult:
+    def run(self) -> ComponentResult:
         """
         Run the issue type migration.
-
-        Args:
-            dry_run: If True, don't actually create or update anything
-            force: If True, force re-extraction of data
-            mappings: Optional mappings object (not used in this migration)
 
         Returns:
             Dictionary with migration results
@@ -1139,15 +1120,15 @@ class IssueTypeMigration(BaseMigration):
         logger.info("Starting issue type migration...")
 
         # 1. Extract and process issue types
-        self.extract_jira_issue_types(force=force)
-        self.extract_openproject_work_package_types(force=force)
-        self.create_issue_type_mapping(force=force)
+        self.extract_jira_issue_types()
+        self.extract_openproject_work_package_types()
+        self.create_issue_type_mapping()
 
         # 2. Normalize issue types (map sub-types to normal types)
         self.normalize_issue_types()
 
         # 3. Migrate issue types (create if needed)
-        if dry_run:
+        if config.migration_config.get("dry_run", False):
             logger.info("DRY RUN: Skipping actual issue type migration")
             results = ComponentResult(
                 success=True,
@@ -1171,7 +1152,7 @@ class IssueTypeMigration(BaseMigration):
             migration_results = self.migrate_issue_types()
 
             results = ComponentResult(
-                success=self.update_mapping_file(force=force),
+                success=self.update_mapping_file(),
                 total_types=migration_results.get("total", 0),
                 matched_types=migration_results.get("matched", 0),
                 normalized_types=migration_results.get("normalized", 0),

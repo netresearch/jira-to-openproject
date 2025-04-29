@@ -102,8 +102,6 @@ Run the migration tool using the CLI or directly via Python:
 j2o migrate --dry-run
 # Migrate specific components
 j2o migrate --components users projects
-# Migrate with Rails console integration (for custom fields/types)
-j2o migrate --components custom_fields issue_types --direct-migration
 # Full migration (use with caution!)
 j2o migrate
 # Force re-extraction
@@ -124,7 +122,7 @@ python src/main.py --dry-run
 * **Mappings:** Mapping files in `var/data/*.json` translate IDs and values between systems.
 * **Project Hierarchy:** Projects are organized hierarchically with Tempo companies as top-level projects and Jira projects as their sub-projects.
 * **Rails Console Integration:** For entities not supported by the OpenProject API, the tool can:
-  * Execute commands via SSH/Docker (`--direct-migration`)
+  * Execute commands via SSH/Docker
   * Generate Ruby scripts for manual execution
 * **Dry Run:** The `--dry-run` flag simulates migration without making changes.
 * **Data Directory:** The `var/` directory stores extracted data, logs, scripts, and mapping files.

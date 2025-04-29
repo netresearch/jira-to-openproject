@@ -11,7 +11,7 @@ import json
 import os
 import subprocess
 import time
-from typing import Any
+from typing import Any, Optional
 
 from src import config
 
@@ -25,9 +25,9 @@ class OpenProjectRailsClient:
     """
 
     # Singleton instance
-    _instance = None
+    _instance: Optional["OpenProjectRailsClient"] = None
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args: Any, **kwargs: Any) -> "OpenProjectRailsClient":
         """Create a singleton instance of the OpenProjectRailsClient."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)

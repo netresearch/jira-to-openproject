@@ -14,7 +14,8 @@ class TestMainEntryPoint(unittest.TestCase):
 
     @patch("src.main.argparse.ArgumentParser.parse_args")
     @patch("src.main.run_migration")
-    def test_migrate_command(self, mock_run_migration, mock_parse_args):
+    @patch("src.main.migration_config")
+    def test_migrate_command(self, mock_migration_config, mock_run_migration, mock_parse_args):
         """Test the 'migrate' command."""
         # Set up mock args
         mock_args = argparse.Namespace(
@@ -23,11 +24,17 @@ class TestMainEntryPoint(unittest.TestCase):
             components=["users", "projects"],
             no_backup=False,
             force=False,
-            direct_migration=False,
             restore=None,
             tmux=False,
         )
         mock_parse_args.return_value = mock_args
+
+        # Set up mock config values
+        mock_migration_config.get.side_effect = lambda key, default=None: {
+            "dry_run": True,
+            "no_backup": False,
+            "force": False,
+        }.get(key, default)
 
         # Set up mock result
         mock_run_migration.return_value = {
@@ -43,13 +50,7 @@ class TestMainEntryPoint(unittest.TestCase):
             main()
 
             # Check that run_migration was called with correct arguments
-            mock_run_migration.assert_called_once_with(
-                dry_run=True,
-                components=["users", "projects"],
-                no_backup=False,
-                force=False,
-                direct_migration=False,
-            )
+            mock_run_migration.assert_called_once_with(components=["users", "projects"])
 
             # Check that sys.exit was called with 0 (success)
             mock_exit.assert_called_once_with(0)
@@ -59,8 +60,10 @@ class TestMainEntryPoint(unittest.TestCase):
     @patch("src.main.JiraClient")
     @patch("src.main.OpenProjectClient")
     @patch("src.main.OpenProjectRailsClient")
+    @patch("src.main.migration_config")
     def test_export_command(
         self,
+        mock_migration_config,
         mock_rails_client,
         mock_op_client,
         mock_jira_client,
@@ -73,6 +76,9 @@ class TestMainEntryPoint(unittest.TestCase):
             command="export", dry_run=False, force=True, projects=["TEST1", "TEST2"]
         )
         mock_parse_args.return_value = mock_args
+
+        # Set up mock config values
+        mock_migration_config.get.return_value = True  # For use_rails_console
 
         # Set up mock clients
         mock_jira_client_instance = MagicMock()

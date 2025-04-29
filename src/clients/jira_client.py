@@ -47,9 +47,9 @@ class JiraClient:
 
         # Initialize client
         self.jira: JIRA | None = None
-        self.request_count = 0
-        self.period_start = time.time()
-        self.base_url = self.jira_url.rstrip("/")
+        self.request_count: int = 0
+        self.period_start: float = time.time()
+        self.base_url: str = self.jira_url.rstrip("/")
 
         # Cache fields
         self.captcha_challenge = False

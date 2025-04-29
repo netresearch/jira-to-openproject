@@ -84,16 +84,9 @@ class BaseMigration:
         self.logger.debug(f"Saved data to {filepath}")
         return filepath
 
-    def run(
-        self, dry_run: bool = False, force: bool = False
-    ) -> ComponentResult:
+    def run(self) -> ComponentResult:
         """
         Default implementation of the run method that all migration classes should implement.
-
-        Args:
-            dry_run: If True, no changes will be made to OpenProject
-            force: If True, force extraction of data even if it already exists
-            mappings: Optional mappings object that can be used for mapping IDs between systems
 
         Returns:
             Dictionary with migration results

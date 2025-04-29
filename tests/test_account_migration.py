@@ -117,7 +117,7 @@ class TestAccountMigration(unittest.TestCase):
         )
 
         # Call extract_tempo_accounts
-        result = migration.extract_tempo_accounts(force=True)
+        result = migration.extract_tempo_accounts()
 
         # Verify calls
         mock_jira_instance.get_tempo_accounts.assert_called_once_with(expand=True)

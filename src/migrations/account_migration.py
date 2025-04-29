@@ -106,15 +106,15 @@ class AccountMigration(BaseMigration):
         Extracts Tempo accounts using the JiraClient.
 
         Args:
-            force: If True, re-extract data even if it exists locally.
+            force: If True, forces re-extraction even if cached data exists.
 
         Returns:
             List of Tempo account dictionaries.
         """
         if (
             self.tempo_accounts
-            and not force
             and not config.migration_config.get("force", False)
+            and not force
         ):
             self.logger.info(
                 f"Using cached Tempo accounts from {Mappings.TEMPO_ACCOUNTS_FILE}"
@@ -142,9 +142,12 @@ class AccountMigration(BaseMigration):
             )
             return []
 
-    def extract_openproject_projects(self) -> list[dict[str, Any]]:
+    def extract_openproject_projects(self, force: bool = False) -> list[dict[str, Any]]:
         """
         Extract projects from OpenProject.
+
+        Args:
+            force: If True, forces re-extraction even if cached data exists.
 
         Returns:
             List of OpenProject project dictionaries
@@ -723,16 +726,9 @@ class AccountMigration(BaseMigration):
         self._save_to_json(analysis, "account_mapping_analysis.json")
         self.account_custom_field_id = cf_id
 
-    def run(
-        self, dry_run: bool = False, force: bool = False
-    ) -> ComponentResult:
+    def run(self) -> ComponentResult:
         """
         Run the account migration process.
-
-        Args:
-            dry_run: If True, don't actually create or modify accounts in OpenProject
-            force: If True, force extraction of data even if it already exists
-            mappings: Optional mappings object (not used in this migration)
 
         Returns:
             Dictionary with migration results
@@ -746,7 +742,7 @@ class AccountMigration(BaseMigration):
             self._load_data()
 
             # Extract data
-            tempo_accounts = self.extract_tempo_accounts(force=force)
+            tempo_accounts = self.extract_tempo_accounts()
             op_projects = self.extract_openproject_projects()
 
             # Create mapping
@@ -755,7 +751,7 @@ class AccountMigration(BaseMigration):
             # Create/find custom field if not in dry run mode
             result = None
 
-            if not dry_run:
+            if not config.migration_config.get("dry_run", False):
                 # Migrate accounts (will create custom field if needed)
                 account_mapping = self.migrate_accounts()
 
