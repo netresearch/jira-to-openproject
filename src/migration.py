@@ -153,29 +153,20 @@ def restore_backup(backup_dir: str) -> bool:
 
 
 def run_migration(
-    dry_run: bool = False,
     components: list[ComponentName] | None = None,
-    no_backup: bool = False,
-    force: bool = False,
-    direct_migration: bool = False,
 ) -> MigrationResult:
     """
     Run the migration process.
 
     Args:
-        dry_run: If True, no changes will be made to OpenProject
         components: List of specific components to run (if None, run all)
-        no_backup: If True, skip creating a backup before migration
-        force: If True, force extraction of data even if it already exists
-        direct_migration: If True, use direct Rails console execution for supported
-        operations, including work packages
 
     Returns:
         Dictionary with migration results
     """
     try:
         # Check if we need a migration mode header
-        if dry_run:
+        if config.migration_config.get("dry_run", False):
             config.logger.warning(
                 "Running in DRY RUN mode - no changes will be made to OpenProject",
                 extra={"markup": True},
@@ -200,11 +191,10 @@ def run_migration(
                 "status": "success",  # Will be updated if any component fails
                 "start_time": datetime.now().isoformat(),
                 "input_params": {
-                    "dry_run": dry_run,
+                    "dry_run": config.migration_config.get("dry_run", False),
                     "components": components,
-                    "no_backup": no_backup,
-                    "force": force,
-                    "direct_migration": direct_migration,
+                    "no_backup": config.migration_config.get("no_backup", False),
+                    "force": config.migration_config.get("force", False),
                 },
                 "confirm_after_component": True,  # Enable confirmation between components
             },
@@ -212,7 +202,7 @@ def run_migration(
 
         # Create a backup if not disabled
         backup_path = None
-        if not no_backup and not dry_run:
+        if not config.migration_config.get("no_backup", False) and not config.migration_config.get("dry_run", False):
             config.logger.info(
                 "Creating backup before migration...", extra={"markup": True}
             )
@@ -233,39 +223,33 @@ def run_migration(
         op_client = OpenProjectClient()
 
         # Initialize Rails client if direct migration is requested
-        op_rails_client = None
-        if direct_migration:
-            config.logger.notice(
-                "Direct migration mode enabled - using Rails console for supported operations",
+        try:
+            op_rails_client = OpenProjectRailsClient()
+            # Check if Rails client is working
+            config.logger.info(
+                "Testing Rails console connection...", extra={"markup": True}
+            )
+            if op_rails_client.test_connection():
+                config.logger.success(
+                    "Rails console connection successful", extra={"markup": True}
+                )
+            else:
+                config.logger.error(
+                    "Rails console connection test failed", extra={"markup": True}
+                )
+        except Exception as e:
+            config.logger.error(
+                f"Failed to initialize Rails client: {str(e)}",
                 extra={"markup": True},
             )
-            try:
-                op_rails_client = OpenProjectRailsClient()
-                # Check if Rails client is working
-                config.logger.info(
-                    "Testing Rails console connection...", extra={"markup": True}
-                )
-                if op_rails_client.test_connection():
-                    config.logger.success(
-                        "Rails console connection successful", extra={"markup": True}
-                    )
-                else:
-                    config.logger.error(
-                        "Rails console connection test failed", extra={"markup": True}
-                    )
-            except Exception as e:
-                config.logger.error(
-                    f"Failed to initialize Rails client: {str(e)}",
-                    extra={"markup": True},
-                )
 
-                # Mark overall status as failed
-                results.overall["status"] = "failed"
-                results.overall["error"] = f"Rails client initialization failed: {str(e)}"
+            # Mark overall status as failed
+            results.overall["status"] = "failed"
+            results.overall["error"] = f"Rails client initialization failed: {str(e)}"
 
-                # Add end time
-                results.overall["end_time"] = datetime.now().isoformat()
-                return results
+            # Add end time
+            results.overall["end_time"] = datetime.now().isoformat()
+            return results
 
         # Initialize mappings
         config.mappings = Mappings(
@@ -350,9 +334,7 @@ def run_migration(
 
                 # Run the component
                 try:
-                    component_result = component.run(
-                        dry_run=dry_run, force=force
-                    )
+                    component_result = component.run()
 
                     if component_result:
                         # Add timing information (if not already present)
@@ -576,11 +558,6 @@ def parse_args() -> argparse.Namespace:
         help="Force extraction of data even if it already exists",
     )
     parser.add_argument(
-        "--direct-migration",
-        action="store_true",
-        help="Use direct Rails console execution for supported operations, including work packages",
-    )
-    parser.add_argument(
         "--setup-tmux",
         action="store_true",
         help="Create and setup a tmux session for Rails console use",
@@ -733,9 +710,7 @@ def main() -> None:
                     custom_field_migration = CustomFieldMigration(
                         jira_client, op_client
                     )
-                    mapping_update_result = custom_field_migration.update_mapping_file(
-                        force=args.force
-                    )
+                    mapping_update_result = custom_field_migration.update_mapping_file()
                     if mapping_update_result:
                         config.logger.success(
                             "Custom field mapping updated successfully."
@@ -746,7 +721,7 @@ def main() -> None:
                         )
                 elif choice == "2":
                     issue_type_migration = IssueTypeMigration(jira_client, op_client)
-                    issue_type_mapping_update_result = issue_type_migration.update_mapping_file(force=args.force)
+                    issue_type_mapping_update_result = issue_type_migration.update_mapping_file()
                     if issue_type_mapping_update_result:
                         config.logger.success(
                             "Issue type mapping updated successfully."
@@ -766,13 +741,7 @@ def main() -> None:
         config.logger.debug(f"Args: {args}", extra={"markup": True})
 
         # Run migration with provided arguments
-        migration_result = run_migration(
-            dry_run=args.dry_run,
-            components=args.components,
-            no_backup=args.no_backup,
-            force=args.force,
-            direct_migration=args.direct_migration,
-        )
+        migration_result = run_migration(components=args.components)
 
         # Display migration results summary
         if migration_result:

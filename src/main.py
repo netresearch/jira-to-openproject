@@ -19,7 +19,7 @@ from src.export import export_work_packages, import_work_packages_to_rails
 from src.migration import restore_backup, run_migration, setup_tmux_session
 
 
-def main():
+def main() -> None:
     """
     Parse arguments and execute the appropriate command.
     """
@@ -56,11 +56,6 @@ def main():
         "--force",
         action="store_true",
         help="Force extraction of data even if it already exists",
-    )
-    migrate_parser.add_argument(
-        "--direct-migration",
-        action="store_true",
-        help="Use direct Rails console execution for supported operations",
     )
     migrate_parser.add_argument(
         "--restore",
@@ -126,13 +121,7 @@ def main():
             setup_tmux_session()
 
         # Run the migration
-        result = run_migration(
-            dry_run=args.dry_run,
-            components=args.components,
-            no_backup=args.no_backup,
-            force=args.force,
-            direct_migration=args.direct_migration,
-        )
+        result = run_migration(components=args.components)
 
         # Exit with appropriate code
         if result["overall"]["status"] == "success":

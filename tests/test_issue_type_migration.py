@@ -129,65 +129,73 @@ class TestIssueTypeMigration(unittest.TestCase):
 
     @patch("src.migrations.issue_type_migration.JiraClient")
     @patch("src.migrations.issue_type_migration.OpenProjectClient")
+    @patch("src.migrations.issue_type_migration.OpenProjectRailsClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
+    @patch("src.migrations.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_issue_types(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
+        self, mock_file, mock_exists, mock_migration_config, mock_get_path, mock_rails_client, mock_op_client, mock_jira_client
     ):
-        """Test the extract_jira_issue_types method."""
-        # Setup mocks
+        """Test extracting Jira issue types."""
+        # Setup
         mock_jira_instance = mock_jira_client.return_value
-        mock_jira_instance.get_issue_types.return_value = self.jira_issue_types
-
         mock_op_instance = mock_op_client.return_value
+        mock_rails_instance = mock_rails_client.return_value
+        mock_jira_instance.get_issue_types.return_value = self.jira_issue_types
         mock_get_path.return_value = "/tmp/test_data"
-        mock_exists.return_value = False  # No cached data
+        mock_exists.return_value = False
 
-        # Create instance and call method
-        migration = IssueTypeMigration(
-            jira_client=mock_jira_instance, op_client=mock_op_instance
+        # Mock the config to return force=True
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+
+        # Execute
+        issue_migration = IssueTypeMigration(
+            mock_jira_instance, mock_op_instance, mock_rails_instance
         )
-        result = migration.extract_jira_issue_types(force=True)
+        result = issue_migration.extract_jira_issue_types()
 
-        # Assertions
-        self.assertEqual(result, self.jira_issue_types)
+        # Assert
         mock_jira_instance.get_issue_types.assert_called_once()
         mock_file.assert_called_with("/tmp/test_data/jira_issue_types.json", "w")
-        mock_file().write.assert_called()
+        self.assertEqual(result, self.jira_issue_types)
 
     @patch("src.migrations.issue_type_migration.JiraClient")
     @patch("src.migrations.issue_type_migration.OpenProjectClient")
+    @patch("src.migrations.issue_type_migration.OpenProjectRailsClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
+    @patch("src.migrations.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_openproject_work_package_types(
-        self, mock_file, mock_exists, mock_get_path, mock_op_client, mock_jira_client
+        self, mock_file, mock_exists, mock_migration_config, mock_get_path, mock_rails_client, mock_op_client, mock_jira_client
     ):
-        """Test the extract_openproject_work_package_types method."""
-        # Setup mocks
+        """Test extracting OpenProject work package types."""
+        # Setup
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
+        mock_rails_instance = mock_rails_client.return_value
         mock_op_instance.get_work_package_types.return_value = (
             self.op_work_package_types
         )
-
         mock_get_path.return_value = "/tmp/test_data"
-        mock_exists.return_value = False  # No cached data
+        mock_exists.return_value = False
 
-        # Create instance and call method
-        migration = IssueTypeMigration(
-            jira_client=mock_jira_instance, op_client=mock_op_instance
+        # Mock the config to return force=True
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+
+        # Execute
+        issue_migration = IssueTypeMigration(
+            mock_jira_instance, mock_op_instance, mock_rails_instance
         )
-        result = migration.extract_openproject_work_package_types(force=True)
+        result = issue_migration.extract_openproject_work_package_types()
 
-        # Assertions
-        self.assertEqual(result, self.op_work_package_types)
+        # Assert
         mock_op_instance.get_work_package_types.assert_called_once()
         mock_file.assert_called_with(
             "/tmp/test_data/openproject_work_package_types.json", "w"
         )
-        mock_file().write.assert_called()
+        self.assertEqual(result, self.op_work_package_types)
 
     @patch("src.migrations.issue_type_migration.JiraClient")
     @patch("src.migrations.issue_type_migration.OpenProjectClient")

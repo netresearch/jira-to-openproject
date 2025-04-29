@@ -951,7 +951,7 @@ class WorkPackageMigration(BaseMigration):
                                 f"Preparing issue {issue_key} ({i+1}/{len(issues)})"
                             )
 
-                        if hasattr(self, "dry_run") and self.dry_run:
+                        if config.migration_config.get("dry_run", False):
                             self.logger.notice(
                                 f"DRY RUN: Would create work package for {issue_key}",
                                 extra={"markup": True},
@@ -1001,7 +1001,7 @@ class WorkPackageMigration(BaseMigration):
                         f"Warnings: {preparation_errors} preparation errors for {project_key}"
                     )
 
-                if hasattr(self, "dry_run") and self.dry_run:
+                if config.migration_config.get("dry_run", False):
                     project_tracker.add_log_item(
                         f"DRY RUN: Would create {len(issues)} work packages for {project_key}"
                     )
@@ -1844,16 +1844,9 @@ class WorkPackageMigration(BaseMigration):
             )
             return None
 
-    def run(
-        self, dry_run: bool = False, force: bool = False
-    ) -> ComponentResult:
+    def run(self) -> ComponentResult:
         """
         Run the work package migration process.
-
-        Args:
-            dry_run: If True, don't actually create or update anything
-            force: If True, force extraction of data even if it already exists
-            mappings: Optional mappings object for accessing other migration results
 
         Returns:
             ComponentResult with migration results
@@ -1862,9 +1855,6 @@ class WorkPackageMigration(BaseMigration):
         start_time = datetime.now()
 
         try:
-            # Set dry_run flag
-            self.dry_run = dry_run
-
             # Verify required mappings are available
             missing_mappings = []
 
@@ -2135,7 +2125,7 @@ class WorkPackageMigration(BaseMigration):
             )
 
             # Extract custom fields using the existing method
-            custom_fields = cf_migration.extract_openproject_custom_fields(force=False)
+            custom_fields = cf_migration.extract_openproject_custom_fields()
 
             if not custom_fields:
                 self.logger.warning("No custom fields found in OpenProject", extra={"markup": True})

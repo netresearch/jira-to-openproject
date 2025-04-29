@@ -7,7 +7,7 @@ This module contains test cases for validating the status migration from Jira to
 import json
 import os
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
@@ -18,7 +18,7 @@ from src.migrations.status_migration import StatusMigration
 class TestStatusMigration(unittest.TestCase):
     """Test cases for the StatusMigration class."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up the test environment."""
         # Create mock clients
         self.jira_client = MagicMock(spec=JiraClient)
@@ -33,6 +33,14 @@ class TestStatusMigration(unittest.TestCase):
         self.mappings = MagicMock(spec=Mappings)
         self.mappings.status_mapping = {}
 
+        # Mock the config
+        self.config_patcher = patch("src.migrations.status_migration.config")
+        self.mock_config = self.config_patcher.start()
+        self.mock_config.migration_config.get.side_effect = lambda key, default=None: {
+            "dry_run": True,
+            "force": False,
+        }.get(key, default)
+
         # Initialize the status migration
         self.status_migration = StatusMigration(
             jira_client=self.jira_client,
@@ -40,7 +48,6 @@ class TestStatusMigration(unittest.TestCase):
             op_rails_client=self.op_rails_client,
             mappings=self.mappings,
             data_dir=self.test_data_dir,
-            dry_run=True,
         )
 
         # Create test data
@@ -69,8 +76,11 @@ class TestStatusMigration(unittest.TestCase):
         ]
         self.op_client.get_statuses.return_value = self.sample_op_statuses
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         """Clean up after each test."""
+        # Stop config patcher
+        self.config_patcher.stop()
+
         # Remove test data files
         for filename in os.listdir(self.test_data_dir):
             os.remove(os.path.join(self.test_data_dir, filename))
@@ -79,9 +89,15 @@ class TestStatusMigration(unittest.TestCase):
         if os.path.exists(self.test_data_dir) and not os.listdir(self.test_data_dir):
             os.rmdir(self.test_data_dir)
 
-    def test_extract_jira_statuses(self):
+    def test_extract_jira_statuses(self) -> None:
         """Test extracting statuses from Jira."""
-        statuses = self.status_migration.extract_jira_statuses(force=True)
+        # Temporarily override force to True
+        self.mock_config.migration_config.get.side_effect = lambda key, default=None: {
+            "dry_run": True,
+            "force": True,
+        }.get(key, default)
+
+        statuses = self.status_migration.extract_jira_statuses()
 
         # Verify that get_all_statuses was called
         self.jira_client.get_all_statuses.assert_called_once()
@@ -98,9 +114,15 @@ class TestStatusMigration(unittest.TestCase):
             saved_statuses = json.load(f)
         self.assertEqual(saved_statuses, self.sample_jira_statuses)
 
-    def test_extract_status_categories(self):
+    def test_extract_status_categories(self) -> None:
         """Test extracting status categories from Jira."""
-        categories = self.status_migration.extract_status_categories(force=True)
+        # Temporarily override force to True
+        self.mock_config.migration_config.get.side_effect = lambda key, default=None: {
+            "dry_run": True,
+            "force": True,
+        }.get(key, default)
+
+        categories = self.status_migration.extract_status_categories()
 
         # Verify that get_status_categories was called
         self.jira_client.get_status_categories.assert_called_once()
@@ -114,9 +136,15 @@ class TestStatusMigration(unittest.TestCase):
         )
         self.assertTrue(os.path.exists(categories_file))
 
-    def test_get_openproject_statuses(self):
+    def test_get_openproject_statuses(self) -> None:
         """Test getting statuses from OpenProject."""
-        statuses = self.status_migration.get_openproject_statuses(force=True)
+        # Temporarily override force to True
+        self.mock_config.migration_config.get.side_effect = lambda key, default=None: {
+            "dry_run": True,
+            "force": True,
+        }.get(key, default)
+
+        statuses = self.status_migration.get_openproject_statuses()
 
         # Verify that get_statuses was called
         self.op_client.get_statuses.assert_called_once()
@@ -128,14 +156,20 @@ class TestStatusMigration(unittest.TestCase):
         status_file = os.path.join(self.test_data_dir, "op_statuses.json")
         self.assertTrue(os.path.exists(status_file))
 
-    def test_create_status_mapping(self):
+    def test_create_status_mapping(self) -> None:
         """Test creating a mapping between Jira and OpenProject statuses."""
         # Set up test data
         self.status_migration.jira_statuses = self.sample_jira_statuses
         self.status_migration.op_statuses = self.sample_op_statuses
 
+        # Temporarily override force to True
+        self.mock_config.migration_config.get.side_effect = lambda key, default=None: {
+            "dry_run": True,
+            "force": True,
+        }.get(key, default)
+
         # Call the method
-        mapping = self.status_migration.create_status_mapping(force=True)
+        mapping = self.status_migration.create_status_mapping()
 
         # Verify that a mapping is created
         self.assertIsInstance(mapping, dict)
@@ -153,7 +187,7 @@ class TestStatusMigration(unittest.TestCase):
         mapping_file = os.path.join(self.test_data_dir, "status_mapping.json")
         self.assertTrue(os.path.exists(mapping_file))
 
-    def test_migrate_statuses(self):
+    def test_migrate_statuses(self) -> None:
         """Test the status migration process."""
         # Set up test data - an unmapped Jira status that needs to be created in OpenProject
         self.status_migration.jira_statuses = self.sample_jira_statuses.copy()
@@ -199,7 +233,7 @@ class TestStatusMigration(unittest.TestCase):
         )  # In dry run mode, it uses this format
         self.assertEqual(result["mapping"]["4"]["openproject_name"], "Pending")
 
-    def test_analyze_status_mapping(self):
+    def test_analyze_status_mapping(self) -> None:
         """Test the status mapping analysis."""
         # Set up test data with a complete mapping
         self.status_migration.jira_statuses = self.sample_jira_statuses
@@ -229,8 +263,9 @@ class TestStatusMigration(unittest.TestCase):
         # Call the analyze method again
         analysis = self.status_migration.analyze_status_mapping()
 
-        # Verify that the unmapped status is identified - updated to match the actual key name
+        # Verify that the analysis contains the unmapped status
         self.assertEqual(len(analysis["unmapped_statuses"]), 1)
+        # Check that the first unmapped status has a jira_id of '4'
         self.assertEqual(analysis["unmapped_statuses"][0]["jira_id"], "4")
 
 

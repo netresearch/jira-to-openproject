@@ -36,19 +36,15 @@ class TempoAccountMigration:
     4. Migrating Tempo worklog data to OpenProject time entries
     """
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self):
         """
         Initialize the Tempo account migration tools.
-
-        Args:
-            dry_run: If True, no changes will be made to OpenProject
         """
         self.jira_client = JiraClient()
         self.op_client = OpenProjectClient()
         self.accounts = []
         self.account_mapping = {}
         self.custom_field_id = None
-        self.dry_run = dry_run
 
         # Use the centralized config for var directories
         self.data_dir = config.get_path("data")
@@ -261,7 +257,7 @@ class TempoAccountMigration:
             extra={"markup": True},
         )
 
-        if self.dry_run:
+        if config.migration_config.get("dry_run", False):
             logger.info(
                 f"DRY RUN: Would create company: {name}", extra={"markup": True}
             )
@@ -487,7 +483,7 @@ class TempoAccountMigration:
 
         return analysis
 
-    def _save_to_json(self, data: Any, filename: str):
+    def _save_to_json(self, data: Any, filename: str) -> None:
         """
         Save data to a JSON file.
 
@@ -501,15 +497,12 @@ class TempoAccountMigration:
         logger.info(f"Saved data to {filepath}", extra={"markup": True})
 
 
-def run_tempo_account_migration(dry_run: bool = False):
+def run_tempo_account_migration() -> None:
     """
     Run the Tempo account migration as a standalone script.
-
-    Args:
-        dry_run: If True, no changes will be made to OpenProject
     """
     logger.info("Starting Tempo account migration", extra={"markup": True})
-    migration = TempoAccountMigration(dry_run=dry_run)
+    migration = TempoAccountMigration()
 
     # Extract accounts/companies from both systems
     migration.extract_tempo_accounts()

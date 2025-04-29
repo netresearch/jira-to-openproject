@@ -46,7 +46,6 @@ class StatusMigration(BaseMigration):
         mappings: Mappings | None = None,
         data_dir: str | None = None,
         tracker: ProgressTracker | None = None,
-        dry_run: bool = False,
     ):
         """
         Initialize the status migration tools.
@@ -58,7 +57,6 @@ class StatusMigration(BaseMigration):
             mappings: Initialized Mappings instance
             data_dir: Path to the data directory
             tracker: Optional progress tracker instance
-            dry_run: If True, no changes will be made to OpenProject
         """
         super().__init__(jira_client, op_client, op_rails_client)
 
@@ -66,7 +64,6 @@ class StatusMigration(BaseMigration):
         if data_dir:
             self.data_dir = data_dir
         self.tracker = tracker
-        self.dry_run = dry_run
 
         # Initialize empty lists
         self.jira_statuses = []
@@ -95,19 +92,16 @@ class StatusMigration(BaseMigration):
         logger.info(f"Loaded {len(self.jira_status_categories)} Jira status categories")
         logger.info(f"Loaded {len(self.op_statuses)} OpenProject statuses")
 
-    def extract_jira_statuses(self, force=False) -> list[dict[str, Any]]:
+    def extract_jira_statuses(self) -> list[dict[str, Any]]:
         """
         Extract all statuses from Jira.
-
-        Args:
-            force: If True, extract again even if data already exists
 
         Returns:
             List of Jira status dictionaries
         """
         statuses_file = os.path.join(self.data_dir, "jira_statuses.json")
 
-        if os.path.exists(statuses_file) and not force:
+        if os.path.exists(statuses_file) and not config.migration_config.get("force", False):
             logger.info(
                 "Jira statuses data already exists, skipping extraction (use --force to override)"
             )
@@ -133,19 +127,16 @@ class StatusMigration(BaseMigration):
             logger.error(f"Failed to extract statuses from Jira: {str(e)}")
             return []
 
-    def extract_status_categories(self, force=False) -> list[dict[str, Any]]:
+    def extract_status_categories(self) -> list[dict[str, Any]]:
         """
         Extract status categories from Jira.
-
-        Args:
-            force: If True, extract again even if data already exists
 
         Returns:
             List of Jira status category dictionaries
         """
         categories_file = os.path.join(self.data_dir, "jira_status_categories.json")
 
-        if os.path.exists(categories_file) and not force:
+        if os.path.exists(categories_file) and not config.migration_config.get("force", False):
             logger.info(
                 "Jira status categories data already exists, skipping extraction (use --force to override)"
             )
@@ -171,19 +162,16 @@ class StatusMigration(BaseMigration):
             logger.error(f"Failed to extract status categories from Jira: {str(e)}")
             return []
 
-    def get_openproject_statuses(self, force=False) -> list[dict[str, Any]]:
+    def get_openproject_statuses(self) -> list[dict[str, Any]]:
         """
         Get all statuses from OpenProject.
-
-        Args:
-            force: If True, get again even if data already exists
 
         Returns:
             List of OpenProject status dictionaries
         """
         statuses_file = os.path.join(self.data_dir, "op_statuses.json")
 
-        if os.path.exists(statuses_file) and not force:
+        if os.path.exists(statuses_file) and not config.migration_config.get("force", False):
             logger.info(
                 "OpenProject statuses data already exists, skipping extraction (use --force to override)"
             )
@@ -352,19 +340,16 @@ class StatusMigration(BaseMigration):
             )
             return None
 
-    def create_status_mapping(self, force=False) -> dict[str, Any]:
+    def create_status_mapping(self) -> dict[str, Any]:
         """
         Create a mapping between Jira statuses and OpenProject statuses.
-
-        Args:
-            force: If True, create the mapping again even if it already exists
 
         Returns:
             Dictionary mapping Jira status names to OpenProject status IDs
         """
         mapping_file = os.path.join(self.data_dir, "status_mapping.json")
 
-        if os.path.exists(mapping_file) and not force:
+        if os.path.exists(mapping_file) and not config.migration_config.get("force", False):
             logger.info(
                 "Status mapping already exists, loading from file (use --force to recreate)"
             )
@@ -490,7 +475,7 @@ class StatusMigration(BaseMigration):
                         f"(ID: {op_status_id}) for Jira status '{name}'"
                     )
                     already_exists_count += 1
-                elif self.dry_run:
+                elif config.migration_config.get("dry_run", False):
                     logger.info(
                         f"[DRY RUN] Would create status '{name}' (is_closed: {is_closed})"
                     )
@@ -624,15 +609,9 @@ class StatusMigration(BaseMigration):
             "message": f"Found {mapped_statuses}/{total_statuses} mapped statuses",
         }
 
-    def run(
-        self, dry_run: bool = False, force: bool = False
-    ) -> ComponentResult:
+    def run(self) -> ComponentResult:
         """
         Run the status migration process.
-
-        Args:
-            dry_run: If True, no changes will be made to OpenProject
-            force: If True, force extraction of data even if it already exists
 
         Returns:
             ComponentResult with migration results
@@ -640,7 +619,6 @@ class StatusMigration(BaseMigration):
         logger.info("Running status migration...")
 
         # Update instance variables
-        self.dry_run = dry_run
         self.mappings = config.mappings
         self.status_mapping = (
             config.mappings.status_mapping if hasattr(config.mappings, "status_mapping") else {}
@@ -648,7 +626,7 @@ class StatusMigration(BaseMigration):
 
         try:
             # Step 1: Extract Jira statuses
-            self.jira_statuses = self.extract_jira_statuses(force=force)
+            self.jira_statuses = self.extract_jira_statuses()
             if not self.jira_statuses:
                 return {
                     "status": "failed",
@@ -659,17 +637,17 @@ class StatusMigration(BaseMigration):
                 }
 
             # Step 2: Extract Jira status categories
-            self.jira_status_categories = self.extract_status_categories(force=force)
+            self.jira_status_categories = self.extract_status_categories()
 
             # Step 3: Get OpenProject statuses
-            self.op_statuses = self.get_openproject_statuses(force=force)
+            self.op_statuses = self.get_openproject_statuses()
 
             # Step 4: Create status mapping if needed
-            if not self.status_mapping or force:
-                self.status_mapping = self.create_status_mapping(force=force)
+            if not self.status_mapping:
+                self.status_mapping = self.create_status_mapping()
 
             # Step 5: Migrate statuses - if in dry_run mode, simulate success for all
-            if dry_run:
+            if config.migration_config.get("dry_run", False):
                 logger.info("[DRY RUN] Simulating status migration success")
 
                 # Create simulated mapping for all statuses

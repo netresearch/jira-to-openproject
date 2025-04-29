@@ -224,7 +224,7 @@ class TestCompanyMigration(unittest.TestCase):
 
     def test_extract_openproject_projects(self):
         """Test extracting projects from OpenProject."""
-        projects = self.company_migration.extract_openproject_projects(force=True)
+        projects = self.company_migration.extract_openproject_projects()
 
         # Verify that get_projects was called
         self.op_client.get_projects.assert_called_once()

@@ -20,7 +20,7 @@ from src.clients.openproject_rails_client import OpenProjectRailsClient
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-def strtobool(val):
+def strtobool(val: str) -> bool:
     """Convert a string representation of truth to True or False.
 
     True values are 'y', 'yes', 't', 'true', 'on', and '1';
@@ -237,7 +237,7 @@ class OpenProjectClient:
                 f"{self.username}:{self.password}".encode()
             ).decode()
 
-    def _request(self, method, endpoint, data=None, params=None):
+    def _request(self, method: str, endpoint: str, data: Any = None, params: Any = None) -> dict[str, Any]:
         """
         Make a request to the OpenProject API with rate limiting.
 
@@ -384,10 +384,10 @@ class OpenProjectClient:
             return None
 
     def get_work_package_types(
-        self, force_refresh: bool = False
+        self
     ) -> list[dict[str, Any]]:
         """Get all work package types from OpenProject."""
-        if not force_refresh and self._work_package_types_cache:
+        if self._work_package_types_cache:
             return self._work_package_types_cache
 
         try:

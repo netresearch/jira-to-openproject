@@ -61,7 +61,7 @@ To create statuses that exist in Jira but not in OpenProject, you have two optio
 #### Option 1: Automated Creation via Rails Console (Recommended)
 
 ```bash
-python src/main.py migrate --components status --direct-migration
+python src/main.py migrate --components status
 ```
 
 This will:

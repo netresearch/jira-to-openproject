@@ -154,6 +154,9 @@ class CompanyMigration(BaseMigration):
         """
         Extract projects from OpenProject.
 
+        Args:
+            force: If True, forces re-extraction even if cached data exists.
+
         Returns:
             List of OpenProject project dictionaries
         """
@@ -760,6 +763,9 @@ class CompanyMigration(BaseMigration):
             f"Created {created_count} company projects (errors: {len(errors)})"
         )
 
+        # Refresh cached projects from OpenProject
+        self.op_client.get_projects(force_refresh=True)
+
         # Save the updated mapping
         self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
 
@@ -1145,16 +1151,9 @@ class CompanyMigration(BaseMigration):
 
         return results
 
-    def run(
-        self, dry_run: bool = False, force: bool = False
-    ) -> ComponentResult:
+    def run(self) -> ComponentResult:
         """
         Run the company migration process.
-
-        Args:
-            dry_run: If True, don't actually create companies in OpenProject
-            force: If True, force extraction of data even if it already exists
-            mappings: Optional mappings object (not used in this migration)
 
         Returns:
             Dictionary with migration results
@@ -1164,13 +1163,13 @@ class CompanyMigration(BaseMigration):
         try:
             # Extract data
             tempo_companies = self.extract_tempo_companies()
-            op_projects = self.extract_openproject_projects(force=force)
+            op_projects = self.extract_openproject_projects()
 
             # Create mapping
             mapping = self.create_company_mapping()
 
             # Migrate companies if not in dry run mode
-            if not dry_run:
+            if not config.migration_config.get("dry_run", False):
                 self.logger.info("Using bulk creation for company projects")
                 result = self.migrate_companies_bulk()
 

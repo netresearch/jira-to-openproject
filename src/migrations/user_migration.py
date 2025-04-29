@@ -518,16 +518,9 @@ class UserMigration(BaseMigration):
 
         return analysis
 
-    def run(
-        self, dry_run: bool = False, force: bool = False
-    ) -> ComponentResult:
+    def run(self) -> ComponentResult:
         """
         Run the user migration process.
-
-        Args:
-            dry_run: If True, don't actually create users in OpenProject
-            force: If True, force extraction of data even if it already exists
-            mappings: Optional mappings object (not used in this migration)
 
         Returns:
             Dictionary with migration results
@@ -543,13 +536,7 @@ class UserMigration(BaseMigration):
             self.create_user_mapping()
 
             # Create missing users if not in dry run mode
-            if not dry_run:
-                self.create_missing_users()
-            else:
-                self.logger.warning(
-                    "Dry run mode - not creating missing users",
-                    extra={"markup": True},
-                )
+            self.create_missing_users()
 
             # Analyze results
             analysis = self.analyze_user_mapping()

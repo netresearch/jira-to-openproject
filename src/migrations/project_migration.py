@@ -78,14 +78,14 @@ class ProjectMigration(BaseMigration):
             Mappings.COMPANY_MAPPING_FILE
         )
 
-    def extract_jira_projects(self, force: bool = False) -> list[dict[str, Any]]:
+    def extract_jira_projects(self) -> list[dict[str, Any]]:
         """
         Extract projects from Jira.
 
         Returns:
             List of Jira projects
         """
-        if not force and not config.migration_config.get("force", False):
+        if not config.migration_config.get("force", False):
             cached_projects = self._load_from_json(JIRA_PROJECTS_FILE, default=None)
             if cached_projects:
                 logger.info(f"Using cached Jira projects from {JIRA_PROJECTS_FILE}")
@@ -102,14 +102,14 @@ class ProjectMigration(BaseMigration):
 
         return self.jira_projects
 
-    def extract_openproject_projects(self, force: bool = False) -> list[dict[str, Any]]:
+    def extract_openproject_projects(self) -> list[dict[str, Any]]:
         """
         Extract projects from OpenProject.
 
         Returns:
             List of OpenProject project dictionaries
         """
-        if not force and not config.migration_config.get("force", False):
+        if not config.migration_config.get("force", False):
             cached_projects = self._load_from_json(OP_PROJECTS_FILE, default=None)
             if cached_projects:
                 logger.info(
@@ -178,15 +178,12 @@ class ProjectMigration(BaseMigration):
             )
             return {}
 
-    def extract_project_account_mapping(self, force: bool = False) -> dict[str, Any]:
+    def extract_project_account_mapping(self) -> dict[str, Any]:
         """
         Extract the mapping between Jira projects and Tempo accounts using already fetched Tempo account data.
 
         Instead of making individual API calls for each project, this method processes the account links
         already available in the Tempo accounts data from account migration.
-
-        Args:
-            force: If True, re-extract data even if it exists locally.
 
         Returns:
             Dictionary mapping project keys to account IDs.
@@ -194,7 +191,6 @@ class ProjectMigration(BaseMigration):
         # Load existing data unless forced to refresh
         if (
             self.project_account_mapping
-            and not force
             and not config.migration_config.get("force", False)
         ):
             logger.info(
@@ -772,31 +768,18 @@ class ProjectMigration(BaseMigration):
 
         return analysis
 
-    def run(
-        self, dry_run: bool = False, force: bool = False
-    ) -> ComponentResult:
+    def run(self) -> ComponentResult:
         """
         Run the project migration.
-
-        Args:
-            dry_run: If True, don't actually create or update anything
-            force: If True, force recalculation of data even if it already exists
-            mappings: Optional mappings reference for cross-reference during migration
 
         Returns:
             ComponentResult with migration results
         """
-        # Set dry run in config
-        if dry_run:
-            logger.info("Running in dry run mode - no changes will be made")
-            if not config.migration_config.get("dry_run", False):
-                config.migration_config["dry_run"] = dry_run
-
         # Extract Jira projects
-        self.extract_jira_projects(force=force)
+        self.extract_jira_projects()
 
         # Extract OpenProject projects
-        self.extract_openproject_projects(force=force)
+        self.extract_openproject_projects()
 
         # Load account mapping - won't do anything if it doesn't exist
         self.load_account_mapping()
@@ -805,12 +788,8 @@ class ProjectMigration(BaseMigration):
         self.load_company_mapping()
 
         # Extract project-account mapping
-        self.extract_project_account_mapping(force=force)
+        self.extract_project_account_mapping()
 
         # Always use Rails bulk migration for project creation
-        if dry_run:
-            logger.info(
-                "DRY RUN: no projects will be created or modified in OpenProject"
-            )
         logger.info("Running bulk project migration via Rails console")
         return self.bulk_migrate_projects()

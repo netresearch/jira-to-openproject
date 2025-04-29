@@ -17,6 +17,7 @@ from src.clients.openproject_client import OpenProjectClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.display import ProgressTracker, console
 from src.migrations.base_migration import BaseMigration
+from src import config
 
 # Create rich console instance
 console = console
@@ -72,19 +73,16 @@ class CustomFieldMigration(BaseMigration):
             f"Loaded analysis with {len(self.analysis)} keys: {list(self.analysis.keys())}"
         )
 
-    def extract_jira_custom_fields(self, force: bool = False) -> list[dict[str, Any]]:
+    def extract_jira_custom_fields(self) -> list[dict[str, Any]]:
         """
         Extract custom field information from Jira.
-
-        Args:
-            force: If True, extract again even if data already exists
 
         Returns:
             List of Jira custom fields
         """
         custom_fields_file = os.path.join(self.data_dir, "jira_custom_fields.json")
 
-        if os.path.exists(custom_fields_file) and not force:
+        if os.path.exists(custom_fields_file) and not config.migration_config.get("force", False):
             self.logger.info(
                 "Jira custom fields data already exists, skipping extraction (use --force to override)"
             )
@@ -161,14 +159,9 @@ class CustomFieldMigration(BaseMigration):
             self.logger.error(f"Failed to extract custom fields from Jira: {str(e)}")
             return []
 
-    def extract_openproject_custom_fields(
-        self, force: bool = False
-    ) -> list[dict[str, Any]]:
+    def extract_openproject_custom_fields(self) -> list[dict[str, Any]]:
         """
         Extract custom field information from OpenProject and save to a JSON file.
-
-        Args:
-            force (bool): If True, forces extraction even if data exists.
 
         Returns:
             List of custom field dictionaries retrieved from OpenProject
@@ -179,7 +172,7 @@ class CustomFieldMigration(BaseMigration):
         output_file = pathlib.Path(self.output_dir) / "openproject_custom_fields.json"
 
         # Check if the data already exists
-        if output_file.exists() and not force:
+        if output_file.exists() and not config.migration_config.get("force", False):
             self.logger.info(
                 f"Using existing OpenProject custom field data from {output_file}"
             )
@@ -320,31 +313,18 @@ class CustomFieldMigration(BaseMigration):
 
         return op_format_map.get(jira_type, op_format_map.get("default", "text"))
 
-    def create_custom_field_mapping(self, force: bool = False) -> dict[str, Any]:
+    def create_custom_field_mapping(self) -> dict[str, Any]:
         """
         Create a mapping between Jira and OpenProject custom fields.
-
-        Args:
-            force: If True, force extraction of data even if it already exists
 
         Returns:
             Dictionary mapping Jira custom field IDs to OpenProject field information
         """
         self.logger.info("Creating custom field mapping...")
 
-        # Only extract data if not using cached data
-        if (
-            not hasattr(self, "_create_mapping_with_cached_data")
-            or not self._create_mapping_with_cached_data
-        ):
-            self.logger.info("Extracting custom fields from Jira...")
-            self.logger.debug(f"Force: {force}")
-            self.extract_jira_custom_fields(force=force)
+        self.extract_jira_custom_fields()
 
-            self.logger.info("Extracting custom fields from OpenProject...")
-            self.extract_openproject_custom_fields(force=force)
-        else:
-            self.logger.info("Using cached custom field data")
+        self.extract_openproject_custom_fields()
 
         mapping = {}
 
@@ -352,7 +332,7 @@ class CustomFieldMigration(BaseMigration):
             field.get("name", "").lower(): field for field in self.op_custom_fields
         }
 
-        def process_field(jira_field, context):
+        def process_field(jira_field: dict[str, Any], context: dict[str, Any]) -> str | None:
             jira_id = jira_field.get("id")
             jira_name = jira_field.get("name", "")
             jira_name_lower = jira_name.lower()
@@ -546,7 +526,7 @@ class CustomFieldMigration(BaseMigration):
 
         return result
 
-    def migrate_custom_fields_via_json(self, fields_to_migrate) -> bool:
+    def migrate_custom_fields_via_json(self, fields_to_migrate: list[dict[str, Any]]) -> bool:
         """Migrate custom fields by creating a JSON file and processing it in a Ruby script.
 
         This is a more efficient approach than creating fields one by one via API calls.
@@ -908,11 +888,8 @@ class CustomFieldMigration(BaseMigration):
             self.logger.error("Failed to create any custom fields")
             return False
 
-    def migrate_custom_fields(self, force=False) -> bool:
+    def migrate_custom_fields(self) -> bool:
         """Migrate custom fields from Jira to OpenProject
-
-        Args:
-            force (bool): If True, force re-extraction of data from both systems
 
         Returns:
             Boolean indicating success or failure
@@ -930,16 +907,8 @@ class CustomFieldMigration(BaseMigration):
             f"Starting custom field migration with {len(self.mapping)} fields in mapping"
         )
 
-        # If force is True, refresh OpenProject custom fields to get the latest state
-        if force:
-            self.logger.info(
-                "Force flag is set, refreshing OpenProject custom fields data"
-            )
-            self.extract_openproject_custom_fields(force=True)
-            # Use cached data for Jira custom fields to avoid unnecessary API calls
-            self._create_mapping_with_cached_data = True
-            self.create_custom_field_mapping(force=True)
-            self._create_mapping_with_cached_data = False
+        self.extract_openproject_custom_fields()
+        self.create_custom_field_mapping()
 
         # Check if we have fields that need to be created
         fields_to_create = [
@@ -1059,30 +1028,20 @@ class CustomFieldMigration(BaseMigration):
 
         return analysis
 
-    def update_mapping_file(self, force: bool = False) -> bool:
+    def update_mapping_file(self) -> bool:
         """
         Update the mapping file after manual creation of custom fields.
-
-        Args:
-            force: If True, force extraction even if data exists
 
         Returns:
             True if mapping was updated, False otherwise
         """
-        self.extract_openproject_custom_fields(force=force)
-        self.extract_jira_custom_fields(force=force)
-        return self.create_custom_field_mapping(force=force) is not None
+        self.extract_openproject_custom_fields()
+        self.extract_jira_custom_fields()
+        return self.create_custom_field_mapping() is not None
 
-    def run(
-        self, dry_run: bool = False, force: bool = False
-    ) -> ComponentResult:
+    def run(self) -> ComponentResult:
         """
         Run the custom field migration process.
-
-        Args:
-            dry_run: If True, don't actually create fields in OpenProject
-            force: If True, force extraction of data even if it already exists
-            mappings: Optional mappings object (not used in this migration)
 
         Returns:
             Dictionary with migration results
@@ -1091,26 +1050,23 @@ class CustomFieldMigration(BaseMigration):
 
         try:
             # Extract data once and cache it
-            jira_fields = self.extract_jira_custom_fields(force=force)
-            op_fields = self.extract_openproject_custom_fields(force=force)
+            jira_fields = self.extract_jira_custom_fields()
+            op_fields = self.extract_openproject_custom_fields()
 
-            # Create mapping using the cached data (set force=False to avoid re-extraction)
-            self._create_mapping_with_cached_data = True
-            mapping = self.create_custom_field_mapping(force=False)
-            self._create_mapping_with_cached_data = False
+            mapping = self.create_custom_field_mapping()
 
             # Migrate custom fields
-            if not dry_run and self.rails_console:
+            if not config.migration_config.get("dry_run", False) and self.rails_console:
                 self.logger.info(
                     "Migrating custom fields via Rails console", extra={"markup": True}
                 )
-                success = self.migrate_custom_fields(force=False)
-            elif not dry_run:
+                success = self.migrate_custom_fields()
+            elif not config.migration_config.get("dry_run", False):
                 self.logger.info(
                     "Generating JSON migration script (no Rails console available)",
                     extra={"markup": True},
                 )
-                success = self.migrate_custom_fields(force=False)
+                success = self.migrate_custom_fields()
             else:
                 self.logger.warning(
                     "Dry run mode - not creating custom fields", extra={"markup": True}
