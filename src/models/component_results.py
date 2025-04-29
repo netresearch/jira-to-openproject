@@ -16,6 +16,13 @@ class ComponentResult(BaseModel):
     data: Optional[Dict[str, Any] | List[Dict[str, Any]]] = None
     errors: Optional[List[str]] = None
     warnings: Optional[List[str]] = None
+    dry_run: bool = False
+    total_types: int = 0
+    matched_types: int = 0
+    normalized_types: int = 0
+    created_types: int = 0
+    failed_types: int = 0
+    existing_types: int = 0
 
     # Helper methods to make the class more usable
     def add_error(self, error: str) -> None:
