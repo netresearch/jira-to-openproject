@@ -419,26 +419,27 @@ def run_migration(
                 # Pause for user confirmation between components
                 if component_name != components[-1]:  # Skip after the last component
                     try:
-                        print("\n" + "-" * 50)
-                        print(f"Component '{component_name}' has completed.")
-                        print("-" * 50)
-
+                        result: str = '\033[1;90mUNKNOWN RESULT\033[0m'
                         current_result = results.components.get(component_name)
-                        if current_result and hasattr(current_result, 'success'):
-                            if current_result.success:
-                                print("Status: SUCCESS")
-                            else:
-                                print("Status: FAILED")
-                                if hasattr(current_result, 'errors') and current_result.errors:
-                                    print(f"Errors: {current_result.errors}")
+                        if current_result:
+                            if hasattr(current_result, 'success'):
+                                if current_result.success:
+                                    result = "\033[1;32mSUCCEEDED\033[0m"
+                                else:
+                                    result = "\033[1;31mFAILED\033[0m"
+                            if hasattr(current_result, 'errors') and current_result.errors:
+                                result = f"\033[1;31mFAILED\033[0m with errors: {current_result.errors}"
 
-                        next_component = components[components.index(component_name) + 1]
-                        print(f"\nNext component: {next_component}")
+                        print("\n" + "-" * 50)
+                        print(f"Component '{component_name}' has {result}.")
+                        print("-" * 50)
 
                         if results.overall["status"] != "success":
                             print("\nWARNING: Previous component had errors.")
 
-                        user_input = input("\nContinue to next component? [Y/n]: ").strip().lower()
+                        next_component = components[components.index(component_name) + 1]
+
+                        user_input = input(f"\nContinue to next component: {next_component}? [Y/n]: ").strip().lower()
                         if user_input and user_input not in ('y', 'yes'):
                             config.logger.warning(
                                 "Migration paused by user", extra={"markup": True}
