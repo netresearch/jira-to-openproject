@@ -17,7 +17,8 @@ The migration tool uses a consolidated configuration approach combining:
     * `.env`: Contains version-controlled default environment variables.
     * `.env.local`: Contains **non-version-controlled** custom settings and secrets (e.g., API keys, passwords). This file overrides `.env`.
     * Shell Environment Variables: System-level environment variables have the highest priority.
-3. **Configuration Loader:** The `src.config_loader.ConfigLoader` class reads and merges these sources, making them accessible via the `src.config` module.
+3. **Command-Line Arguments:** CLI arguments like `--force` and `--no-backup` are integrated into the configuration system.
+4. **Configuration Loader:** The `src.config_loader.ConfigLoader` class reads and merges these sources, making them accessible via the `src.config` module.
 
 ## Configuration Priority
 
@@ -27,6 +28,7 @@ Configuration values are loaded in the following order, with later sources overr
 2. Variables defined in the `.env` file.
 3. Variables defined in the `.env.local` file.
 4. Shell environment variables set in the system.
+5. Command-line arguments specified when running the tool.
 
 ## Accessing Configuration
 
@@ -47,11 +49,37 @@ api_key = openproject_config.get("api_key") # Likely overridden by .env.local
 batch_size = migration_config.get("batch_size", 100) # Default value if not set
 ssh_user = rails_config.get("ssh_user") # Likely overridden by .env.local
 
+# Access CLI arguments through the migration_config
+force_mode = migration_config.get("force", False)
+no_backup = migration_config.get("no_backup", False)
+dry_run = migration_config.get("dry_run", False)
+
 # Get a value from a specific section with a default
 ssl_verify = config.get_value("migration", "ssl_verify", True)
 
 # Get the fully merged configuration dictionary
 all_settings = config.get_config()
+```
+
+## Command-Line Arguments
+
+Command-line arguments are automatically integrated into the configuration system. This means that components can access them consistently via the configuration system rather than having to pass them around explicitly. The following CLI arguments are supported:
+
+| Argument       | Config Key             | Description                                      |
+|----------------|------------------------|--------------------------------------------------|
+| `--dry-run`    | `migration_config['dry_run']` | Run without making changes to OpenProject      |
+| `--no-backup`  | `migration_config['no_backup']` | Skip creating a backup before migration      |
+| `--force`      | `migration_config['force']` | Force extraction of data even if it already exists |
+
+To access these from any component:
+
+```python
+from src import config
+
+# This will be True if --force was specified on the command line
+if config.migration_config.get("force", False):
+    # Force mode is enabled
+    # ...
 ```
 
 ## Environment Variables (`.env`, `.env.local`, Shell)
