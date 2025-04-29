@@ -3,22 +3,17 @@ description: Project description
 globs: ["**/*"]
 alwaysApply: true
 ---
-# Your Task
-
-You are an expert in Python, API clients, especially Jira Server 9.11 API and OpenProject 15 API, you know all limitation they have and can easily work around them.
-Your task is to write/finish this migration application.
-
-See [PROJECT_GOALS.md](mdc:PROJECT_GOALS.md)
-
 # Project Rules
 
-- use Jira API and OpenProject API and OpenProject rails console
+- use Jira API and OpenProject rails console
 - use Python venv ".venv"
 - when writing ruby code in python, split up the ruby code into a head section using f-string where you assign python variables, and main section not using f-string. To separate the Python variable interpolation from the Ruby code logic.
+- carefully check for any existing code/functions to re-use before creating new code.
+- generaly try to keep teh code simple and small - don't overengineer
 
 # Project Tasks
 
-See [PLANNING.md](mdc:PLANNING.md) and [TASKS.md](mdc:TASKS.md)
+See [PROJECT_GOALS.md](mdc:PROJECT_GOALS.md), [PLANNING.md](mdc:PLANNING.md) and [TASKS.md](mdc:TASKS.md)
 
 # Documentation
 
