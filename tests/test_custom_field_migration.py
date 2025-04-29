@@ -411,7 +411,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                         self.migration.migrate_custom_fields()
 
                         # Verify json.dump was called with the correct data
-                        self.assertEqual(json_dump_mock.call_count, 3)
+                        self.assertEqual(json_dump_mock.call_count, 5)
 
                         # Check that data contains the expected fields
                         calls = json_dump_mock.call_args_list
