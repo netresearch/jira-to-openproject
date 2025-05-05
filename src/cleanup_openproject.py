@@ -1139,12 +1139,13 @@ class OpenProjectCleaner:
         return results
 
 
-def main():
+def main() -> None:
     """
     Main function to run the cleanup script.
     """
     parser = argparse.ArgumentParser(
-        description="Clean up OpenProject by removing specified entities. Defaults to all entities if none are specified."
+        description="Clean up OpenProject by removing specified entities. "
+        "Defaults to all entities if none are specified."
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Run in dry-run mode (no actual changes)"
@@ -1200,7 +1201,9 @@ def main():
         choices=entity_choices,
         # Default is handled after parsing to ensure normalization
         # default=default_entities, # Cannot directly use default with normalization easily
-        help="Specify the entities to delete using short codes or full names. Available entities: users (u), work_packages (wp), projects (p), custom_fields (cf), issue_types (it), issue_statuses (is), issue_link_types (il). Defaults to all if none are specified.",
+        help="Specify the entities to delete using short codes or full names. Available entities: users (u),"
+        "work_packages (wp), projects (p), custom_fields (cf), issue_types (it), issue_statuses (is), "
+        "issue_link_types (il). Defaults to all if none are specified.",
     )
     args = parser.parse_args()
 

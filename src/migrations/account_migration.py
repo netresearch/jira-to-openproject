@@ -3,6 +3,8 @@ Account migration module for Jira to OpenProject migration.
 Handles the migration of Tempo timesheet accounts as custom fields in OpenProject.
 """
 
+from __future__ import annotations
+
 import json
 import os
 from typing import Any

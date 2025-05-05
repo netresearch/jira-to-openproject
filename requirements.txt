@@ -19,7 +19,8 @@ pytest==8.3.5
 # Code quality
 black==25.1.0
 flake8==7.2.0
-mypy==1.15.0
+mypy==1.16.0+dev
+pandas-stubs==2.2.3
 
 # Build tools
 build==1.2.2.post1

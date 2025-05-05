@@ -113,7 +113,13 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_link_types(
-        self, mock_file: MagicMock, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test the extract_jira_link_types method."""
         # Setup mocks
@@ -144,7 +150,13 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_link_type_mapping(
-        self, mock_file: MagicMock, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test the create_link_type_mapping method."""
         # Setup mocks
@@ -182,7 +194,14 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_run_method(
         self,
-        mock_file: MagicMock, mock_exists: MagicMock, mock_progress_tracker: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_progress_tracker: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
         """Test the main run method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -208,7 +227,7 @@ class TestLinkTypeMigration(unittest.TestCase):
             "dry_run": False,
             "force": True,
         }.get(key, default)
-        mock_exists.return_value = False # Ensure extraction and mapping run
+        mock_exists.return_value = False  # Ensure extraction and mapping run
 
         # Mock ProgressTracker to avoid terminal output issues
         mock_progress_tracker_instance = mock_progress_tracker.return_value
@@ -238,7 +257,13 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_analyze_link_type_mapping(
-        self, mock_file: MagicMock, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test the analyze_link_type_mapping method."""
         # Setup mocks
@@ -249,7 +274,7 @@ class TestLinkTypeMigration(unittest.TestCase):
         mock_exists.return_value = True
 
         # Mock the config for any configuration needs
-        mock_migration_config.get.return_value = False # Not dry run
+        mock_migration_config.get.return_value = False  # Not dry run
 
         # Mock file read to return a simplified mapping
         mock_mapping = {

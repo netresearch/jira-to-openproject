@@ -34,8 +34,8 @@ class UserMigration(BaseMigration):
         self,
         jira_client: JiraClient,
         op_client: OpenProjectClient,
-        data_dir: str = None,
-    ):
+        data_dir: str | None = None,
+    ) -> None:
         """
         Initialize the user migration tools.
 

@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger("setup_var_dirs")
 
 
-def create_var_directories():
+def create_var_directories() -> bool:
     """Create the var directory structure."""
     logger.info("Creating var directory structure...")
 
@@ -31,7 +31,7 @@ def create_var_directories():
     return True
 
 
-def main():
+def main() -> bool:
     """Main function to set up the var directory structure."""
     try:
         # Create directories

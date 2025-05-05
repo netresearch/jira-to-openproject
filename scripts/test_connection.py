@@ -12,7 +12,7 @@ from src.clients.openproject_client import OpenProjectClient
 from src.config_loader import ConfigLoader
 
 
-def setup_logging():
+def setup_logging() -> None:
     """
     Set up logging configuration.
     """
@@ -23,7 +23,7 @@ def setup_logging():
     )
 
 
-def main():
+def main() -> None:
     """
     Main function to test connections.
     """

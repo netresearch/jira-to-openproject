@@ -14,7 +14,7 @@ import sys
 import time
 
 
-def run_command_in_tmux(session_name, command):
+def run_command_in_tmux(session_name: str, command: str) -> bool:
     """Run a command in the specified tmux session."""
     print(f"Running command in tmux session '{session_name}':")
     print(f"Command: {command}")
@@ -31,7 +31,7 @@ def run_command_in_tmux(session_name, command):
     return True
 
 
-def capture_tmux_output(session_name, lines=1000):
+def capture_tmux_output(session_name: str, lines: int = 1000) -> str:
     """Capture output from the tmux session."""
     print(f"Capturing output from tmux session '{session_name}'")
 
@@ -48,7 +48,7 @@ def capture_tmux_output(session_name, lines=1000):
     return output
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     # Parse command line arguments
     output_file = None

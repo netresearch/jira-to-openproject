@@ -3,6 +3,8 @@ Project migration module for Jira to OpenProject migration.
 Handles the migration of projects and their hierarchies from Jira to OpenProject.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -45,9 +47,9 @@ class ProjectMigration(BaseMigration):
 
     def __init__(
         self,
-        jira_client: "JiraClient",
-        op_client: "OpenProjectClient",
-        op_rails_client: "OpenProjectRailsClient" | None = None,
+        jira_client: JiraClient,
+        op_client: OpenProjectClient,
+        op_rails_client: OpenProjectRailsClient | None = None,
     ):
         """
         Initialize the project migration tools.

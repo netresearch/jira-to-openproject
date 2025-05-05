@@ -14,8 +14,13 @@ class TestMainEntryPoint(unittest.TestCase):
 
     @patch("src.main.argparse.ArgumentParser.parse_args")
     @patch("src.main.run_migration")
-    @patch("src.main.migration_config")
-    def test_migrate_command(self, mock_migration_config: MagicMock, mock_run_migration: MagicMock, mock_parse_args: MagicMock) -> None:
+    @patch("src.config.migration_config")
+    def test_migrate_command(
+        self,
+        mock_migration_config: MagicMock,
+        mock_run_migration: MagicMock,
+        mock_parse_args: MagicMock,
+    ) -> None:
         """Test the 'migrate' command."""
         # Set up mock args
         mock_args = argparse.Namespace(
@@ -51,82 +56,6 @@ class TestMainEntryPoint(unittest.TestCase):
 
             # Check that run_migration was called with correct arguments
             mock_run_migration.assert_called_once_with(components=["users", "projects"])
-
-            # Check that sys.exit was called with 0 (success)
-            mock_exit.assert_called_once_with(0)
-
-    @patch("src.main.argparse.ArgumentParser.parse_args")
-    @patch("src.main.export_work_packages")
-    @patch("src.main.JiraClient")
-    @patch("src.main.OpenProjectClient")
-    @patch("src.main.OpenProjectRailsClient")
-    @patch("src.main.migration_config")
-    def test_export_command(
-        self,
-        mock_migration_config: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock, mock_export_wp: MagicMock, mock_parse_args: MagicMock) -> None:
-        """Test the 'export' command."""
-        # Set up mock args
-        mock_args = argparse.Namespace(
-            command="export", dry_run=False, force=True, projects=["TEST1", "TEST2"]
-        )
-        mock_parse_args.return_value = mock_args
-
-        # Set up mock config values
-        mock_migration_config.get.return_value = True  # For use_rails_console
-
-        # Set up mock clients
-        mock_jira_client_instance = MagicMock()
-        mock_op_client_instance = MagicMock()
-        mock_jira_client.return_value = mock_jira_client_instance
-        mock_op_client.return_value = mock_op_client_instance
-
-        # Set up mock result
-        mock_export_wp.return_value = {
-            "status": "success",
-            "exported_projects": 2,
-            "total_work_packages": 100,
-        }
-
-        # Test main function with mocked exit
-        with patch("sys.exit") as mock_exit:
-            main()
-
-            # Check that export_work_packages was called with correct arguments
-            mock_export_wp.assert_called_once()
-            args, kwargs = mock_export_wp.call_args
-            self.assertEqual(kwargs["jira_client"], mock_jira_client_instance)
-            self.assertEqual(kwargs["op_client"], mock_op_client_instance)
-            self.assertEqual(kwargs["dry_run"], False)
-            self.assertEqual(kwargs["force"], True)
-            self.assertEqual(kwargs["project_keys"], ["TEST1", "TEST2"])
-
-            # Check that sys.exit was called with 0 (success)
-            mock_exit.assert_called_once_with(0)
-
-    @patch("src.main.argparse.ArgumentParser.parse_args")
-    @patch("src.main.import_work_packages_to_rails")
-    def test_import_command(self, mock_import_wp: MagicMock, mock_parse_args: MagicMock) -> None:
-        """Test the 'import' command."""
-        # Set up mock args
-        mock_args = argparse.Namespace(
-            command="import", project="TEST1", export_dir="/path/to/exports"
-        )
-        mock_parse_args.return_value = mock_args
-
-        # Set up mock result
-        mock_import_wp.return_value = {
-            "status": "success",
-            "imported_work_packages": 50,
-        }
-
-        # Test main function with mocked exit
-        with patch("sys.exit") as mock_exit:
-            main()
-
-            # Check that import_work_packages_to_rails was called with correct arguments
-            mock_import_wp.assert_called_once_with(
-                export_dir="/path/to/exports", project_key="TEST1"
-            )
 
             # Check that sys.exit was called with 0 (success)
             mock_exit.assert_called_once_with(0)

@@ -21,6 +21,7 @@ from rich.theme import Theme
 
 T = TypeVar("T")
 
+
 # Define Protocol for extended Logger with success and notice methods
 class ExtendedLogger(Protocol):
     def debug(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
@@ -31,6 +32,7 @@ class ExtendedLogger(Protocol):
     def success(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
     def notice(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
     def exception(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+
 
 # Create a custom theme for logging
 LOGGING_THEME = Theme(
@@ -185,7 +187,7 @@ class ProgressTracker(Generic[T]):
         self.log_panel = None
         self.live = None
 
-    def __enter__(self):
+    def __enter__(self) -> "ProgressTracker[T]":
         """Start the live display when entering context."""
         self.live = Live(
             console=console,
@@ -196,16 +198,16 @@ class ProgressTracker(Generic[T]):
         self.live.__enter__()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Close the live display when exiting context."""
         if self.live:
             self.live.__exit__(exc_type, exc_val, exc_tb)
 
-    def update_description(self, description: str):
+    def update_description(self, description: str) -> None:
         """Update the progress bar description."""
         self.progress.update(self.task_id, description=description)
 
-    def add_log_item(self, item: str):
+    def add_log_item(self, item: str) -> None:
         """
         Add an item to the rolling log.
 
@@ -215,7 +217,7 @@ class ProgressTracker(Generic[T]):
         self.recent_items.append(item)
         self._update_display()
 
-    def increment(self, advance: int = 1, description: str | None = None):
+    def increment(self, advance: int = 1, description: str | None = None) -> None:
         """
         Increment the progress bar.
 
@@ -232,7 +234,7 @@ class ProgressTracker(Generic[T]):
             self.progress.update(self.task_id, completed=self.processed_count)
         self._update_display()
 
-    def _update_display(self):
+    def _update_display(self) -> None:
         """Update the live display with current progress and log."""
         if not self.live:
             return
@@ -259,7 +261,7 @@ class ProgressTracker(Generic[T]):
             # This helps prevent disrupting the main migration process
             pass
 
-    def _create_combined_display(self, progress, log_table):
+    def _create_combined_display(self, progress: Progress, log_table: Table) -> Table:
         """Create a combined display with progress and log table."""
         combined = Table.grid(padding=1)
         combined.add_column()
