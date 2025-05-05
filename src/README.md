@@ -11,7 +11,9 @@ src/
 │   ├── __init__.py
 │   ├── jira_client.py         # Handles communication with the Jira REST API
 │   ├── openproject_client.py  # Handles communication with the OpenProject REST API
-│   └── openproject_rails_client.py # Handles interaction with OpenProject Rails console via SSH/Docker
+│   ├── rails_console_client.py # Handles Rails console interactions
+│   ├── docker_client.py       # Manages Docker container operations
+│   └── ssh_client.py          # Handles SSH operations to remote servers
 ├── config.py                # Provides centralized access to configuration settings
 ├── config_loader.py         # Loads and merges configuration from YAML and environment variables
 ├── display.py               # Utilities for displaying progress and information (using Rich library)
@@ -43,8 +45,11 @@ src/
 * **`src/config_loader.py:ConfigLoader`:** Loads configuration from YAML, `.env`, `.env.local`, and environment variables.
 * **`src/config.py`:** Provides a global access point (`config` object) to the loaded configuration.
 * **`src/clients/jira_client.py:JiraClient`:** Interacts with the Jira API to fetch data.
-* **`src/clients/openproject_client.py:OpenProjectClient`:** Interacts with the OpenProject API v3 to create/update data.
-* **`src/clients/openproject_rails_client.py:OpenProjectRailsClient`:** Connects via SSH to the OpenProject server, enters the Docker container, and executes commands/scripts within the Rails console. Used for operations not supported by the API.
+* **`src/clients/openproject_client.py:OpenProjectClient`:** Main API for OpenProject operations, providing high-level methods for record management.
+* **`src/clients/rails_console_client.py:RailsConsoleClient`:** Handles the execution of Ruby code in the Rails console.
+* **`src/clients/docker_client.py:DockerClient`:** Manages Docker container operations, including file transfers and command execution.
+* **`src/clients/ssh_client.py:SSHClient`:** Handles SSH connections and command execution on remote servers.
+* **`src/utils/file_manager.py:FileManager`:** Centralizes file operations, including creation, tracking, and cleanup.
 * **`src/migrations/base_migration.py:BaseMigration`:** Abstract base class defining the interface for all migration components (`run`, `_extract`, `_map`, `_load`, `_test`).
 * **`src/migrations/*_migration.py`:** Concrete implementations of `BaseMigration` for each specific data type (e.g., `UserMigration`, `ProjectMigration`). Each handles the Extract-Map-Load process for its component.
 * **`src/display.py`:** Contains functions for user-friendly console output using the `rich` library (e.g., progress bars, tables, formatted logs).
@@ -60,6 +65,7 @@ src/
 * New migration components should inherit from `BaseMigration`.
 * API interactions should be encapsulated within the `clients/` modules.
 * Configuration should always be accessed via `src.config`.
+* The codebase uses a layered architecture for interacting with OpenProject, with clean separation of concerns.
 
 ## Error Handling and Resilience
 

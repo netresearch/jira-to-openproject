@@ -13,7 +13,6 @@ from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.display import ProgressTracker
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
@@ -40,26 +39,24 @@ class AccountMigration(BaseMigration):
 
     def __init__(
         self,
-        jira_client: "JiraClient",
-        op_client: "OpenProjectClient",
-        op_rails_client: "OpenProjectRailsClient",
-    ):
+        jira_client: JiraClient,
+        op_client: OpenProjectClient,
+    ) -> None:
         """
         Initialize the account migration tools.
 
         Args:
             jira_client: Initialized Jira client instance.
             op_client: Initialized OpenProject client instance.
-            op_rails_client: OpenProjectRailsClient instance for direct migration (REQUIRED).
         """
-        super().__init__(jira_client, op_client, op_rails_client)
-        self.tempo_accounts = []
-        self.op_projects = []
-        self.account_mapping = {}
-        self.company_mapping = {}
-        self._created_accounts = 0
+        super().__init__(jira_client, op_client)
+        self.tempo_accounts: list[dict[str, Any]] = []
+        self.op_projects: list[dict[str, Any]] = []
+        self.account_mapping: dict[str, Any] = {}
+        self.company_mapping: dict[str, Any] = {}
+        self._created_accounts: int = 0
 
-        self.account_custom_field_id = None
+        self.account_custom_field_id: int | None = None
 
         # Load existing data if available
         self.tempo_accounts = self._load_from_json(Mappings.TEMPO_ACCOUNTS_FILE) or []
@@ -321,7 +318,8 @@ class AccountMigration(BaseMigration):
             )
 
         self.logger.info(
-            f"Unmatched accounts: {total_accounts - matched_accounts} - these will be available in the custom field but not linked to projects",
+            f"Unmatched accounts: {total_accounts - matched_accounts}"
+            f" - these will be available in the custom field but not linked to projects",
             extra={"markup": True},
         )
 
@@ -373,7 +371,7 @@ class AccountMigration(BaseMigration):
             self.logger.info(
                 "Checking if 'Tempo Account' custom field exists via Rails..."
             )
-            existing_id = self.op_rails_client.get_custom_field_id_by_name(
+            existing_id = self.op_client.get_custom_field_id_by_name(
                 "Tempo Account"
             )
 
@@ -421,7 +419,7 @@ class AccountMigration(BaseMigration):
             cf.id
             """
 
-            result = self.op_rails_client.execute(create_command)
+            result = self.op_client.execute_query(create_command)
 
             if result["status"] == "success" and result["output"] is not None:
                 new_id = result["output"]
@@ -463,7 +461,7 @@ class AccountMigration(BaseMigration):
                 true
                 """
 
-                activate_result = self.op_rails_client.execute(activate_command)
+                activate_result = self.op_client.execute_query(activate_command)
                 if activate_result["status"] == "success":
                     self.logger.success(
                         "Custom field activated for all work package types",
@@ -568,7 +566,8 @@ class AccountMigration(BaseMigration):
             extra={"markup": True},
         )
         self.logger.info(
-            f"{total_accounts - matched_accounts} accounts were added to the custom field but not linked to any existing project",
+            f"{total_accounts - matched_accounts} accounts were added to the custom field"
+            f" but not linked to any existing project",
             extra={"markup": True},
         )
 
@@ -693,7 +692,8 @@ class AccountMigration(BaseMigration):
                 extra={"markup": True},
             )
         self.logger.info(
-            f"Accounts added to custom field but not matched to projects: {analysis['summary']['accounts_without_project_match']}",
+            "Accounts added to custom field but not matched to projects:"
+            f" {analysis['summary']['accounts_without_project_match']}",
             extra={"markup": True},
         )
         self.logger.info(

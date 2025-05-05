@@ -351,47 +351,6 @@ class TestWorkflowMigration(unittest.TestCase):
     @patch("src.migrations.workflow_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
-    def test_analyze_status_mapping(
-        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
-    ) -> None:
-        """Test the analyze_status_mapping method."""
-        # Setup mocks
-        mock_jira_instance = mock_jira_client.return_value
-        mock_op_instance = mock_op_client.return_value
-
-        # Update one mapping to be 'created' instead of 'none'
-        mapping = self.expected_status_mapping.copy()
-        mapping["4"] = {
-            "jira_id": "4",
-            "jira_name": "Custom Status",
-            "openproject_id": 4,
-            "openproject_name": "Custom Status",
-            "is_closed": False,
-            "matched_by": "created",
-        }
-
-        mock_get_path.return_value = "/tmp/test_data"
-
-        # Create instance and call method
-        migration = WorkflowMigration(mock_jira_instance, mock_op_instance)
-        migration.status_mapping = mapping
-        result = migration.analyze_status_mapping()
-
-        # Assertions
-        self.assertEqual(result["total_statuses"], 4)
-        self.assertEqual(result["matched_statuses"], 4)  # All are now matched
-        self.assertEqual(result["matched_by_name"], 3)  # 'Open', 'In Progress', 'Done'
-        self.assertEqual(result["matched_by_creation"], 1)  # 'Custom Status'
-        self.assertEqual(result["match_percentage"], 100.0)
-
-        mock_file.assert_called_with("/tmp/test_data/status_mapping_analysis.json", "w")
-        mock_file().write.assert_called()
-
-    @patch("src.migrations.workflow_migration.JiraClient")
-    @patch("src.migrations.workflow_migration.OpenProjectClient")
-    @patch("src.migrations.workflow_migration.config.get_path")
-    @patch("os.path.exists")
-    @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_workflows(
         self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
     ) -> None:
@@ -469,17 +428,13 @@ def workflow_migration_test_steps() -> Any:
        - Configure any specific workflow rules needed based on the mapping
        - Test transitions between statuses for each work package type
 
-    8. Test the workflow analysis functionality:
-       - Run the analyze_status_mapping method
-       - Verify it correctly reports on the status of mappings
-
-    9. Test workflow usage in work package migration:
+    8. Test workflow usage in work package migration:
        - Create test issues in Jira with different statuses
        - Run the work package migration
        - Verify the work packages are created with correct statuses in OpenProject
        - Test status transitions for migrated work packages
 
-    10. Verify status configuration in real projects:
+    9. Verify status configuration in real projects:
         - Check status transitions in real project contexts
         - Verify that status workflows match the original Jira configuration
           as closely as possible

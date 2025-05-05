@@ -15,6 +15,40 @@ This project provides a robust, modular, and configurable toolset for migrating 
 * **Status Migration:** [docs/status_migration.md](docs/status_migration.md)
 * **Workflow Configuration:** [docs/workflow_configuration.md](docs/workflow_configuration.md)
 
+## Architecture
+
+This project uses a layered architecture for interacting with OpenProject:
+
+```plain
+┌─────────────────────────┐
+│    OpenProjectClient    │  High-level API for OpenProject operations
+└───────────┬─────────────┘
+            │
+┌───────────▼─────────────┐
+│   RailsConsoleClient    │  Handles Rails console interactions
+└───────────┬─────────────┘
+            │
+┌───────────▼─────────────┐
+│      DockerClient       │  Manages Docker container operations
+└───────────┬─────────────┘
+            │
+┌───────────▼─────────────┐
+│        SSHClient        │  Handles SSH operations to remote servers
+└───────────┬─────────────┘
+            │
+┌───────────▼─────────────┐
+│      FileManager        │  Manages file operations and tracking
+└─────────────────────────┘
+```
+
+Each layer has a specific responsibility:
+
+* **OpenProjectClient**: The main API for OpenProject operations, providing high-level methods for record management.
+* **RailsConsoleClient**: Handles the execution of Ruby code in the Rails console.
+* **DockerClient**: Manages Docker container operations, including file transfers and command execution.
+* **SSHClient**: Handles SSH connections and command execution on remote servers.
+* **FileManager**: Centralizes file operations, including creation, tracking, and cleanup.
+
 ## Introduction
 
 This tool automates the migration of users, projects, issues (work packages), statuses, workflows, custom fields, issue types, link types, attachments, comments, and plugin-specific data (e.g., Tempo Accounts) from Jira to OpenProject. It handles API limitations by integrating with the OpenProject Rails console (via SSH/Docker) and can generate Ruby scripts for manual execution if needed.

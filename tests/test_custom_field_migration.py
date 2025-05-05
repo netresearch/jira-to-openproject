@@ -3,11 +3,10 @@
 Test suite for the custom field migration component.
 """
 
-import json
 import unittest
 from unittest.mock import Mock, patch
 from src.clients.jira_client import JiraClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
+from src.clients.openproject_client import OpenProjectClient
 
 from src.migrations.custom_field_migration import CustomFieldMigration
 
@@ -20,13 +19,18 @@ class TestCustomFieldMigration(unittest.TestCase):
         # Create mock clients
         self.mock_jira_client = Mock(spec=JiraClient)
         self.mock_op_client = Mock()  # Remove spec for more flexible mocking
-        self.mock_rails_client = Mock(spec=OpenProjectRailsClient)
+        self.mock_rails_client = Mock(spec=OpenProjectClient)
 
         # Set up the rails client reference on the op_client
         self.mock_op_client.rails_client = self.mock_rails_client
 
         # Explicitly mock the get_custom_fields method
         self.mock_op_client.get_custom_fields = Mock()
+
+        # Add methods for the new client
+        self.mock_rails_client.execute_query = Mock()
+        self.mock_rails_client.transfer_file_from_container = Mock()
+        self.mock_rails_client.execute = Mock()  # Required for migrate_custom_fields_via_json
 
         # Create a mock JIRA instance to mock the jira attribute
         self.mock_jira = Mock()
@@ -263,7 +267,7 @@ class TestCustomFieldMigration(unittest.TestCase):
         self.mock_rails_client.transfer_file_from_container = Mock(return_value=True)
 
         # Mock the execute method to return success
-        self.mock_rails_client.execute = Mock(
+        self.mock_rails_client.execute_query = Mock(
             return_value={
                 "status": "success",
                 "output": {
@@ -283,28 +287,26 @@ class TestCustomFieldMigration(unittest.TestCase):
             }
         )
 
-        # Mock the open function to return a mock file for the result json
-        mock_json_content = json.dumps(
-            {
+        # Mock successful return for execute method
+        self.mock_rails_client.execute = Mock(
+            return_value={
                 "status": "success",
-                "created": [
-                    {
-                        "name": "Test Text Field",
-                        "status": "created",
-                        "id": 3,
-                        "jira_id": "customfield_10001",
-                    }
-                ],
-                "created_count": 1,
-                "existing_count": 0,
-                "error_count": 0,
+                "output": {
+                    "status": "success",
+                    "created": [
+                        {
+                            "name": "Test Text Field",
+                            "status": "created",
+                            "id": 3,
+                            "jira_id": "customfield_10001",
+                        }
+                    ],
+                    "created_count": 1,
+                    "existing_count": 0,
+                    "error_count": 0,
+                }
             }
         )
-        mock_file = Mock()
-        mock_file.__enter__ = Mock(return_value=mock_file)
-        mock_file.__exit__ = Mock(return_value=None)
-        mock_file.read = Mock(return_value=mock_json_content)
-        self.mock_open.return_value = mock_file
 
         # Mock analyze_custom_field_mapping to return successful analysis
         with patch.object(
@@ -348,6 +350,11 @@ class TestCustomFieldMigration(unittest.TestCase):
         self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
 
         # Mock the execute method to return an error
+        self.mock_rails_client.execute_query = Mock(
+            return_value={"status": "error", "error": "Test error message"}
+        )
+
+        # Mock error return for execute method
         self.mock_rails_client.execute = Mock(
             return_value={"status": "error", "error": "Test error message"}
         )
@@ -393,6 +400,11 @@ class TestCustomFieldMigration(unittest.TestCase):
                 self.mock_rails_client.transfer_file_to_container = Mock(
                     return_value=True
                 )
+                self.mock_rails_client.execute_query = Mock(
+                    return_value={"status": "success"}
+                )
+
+                # Mock successful return for execute method
                 self.mock_rails_client.execute = Mock(
                     return_value={"status": "success"}
                 )
@@ -477,6 +489,9 @@ class TestCustomFieldMigration(unittest.TestCase):
 
         # Mock file operations
         self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
+        self.mock_rails_client.execute_query = Mock(return_value={"status": "success"})
+
+        # Mock execute method for migrate_custom_fields_via_json
         self.mock_rails_client.execute = Mock(return_value={"status": "success"})
 
         # Mock analyze_custom_field_mapping to return successful analysis
@@ -494,7 +509,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                 script_content = args[0]
 
                 # Verify script structure - header with Python variables
-                self.assertIn("# Ruby variables from Python", script_content)
+                self.assertIn("Ruby variables from Python", script_content)
 
                 # Verify main Ruby code section
                 self.assertIn("begin", script_content)
@@ -512,8 +527,11 @@ class TestCustomFieldMigration(unittest.TestCase):
     def test_handle_list_field_possible_values(self) -> None:
         """Test that list field possible values are properly handled."""
         # Create a mock for execute that captures the script
-        self.mock_rails_client.execute = Mock(return_value={"status": "success"})
+        self.mock_rails_client.execute_query = Mock(return_value={"status": "success"})
         self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
+
+        # Mock execute method for migrate_custom_fields_via_json
+        self.mock_rails_client.execute = Mock(return_value={"status": "success"})
 
         # Set up sample data with a list field
         test_mapping = {

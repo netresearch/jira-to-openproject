@@ -1,1493 +1,668 @@
+#!/usr/bin/env python3
 """
-OpenProject API client for the migration project.
-Provides access to OpenProject resources through the API.
+OpenProjectClient
+
+Main client interface for OpenProject operations.
+Uses RailsConsoleClient for Rails console interactions.
 """
 
-import base64
 import json
-import logging
-import math
-import time
-from typing import Any, Optional
-
-import requests
-import urllib3
+from typing import Any, Dict, List, Optional, cast
 
 from src import config
-from src.clients.openproject_rails_client import OpenProjectRailsClient
+from src.clients.rails_console_client import RailsConsoleClient
+from src.utils.file_manager import FileManager
 
-# Disable SSL warnings - only use this in development environments
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-
-def strtobool(val: str) -> bool:
-    """Convert a string representation of truth to True or False.
-
-    True values are 'y', 'yes', 't', 'true', 'on', and '1';
-    False values are 'n', 'no', 'f', 'false', 'off', and '0'.
-    Raises ValueError if 'val' is anything else.
-    """
-    val = val.lower()
-    if val in ("y", "yes", "t", "true", "on", "1"):
-        return True
-    elif val in ("n", "no", "f", "false", "off", "0"):
-        return False
-    else:
-        raise ValueError(f"Invalid truth value: {val}")
-
-
-# Set up logger
-logger = logging.getLogger("migration.openproject_client")
+logger = config.logger
 
 
 class OpenProjectClient:
     """
-    Client for interacting with the OpenProject API.
-    Implemented as a singleton to ensure only one instance exists.
+    Client for OpenProject operations.
+    This is the main API that consumers should use.
     """
 
-    # Singleton instance
-    _instance = None
-
-    def __new__(cls, *args, **kwargs):
-        """Create a singleton instance of the OpenProjectClient."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self, rails_client: Optional["OpenProjectRailsClient"] = None) -> None:
-        """Initialize the OpenProject client.
+    def __init__(
+        self,
+        container_name: Optional[str] = None,
+        ssh_host: Optional[str] = None,
+        ssh_user: Optional[str] = None,
+        ssh_key_file: Optional[str] = None,
+        tmux_session_name: Optional[str] = None,
+        command_timeout: int = 180,
+    ) -> None:
+        """
+        Initialize the OpenProject client.
 
         Args:
-            rails_client: Optional OpenProjectRailsClient for operations not supported by the API
+            container_name: Docker container name (default: from config)
+            ssh_host: SSH host (default: from config)
+            ssh_user: SSH username (default: from config)
+            ssh_key_file: SSH key file (default: from config)
+            tmux_session_name: tmux session name (default: from config)
+            command_timeout: Command timeout in seconds (default: 180)
         """
-        # Skip initialization if already initialized
-        if self._initialized:
-            if rails_client is not None:
-                # Update rails client reference if provided
-                logger.debug("Updating Rails client reference in OpenProjectClient")
-                self.rails_client = rails_client
-            return
+        # Load configuration
+        op_config = config.openproject_config
 
-        # Get OpenProject configuration from central config
-        self.op_config = config.openproject_config
+        # Use provided values or defaults from config
+        self.container_name = container_name or op_config.get("container")
+        self.ssh_host = ssh_host or op_config.get("server")
+        self.ssh_user = ssh_user or op_config.get("user")
+        self.ssh_key_file = ssh_key_file or op_config.get("key_file")
+        self.tmux_session_name = tmux_session_name or op_config.get("tmux_session_name", "rails_console")
+        self.command_timeout = command_timeout
 
-        # Get migration configuration
-        self.migration_config = config.migration_config
+        # Verify required configuration
+        if not self.container_name:
+            raise ValueError("Container name is required")
+        if not self.ssh_host:
+            raise ValueError("SSH host is required")
 
-        # Store Rails client if provided
-        self.rails_client = rails_client
+        # Initialize file manager
+        self.file_manager = FileManager()
 
-        # Try to initialize Rails client if tmux session is configured but not provided
-        if self.rails_client is None and self.op_config.get("tmux_session_name"):
-            try:
-                # This will use the existing singleton or create one if needed
-                self.rails_client = OpenProjectRailsClient()
-                logger.info("Initialized Rails client with tmux session from config")
-            except ValueError as e:
-                # This is the error raised when the tmux session doesn't exist
-                logger.warning(f"Could not initialize Rails client: {str(e)}")
-                logger.warning(
-                    "The tmux session specified in the configuration doesn't exist."
-                )
-                logger.warning(
-                    "To use direct Rails console features, please start the tmux session first."
-                )
-                logger.warning(
-                    "You can continue with API-only operations, "
-                    "but direct Rails console functions will not be available."
-                )
-                self.rails_client = None
-            except RuntimeError as e:
-                # This is the error raised when tmux is not installed
-                logger.warning(f"Could not initialize Rails client: {str(e)}")
-                logger.warning(
-                    "Make sure tmux is installed and available in your PATH."
-                )
-                logger.warning(
-                    "You can continue with API-only operations, "
-                    "but direct Rails console functions will not be available."
-                )
-                self.rails_client = None
-            except Exception as e:
-                logger.warning(f"Could not initialize Rails client: {str(e)}")
-                logger.warning(
-                    "You can continue with API-only operations, "
-                    "but direct Rails console functions will not be available."
-                )
-                self.rails_client = None
-
-        # OpenProject API credentials
-        self.url = self.op_config.get("url", "").rstrip("/")
-        self.username = self.op_config.get("username", "")
-        self.password = self.op_config.get("password", "")
-
-        # Support both 'api_token' and 'api_key' in config for backward compatibility
-        self.api_token = self.op_config.get("api_token", "") or self.op_config.get(
-            "api_key", ""
+        # Initialize Rails console client
+        self.rails_client = RailsConsoleClient(
+            container_name=str(self.container_name),
+            ssh_host=str(self.ssh_host),
+            ssh_user=self.ssh_user,
+            ssh_key_file=cast(Optional[str], self.ssh_key_file),
+            tmux_session_name=self.tmux_session_name,
+            command_timeout=self.command_timeout
         )
 
-        self.api_version = self.op_config.get("api_version", "v3")
+        logger.success(f"OpenProjectClient initialized for host {self.ssh_host}, container {self.container_name}")
 
-        # SSL verification is in the migration_config section, not op_config
-        ssl_verify = self.migration_config.get("ssl_verify", True)
-        if isinstance(ssl_verify, str):
-            self.verify_ssl = strtobool(ssl_verify)
-        else:
-            self.verify_ssl = bool(ssl_verify)
-
-        # Log the SSL verification setting
-        logger.info(f"OpenProject SSL verification: {self.verify_ssl}")
-
-        # Set up base API URL
-        self.api_url = f"{self.url}/api/{self.api_version}"
-
-        # Set up authentication
-        self.token = None
-        self.auth_type = None
-
-        # Rate limiting settings
-        self.rate_limit = float(
-            self.op_config.get("rate_limit", 100)
-        )  # requests per second
-        self.last_request_time = 0
-
-        # Cache for commonly accessed data
-        # We don't need frequent refreshes since we're the only ones changing the data
-        self._projects_cache = []
-        self._users_cache = []
-        self._custom_fields_cache = []
-        self._statuses_cache = []
-        self._work_package_types_cache = []
-
-        # Mark as initialized
-        self._initialized = True
-        self.connected = False
-
-        # Connect to validate configuration
-        self.connect()
-
-    def connect(self) -> None:
-        """Verify the connection to the OpenProject API."""
-        # Check for required configuration
-        if not self.url:
-            logger.error("OpenProject URL is missing. Cannot connect.")
-            self.connected = False
-            return
-
-        # Check authentication method availability
-        has_token_auth = bool(self.api_token)
-        has_basic_auth = bool(self.username and self.password)
-
-        if not (has_token_auth or has_basic_auth):
-            logger.error(
-                "OpenProject authentication credentials missing. Need either API token or username/password."
-            )
-            self.connected = False
-            return
-
-        # Set up authentication method
-        if has_token_auth:
-            logger.info("Using API token authentication for OpenProject")
-            self.auth_type = "token"
-        else:
-            logger.info("Using basic authentication for OpenProject")
-            self.auth_type = "basic"
-
-        try:
-            logger.info(f"Connecting to OpenProject at {self.url}...")
-            # Use _request to handle rate limiting and error raising
-            response = self._request("GET", "/users/me")
-            # Check if the response has the expected structure for a user object
-            if response and "_type" in response and response["_type"] == "User":
-                user_name = response.get("name", "Unknown User")
-                logger.success(
-                    f"Successfully connected to OpenProject as user: {user_name}"
-                )
-                self.connected = True
-            else:
-                logger.error(
-                    "Connected to OpenProject, but failed to verify user. Check credentials."
-                )
-                logger.debug(f"Unexpected response for /users/me: {response}")
-                self.connected = False
-        except requests.exceptions.RequestException as e:
-            logger.exception(f"Connection to OpenProject failed: {e}")
-            self.connected = False
-        except Exception as e:
-            logger.exception(f"An unexpected error occurred during connection: {e}")
-            self.connected = False
-
-    def _get_auth_token(self) -> str:
+    def execute_query(self, query: str, timeout: Optional[int] = None) -> Dict[str, Any]:
         """
-        Encode the API key for Basic Authentication.
-
-        For API token authentication, use the format 'apikey:{token}'.
-        For basic authentication, use the format 'username:password'.
-        """
-        if self.auth_type == "token":
-            if not self.api_token:
-                raise ValueError("OpenProject API Token is not set")
-            return base64.b64encode(f"apikey:{self.api_token}".encode()).decode()
-        else:
-            if not self.username or not self.password:
-                raise ValueError("OpenProject username or password is not set")
-            return base64.b64encode(
-                f"{self.username}:{self.password}".encode()
-            ).decode()
-
-    def _request(self, method: str, endpoint: str, data: Any = None, params: Any = None) -> dict[str, Any]:
-        """
-        Make a request to the OpenProject API with rate limiting.
+        Execute a Rails query.
 
         Args:
-            method: HTTP method (GET, POST, PUT, DELETE)
-            endpoint: API endpoint (relative to the base URL)
-            data: Data to include in the request body
-            params: URL parameters
+            query: Rails query to execute
+            timeout: Query timeout in seconds (default: self.command_timeout)
 
         Returns:
-            Response data as a dictionary
+            Dict with status and result or error
         """
-        endpoint = endpoint.lstrip("/")  # Remove leading slash if present
-        url = f"{self.api_url}/{endpoint}"
+        return self.rails_client.execute(query, timeout)
 
-        try:
-            # Apply rate limiting
-            current_time = time.time()
-            if current_time - self.last_request_time < (1.0 / self.rate_limit):
-                wait_time = (1.0 / self.rate_limit) - (
-                    current_time - self.last_request_time
-                )
-                logger.debug(f"Rate limiting: waiting {wait_time:.3f}s")
-                time.sleep(wait_time)
+    def count_records(self, model: str) -> int:
+        """
+        Count records for a given Rails model.
 
-            # Set up headers with authentication
-            headers = {
-                "Authorization": f"Basic {self._get_auth_token()}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
+        Args:
+            model: Model name (e.g., "User", "Project")
 
-            # Make the request
-            response = requests.request(
-                method,
-                url,
-                json=data,
-                params=params,
-                headers=headers,
-                verify=self.verify_ssl,
-            )
-
-            # Update last request time
-            self.last_request_time = time.time()
-
-            # If the response indicates an error, raise HTTPError with the response attached
+        Returns:
+            Number of records or -1 if error
+        """
+        result = self.execute_query(f"{model}.count")
+        if result["status"] == "success" and result["output"] is not None:
             try:
-                response.raise_for_status()
-            except requests.HTTPError as e:
-                # Attach the response to the exception for error handling
-                e.response = response
-                logger.exception(f"Error making {method} request to {url}: {str(e)}")
-                raise
+                # Handle different output formats
+                output = result["output"]
+                if isinstance(output, int):
+                    return output
+                if isinstance(output, str) and output.isdigit():
+                    return int(output)
+                return -1
+            except (ValueError, TypeError):
+                return -1
+        return -1
 
-            if response.status_code == 204:
+    def find_record(self, model: str, id_or_conditions: int | Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Find a record by ID or conditions.
+
+        Args:
+            model: Model name (e.g., "User", "Project")
+            id_or_conditions: ID or conditions hash
+
+        Returns:
+            Record data or None if not found
+        """
+        if isinstance(id_or_conditions, int):
+            command = f"{model}.find_by(id: {id_or_conditions})&.as_json"
+        else:
+            # Convert Python dict to Ruby hash format
+            conditions_str = json.dumps(id_or_conditions).replace('"', "'")
+            command = f"{model}.find_by({conditions_str})&.as_json"
+
+        result = self.execute_query(command)
+
+        if result["status"] == "success" and result["output"]:
+            try:
+                # Handle the case where output is already parsed into Python types
+                if isinstance(result["output"], dict):
+                    return result["output"]
+
+                # Try to parse it as JSON if it's a string
+                if isinstance(result["output"], str):
+                    # Handle Ruby hash format
+                    cleaned_output = result["output"].replace("=>", ":")
+                    cleaned_output = cleaned_output.replace("nil", "null")
+                    return cast(Dict[str, Any], json.loads(cleaned_output))
+
                 return None
-
-            return response.json()
-        except requests.HTTPError:
-            # This is already logged above
-            raise
-        except Exception as e:
-            logger.exception(f"Error making {method} request to {url}: {str(e)}")
-            raise
-
-    def get_projects(self, force_refresh: bool = False) -> list[dict[str, Any]]:
-        """Get all projects from OpenProject.
-
-        Args:
-            force_refresh: If True, ignore cache and fetch fresh data
-
-        Returns:
-            List of projects
-        """
-        # Return cached projects if available and not forced to refresh
-        if not force_refresh and self._projects_cache:
-            logger.debug(
-                f"Using cached projects ({len(self._projects_cache)} projects)"
-            )
-            return self._projects_cache
-
-        try:
-            all_projects = []
-            page = 1
-            total_pages = 1
-
-            while page <= total_pages:
-                # Request with pagination params - get 1000 results per page
-                params = {"pageSize": 1000, "offset": (page - 1) * 1000}
-                response = self._request("GET", "/projects", params=params)
-
-                # Extract projects from current page
-                projects = response.get("_embedded", {}).get("elements", [])
-                all_projects.extend(projects)
-
-                # Update pagination info
-                total = response.get("total", 0)
-                page_size = response.get("pageSize", 20)
-                total_pages = math.ceil(total / page_size)
-
-                logger.debug(
-                    f"Retrieved projects page {page}/{total_pages} with {len(projects)} projects"
-                )
-                page += 1
-
-            logger.info(
-                f"Retrieved a total of {len(all_projects)} projects from OpenProject"
-            )
-
-            # Update cache
-            self._projects_cache = all_projects
-            return all_projects
-        except Exception as e:
-            logger.exception(f"Failed to get projects: {str(e)}")
-            return self._projects_cache if self._projects_cache else []
-
-    def get_project_by_identifier(self, identifier: str) -> dict[str, Any] | None:
-        """Get a project by its identifier.
-
-        Args:
-            identifier: The identifier of the project to find
-
-        Returns:
-            The project dictionary or None if not found
-        """
-        try:
-            # Get projects from cache or API
-            all_projects = self.get_projects()
-
-            # Find the project with matching identifier
-            for project in all_projects:
-                if project.get("identifier") == identifier:
-                    logger.debug(
-                        f"Found existing project with identifier '{identifier}'"
-                    )
-                    return project
-
-            logger.debug(f"No project found with identifier '{identifier}'")
-            return None
-        except Exception as e:
-            logger.exception(
-                f"Failed to get project by identifier '{identifier}': {str(e)}"
-            )
-            return None
-
-    def get_work_package_types(
-        self
-    ) -> list[dict[str, Any]]:
-        """Get all work package types from OpenProject."""
-        if self._work_package_types_cache:
-            return self._work_package_types_cache
-
-        try:
-            response = self._request("GET", "/types")
-            types = response.get("_embedded", {}).get("elements", [])
-            self._work_package_types_cache = types
-            return types
-        except Exception as e:
-            logger.exception(f"Failed to get work package types: {str(e)}")
-            return (
-                self._work_package_types_cache if self._work_package_types_cache else []
-            )
-
-    def get_statuses(self, force_refresh: bool = False) -> list[dict[str, Any]]:
-        """Get all statuses from OpenProject."""
-        if not force_refresh and self._statuses_cache:
-            return self._statuses_cache
-
-        try:
-            response = self._request("GET", "/statuses")
-            statuses = response.get("_embedded", {}).get("elements", [])
-            self._statuses_cache = statuses
-            return statuses
-        except Exception as e:
-            logger.exception(f"Failed to get statuses: {str(e)}")
-            return self._statuses_cache if self._statuses_cache else []
-
-    def get_users(self, force_refresh: bool = False) -> list[dict[str, Any]]:
-        """Get all users from OpenProject."""
-        if not force_refresh and self._users_cache:
-            return self._users_cache
-
-        try:
-            all_users = []
-            page_size = 500  # Use a consistent page size
-
-            logger.info(f"Fetching all OpenProject users with page size {page_size}")
-
-            # Start by getting the first page
-            params = {"pageSize": page_size}
-            current_url = "/users"
-
-            while True:
-                logger.info(f"Fetching users with URL: {current_url}")
-                response = self._request("GET", current_url, params=params)
-
-                # Extract users from current page
-                users = response.get("_embedded", {}).get("elements", [])
-                users_count = len(users)
-                all_users.extend(users)
-
-                # Get total count from response
-                total = response.get("total", 0)
-                logger.info(
-                    f"Page returned {users_count} users (total fetched: {len(all_users)}/{total})"
-                )
-
-                # Look for next page link in the response
-                next_url = None
-                if "_links" in response and "nextByOffset" in response.get(
-                    "_links", {}
-                ):
-                    next_url = (
-                        response.get("_links", {}).get("nextByOffset", {}).get("href")
-                    )
-                    if next_url:
-                        # Extract the relative path from the full URL
-                        logger.debug(f"Found next page URL: {next_url}")
-                        # The API returns a full URL, but we need to extract just the path portion
-                        if "api/v3" in next_url:
-                            # Extract the part after /api/v3
-                            current_url = next_url.split("/api/v3")[1]
-                            params = None  # Don't send params when using full URL path
-                        else:
-                            # If the URL doesn't have the expected format, use it as is
-                            current_url = next_url
-                            params = None
-
-                # If there's no next URL or we've fetched all users, we're done
-                if not next_url or len(all_users) >= total:
-                    logger.info(
-                        f"No more pages to fetch. Retrieved {len(all_users)}/{total} users"
-                    )
-                    break
-
-                # Safety check to prevent infinite loops
-                if len(all_users) >= 10000:
-                    logger.warning(
-                        "Stopping pagination after 10000 users - possible infinite loop"
-                    )
-                    break
-
-            logger.info(
-                f"Retrieved a total of {len(all_users)} users from OpenProject (total reported: {total})"
-            )
-
-            self._users_cache = all_users
-            return all_users
-        except Exception as e:
-            logger.exception(f"Failed to get users: {str(e)}")
-            return self._users_cache if self._users_cache else []
-
-    def get_user_by_email(self, email: str) -> dict[str, Any] | None:
-        """
-        Find a user by their email address.
-
-        Args:
-            email: Email address to search for
-
-        Returns:
-            User dictionary if found, None otherwise
-        """
-        if not email:
-            logger.warning("No email provided to get_user_by_email")
-            return None
-
-        email = email.lower().strip()
-
-        # Make sure we have the users
-        users = self.get_users()
-
-        # Try to find the user by email
-        for user in users:
-            user_email = user.get("email", "").lower().strip()
-            if user_email == email:
-                logger.debug(f"Found user with email {email}: {user.get('login')}")
-                return user
-
-        # If not found, try to search with the API directly
-        try:
-            # OpenProject API doesn't directly support email search, but we can use a filter
-            params = {
-                "filters": json.dumps([
-                    {"email": {"operator": "=", "values": [email]}}
-                ])
-            }
-
-            response = self._request("GET", "/users", params=params)
-            if response and response.get("_embedded", {}).get("elements", []):
-                user = response.get("_embedded", {}).get("elements", [])[0]
-                logger.debug(f"Found user with email {email} via API search: {user.get('login')}")
-                return user
-
-        except Exception as e:
-            logger.exception(f"Error searching for user by email {email}: {str(e)}")
-
-        # If still not found, try using the Rails client if available
-        if self.rails_client:
-            try:
-                script = f"""
-                user = User.find_by(mail: "{email}")
-                if user
-                  {{
-                    id: user.id,
-                    login: user.login,
-                    email: user.mail,
-                    firstName: user.firstname,
-                    lastName: user.lastname,
-                    admin: user.admin,
-                    status: user.status
-                  }}
-                else
-                  nil
-                end
-                """
-                result = self.rails_client.execute(script)
-                if result.get("status") == "success" and result.get("output"):
-                    user_data = result.get("output")
-                    if user_data and isinstance(user_data, dict) and "id" in user_data:
-                        logger.debug(f"Found user with email {email} via Rails: {user_data.get('login')}")
-                        return user_data
-            except Exception as e:
-                logger.exception(f"Error searching for user with Rails client: {str(e)}")
-
-        logger.debug(f"No user found with email {email}")
+            except (json.JSONDecodeError, TypeError):
+                return None
         return None
 
-    def create_user(self, user_data: dict[str, Any]) -> dict[str, Any] | None:
+    def create_record(self, model: str, attributes: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Create a new user in OpenProject.
+        Create a record with given attributes.
 
         Args:
-            user_data: Dictionary with user data (login, email, firstName, lastName, etc.)
+            model: Model name (e.g., "User", "Project")
+            attributes: Record attributes
 
         Returns:
-            Created user dictionary if successful, None otherwise
+            Dict with status, record data, and error info
         """
-        if not user_data:
-            logger.warning("No user data provided to create_user")
-            return None
+        # Convert Python dict to Ruby hash format
+        ruby_hash = json.dumps(attributes).replace('"', "'")
 
-        # Required fields
-        required_fields = ["login", "email", "firstName", "lastName", "password"]
-        for field in required_fields:
-            if field not in user_data:
-                logger.warning(f"Missing required field '{field}' for user creation")
-                return None
-
-        try:
-            # Check if user with this login or email already exists
-            existing_users = self.get_users()
-            for user in existing_users:
-                if user.get("login", "").lower() == user_data["login"].lower():
-                    logger.warning(f"User with login '{user_data['login']}' already exists")
-                    return user
-                if user.get("email", "").lower() == user_data["email"].lower():
-                    logger.warning(f"User with email '{user_data['email']}' already exists")
-                    return user
-
-            # Create the user
-            logger.info(f"Creating user with login '{user_data['login']}' and email '{user_data['email']}'")
-            response = self._request("POST", "/users", data=user_data)
-
-            if response and response.get("id"):
-                logger.success(f"User '{user_data['login']}' created successfully with ID {response.get('id')}")
-                # Clear users cache
-                self._users_cache = []
-                return response
-            else:
-                logger.warning(f"Failed to create user: {response}")
-                return None
-
-        except requests.exceptions.HTTPError as e:
-            logger.exception(f"HTTP error creating user: {str(e)}")
-            # Re-raise the exception for the caller to handle
-            raise
-        except Exception as e:
-            logger.exception(f"Error creating user: {str(e)}")
-            return None
-
-    def clear_cache(self):
-        """Clear all cached data to force fresh retrieval."""
-        self._projects_cache = []
-        self._users_cache = []
-        self._custom_fields_cache = []
-        self._statuses_cache = []
-        self._work_package_types_cache = []
-        logger.debug("All caches have been cleared.")
-
-    def update_project(
-        self, project_id: int, data_or_name=None, description=None
-    ) -> dict[str, Any] | None:
-        """Update an existing project in OpenProject.
-
-        Args:
-            project_id: The ID of the project to update
-            data_or_name: Either a dictionary of data to update or the name (for backward compatibility)
-            description: The description (used only with backward compatibility mode)
-
-        Returns:
-            The updated project or None if update failed
+        # Build command to create and return the record
+        command = f"""
+        record = {model}.new({ruby_hash})
+        if record.save
+          {{ status: 'success', record: record.as_json }}
+        else
+          {{ status: 'error', errors: record.errors.full_messages }}
+        end
         """
-        try:
-            # Handle backward compatibility for old method signature
-            if not isinstance(data_or_name, dict):
-                logger.warning(
-                    "Using deprecated update_project method signature with separate parameters"
-                )
-                name = data_or_name
-                data = {}
-                if name:
-                    data["name"] = name
-                if description:
-                    data["description"] = {"raw": description}
-            else:
-                data = data_or_name
 
-            if not data:  # Nothing to update
-                return None
+        result = self.execute_query(command)
 
-            # Format the data - handle parent as _links
-            formatted_data = {}
+        if result["status"] == "success":
+            output = result["output"]
 
-            # Copy basic fields
-            if "name" in data:
-                formatted_data["name"] = data["name"]
-            if "description" in data:
-                if (
-                    isinstance(data["description"], dict)
-                    and "raw" in data["description"]
-                ):
-                    formatted_data["description"] = data["description"]
+            # Parse the result to extract status and data
+            if isinstance(output, dict):
+                record_status = output.get("status")
+
+                if record_status == "success":
+                    return {
+                        "status": "success",
+                        "record": output.get("record")
+                    }
                 else:
-                    formatted_data["description"] = {"raw": data["description"]}
-
-            # Handle parent project as _links
-            if "parent" in data and data["parent"]:
-                formatted_data["_links"] = {
-                    "parent": {"href": f"/api/v3/projects/{data['parent']}"}
-                }
-
-            logger.debug(
-                f"Updating project {project_id} with data: {json.dumps(formatted_data)}"
-            )
-            return self._request(
-                "PATCH", f"/projects/{project_id}", data=formatted_data
-            )
-        except Exception as e:
-            if hasattr(e, "response") and e.response is not None:
-                try:
-                    error_details = e.response.json()
-                    logger.exception(
-                        f"Server response for project update {project_id}: {json.dumps(error_details)}"
-                    )
-                except Exception:
-                    logger.exception(f"Server response text: {e.response.text}")
-
-            logger.exception(f"Failed to update project {project_id}: {str(e)}")
-            return None
-
-    def create_type(
-        self,
-        name: str,
-        color: str = None,
-        is_milestone: bool = False,
-        is_default: bool = False,
-    ) -> dict[str, Any]:
-        """
-        Create a new work package type in OpenProject.
-
-        Args:
-            name: The name of the work package type
-            color: The color of the work package type (hex code)
-            is_milestone: Whether the type is a milestone
-            is_default: Whether the type is the default type
-
-        Returns:
-            Dictionary with the created work package type or None if failed
-        """
-        try:
-            # First check if type already exists
-            existing_types = self.get_work_package_types()
-            for existing_type in existing_types:
-                if existing_type.get("name") == name:
-                    logger.info(
-                        f"Work package type '{name}' already exists, skipping creation"
-                    )
                     return {
-                        "success": True,
-                        "message": f"Work package type '{name}' already exists",
-                        "id": existing_type.get("id"),
-                        "data": existing_type,
+                        "status": "error",
+                        "errors": output.get("errors", ["Unknown error"])
                     }
 
-            # OpenProject API for work package types only available to admins
-            data = {
-                "name": name,
-                "isMilestone": is_milestone,
-                "isDefault": is_default,
-                "color": color or "#1A67A3",  # Default blue color
-            }
-
-            result = self._request("POST", "/types", data=data)
-            logger.info(f"Created work package type: {name}")
+            # If output is not a dict, return an error
             return {
-                "success": True,
-                "message": f"Created work package type: {name}",
-                "id": result.get("id"),
-                "data": result,
+                "status": "error",
+                "errors": ["Unexpected response format"]
             }
-        except Exception as e:
-            logger.exception(f"Failed to create work package type {name}: {str(e)}")
-            return {"success": False, "message": str(e)}
+        else:
+            return {
+                "status": "error",
+                "errors": [result.get("error", "Failed to create record")]
+            }
 
-    def create_status(
-        self, name: str, color: str = None, is_closed: bool = False
-    ) -> dict[str, Any]:
+    def update_record(self, model: str, id: int, attributes: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Create a new status in OpenProject.
+        Update a record with given attributes.
 
         Args:
-            name: The name of the status
-            color: The color of the status (hex code)
-            is_closed: Whether the status is considered 'closed'
+            model: Model name (e.g., "User", "Project")
+            id: Record ID
+            attributes: Attributes to update
 
         Returns:
-            Dictionary with the created status or None if failed
+            Dict with status and error info
         """
-        try:
-            # First check if status already exists
-            existing_statuses = self.get_statuses()
-            for existing_status in existing_statuses:
-                if existing_status.get("name") == name:
-                    logger.info(f"Status '{name}' already exists, skipping creation")
+        # Convert Python dict to Ruby hash format
+        ruby_hash = json.dumps(attributes).replace('"', "'")
+
+        # Build command to update the record
+        command = f"""
+        record = {model}.find_by(id: {id})
+        if record.nil?
+          {{ status: 'error', errors: ['Record not found'] }}
+        elsif record.update({ruby_hash})
+          {{ status: 'success', record: record.as_json }}
+        else
+          {{ status: 'error', errors: record.errors.full_messages }}
+        end
+        """
+
+        result = self.execute_query(command)
+
+        if result["status"] == "success":
+            output = result["output"]
+
+            # Parse the result to extract status and data
+            if isinstance(output, dict):
+                record_status = output.get("status")
+
+                if record_status == "success":
                     return {
-                        "success": True,
-                        "message": f"Status '{name}' already exists",
-                        "id": existing_status.get("id"),
-                        "data": existing_status,
+                        "status": "success",
+                        "record": output.get("record")
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "errors": output.get("errors", ["Unknown error"])
                     }
 
-            # OpenProject API for statuses only available to admins
-            data = {
-                "name": name,
-                "isClosed": is_closed,
-                "color": color or "#1F75D3",  # Default blue color
-            }
-
-            result = self._request("POST", "/statuses", data=data)
-            logger.info(f"Created status: {name}")
+            # If output is not a dict, return an error
             return {
-                "success": True,
-                "message": f"Created status: {name}",
-                "id": result.get("id"),
-                "data": result,
+                "status": "error",
+                "errors": ["Unexpected response format"]
             }
-        except Exception as e:
-            logger.exception(f"Failed to create status {name}: {str(e)}")
-            return {"success": False, "message": str(e)}
+        else:
+            return {
+                "status": "error",
+                "errors": [result.get("error", "Failed to update record")]
+            }
 
-    def create_work_package(
+    def delete_record(self, model: str, id: int) -> Dict[str, Any]:
+        """
+        Delete a record.
+
+        Args:
+            model: Model name (e.g., "User", "Project")
+            id: Record ID
+
+        Returns:
+            Dict with status and error info
+        """
+        command = f"""
+        record = {model}.find_by(id: {id})
+        if record.nil?
+          {{ status: 'error', errors: ['Record not found'] }}
+        elsif record.destroy
+          {{ status: 'success' }}
+        else
+          {{ status: 'error', errors: record.errors.full_messages }}
+        end
+        """
+
+        result = self.execute_query(command)
+
+        if result["status"] == "success":
+            output = result["output"]
+
+            # Parse the result to extract status and data
+            if isinstance(output, dict):
+                record_status = output.get("status")
+
+                if record_status == "success":
+                    return {
+                        "status": "success"
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "errors": output.get("errors", ["Unknown error"])
+                    }
+
+            # If output is not a dict, return an error
+            return {
+                "status": "error",
+                "errors": ["Unexpected response format"]
+            }
+        else:
+            return {
+                "status": "error",
+                "errors": [result.get("error", "Failed to delete record")]
+            }
+
+    def find_all_records(
         self,
-        project_id: int,
-        type_id: int,
-        subject: str,
-        description: str = None,
-        status_id: int = None,
-        assigned_to_id: int = None,
-    ) -> dict[str, Any] | None:
-        """Create a new work package in OpenProject."""
-        data = {
-            "_links": {
-                "project": {"href": f"/api/v3/projects/{project_id}"},
-                "type": {"href": f"/api/v3/types/{type_id}"},
-            },
-            "subject": subject,
-        }
-
-        if description:
-            data["description"] = {"raw": description}
-
-        if status_id:
-            data["_links"]["status"] = {"href": f"/api/v3/statuses/{status_id}"}
-
-        if assigned_to_id:
-            data["_links"]["assignee"] = {"href": f"/api/v3/users/{assigned_to_id}"}
-
-        try:
-            return self._request("POST", "/work_packages", data=data)
-        except requests.exceptions.HTTPError as e:
-            # Log details of the request that failed
-            logger.exception(
-                f"Failed work package creation request data for {subject}: {json.dumps(data)}"
-            )
-
-            # Extract detailed error message from OpenProject
-            error_message = str(e)
-            error_details = {}
-            validation_errors = []
-
-            if hasattr(e, "response") and e.response is not None:
-                try:
-                    error_details = e.response.json()
-                    error_message = error_details.get("message", str(e))
-
-                    # Log specific validation errors
-                    if (
-                        "_embedded" in error_details
-                        and "errors" in error_details["_embedded"]
-                    ):
-                        for error in error_details["_embedded"]["errors"]:
-                            error_msg = error.get("message", "Unknown error")
-                            validation_errors.append(error_msg)
-                            logger.warning(
-                                f"Validation error for work package '{subject}': {error_msg}"
-                            )
-
-                    # If there's no embedded errors structure, log the whole error message
-                    if not validation_errors:
-                        logger.warning(
-                            f"Error creating work package '{subject}': {error_message}"
-                        )
-
-                except json.JSONDecodeError:
-                    # If we can't parse the response as JSON, just log the text
-                    if e.response.text:
-                        logger.exception(f"Server response text: {e.response.text}")
-
-            # Return error information for the caller to handle
-            return {
-                "error": True,
-                "status_code": (
-                    e.response.status_code if hasattr(e, "response") else None
-                ),
-                "message": error_message,
-                "validation_errors": validation_errors,
-                "details": error_details,
-            }
-        except Exception as e:
-            logger.exception(f"Failed to create work package {subject}: {str(e)}")
-            return {"error": True, "message": str(e)}
-
-    def get_relation_types(self) -> list[dict[str, Any]]:
-        """Get all relation types from OpenProject using the /relations endpoint."""
-        try:
-            # Use the correct endpoint for relation types
-            try:
-                logger.debug(
-                    "Getting relation types using the correct endpoint: /relations"
-                )
-                response = self._request("GET", "/relations")
-
-                if response and "_embedded" in response:
-                    elements = response.get("_embedded", {}).get("elements", [])
-                    if elements:
-                        # Extract the types from the relations
-                        types = []
-                        type_ids = set()
-
-                        for relation in elements:
-                            relation_type = relation.get("_links", {}).get("type", {})
-                            type_id = relation_type.get("href", "").split("/")[-1]
-                            type_name = relation_type.get("title", "")
-
-                            if type_id and type_id not in type_ids:
-                                types.append(
-                                    {
-                                        "id": type_id,
-                                        "name": type_name,
-                                        "_type": "RelationType",
-                                    }
-                                )
-                                type_ids.add(type_id)
-
-                        if types:
-                            logger.success(
-                                f"Successfully retrieved {len(types)} relation types"
-                            )
-                            return types
-            except Exception as e:
-                logger.exception(f"Could not access relations endpoint: {str(e)}")
-
-            # If we couldn't get data, return common relation types as defaults
-            logger.warning(
-                "Could not retrieve relation types from OpenProject API. Using default types."
-            )
-
-            return [
-                {
-                    "id": "relates",
-                    "name": "relates to",
-                    "reverseName": "relates to",
-                    "_type": "RelationType",
-                },
-                {
-                    "id": "duplicates",
-                    "name": "duplicates",
-                    "reverseName": "duplicated by",
-                    "_type": "RelationType",
-                },
-                {
-                    "id": "blocks",
-                    "name": "blocks",
-                    "reverseName": "blocked by",
-                    "_type": "RelationType",
-                },
-                {
-                    "id": "precedes",
-                    "name": "precedes",
-                    "reverseName": "follows",
-                    "_type": "RelationType",
-                },
-                {
-                    "id": "includes",
-                    "name": "includes",
-                    "reverseName": "part of",
-                    "_type": "RelationType",
-                },
-            ]
-        except Exception as e:
-            logger.exception(f"Failed to get relation types: {str(e)}")
-            return []
-
-    def get_companies(self) -> list[dict[str, Any]]:
+        model: str,
+        conditions: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+        includes: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """
-        Get all companies/organizations from OpenProject.
-
-        In OpenProject, companies are managed through the API endpoint that
-        varies depending on the OpenProject version and plugins installed.
-
-        Returns:
-            List of companies
-        """
-        try:
-            # Try different possible API endpoints for companies
-            # First, try the standard endpoint
-            try:
-                response = self._request("GET", "/companies")
-                if response and "_embedded" in response:
-                    return response.get("_embedded", {}).get("elements", [])
-            except Exception as e:
-                logger.exception(f"Could not access companies endpoint: {str(e)}")
-
-            # Then try the organizations endpoint (sometimes used)
-            try:
-                response = self._request("GET", "/organizations")
-                if response and "_embedded" in response:
-                    return response.get("_embedded", {}).get("elements", [])
-            except Exception as e:
-                logger.exception(f"Could not access organizations endpoint: {str(e)}")
-
-            # If all fails, but we're testing, return some dummy data
-            logger.warning(
-                "Could not retrieve companies from OpenProject. Using test data."
-            )
-
-            # Return some dummy companies for testing
-            return [
-                {
-                    "id": 1,
-                    "name": "Acme Corporation",
-                    "identifier": "acme",
-                    "description": "A fictional company",
-                },
-                {
-                    "id": 2,
-                    "name": "Example Corp",
-                    "identifier": "example",
-                    "description": "An example company for testing",
-                },
-            ]
-        except Exception as e:
-            logger.exception(f"Failed to get companies: {str(e)}")
-            return []
-
-    def get_company_by_identifier(self, identifier: str) -> dict[str, Any] | None:
-        """
-        Get a company by its identifier.
+        Find all records matching conditions.
 
         Args:
-            identifier: The identifier of the company to find
+            model: Model name (e.g., "User", "Project")
+            conditions: Optional conditions hash
+            limit: Optional limit on number of records
+            includes: Optional list of associations to include
 
         Returns:
-            The company dictionary or None if not found
+            List of record data
         """
-        try:
-            # Get all companies and filter manually instead of using the filters parameter
-            # which is causing 400 Bad Request errors
-            all_companies = self.get_companies()
+        # Start building the query
+        query = f"{model}"
 
-            # Find the company with matching identifier
-            for company in all_companies:
-                if company.get("identifier") == identifier:
-                    logger.info(
-                        f"Found existing company with identifier '{identifier}'"
-                    )
-                    return company
+        # Add conditions if provided
+        if conditions:
+            conditions_str = json.dumps(conditions).replace('"', "'")
+            query += f".where({conditions_str})"
 
-            logger.debug(f"No company found with identifier '{identifier}'")
-            return None
-        except Exception as e:
-            logger.debug(
-                f"Failed to get company by identifier '{identifier}': {str(e)}"
-            )
-            return None
+        # Add includes if provided
+        if includes:
+            includes_str = json.dumps(includes).replace('"', "'")
+            query += f".includes({includes_str})"
 
-    def update_company(
-        self, company_id: int, name: str = None, description: str = None
-    ) -> dict[str, Any] | None:
+        # Add limit if provided
+        if limit:
+            query += f".limit({limit})"
+
+        # Add to_json to get the result as JSON
+        query += ".as_json"
+
+        result = self.execute_query(query)
+
+        if result["status"] == "success" and result["output"]:
+            try:
+                # Handle the case where output is already parsed into Python types
+                if isinstance(result["output"], list):
+                    return result["output"]
+
+                # Try to parse it as JSON if it's a string
+                if isinstance(result["output"], str):
+                    # Handle Ruby hash format
+                    cleaned_output = result["output"].replace("=>", ":")
+                    cleaned_output = cleaned_output.replace("nil", "null")
+                    return cast(List[Dict[str, Any]], json.loads(cleaned_output))
+
+                return []
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    def execute_transaction(self, commands: List[str]) -> Dict[str, Any]:
         """
-        Update an existing company in OpenProject.
+        Execute multiple commands in a transaction.
 
         Args:
-            company_id: The ID of the company to update
-            name: The new name for the company
-            description: The new description for the company
+            commands: List of Ruby/Rails commands
 
         Returns:
-            The updated company or None if update failed
+            Dict with status and output or error
         """
-        try:
-            data = {}
-            if name:
-                data["name"] = name
-            if description:
-                data["description"] = {"raw": description}
+        # Build transaction block
+        transaction_commands = "\n".join(commands)
+        transaction_block = f"""
+        ActiveRecord::Base.transaction do
+          {transaction_commands}
+        end
+        """
 
-            if not data:  # Nothing to update
+        return self.execute_query(transaction_block)
+
+    def execute_script(self, script_content: str) -> Dict[str, Any]:
+        """
+        Execute a Ruby script.
+
+        Args:
+            script_content: Ruby script content
+
+        Returns:
+            Dict with status and output or error
+        """
+        if self.rails_client:
+            return self.rails_client.execute_script(script_content)
+
+        logger.error("Rails client not available for script execution")
+        return {"status": "error", "error": "Rails client not available"}
+
+    def execute_script_with_data(self, script_content: str, data: Any) -> Dict[str, Any]:
+        """
+        Execute a Ruby script with provided data.
+
+        Args:
+            script_content: Ruby script content
+            data: Data to pass to the script
+
+        Returns:
+            Dict with status and output or error
+        """
+        if self.rails_client:
+            return self.rails_client.execute_with_data(script_content, data)
+
+        logger.error("Rails client not available for script execution with data")
+        return {"status": "error", "error": "Rails client not available"}
+
+    def get_custom_field_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a custom field by name.
+
+        Args:
+            name: The name of the custom field to find
+
+        Returns:
+            The custom field or None if not found
+        """
+        return self.find_record("CustomField", {"name": name})
+
+    def get_custom_field_id_by_name(self, name: str) -> Optional[int]:
+        """
+        Find a custom field ID by name.
+
+        Args:
+            name: The name of the custom field to find
+
+        Returns:
+            The custom field ID or None if not found
+        """
+        result = self.execute_query(f"CustomField.where(name: '{name}').first&.id")
+
+        if result["status"] == "success" and result["output"] is not None:
+            # Get the output and sanitize it if it's a string
+            output = result["output"]
+
+            # Handle nil value from Ruby
+            if output == "nil" or output is None:
                 return None
 
-            logger.debug(f"Updating company {company_id} with data: {json.dumps(data)}")
+            if isinstance(output, int):
+                return output
 
-            # Try different possible API endpoints for companies
-            try:
-                return self._request("PATCH", f"/companies/{company_id}", data=data)
-            except Exception as e:
-                logger.debug(
-                    f"Could not update company using companies endpoint: {str(e)}"
-                )
-
-            # Then try the organizations endpoint
-            try:
-                return self._request("PATCH", f"/organizations/{company_id}", data=data)
-            except Exception as e:
-                logger.debug(
-                    f"Could not update company using organizations endpoint: {str(e)}"
-                )
-
-            logger.warning(f"Could not update company {company_id} in OpenProject")
-            return None
-        except Exception as e:
-            if hasattr(e, "response") and e.response is not None:
+            if isinstance(output, str):
                 try:
-                    error_details = e.response.json()
-                    logger.error(
-                        f"Server response for company update {company_id}: {json.dumps(error_details)}"
-                    )
-                except Exception:
-                    logger.error(f"Server response text: {e.response.text}")
+                    return int(output)
+                except ValueError:
+                    return None
 
-            logger.error(f"Failed to update company {company_id}: {str(e)}")
             return None
+        return None
 
-    def create_company(
-        self, name: str, identifier: str, description: str = None
-    ) -> dict[str, Any] | None:
+    def get_statuses(self) -> List[Dict[str, Any]]:
         """
-        Create a company or organization in OpenProject.
-
-        Args:
-            name: The name of the company
-            identifier: The identifier for the company (lowercase, no spaces)
-            description: Optional description of the company
+        Get all statuses from OpenProject.
 
         Returns:
-            Tuple containing:
-            - The created company or None if creation failed
-            - Boolean indicating if the company was created (True) or already existed (False)
+            List of status dictionaries
         """
-        try:
-            # First check if a company with this identifier already exists
-            existing_company = self.get_company_by_identifier(identifier)
+        # Try to get statuses using the Status model
+        result = self.execute_query("Status.all.as_json")
 
-            if existing_company:
-                company_id = existing_company.get("id")
-                logger.info(
-                    f"Company with identifier '{identifier}' already exists (ID: {company_id})"
-                )
+        if result["status"] == "success" and result["output"] is not None:
+            try:
+                # Handle the case where output is already parsed into Python types
+                if isinstance(result["output"], list):
+                    return result["output"]
 
-                # Update the company if needed
-                if name != existing_company.get(
-                    "name"
-                ) or description != existing_company.get("description", {}).get(
-                    "raw", ""
-                ):
-                    logger.info(
-                        f"Updating existing company '{identifier}' with new details"
+                # Try to parse it as JSON if it's a string
+                if isinstance(result["output"], str):
+                    # Clean Ruby-style hashes in the output
+                    cleaned_output = result["output"].replace("=>", ":")
+                    cleaned_output = cleaned_output.replace("nil", "null")
+                    parsed_output = json.loads(cleaned_output)
+                    return cast(
+                        List[Dict[str, Any]],
+                        parsed_output if isinstance(parsed_output, list) else [parsed_output]
                     )
-                    updated_company = self.update_company(company_id, name, description)
-                    return (
-                        updated_company or existing_company,
-                        False,
-                    )  # Return existing if update failed
 
-                return (existing_company, False)  # Company exists but no update needed
+                return []
+            except (json.JSONDecodeError, TypeError):
+                logger.error("Failed to parse statuses from OpenProject")
+                return []
 
-            # Create new company
-            data = {"name": name, "identifier": identifier}
+        logger.error("Failed to get statuses from OpenProject")
+        return []
 
-            if description:
-                data["description"] = {"raw": description}
-
-            logger.debug(f"Creating company with data: {json.dumps(data)}")
-
-            # Try different possible API endpoints for companies
-            try:
-                created_company = self._request("POST", "/companies", data=data)
-                return (created_company, True)
-            except Exception as e:
-                if (
-                    hasattr(e, "response")
-                    and e.response is not None
-                    and e.response.status_code == 422
-                ):
-                    # Check if this is a duplicate identifier error
-                    try:
-                        error_details = e.response.json()
-                        if "already been taken" in error_details.get("message", ""):
-                            # Log as warning instead of error for this expected case
-                            logger.warning(
-                                f"Company identifier '{identifier}' already taken, trying to retrieve existing company"
-                            )
-                            existing_company = self.get_company_by_identifier(
-                                identifier
-                            )
-                            if existing_company:
-                                logger.success(
-                                    f"Successfully found existing company with identifier '{identifier}'"
-                                )
-                                return (existing_company, False)
-                            else:
-                                # Only log error if we couldn't find the existing company
-                                logger.error(
-                                    f"Could not find existing company with identifier '{identifier}' after 422 error"
-                                )
-                    except Exception:
-                        pass
-
-                logger.debug(
-                    f"Could not create company using companies endpoint: {str(e)}"
-                )
-
-            # Then try the organizations endpoint (sometimes used)
-            try:
-                created_company = self._request("POST", "/organizations", data=data)
-                return (created_company, True)
-            except Exception as e:
-                if (
-                    hasattr(e, "response")
-                    and e.response is not None
-                    and e.response.status_code == 422
-                ):
-                    # Check if this is a duplicate identifier error
-                    try:
-                        error_details = e.response.json()
-                        if "already been taken" in error_details.get("message", ""):
-                            # Log as warning instead of error for this expected case
-                            logger.warning(
-                                f"Company identifier '{identifier}' already taken, trying to retrieve existing company"
-                            )
-                            existing_company = self.get_company_by_identifier(
-                                identifier
-                            )
-                            if existing_company:
-                                logger.success(
-                                    f"Successfully found existing company with identifier '{identifier}'"
-                                )
-                                return (existing_company, False)
-                            else:
-                                # Only log error if we couldn't find the existing company
-                                logger.error(
-                                    f"Could not find existing company with identifier '{identifier}' after 422 error"
-                                )
-                    except Exception:
-                        pass
-
-                logger.debug(
-                    f"Could not create company using organizations endpoint: {str(e)}"
-                )
-
-            # If all fails, return a simulated response
-            logger.warning(
-                f"Could not create company {name} in OpenProject. Returning simulated response."
-            )
-
-            return (
-                {
-                    "id": None,  # No actual ID since it wasn't created
-                    "name": name,
-                    "identifier": identifier,
-                    "description": description,
-                    "_simulated": True,  # Flag to indicate this is not a real company
-                },
-                True,
-            )
-        except Exception as e:
-            logger.error(f"Failed to create company {name}: {str(e)}")
-            return (None, False)
-
-    def create_relation_type(
-        self, name: str, inward: str, outward: str
-    ) -> dict[str, Any] | None:
+    def get_work_package_types(self) -> List[Dict[str, Any]]:
         """
-        Create a new relation type in OpenProject.
-
-        Args:
-            name: The name of the relation type
-            inward: The inward description (e.g., "is blocked by")
-            outward: The outward description (e.g., "blocks")
+        Get all work package types from OpenProject.
 
         Returns:
-            Dictionary with the created relation type or None if failed
+            List of work package type dictionaries
         """
-        try:
-            # First check if relation type already exists
-            existing_types = self.get_relation_types()
-            for existing_type in existing_types:
-                if existing_type.get("name") == name:
-                    logger.info(
-                        f"Relation type '{name}' already exists, skipping creation"
-                    )
-                    return {
-                        "success": True,
-                        "message": f"Relation type '{name}' already exists",
-                        "id": existing_type.get("id"),
-                        "data": existing_type,
-                    }
+        # Try to get work package types using the API or Rails console
+        result = self.execute_query("Type.all.as_json")
 
-            # Note: Creating relation types in OpenProject typically requires admin privileges
-            # and may not be fully supported through the API
-            # We'll provide a simulated response and log a warning
-
-            logger.warning(
-                "Creating relation types via API may not be fully supported in OpenProject"
-            )
-            logger.info(
-                f"Would create relation type: {name} (Inward: {inward}, Outward: {outward})"
-            )
-
-            # Simulate a response for compatibility
-            return {
-                "success": True,
-                "message": f"Simulated creation of relation type: {name}",
-                "id": f"relation{int(time.time())}",
-                "data": {"name": name, "inward": inward, "outward": outward},
-            }
-        except Exception as e:
-            logger.error(f"Failed to create relation type {name}: {str(e)}")
-            return {"success": False, "message": str(e)}
-
-    def get_custom_fields(self, force_refresh: bool = False) -> list[dict[str, Any]]:
-        """
-        Get all custom fields from OpenProject using Rails console.
-
-        This method uses the Rails console to retrieve custom fields directly.
-
-        Args:
-            force_refresh: If True, ignore cache and fetch fresh data
-
-        Returns:
-            List of custom field dictionaries
-        """
-        # Return cached custom fields if available and not forced to refresh
-        if not force_refresh and self._custom_fields_cache:
-            logger.debug(
-                f"Using cached custom fields ({len(self._custom_fields_cache)} fields)"
-            )
-            return self._custom_fields_cache
-
-        # Check if Rails client is available
-        if not self.rails_client:
-            logger.error(
-                "Rails client is required to get custom fields but is not available"
-            )
-            return []
-
-        try:
-            # Create the Ruby command to get custom fields directly as JSON string
-            command = """
-            begin
-                fields = CustomField.all.map do |cf|
-                    {
-                        id: cf.id,
-                        name: cf.name,
-                        field_format: cf.field_format,
-                        type: cf.type,
-                        is_required: cf.is_required,
-                        is_for_all: cf.is_for_all,
-                        possible_values: (cf.respond_to?(:possible_values) ? cf.possible_values : nil)
-                    }
-                end
-
-                # Return the fields directly as JSON
-                fields.to_json
-            rescue => e
-                "ERROR: #{e.message}"
-            end
-            """
-
-            # Execute the command using the Rails client
-            result = self.rails_client.execute(command)
-
-            if result["status"] != "success":
-                logger.error(
-                    f"Failed to execute Rails command to get custom fields: {result.get('error', 'Unknown error')}"
-                )
-                return []
-
-            # Get the output which should be the JSON string with custom fields
-            output = result.get("output", "")
-
-            if not output or output.startswith("ERROR:"):
-                error_message = (
-                    output[6:] if output.startswith("ERROR:") else "No output returned"
-                )
-                logger.error(f"Failed to get custom fields: {error_message}")
-                return []
-
+        if result["status"] == "success" and result["output"] is not None:
             try:
-                # Parse the JSON output directly
-                # Check if the output looks like a Ruby object/string representation instead of JSON
-                if output.startswith('"') and output.endswith('"'):
-                    # Handle the case where output is a string representation
-                    logger.warning(
-                        "Received string output instead of JSON array. Attempting to handle it."
+                # Handle the case where output is already parsed into Python types
+                if isinstance(result["output"], list):
+                    return result["output"]
+
+                # Try to parse it as JSON if it's a string
+                if isinstance(result["output"], str):
+                    # Clean Ruby-style hashes in the output
+                    cleaned_output = result["output"].replace("=>", ":")
+                    cleaned_output = cleaned_output.replace("nil", "null")
+                    parsed_output = json.loads(cleaned_output)
+                    return cast(
+                        List[Dict[str, Any]],
+                        parsed_output if isinstance(parsed_output, list) else [parsed_output]
                     )
-                    logger.debug(f"Raw output: {output}")
-                    # Try to parse the string output - it might be a valid JSON string inside quotes
-                    try:
-                        # Remove outer quotes and try to parse
-                        inner_content = output[1:-1].replace('\\"', '"')
-                        custom_fields = json.loads(inner_content)
-                        if isinstance(custom_fields, list):
-                            logger.info(
-                                f"Successfully parsed string output, found {len(custom_fields)} custom fields"
-                            )
-                            self._custom_fields_cache = custom_fields
-                            return custom_fields
-                    except json.JSONDecodeError:
-                        # This is normal when there are no custom fields yet - just log at debug level
-                        logger.debug(
-                            "Could not parse string content as JSON - this is normal if no custom fields exist yet"
-                        )
 
-                    # If all else fails - return empty list (no custom fields yet)
-                    logger.info("No custom fields found in OpenProject")
-                    self._custom_fields_cache = []
-                    return []
-
-                custom_fields = json.loads(output)
-
-                if not isinstance(custom_fields, list):
-                    logger.error(
-                        f"Unexpected response format: expected list, got {type(custom_fields).__name__}"
-                    )
-                    return []
-
-                # Cache the results
-                self._custom_fields_cache = custom_fields
-
-                logger.info(
-                    f"Successfully retrieved {len(custom_fields)} custom fields"
-                )
-                return custom_fields
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing custom fields JSON: {str(e)}")
-                logger.debug(f"Invalid JSON data (first 200 chars): {output[:200]}...")
+                return []
+            except (json.JSONDecodeError, TypeError):
+                logger.error("Failed to parse work package types from OpenProject")
                 return []
 
-        except Exception as e:
-            logger.error(f"Failed to get custom fields: {str(e)}")
-            return []
+        logger.error("Failed to get work package types from OpenProject")
+        return []
 
-    def update_project_custom_field(
-        self, project_id: int, custom_field_id: int, value: Any
-    ) -> bool:
+    def transfer_file_to_container(self, local_path: str, container_path: str) -> bool:
         """
-        Update a custom field value for a project.
+        Transfer a file to the container.
 
         Args:
-            project_id: The ID of the project
-            custom_field_id: The ID of the custom field
-            value: The value to set for the custom field
+            local_path: Path to the local file
+            container_path: Path to the destination in the container
 
         Returns:
             True if successful, False otherwise
         """
-        logger.info(
-            f"Setting custom field {custom_field_id} for project {project_id} to '{value}'"
-        )
+        if self.rails_client and hasattr(self.rails_client, 'transfer_file_to_container'):
+            # The method exists on Rails client, delegate to it
+            result = self.rails_client.transfer_file_to_container(local_path, container_path)
+            return bool(result)  # Ensure boolean return
 
-        try:
-            # If we have a rails client, use it for direct custom field updates
-            # as the API doesn't always support all custom field types
-            if self.rails_client:
-                ruby_script = f"""
-                project = Project.find({project_id})
-                custom_field = CustomField.find({custom_field_id})
+        # Method doesn't exist, use parent's DockerClient via rails_client
+        if self.rails_client and hasattr(self.rails_client, 'docker_client'):
+            docker_client = getattr(self.rails_client, 'docker_client')
+            if hasattr(docker_client, 'copy_file_to_container'):
+                result = docker_client.copy_file_to_container(local_path, container_path)
+                return bool(result)
 
-                if project && custom_field
-                  project.custom_field_values = {{custom_field.id => '{value}'}}
-                  if project.save
-                    puts "Custom field updated successfully"
-                    true
-                  else
-                    puts "Failed to update custom field: #{{project.errors.full_messages.join(', ')}}"
-                    false
-                  end
-                else
-                  puts "Project or custom field not found"
-                  false
-                end
-                """
-                result = self.rails_client.execute(ruby_script)
-                success = "Custom field updated successfully" in result
+        logger.error("Rails client not available for file transfer")
+        return False
 
-                if success:
-                    logger.info(
-                        f"Successfully updated custom field {custom_field_id} for project {project_id}"
-                    )
-                    return True
-                else:
-                    logger.error(f"Failed to update custom field via Rails: {result}")
-                    return False
+    def transfer_file_from_container(self, container_path: str, local_path: str) -> bool:
+        """
+        Copy a file from the container to the local system.
 
-            # Fall back to API if rails client not available
-            # This assumes the custom field is available via the API
-            data = {"customField" + str(custom_field_id): {"raw": value}}
+        Args:
+            container_path: Path to the file in the container
+            local_path: Path where the file should be saved locally
 
-            response = self._request("PATCH", f"projects/{project_id}", data=data)
+        Returns:
+            True if successful, False otherwise
+        """
+        if self.rails_client and hasattr(self.rails_client, 'transfer_file_from_container'):
+            # The method exists on Rails client, delegate to it
+            result = self.rails_client.transfer_file_from_container(container_path, local_path)
+            return bool(result)  # Ensure boolean return
 
-            if response and "_type" in response and response["_type"] == "Project":
-                logger.info(
-                    f"Successfully updated custom field {custom_field_id} for project {project_id}"
-                )
-                return True
-            else:
-                logger.error(f"Failed to update custom field via API: {response}")
-                return False
+        # Method doesn't exist, use parent's DockerClient via rails_client
+        if self.rails_client and hasattr(self.rails_client, 'docker_client'):
+            docker_client = getattr(self.rails_client, 'docker_client')
+            if hasattr(docker_client, 'copy_file_from_container'):
+                result = docker_client.copy_file_from_container(container_path, local_path)
+                return bool(result)
 
-        except Exception as e:
-            logger.error(f"Error updating custom field: {str(e)}")
-            return False
+        logger.error("Rails client not available for file transfer")
+        return False
+
+    def execute(self, script_content: str) -> Dict[str, Any]:
+        """
+        Legacy method that delegates to execute_query for backward compatibility.
+
+        Args:
+            script_content: Ruby script content
+
+        Returns:
+            Dict with status and output or error
+        """
+        return self.execute_query(script_content)
+
+    def get_projects(self) -> List[Dict[str, Any]]:
+        """
+        Get all projects from OpenProject.
+
+        Returns:
+            List of project dictionaries
+        """
+        # Try to get projects using the API or Rails console
+        result = self.execute_query("Project.all.as_json")
+
+        if result["status"] == "success" and result["output"] is not None:
+            try:
+                # Handle the case where output is already parsed into Python types
+                if isinstance(result["output"], list):
+                    return result["output"]
+
+                # Try to parse it as JSON if it's a string
+                if isinstance(result["output"], str):
+                    # Clean Ruby-style hashes in the output
+                    cleaned_output = result["output"].replace("=>", ":")
+                    return cast(List[Dict[str, Any]], json.loads(cleaned_output))
+
+                return []
+            except Exception as e:
+                logger.error(f"Failed to parse projects output: {e}")
+                return []
+
+        logger.error("Failed to get projects from OpenProject")
+        return []
+
+    def get_project_by_identifier(self, identifier: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a project by identifier.
+
+        Args:
+            identifier: Project identifier or slug
+
+        Returns:
+            Project dictionary or None if not found
+        """
+        # Try to get project using the API or Rails console
+        result = self.execute_query(f"Project.find_by(identifier: '{identifier}').as_json")
+
+        if result["status"] == "success" and result["output"] is not None:
+            try:
+                # Handle the case where output is already parsed into Python types
+                if isinstance(result["output"], dict):
+                    return result["output"]
+
+                # Try to parse it as JSON if it's a string and not "null"
+                if isinstance(result["output"], str) and result["output"] != "null":
+                    # Clean Ruby-style hashes in the output
+                    cleaned_output = result["output"].replace("=>", ":")
+                    return cast(Dict[str, Any], json.loads(cleaned_output))
+
+                return None
+            except Exception as e:
+                logger.error(f"Failed to parse project output: {e}")
+                return None
+
+        logger.error(f"Failed to get project with identifier {identifier}")
+        return None

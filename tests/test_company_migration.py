@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.migrations.company_migration import CompanyMigration
 from src.utils import data_handler
 
@@ -318,7 +317,7 @@ class TestCompanyMigration(unittest.TestCase):
         mock_migration_config.get.return_value = False
 
         # Create a mock Rails client
-        mock_rails_client = MagicMock(spec=OpenProjectRailsClient)
+        mock_rails_client = MagicMock(spec=OpenProjectClient)
         self.op_client.rails_client = mock_rails_client
 
         # Configure op_config attribute on the mock client

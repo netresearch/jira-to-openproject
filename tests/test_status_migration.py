@@ -10,7 +10,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.mappings.mappings import Mappings
 from src.migrations.status_migration import StatusMigration
 
@@ -27,7 +26,6 @@ class TestStatusMigration(unittest.TestCase):
         self.jira_client.jira = MagicMock()
 
         self.op_client = MagicMock(spec=OpenProjectClient)
-        self.op_rails_client = MagicMock(spec=OpenProjectRailsClient)
 
         # Create a test data directory
         self.test_data_dir = os.path.join(os.path.dirname(__file__), "test_data")
@@ -49,7 +47,6 @@ class TestStatusMigration(unittest.TestCase):
         self.status_migration = StatusMigration(
             jira_client=self.jira_client,
             op_client=self.op_client,
-            op_rails_client=self.op_rails_client,
             mappings=self.mappings,
             data_dir=self.test_data_dir,
         )
@@ -213,8 +210,8 @@ class TestStatusMigration(unittest.TestCase):
 
         self.status_migration.status_mapping = initial_mapping
 
-        # Mock the Rails client to return successful bulk status creation
-        self.op_rails_client.execute.return_value = {
+        # Mock the OpenProject client to return success for execute_query instead of execute
+        self.op_client.execute_query.return_value = {
             "status": "success",
             "output": """
             Processing status 'Pending' (Jira ID: 4)...

@@ -42,7 +42,7 @@ This document outlines the initial plan followed during the development of the J
     * Develop strategy for mapping Jira custom fields to OpenProject equivalents.
     * Handle custom field value mapping in Work Package migration.
 4. **Rails Console Integration:**
-    * Develop OpenProject Rails Client (`src/clients/openproject_rails_client.py`) using SSH/Docker.
+    * Develop OpenProject Rails Console integration (`src/clients/rails_console_client.py`, `src/clients/docker_client.py`, `src/clients/ssh_client.py`) using SSH/Docker.
     * Integrate Rails client into Custom Field and Issue Type migrations.
     * Provide option to generate Ruby scripts as a fallback.
     * Create test script for Rails connection (`scripts/test_rails_connection.py`).

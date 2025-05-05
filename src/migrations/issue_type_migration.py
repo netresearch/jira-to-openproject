@@ -15,7 +15,6 @@ from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.display import console
 from src.migrations.base_migration import BaseMigration
 
@@ -36,7 +35,7 @@ class IssueTypeMigration(BaseMigration):
         self,
         jira_client: JiraClient,
         op_client: OpenProjectClient,
-        rails_console: "OpenProjectRailsClient",
+        rails_console: OpenProjectClient,
     ) -> None:
         """
         Initialize the issue type migration process.
@@ -44,7 +43,7 @@ class IssueTypeMigration(BaseMigration):
         Args:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
-            rails_console: Initialized OpenProjectRailsClient instance (optional)
+            rails_console: Initialized OpenProjectClient instance (optional)
         """
         super().__init__(jira_client, op_client)
 
@@ -436,7 +435,7 @@ class IssueTypeMigration(BaseMigration):
             logger.info(
                 f"Executing Rails command to write work package types to {temp_file_path}..."
             )
-            write_result = self.rails_console.execute(command)
+            write_result = self.rails_console.execute_query(command)
 
             if (
                 write_result.get("status") == "success"
@@ -607,7 +606,7 @@ class IssueTypeMigration(BaseMigration):
 
         # Check if the type already exists to avoid duplicates
         check_command = f'existing_type = Type.where("name ilike ?", "{type_name}").first'
-        check_result = self.rails_console.execute(check_command)
+        check_result = self.rails_console.execute_query(check_command)
 
         if check_result["status"] != "success":
             return {
@@ -616,12 +615,12 @@ class IssueTypeMigration(BaseMigration):
             }
 
         exists_command = 'existing_type.present?'
-        exists_result = self.rails_console.execute(exists_command)
+        exists_result = self.rails_console.execute_query(exists_command)
 
         if exists_result["status"] == "success" and "true" in exists_result["output"]:
             logger.info(f"Work package type '{type_name}' already exists, retrieving ID")
             id_command = 'existing_type.id'
-            id_result = self.rails_console.execute(id_command)
+            id_result = self.rails_console.execute_query(id_command)
 
             if id_result["status"] == "success" and id_result["output"].strip().isdigit():
                 type_id = int(id_result["output"].strip())
@@ -654,7 +653,7 @@ class IssueTypeMigration(BaseMigration):
         end
         """
 
-        result = self.rails_console.execute(command)
+        result = self.rails_console.execute_query(command)
 
         if result["status"] != "success":
             logger.error(
@@ -685,7 +684,7 @@ class IssueTypeMigration(BaseMigration):
 
             # Verify the type exists by querying it
             verify_command = f"Type.find({type_id}).present? rescue false"
-            verify_result = self.rails_console.execute(verify_command)
+            verify_result = self.rails_console.execute_query(verify_command)
 
             if verify_result["status"] == "success" and "true" in verify_result["output"]:
                 logger.info(f"Verified work package type '{type_name}' with ID {type_id} exists")
@@ -917,7 +916,7 @@ class IssueTypeMigration(BaseMigration):
 
         # Execute the bulk creation script
         logger.info("Executing bulk creation of work package types via Rails console...")
-        result = self.rails_console.execute(bulk_create_script)
+        result = self.rails_console.execute_query(bulk_create_script)
 
         if result["status"] != "success":
             logger.error(f"Failed to execute bulk creation script: {result.get('error', 'Unknown error')}")

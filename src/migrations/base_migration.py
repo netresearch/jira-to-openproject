@@ -5,7 +5,6 @@ from typing import Any
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.models import ComponentResult
 
 
@@ -19,7 +18,6 @@ class BaseMigration:
         self,
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
-        op_rails_client: Optional["OpenProjectRailsClient"] = None,
     ) -> None:
         """
         Initialize the base migration with common attributes.
@@ -27,11 +25,9 @@ class BaseMigration:
         Args:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
-            op_rails_client: Optional Initialized OpenProject Rails client
         """
         self.jira_client = jira_client or JiraClient()
         self.op_client = op_client or OpenProjectClient()
-        self.op_rails_client = op_rails_client
 
         self.data_dir = config.get_path("data")
         self.output_dir = config.get_path("output")

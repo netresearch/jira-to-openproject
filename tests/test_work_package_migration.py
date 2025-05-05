@@ -4,7 +4,6 @@ Tests for the work package migration component.
 
 import unittest
 from unittest.mock import MagicMock, patch
-
 from typing import Any
 
 from src import config
@@ -109,17 +108,19 @@ class TestWorkPackageMigration(unittest.TestCase):
 
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
-    @patch("src.migrations.work_package_migration.OpenProjectRailsClient")
     @patch("src.utils.data_handler.load_dict")
     @patch("src.migrations.work_package_migration.ProgressTracker")
     def test_initialize(
         self,
-        mock_tracker: MagicMock, mock_load_dict: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
+        mock_progress_tracker: MagicMock,
+        mock_load_dict: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
         """Test the initialization of WorkPackageMigration class."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
-        mock_rails_instance = mock_rails_client.return_value
 
         # Mock load_dict to return empty dictionaries
         mock_load_dict.return_value = {}
@@ -128,7 +129,6 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            op_rails_client=mock_rails_instance,
             data_dir=config.get_path("data"),
         )
 
@@ -138,14 +138,17 @@ class TestWorkPackageMigration(unittest.TestCase):
         )  # Should be called 5 times for different mappings
         self.assertIsInstance(migration.jira_client, MagicMock)
         self.assertIsInstance(migration.op_client, MagicMock)
-        self.assertIsInstance(migration.op_rails_client, MagicMock)
 
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_load_mappings(
-        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_exists: MagicMock,
+        mock_load_dict: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock
     ) -> None:
         """Test the _load_mappings method."""
         # Setup mocks
@@ -178,16 +181,17 @@ class TestWorkPackageMigration(unittest.TestCase):
 
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
-    @patch("src.migrations.work_package_migration.OpenProjectRailsClient")
     @patch("src.utils.data_handler.load_dict")
     def test_prepare_work_package(
-        self, mock_load_dict: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_load_dict: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock
     ) -> None:
         """Test the prepare_work_package method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
-        mock_rails_instance = mock_rails_client.return_value
 
         # Mock the issue type mapping and work package types
         mock_load_dict.return_value = {}
@@ -199,7 +203,6 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            op_rails_client=mock_rails_instance,
             data_dir=config.get_path("data"),
         )
 
@@ -230,15 +233,14 @@ class TestWorkPackageMigration(unittest.TestCase):
 
         # Create a class with mocked _load_mappings to avoid the initialization error
         class MockedWorkPackageMigration(WorkPackageMigration):
-            def _load_mappings(self: Any) -> Any:
-                # Skip the problematic method
+            def _load_mappings(self) -> None:
+                """Mock implementation to skip the actual loading."""
                 pass
 
         # Create instance
         migration = MockedWorkPackageMigration(
             jira_client=MagicMock(),
             op_client=MagicMock(),
-            op_rails_client=MagicMock(),
             data_dir=config.get_path("data"),
         )
 
@@ -251,7 +253,11 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_analyze_work_package_mapping(
-        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_exists: MagicMock,
+        mock_load_dict: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock
     ) -> None:
         """Test the analyze_work_package_mapping method."""
         # Setup mocks
