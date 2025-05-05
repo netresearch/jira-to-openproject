@@ -10,7 +10,7 @@ import json
 import sys
 
 
-def extract_json(input_file, output_file):
+def extract_json(input_file: str, output_file: str) -> bool:
     """
     Extract JSON from raw tmux output.
 
@@ -90,7 +90,7 @@ def extract_json(input_file, output_file):
     return False
 
 
-def main():
+def main() -> int:
     """Main entry point."""
     # Check command line arguments
     if len(sys.argv) < 3:

@@ -6,7 +6,7 @@ Handles the migration of projects and their hierarchies from Jira to OpenProject
 import json
 import os
 import re
-from typing import Any, Optional
+from typing import Any
 
 from src.models import ComponentResult
 from src import config
@@ -47,7 +47,7 @@ class ProjectMigration(BaseMigration):
         self,
         jira_client: "JiraClient",
         op_client: "OpenProjectClient",
-        op_rails_client: Optional["OpenProjectRailsClient"] = None,
+        op_rails_client: "OpenProjectRailsClient" | None = None,
     ):
         """
         Initialize the project migration tools.

@@ -63,7 +63,7 @@ def parse_custom_fields_list(input_file: str) -> list[dict[str, Any]]:
     return custom_fields
 
 
-def main():
+def main() -> int:
     """Main entry point."""
     if len(sys.argv) < 3:
         print("Usage: python create_custom_fields_json.py <input_file> <output_file>")

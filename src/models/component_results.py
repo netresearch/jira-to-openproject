@@ -2,7 +2,7 @@
 Component result models for tracking migration operations.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -12,10 +12,10 @@ class ComponentResult(BaseModel):
 
     success: bool = False
     message: str = ""
-    details: Dict[str, Any] = Field(default_factory=dict)
-    data: Optional[Dict[str, Any] | List[Dict[str, Any]]] = None
-    errors: Optional[List[str]] = None
-    warnings: Optional[List[str]] = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] | list[dict[str, Any]] | None = None
+    errors: list[str] | None = None
+    warnings: list[str] | None = None
     dry_run: bool = False
     total_types: int = 0
     matched_types: int = 0
@@ -32,7 +32,6 @@ class ComponentResult(BaseModel):
     success_count: int = 0
     failed_count: int = 0
     total_count: int = 0
-
 
     # Helper methods to make the class more usable
     def add_error(self, error: str) -> None:

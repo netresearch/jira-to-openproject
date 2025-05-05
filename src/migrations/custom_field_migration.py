@@ -7,7 +7,7 @@ import json
 import os
 import pathlib
 import time
-from typing import Any, Optional
+from typing import Any
 
 from src.models import ComponentResult
 from src.clients.jira_client import JiraClient
@@ -36,7 +36,7 @@ class CustomFieldMigration(BaseMigration):
         self,
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
-        rails_console: Optional["OpenProjectRailsClient"] = None,
+        rails_console: OpenProjectRailsClient | None = None,
     ) -> None:
         """
         Initialize the custom field migration process.
@@ -47,10 +47,10 @@ class CustomFieldMigration(BaseMigration):
             rails_console: Initialized OpenProjectRailsClient instance (optional)
         """
         super().__init__(jira_client, op_client)
-        self.jira_custom_fields: list[dict] = []
-        self.op_custom_fields: list[dict] = []
-        self.mapping: dict[str, dict] = {}
-        self.analysis: dict = {}
+        self.jira_custom_fields: list[dict[str, Any]] = []
+        self.op_custom_fields: list[dict[str, Any]] = []
+        self.mapping: dict[str, dict[str, Any]] = {}
+        self.analysis: dict[str, Any] = {}
         self.rails_console = rails_console
 
         self._load_data()

@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Optional
+from typing import Any
 
 from src import config
 from src.clients.jira_client import JiraClient
@@ -95,8 +95,8 @@ class BaseMigration:
             f"The run method has not been implemented for {self.__class__.__name__}"
         )
         return ComponentResult(
-            status="failed",
-            error=f"The run method has not been implemented for {self.__class__.__name__}",
+            success=False,
+            errors=[f"The run method has not been implemented for {self.__class__.__name__}"],
             success_count=0,
             failed_count=0,
             total_count=0,

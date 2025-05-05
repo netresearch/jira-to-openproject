@@ -1,6 +1,4 @@
-
-
-from typing import Any, Literal, Union
+from typing import Any, Literal, TypedDict
 from dataclasses import dataclass, field
 
 
@@ -46,11 +44,19 @@ class OpenProjectStatus:
     jira_id: str | None = None
 
 
-type ConfigValue = Union[str, int, bool, dict[str, Any], list[Any]]
+type ConfigValue = str | int | bool | dict[str, Any] | list[Any]
 
 type ConfigDict = dict[str, dict[str, ConfigValue]]
 
-type OpenProjectConfig = dict[str, str | bool | int | None]
+
+class OpenProjectConfig(TypedDict):
+    url: str
+    api_key: str
+    tmux_session_name: str
+    user: str
+    password: str
+
+
 type JiraConfig = dict[str, str | bool | int | None]
 type MigrationConfig = dict[str, str | bool | int | None]
 

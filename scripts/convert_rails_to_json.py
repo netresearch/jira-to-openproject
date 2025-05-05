@@ -10,7 +10,7 @@ import re
 import sys
 
 
-def convert_ruby_to_json(input_file, output_file):
+def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
     """
     Convert Ruby hash syntax to valid JSON.
 

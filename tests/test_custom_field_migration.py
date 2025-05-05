@@ -9,9 +9,6 @@ from unittest.mock import Mock, patch
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_rails_client import OpenProjectRailsClient
 
-from typing import Dict, List, Optional, Any
-
-# Import the CustomFieldMigration class
 from src.migrations.custom_field_migration import CustomFieldMigration
 
 

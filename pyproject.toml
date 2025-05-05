@@ -7,7 +7,7 @@ name = "j2o"
 version = "0.1.0"
 description = "Jira to OpenProject migration tool"
 authors = [
-    {name = "SME", email = "sme@example.com"}
+    {name = "Sebastian Mendel", email = "sebastian.mendel@netresearch.de"}
 ]
 readme = "README.md"
 license = {text = "MIT"}
@@ -43,11 +43,13 @@ exclude = '''
 '''
 
 [tool.mypy]
-python_version = 3.13
+python_version = "3.12"
 warn_unused_configs = true
 disallow_untyped_defs = true
-ignore_missing_imports = true
+ignore_missing_imports = false
 strict = true
+enable_error_code = "deprecated"
+
 # Limit type-checking to exactly these directories
 files   = ["src", "scripts", "tests"]
 exclude = ['^build/', '^dist/', '^\\.venv/']
@@ -55,3 +57,11 @@ exclude = ['^build/', '^dist/', '^\\.venv/']
 [tool.isort]
 profile = "black"
 line_length = 120
+
+[tool.ruff]
+select = ["UP"]
+target-version = "py312"
+fix = true
+
+[tool.ruff.lint]
+extend-select = ["UP006"]

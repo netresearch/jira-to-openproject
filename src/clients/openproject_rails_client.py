@@ -118,7 +118,7 @@ class OpenProjectRailsClient:
         """Get the tmux target string for the session, window, and pane."""
         return f"{self.session_name}:{self.window}.{self.pane}"
 
-    def execute(self, command: str, timeout: int = None) -> dict[str, Any]:
+    def execute(self, command: str, timeout: int | None = None, marker_id: str | None = None) -> dict[str, Any]:
         """
         Execute a command in the Rails console and wait for it to complete.
 
@@ -786,7 +786,7 @@ class OpenProjectRailsClient:
         """
         return self._is_connected
 
-    def _configure_irb_settings(self):
+    def _configure_irb_settings(self) -> None:
         """Configure IRB settings for better output and interaction."""
         # Disable color output, ensure large objects can be displayed,
         # and configure readline settings to avoid IO errors
@@ -1615,7 +1615,7 @@ class OpenProjectRailsClient:
             logger.debug(f"Traceback: {traceback.format_exc()}")
             return {"status": "error", "message": str(e)}
 
-    def _stabilize_console(self):
+    def _stabilize_console(self) -> bool:
         """
         Send a harmless command to stabilize the console state and prevent IO errors.
         This is particularly helpful after commands that might leave the console in an
