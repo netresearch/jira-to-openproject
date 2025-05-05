@@ -41,8 +41,8 @@ class WorkPackageMigration(BaseMigration):
         jira_client: JiraClient,
         op_client: OpenProjectClient,
         op_rails_client: OpenProjectRailsClient | None = None,
-        data_dir: str = None,
-    ):
+        data_dir: str | None = None,
+    ) -> None:
         """
         Initialize the work package migration.
 
@@ -84,7 +84,7 @@ class WorkPackageMigration(BaseMigration):
         # Logging
         self.logger.debug(f"WorkPackageMigration initialized with data dir: {self.data_dir}")
 
-    def _load_mappings(self):
+    def _load_mappings(self) -> None:
         """Load all required mappings from files."""
         from src.utils import data_handler
 
@@ -580,7 +580,7 @@ class WorkPackageMigration(BaseMigration):
             # It's a Jira issue object, use the internal method
             return self._prepare_work_package(jira_issue, project_id)
 
-    def _map_issue_type(self, type_id: str = None, type_name: str = None) -> int:
+    def _map_issue_type(self, type_id: str | None = None, type_name: str | None = None) -> int | None:
         """Map Jira issue type to OpenProject type ID"""
         if not type_id and not type_name:
             return None
@@ -596,7 +596,7 @@ class WorkPackageMigration(BaseMigration):
         # Default to Task (typically ID 1 in OpenProject)
         return 1
 
-    def _map_status(self, status_id: str = None, status_name: str = None) -> int:
+    def _map_status(self, status_id: str | None = None, status_name: str | None = None) -> int | None:
         """Map Jira status to OpenProject status ID"""
         if not status_id and not status_name:
             return None

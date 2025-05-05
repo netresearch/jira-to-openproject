@@ -36,7 +36,7 @@ class TempoAccountMigration:
     4. Migrating Tempo worklog data to OpenProject time entries
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Initialize the Tempo account migration tools.
         """

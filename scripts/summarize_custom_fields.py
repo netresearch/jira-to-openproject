@@ -29,8 +29,8 @@ def summarize_custom_fields(json_file: str) -> dict[str, Any]:
 
     # Collect summary information
     field_count = len(custom_fields)
-    field_formats = Counter()
-    field_types = Counter()
+    field_formats: Counter[str] = Counter()
+    field_types: Counter[str] = Counter()
     required_fields = 0
     all_project_fields = 0
 
@@ -103,7 +103,7 @@ def print_summary(summary: dict[str, Any]) -> None:
             print(f"  {field_type}: {count} ({percentage:.1f}%)")
 
 
-def main():
+def main() -> int:
     """Main entry point."""
     # Get the input file
     json_file = "var/data/openproject_custom_fields_rails.json"

@@ -37,8 +37,8 @@ class CompanyMigration(BaseMigration):
         self,
         jira_client: JiraClient,
         op_client: OpenProjectClient,
-        data_dir: str = None,
-    ):
+        data_dir: str | None = None,
+    ) -> None:
         """
         Initialize the company migration.
 

@@ -95,7 +95,13 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_tempo_accounts(
         self,
-        mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_get_path: MagicMock,
+        mock_rails_client: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
         """Test the extract_tempo_accounts method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -130,7 +136,13 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_openproject_projects(
         self,
-        mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_get_path: MagicMock,
+        mock_rails_client: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
         """Test the extract_openproject_projects method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -165,7 +177,14 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_create_account_mapping(
         self,
-        mock_file: MagicMock, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_rails_client: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
         """Test the create_account_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -226,7 +245,14 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_create_account_custom_field(
         self,
-        mock_file: MagicMock, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_rails_client: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
         """Test the create_account_custom_field method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -278,7 +304,15 @@ class TestAccountMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_migrate_accounts(
         self,
-        mock_file: MagicMock, mock_exists: MagicMock, mock_tracker: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_rails_client: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_tracker: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_rails_client: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
         """Test the migrate_accounts method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value

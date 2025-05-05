@@ -750,7 +750,7 @@ class OpenProjectRailsClient:
                 return None
 
             # If it's already a numeric type, return it directly
-            if isinstance(output, (int, float)):
+            if isinstance(output, int | float):
                 return int(output)
 
             return None

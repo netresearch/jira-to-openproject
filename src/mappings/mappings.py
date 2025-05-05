@@ -31,7 +31,7 @@ class Mappings:
     def __init__(
         self,
         data_dir: str,
-    ):
+    ) -> None:
         self.data_dir = data_dir
 
         # Load all mappings using class attributes for filenames

@@ -422,7 +422,7 @@ class WorkflowMigration:
 
         return result
 
-    def _save_to_json(self, data: Any, filename: str):
+    def _save_to_json(self, data: Any, filename: str) -> None:
         """
         Save data to a JSON file.
 

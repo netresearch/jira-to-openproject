@@ -12,7 +12,7 @@ Implementation is now complete, including:
 
 import json
 import os
-from typing import Any
+from typing import Any, TypeVar
 
 from src.models import ComponentResult
 from src import config
@@ -25,6 +25,9 @@ from src.migrations.base_migration import BaseMigration
 
 # Get logger from config
 logger = config.logger
+
+# Define a type variable for ProgressTracker
+T = TypeVar('T')
 
 
 class StatusMigration(BaseMigration):
@@ -44,7 +47,7 @@ class StatusMigration(BaseMigration):
         op_rails_client: OpenProjectRailsClient | None = None,
         mappings: Mappings | None = None,
         data_dir: str | None = None,
-        tracker: ProgressTracker | None = None,
+        tracker: ProgressTracker[T] | None = None,
     ):
         """
         Initialize the status migration tools.
@@ -242,13 +245,13 @@ class StatusMigration(BaseMigration):
             is_default = status_def["is_default"] || false
             color = status_def["color"]
 
-            puts "Processing status '\#{name}' (Jira ID: \#{jira_id})..."
+            puts "Processing status '#{name}' (Jira ID: #{jira_id})..."
 
             # Check if status already exists
             existing_status = Status.find_by(name: name)
 
             if existing_status
-              puts "Status '\#{name}' already exists with ID: \#{existing_status.id}"
+              puts "Status '#{name}' already exists with ID: #{existing_status.id}"
               results[jira_id] = {
                 "id" => existing_status.id,
                 "name" => existing_status.name,
@@ -270,7 +273,7 @@ class StatusMigration(BaseMigration):
               new_status.color = color if color
 
               if new_status.save
-                puts "SUCCESS: Created status '\#{name}' with ID: \#{new_status.id}"
+                puts "SUCCESS: Created status '#{name}' with ID: #{new_status.id}"
                 results[jira_id] = {
                   "id" => new_status.id,
                   "name" => new_status.name,
@@ -278,9 +281,9 @@ class StatusMigration(BaseMigration):
                   "already_existed" => false
                 }
               else
-                puts "ERROR: Failed to create status '\#{name}'. Validation errors:"
+                puts "ERROR: Failed to create status '#{name}'. Validation errors:"
                 new_status.errors.full_messages.each do |msg|
-                  puts "  - \#{msg}"
+                  puts "  - #{msg}"
                 end
                 results[jira_id] = {
                   "error" => new_status.errors.full_messages.join("; "),
@@ -292,7 +295,7 @@ class StatusMigration(BaseMigration):
 
           # Output the results for validation
           puts "Bulk status creation completed."
-          puts "Created or found \#{results.size} statuses"
+          puts "Created or found #{results.size} statuses"
 
           # Return results in JSON format
           puts "JSON_OUTPUT_START"
@@ -301,8 +304,8 @@ class StatusMigration(BaseMigration):
 
           results
         rescue => e
-          puts "EXCEPTION: \#{e.class.name}: \#{e.message}"
-          puts "Backtrace: \#{e.backtrace.join('\\n')}"
+          puts "EXCEPTION: #{e.class.name}: #{e.message}"
+          puts "Backtrace: #{e.backtrace.join('\\n')}"
           puts "JSON_OUTPUT_START"
           puts {error: e.message}.to_json
           puts "JSON_OUTPUT_END"
