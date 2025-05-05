@@ -49,7 +49,7 @@ class ConfigLoader:
         if "jira" not in self.config:
             self.config["jira"] = {}
         if "openproject" not in self.config:
-            self.config["openproject"] = {}
+            self.config["openproject"] = OpenProjectConfig
         if "migration" not in self.config:
             self.config["migration"] = {}
 

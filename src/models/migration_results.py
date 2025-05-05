@@ -3,7 +3,7 @@ Migration result models for tracking overall migration operations.
 """
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -13,8 +13,8 @@ from src.models.component_results import ComponentResult
 class MigrationResult(BaseModel):
     """Represents the overall result of a migration operation."""
 
-    components: Dict[str, ComponentResult] = Field(default_factory=dict)
-    overall: Dict[str, Any] = Field(default_factory=dict)
+    components: dict[str, ComponentResult] = Field(default_factory=dict)
+    overall: dict[str, Any] = Field(default_factory=dict)
 
     # Default values for overall dictionary
     def __init__(self, **data: Any) -> None:

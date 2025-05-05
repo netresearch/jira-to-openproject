@@ -48,7 +48,7 @@ def capture_tmux_output(session_name: str, lines: int = 1000) -> str:
 
 
 def get_complete_custom_fields(
-    session_name: str = "rails_console", output_file: str = None
+    session_name: str = "rails_console", output_file: str | None = None
 ) -> list[dict[str, Any]]:
     """
     Get detailed information about custom fields from the Rails console.
@@ -138,9 +138,9 @@ def get_complete_custom_fields(
     content = output[start_idx + len(start_marker) : end_idx].strip()
 
     # Parse the custom fields
-    custom_fields = []
-    current_field = None
-    field_count = 0
+    custom_fields: list[dict[str, Any]] = []
+    current_field: dict[str, Any] | None = None
+    field_count: int = 0
 
     for line in content.split("\n"):
         line = line.strip()
@@ -198,7 +198,7 @@ def get_complete_custom_fields(
                     current_field["possible_values"] = []
                 else:
                     # This is a simplified approach - proper parsing would need more logic
-                    values = []
+                    values: list[str | int | None] = []
                     if values_str.startswith("[") and values_str.endswith("]"):
                         values_list = values_str[1:-1].split(",")
                         for v in values_list:
@@ -239,17 +239,17 @@ def get_complete_custom_fields(
     return custom_fields
 
 
-def main():
+def main() -> int:
     """Main entry point."""
     # Parse command line arguments
-    output_file = None
+    output_file: str | None = None
     if len(sys.argv) > 1:
         output_file = sys.argv[1]
     else:
         output_file = "var/data/openproject_custom_fields_complete.json"
 
     # Get the custom fields
-    fields = get_complete_custom_fields(
+    fields: list[dict[str, Any]] = get_complete_custom_fields(
         session_name="rails_console", output_file=output_file
     )
 

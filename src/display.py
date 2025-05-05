@@ -8,7 +8,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Iterable
-from typing import Generic, TypeVar
+from typing import Any, Generic, Protocol, TypeVar, cast
 
 from rich.console import Console
 from rich.live import Live
@@ -20,6 +20,17 @@ from rich.text import Text
 from rich.theme import Theme
 
 T = TypeVar("T")
+
+# Define Protocol for extended Logger with success and notice methods
+class ExtendedLogger(Protocol):
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def info(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def critical(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def success(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def notice(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def exception(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
 
 # Create a custom theme for logging
 LOGGING_THEME = Theme(
@@ -52,7 +63,7 @@ rich_handler = RichHandler(
 
 def configure_logging(
     level: str = "INFO", log_file: str | None = None
-) -> logging.Logger:
+) -> ExtendedLogger:
     """
     Configure logging with rich formatting.
 
@@ -79,7 +90,7 @@ def configure_logging(
         numeric_level = getattr(logging, level.upper(), logging.INFO)
 
     # Create handlers list starting with the rich handler
-    handlers = [rich_handler]
+    handlers: list[logging.Handler] = [rich_handler]
 
     # Add a file handler if a log file path is provided
     if log_file:
@@ -110,30 +121,30 @@ def configure_logging(
     logger = logging.getLogger("migration")
 
     # Define a success method for the logger
-    def success(self, message, *args, **kwargs):
+    def success(self: logging.Logger, message: str, *args: Any, **kwargs: Any) -> None:
         if self.isEnabledFor(25):
             kwargs["extra"] = kwargs.get("extra", {})
             kwargs["extra"]["markup"] = True
             self._log(25, f"[success]{message}[/]", args, stacklevel=2, **kwargs)
 
     # Define a notice method for the logger (less prominent than INFO)
-    def notice(self, message, *args, **kwargs):
+    def notice(self: logging.Logger, message: str, *args: Any, **kwargs: Any) -> None:
         if self.isEnabledFor(21):
             kwargs["extra"] = kwargs.get("extra", {})
             kwargs["extra"]["markup"] = True
             self._log(21, message, args, stacklevel=2, **kwargs)
 
     # Add the success method to the logger class
-    logging.Logger.success = success
+    setattr(logging.Logger, "success", success)
 
     # Add the notice method to the logger class
-    logging.Logger.notice = notice
+    setattr(logging.Logger, "notice", notice)
 
     logger.info("Rich logging configured")
     if log_file:
         logger.info(f"Log file: {log_file}")
 
-    return logger
+    return cast(ExtendedLogger, logger)
 
 
 class ProgressTracker(Generic[T]):

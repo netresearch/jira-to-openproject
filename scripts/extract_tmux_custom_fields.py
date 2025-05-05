@@ -10,9 +10,10 @@ import json
 import os
 import subprocess
 import sys
+from typing import Any
 
 
-def capture_tmux_output(session_name="rails_console", lines=1000):
+def capture_tmux_output(session_name: str = "rails_console", lines: int = 1000) -> str:
     """Capture output from the tmux session."""
     print(f"Capturing output from tmux session '{session_name}'...")
 
@@ -33,11 +34,11 @@ def capture_tmux_output(session_name="rails_console", lines=1000):
         return ""
 
 
-def parse_custom_fields(output):
+def parse_custom_fields(output: str) -> list[dict[str, Any]]:
     """Parse custom fields from the output."""
     # The output appears to be in a format like:
     # ID|Name|field_format|type|is_required|is_for_all
-    fields = []
+    fields: list[dict[str, Any]] = []
 
     # Process each line
     for line in output.split("\n"):
@@ -70,7 +71,7 @@ def parse_custom_fields(output):
     return fields
 
 
-def main():
+def main() -> int:
     """Main entry point."""
     # Get the output file path
     output_file = "var/data/openproject_custom_fields_rails.json"
@@ -84,7 +85,7 @@ def main():
     output = capture_tmux_output(lines=10000)  # Capture a lot of history
 
     # Parse the custom fields
-    fields = parse_custom_fields(output)
+    fields: list[dict[str, Any]] = parse_custom_fields(output)
 
     if not fields:
         print("No custom fields found in the tmux output")

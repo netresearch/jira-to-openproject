@@ -8,9 +8,9 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
 
 from src.config import var_dirs
+from src.types import DirType
 
 # Configure logging
 logging.basicConfig(
@@ -20,7 +20,9 @@ logging.basicConfig(
 logger = logging.getLogger("cleanup_var")
 
 
-def clean_var_directory(dir_name: Optional[str] = None, confirm: bool = True) -> bool:
+def clean_var_directory(
+    dir_name: DirType | None = None, confirm: bool = True
+) -> bool:
     """
     Clean up files in the specified var directory or all var directories.
 
@@ -30,7 +32,7 @@ def clean_var_directory(dir_name: Optional[str] = None, confirm: bool = True) ->
         confirm: Whether to ask for confirmation before deletion
     """
     # Determine which directories to clean
-    dirs_to_clean = {}
+    dirs_to_clean: dict[str, str] = {}
     if dir_name:
         if dir_name in var_dirs and dir_name != "root":
             dirs_to_clean[dir_name] = var_dirs[dir_name]
@@ -68,7 +70,7 @@ def clean_var_directory(dir_name: Optional[str] = None, confirm: bool = True) ->
     return True
 
 
-def main():
+def main() -> bool:
     """Main function to handle directory cleanup."""
     parser = argparse.ArgumentParser(
         description="Clean up var directories or remove old directories."

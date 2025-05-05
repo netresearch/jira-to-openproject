@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest.mock import mock_open, patch, MagicMock
 
-from typing import Dict, List, Optional, Any
+from typing import Any
 
 from src.migrations.link_type_migration import LinkTypeMigration
 

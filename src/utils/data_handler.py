@@ -7,7 +7,7 @@ with special handling for Pydantic models.
 
 import json
 import os
-from typing import TypeVar, Type, Any, Optional, Dict, List
+from typing import TypeVar, Any
 
 from src import config
 
@@ -17,7 +17,7 @@ T = TypeVar("T")
 def save_results(
     data: Any,
     filename: str,
-    directory: Optional[str] = None,
+    directory: str | None = None,
     indent: int = 2,
     ensure_ascii: bool = False
 ) -> bool:
@@ -43,7 +43,7 @@ def save_results(
 def save(
     data: Any,
     filename: str,
-    directory: Optional[str] = None,
+    directory: str | None = None,
     indent: int = 2,
     ensure_ascii: bool = False
 ) -> bool:
@@ -82,11 +82,11 @@ def save(
 
 
 def load(
-    model_class: Type[T],
+    model_class: type[T],
     filename: str,
-    directory: Optional[str] = None,
-    default: Optional[Any] = None
-) -> Optional[T]:
+    directory: str | None = None,
+    default: Any | None = None
+) -> T | None:
     """
     Load data from a JSON file and convert to specified model type.
 
@@ -123,9 +123,9 @@ def load(
 
 def load_dict(
     filename: str,
-    directory: Optional[str] = None,
-    default: Optional[Dict] = None
-) -> Dict:
+    directory: str | None = None,
+    default: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """
     Load dictionary data from a JSON file.
 
@@ -162,9 +162,9 @@ def load_dict(
 
 def load_list(
     filename: str,
-    directory: Optional[str] = None,
-    default: Optional[List] = None
-) -> List:
+    directory: str | None = None,
+    default: list[Any] | None = None
+) -> list[Any]:
     """
     Load list data from a JSON file.
 
@@ -235,10 +235,10 @@ def save_to_path(
 
 
 def load_from_path(
-    model_class: Type[T],
+    model_class: type[T],
     filepath: str,
-    default: Optional[Any] = None
-) -> Optional[T]:
+    default: Any | None = None
+) -> T | None:
     """
     Load data from a JSON file at a specific path.
 

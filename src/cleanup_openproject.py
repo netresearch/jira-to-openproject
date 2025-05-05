@@ -8,7 +8,7 @@ This script removes all existing work packages, projects, and custom fields from
 import argparse
 import json
 import sys
-from typing import Any, Optional
+from typing import Any
 
 import requests
 from src import config
@@ -29,7 +29,7 @@ class OpenProjectCleaner:
         self,
         entities_to_delete: list[str],
         op_client: OpenProjectClient | None = None,
-        rails_client: Optional["OpenProjectRailsClient"] = None,
+        rails_client: OpenProjectRailsClient | None = None,
         dry_run: bool = False,
     ) -> None:
         """

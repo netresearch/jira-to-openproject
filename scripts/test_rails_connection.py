@@ -127,11 +127,13 @@ def get_custom_fields(
                 # Parse the JSON
                 fields = json.loads(python_array)
                 print(f"Successfully retrieved {len(fields)} custom fields")
-                return fields
+                # Explicitly convert to the expected return type
+                return [dict(field) for field in fields]
             elif isinstance(output, list):
                 # Output may already be parsed by the client
                 print(f"Successfully retrieved {len(output)} custom fields")
-                return output
+                # Ensure each item is a dict[str, Any]
+                return [dict(item) for item in output]
             else:
                 print("Could not parse custom fields output as JSON")
                 print(f"Raw output: {output}")
@@ -153,8 +155,13 @@ def get_custom_fields(
         return []
 
 
-def parse_args():
-    """Parse command line arguments."""
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command line arguments.
+
+    Returns:
+        Parsed command line arguments
+    """
     parser = argparse.ArgumentParser(
         description="Test Rails console connection",
         epilog="""
@@ -183,8 +190,13 @@ Example:
     return parser.parse_args()
 
 
-def main():
-    """Main entry point."""
+def main() -> None:
+    """
+    Main entry point.
+
+    Returns:
+        None
+    """
     # Load environment variables
     load_dotenv()
 
