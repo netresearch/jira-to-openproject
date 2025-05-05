@@ -17,7 +17,6 @@ from typing import TypedDict
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult, MigrationResult
@@ -222,35 +221,6 @@ def run_migration(
         jira_client = JiraClient()
         op_client = OpenProjectClient()
 
-        # Initialize Rails client if direct migration is requested
-        try:
-            op_rails_client = OpenProjectRailsClient()
-            # Check if Rails client is working
-            config.logger.info(
-                "Testing Rails console connection...", extra={"markup": True}
-            )
-            if op_rails_client.test_connection():
-                config.logger.success(
-                    "Rails console connection successful", extra={"markup": True}
-                )
-            else:
-                config.logger.error(
-                    "Rails console connection test failed", extra={"markup": True}
-                )
-        except Exception as e:
-            config.logger.error(
-                f"Failed to initialize Rails client: {str(e)}",
-                extra={"markup": True},
-            )
-
-            # Mark overall status as failed
-            results.overall["status"] = "failed"
-            results.overall["error"] = f"Rails client initialization failed: {str(e)}"
-
-            # Add end time
-            results.overall["end_time"] = datetime.now().isoformat()
-            return results
-
         # Initialize mappings
         config.mappings = Mappings(
             data_dir=config.get_path("data")
@@ -260,26 +230,16 @@ def run_migration(
         available_components = AvailableComponents(
             users=UserMigration(jira_client, op_client),
             custom_fields=CustomFieldMigration(
-                jira_client, op_client, op_rails_client
+                jira_client, op_client
             ),
             companies=CompanyMigration(jira_client, op_client),
             projects=ProjectMigration(jira_client, op_client),
             link_types=LinkTypeMigration(jira_client, op_client),
-            issue_types=IssueTypeMigration(jira_client, op_client, op_rails_client),
-            status_types=StatusMigration(jira_client, op_client, op_rails_client),
+            issue_types=IssueTypeMigration(jira_client, op_client),
+            status_types=StatusMigration(jira_client, op_client),
             work_packages=None,  # Initialized later if needed
+            accounts=AccountMigration(jira_client, op_client)
         )
-
-        # Add accounts component only if Rails client is available
-        if op_rails_client:
-            available_components["accounts"] = AccountMigration(
-                jira_client, op_client, op_rails_client
-            )
-        else:
-            config.logger.warning(
-                "Rails client not available - 'accounts' component will be skipped",
-                extra={"markup": True},
-            )
 
         # If components parameter is not provided, use default component order
         if not components:
@@ -316,7 +276,6 @@ def run_migration(
             available_components["work_packages"] = WorkPackageMigration(
                 jira_client,
                 op_client,
-                op_rails_client,
                 data_dir=config.get_path("data"),
             )
 
@@ -689,21 +648,8 @@ def main() -> None:
     # Initialize clients
     jira_client = JiraClient()
     op_client = OpenProjectClient()
-    op_rails_client = None
 
     try:
-        # Initialize OpenProject Rails client if needed
-        try:
-            op_rails_client = OpenProjectRailsClient()
-            op_rails_client.connect()
-        except Exception as e:
-            config.logger.warning(
-                f"Could not initialize Rails client: {str(e)}"
-            )
-            config.logger.warning(
-                "Some components requiring Rails console will be skipped"
-            )
-
         if args.setup_tmux:
             setup_tmux_session()
             config.logger.success("tmux session setup complete.")
@@ -728,7 +674,7 @@ def main() -> None:
                     choice = input("Enter choice (1-2): ")
                     if choice == "1":
                         custom_field_migration = CustomFieldMigration(
-                            jira_client, op_client, op_rails_client
+                            jira_client, op_client
                         )
                         cf_mapping_update_result = custom_field_migration.update_mapping_file()
                         if cf_mapping_update_result:

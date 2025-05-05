@@ -14,7 +14,6 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 
 # Import RailsConsolePexpect to handle direct Rails console execution
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.display import ProgressTracker, console
 from src.migrations.base_migration import BaseMigration
 from src import config
@@ -36,7 +35,7 @@ class CustomFieldMigration(BaseMigration):
         self,
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
-        rails_console: OpenProjectRailsClient | None = None,
+        rails_console: OpenProjectClient | None = None,
     ) -> None:
         """
         Initialize the custom field migration process.
@@ -44,7 +43,7 @@ class CustomFieldMigration(BaseMigration):
         Args:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
-            rails_console: Initialized OpenProjectRailsClient instance (optional)
+            rails_console: Initialized OpenProjectClient instance (optional)
         """
         super().__init__(jira_client, op_client)
         self.jira_custom_fields: list[dict[str, Any]] = []

@@ -13,7 +13,6 @@ from typing import Any
 import requests
 from src import config
 from src.clients.openproject_client import OpenProjectClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.display import ProgressTracker
 
 # Set up logger
@@ -29,7 +28,7 @@ class OpenProjectCleaner:
         self,
         entities_to_delete: list[str],
         op_client: OpenProjectClient | None = None,
-        rails_client: OpenProjectRailsClient | None = None,
+        rails_client: OpenProjectClient | None = None,
         dry_run: bool = False,
     ) -> None:
         """
@@ -38,17 +37,13 @@ class OpenProjectCleaner:
         Args:
             entities_to_delete: List of entity types to delete (e.g., ["work_packages", "projects"])
             op_client: Initialized OpenProject client
-            rails_client: Initialized OpenProjectRailsClient instance (optional)
+            rails_client: Initialized OpenProjectClient instance (optional)
             dry_run: If True, simulate deletion without making changes
         """
         self.entities = entities_to_delete
         self.dry_run = dry_run
-        self.rails_client = (
-            rails_client or OpenProjectRailsClient()
-        )  # Use provided rails client
-        self.op_client = op_client or OpenProjectClient(
-            rails_client=self.rails_client
-        )  # Use provided or create new
+        self.rails_client = rails_client or OpenProjectClient()  # Use provided rails client
+        self.op_client = op_client or OpenProjectClient()  # Use provided or create new
         self.data_dir = config.get_path("data")
 
         # Ensure clients are connected

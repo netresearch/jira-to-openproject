@@ -16,7 +16,6 @@ from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.display import ProgressTracker
 from src.utils import data_handler
 from src.migrations.base_migration import BaseMigration
@@ -40,7 +39,6 @@ class WorkPackageMigration(BaseMigration):
         self,
         jira_client: JiraClient,
         op_client: OpenProjectClient,
-        op_rails_client: OpenProjectRailsClient | None = None,
         data_dir: str | None = None,
     ) -> None:
         """
@@ -49,10 +47,9 @@ class WorkPackageMigration(BaseMigration):
         Args:
             jira_client: JiraClient instance.
             op_client: OpenProjectClient instance.
-            op_rails_client: Optional OpenProjectRailsClient instance.
             data_dir: Path to data directory for storing mappings.
         """
-        super().__init__(jira_client, op_client, op_rails_client)
+        super().__init__(jira_client, op_client)
 
         # Override data_dir if specified
         if data_dir:
@@ -1100,7 +1097,7 @@ class WorkPackageMigration(BaseMigration):
 
                     while retry_count < max_retries:
                         try:
-                            types_result = self.op_client.rails_client.execute(
+                            types_result = self.op_client.rails_client.execute_query(
                                 enable_types_header + enable_types_script
                             )
                             break
@@ -1465,7 +1462,7 @@ class WorkPackageMigration(BaseMigration):
                 )
 
                 # Execute the Ruby script
-                result = self.op_client.rails_client.execute(
+                result = self.op_client.rails_client.execute_query(
                     header_script + main_script
                 )
 
@@ -1801,10 +1798,6 @@ class WorkPackageMigration(BaseMigration):
 
     def _create_wp_via_rails(self, wp_payload: dict[str, Any]) -> dict[str, Any] | None:
         """Creates a work package using the Rails console client via the proper client method."""
-        if not self.op_rails_client:
-            self.logger.error("Rails client not available for direct work package creation.")
-            return None
-
         jira_key = wp_payload.get("jira_key", "UNKNOWN")
         self.logger.debug(
             f"Attempting to create WP for {jira_key} via Rails client create_record..."
@@ -1824,8 +1817,8 @@ class WorkPackageMigration(BaseMigration):
         # Remove None values
         attributes = {k: v for k, v in attributes.items() if v is not None}
 
-        # Use the OpenProjectRailsClient.create_record method
-        success, record_data, error_message = self.op_rails_client.create_record(
+        # Use the OpenProjectClient.create_record method
+        success, record_data, error_message = self.op_client.create_record(
             "WorkPackage", attributes
         )
 
@@ -2359,7 +2352,7 @@ class WorkPackageMigration(BaseMigration):
             """
 
             # Execute the script
-            result = self.op_client.rails_client.execute(ruby_header + ruby_script)
+            result = self.op_client.rails_client.execute_query(ruby_header + ruby_script)
 
             if result.get("status") != "success":
                 self.logger.error(

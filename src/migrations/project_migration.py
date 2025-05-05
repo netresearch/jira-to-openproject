@@ -14,7 +14,6 @@ from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.clients.openproject_rails_client import OpenProjectRailsClient
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
 
@@ -49,7 +48,6 @@ class ProjectMigration(BaseMigration):
         self,
         jira_client: JiraClient,
         op_client: OpenProjectClient,
-        op_rails_client: OpenProjectRailsClient | None = None,
     ):
         """
         Initialize the project migration tools.
@@ -57,9 +55,8 @@ class ProjectMigration(BaseMigration):
         Args:
             jira_client: Initialized Jira client instance.
             op_client: Initialized OpenProject client instance.
-            op_rails_client: Optional instance of OpenProjectRailsClient for direct migration.
         """
-        super().__init__(jira_client, op_client, op_rails_client)
+        super().__init__(jira_client, op_client)
         self.jira_projects: list[dict[str, Any]] = []
         self.op_projects: list[dict[str, Any]] = []
         self.project_mapping: dict[str, Any] = {}
@@ -274,7 +271,7 @@ class ProjectMigration(BaseMigration):
         # 2) Use only the project's default Tempo account (first entry)
         acct_entry = raw_accts[0] if isinstance(raw_accts, list) else raw_accts
         acct_id = (
-            acct_entry if isinstance(acct_entry, (int, str)) else acct_entry.get("id")
+            acct_entry if isinstance(acct_entry, int | str) else acct_entry.get("id")
         )
         if not acct_id:
             logger.warning(
@@ -593,7 +590,7 @@ class ProjectMigration(BaseMigration):
         """
 
         # Execute the Ruby script
-        result = self.op_client.rails_client.execute(header_script + main_script)
+        result = self.op_client.rails_client.execute_query(header_script + main_script)
 
         if result.get("status") != "success":
             logger.error(

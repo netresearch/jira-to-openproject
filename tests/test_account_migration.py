@@ -89,7 +89,7 @@ class TestAccountMigration(unittest.TestCase):
 
     @patch("src.migrations.account_migration.JiraClient")
     @patch("src.migrations.account_migration.OpenProjectClient")
-    @patch("src.migrations.account_migration.OpenProjectRailsClient")
+    @patch("src.migrations.account_migration.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -108,14 +108,13 @@ class TestAccountMigration(unittest.TestCase):
         mock_jira_instance.get_tempo_accounts.return_value = self.tempo_accounts
 
         mock_op_instance = mock_op_client.return_value
-        mock_rails_instance = mock_rails_client.return_value
 
         mock_get_path.return_value = "/tmp/test_data"
         mock_exists.return_value = False  # Force new extraction
 
         # Initialize migration
         migration = AccountMigration(
-            mock_jira_instance, mock_op_instance, mock_rails_instance
+            mock_jira_instance, mock_op_instance
         )
 
         # Call extract_tempo_accounts
@@ -130,7 +129,7 @@ class TestAccountMigration(unittest.TestCase):
 
     @patch("src.migrations.account_migration.JiraClient")
     @patch("src.migrations.account_migration.OpenProjectClient")
-    @patch("src.migrations.account_migration.OpenProjectRailsClient")
+    @patch("src.migrations.account_migration.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -148,14 +147,13 @@ class TestAccountMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
         mock_op_instance.get_projects.return_value = self.op_projects
-        mock_rails_instance = mock_rails_client.return_value
 
         mock_get_path.return_value = "/tmp/test_data"
         mock_exists.return_value = True
 
         # Initialize migration
         migration = AccountMigration(
-            mock_jira_instance, mock_op_instance, mock_rails_instance
+            mock_jira_instance, mock_op_instance
         )
 
         # Call extract_openproject_projects
@@ -170,7 +168,7 @@ class TestAccountMigration(unittest.TestCase):
 
     @patch("src.migrations.account_migration.JiraClient")
     @patch("src.migrations.account_migration.OpenProjectClient")
-    @patch("src.migrations.account_migration.OpenProjectRailsClient")
+    @patch("src.migrations.account_migration.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("src.migrations.account_migration.config.migration_config")
     @patch("os.path.exists")
@@ -193,7 +191,6 @@ class TestAccountMigration(unittest.TestCase):
         mock_op_instance = mock_op_client.return_value
         mock_op_instance.get_projects.return_value = self.op_projects
 
-        mock_rails_instance = mock_rails_client.return_value
         mock_migration_config.get.return_value = False  # Not force mode
         mock_get_path.return_value = "/tmp/test_data"
         mock_exists.return_value = True
@@ -208,7 +205,7 @@ class TestAccountMigration(unittest.TestCase):
         with patch("builtins.open", project_mapping_mock):
             # Initialize migration
             migration = AccountMigration(
-                mock_jira_instance, mock_op_instance, mock_rails_instance
+                mock_jira_instance, mock_op_instance
             )
 
             # Mock _load_from_json to return the project mapping
@@ -238,7 +235,6 @@ class TestAccountMigration(unittest.TestCase):
 
     @patch("src.migrations.account_migration.JiraClient")
     @patch("src.migrations.account_migration.OpenProjectClient")
-    @patch("src.migrations.account_migration.OpenProjectRailsClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("src.migrations.account_migration.config.migration_config")
     @patch("os.path.exists")
@@ -249,7 +245,6 @@ class TestAccountMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_rails_client: MagicMock,
         mock_op_client: MagicMock,
         mock_jira_client: MagicMock,
     ) -> None:
@@ -259,9 +254,8 @@ class TestAccountMigration(unittest.TestCase):
         mock_jira_instance.get_tempo_accounts.return_value = self.tempo_accounts
 
         mock_op_instance = mock_op_client.return_value
-        mock_rails_instance = mock_rails_client.return_value
-        mock_rails_instance.get_custom_field_id_by_name.return_value = None
-        mock_rails_instance.execute.side_effect = [
+        mock_op_instance.get_custom_field_id_by_name.return_value = None
+        mock_op_instance.execute_query.side_effect = [
             self.custom_field_creation_response,
             self.custom_field_activation_response,
         ]
@@ -272,7 +266,7 @@ class TestAccountMigration(unittest.TestCase):
 
         # Initialize migration
         migration = AccountMigration(
-            mock_jira_instance, mock_op_instance, mock_rails_instance
+            mock_jira_instance, mock_op_instance
         )
 
         # Set the extracted data
@@ -283,20 +277,20 @@ class TestAccountMigration(unittest.TestCase):
             # Call create_account_custom_field
             result = migration.create_account_custom_field()
 
-            # Verify Rails client was called to check for existing custom field
-            mock_rails_instance.get_custom_field_id_by_name.assert_called_once_with(
+            # Verify OpenProject client was called to check for existing custom field
+            mock_op_instance.get_custom_field_id_by_name.assert_called_once_with(
                 "Tempo Account"
             )
 
-            # Verify Rails client was called to create the custom field
-            mock_rails_instance.execute.assert_called()
+            # Verify OpenProject client was called to create the custom field
+            mock_op_instance.execute_query.assert_called()
 
             # Verify the result is the custom field ID
             self.assertEqual(result, 42)
 
     @patch("src.migrations.account_migration.JiraClient")
     @patch("src.migrations.account_migration.OpenProjectClient")
-    @patch("src.migrations.account_migration.OpenProjectRailsClient")
+    @patch("src.migrations.account_migration.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("src.migrations.account_migration.config.migration_config")
     @patch("src.migrations.account_migration.ProgressTracker")
@@ -317,7 +311,6 @@ class TestAccountMigration(unittest.TestCase):
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
-        mock_rails_instance = mock_rails_client.return_value
 
         mock_migration_config.get.return_value = False  # Not dry run mode
         mock_get_path.return_value = "/tmp/test_data"
@@ -329,7 +322,7 @@ class TestAccountMigration(unittest.TestCase):
 
         # Initialize migration
         migration = AccountMigration(
-            mock_jira_instance, mock_op_instance, mock_rails_instance
+            mock_jira_instance, mock_op_instance
         )
 
         # Create a deep copy of the mapping so we can modify it

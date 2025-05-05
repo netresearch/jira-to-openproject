@@ -2,9 +2,9 @@
 """
 Test Rails Console Connection
 
-This script tests the connection to the OpenProject Rails console
-using tmux. It's useful for verifying connectivity before
-running migrations that require Rails console access.
+This script tests the connection to the OpenProject Rails console.
+It's useful for verifying connectivity before running migrations
+that require Rails console access.
 """
 
 import argparse
@@ -18,11 +18,11 @@ from dotenv import load_dotenv
 # Add parent directory to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Import the Rails console client
+# Import the OpenProject client
 try:
-    from src.clients.openproject_rails_client import OpenProjectRailsClient
+    from src.clients.openproject_client import OpenProjectClient
 except ImportError:
-    print("Error: Could not import OpenProjectRailsClient.")
+    print("Error: Could not import OpenProjectClient.")
     sys.exit(1)
 
 
@@ -42,12 +42,12 @@ def test_rails_connection(
     print(f"Testing Rails console connection to tmux session: {session_name}")
 
     try:
-        # Create a Rails console client
-        console = OpenProjectRailsClient(session_name=session_name, debug=debug)
+        # Create an OpenProject client
+        client = OpenProjectClient(tmux_session_name=session_name)
 
         # Run a simple command to test execution
         print("Running test command...")
-        result = console.execute("Rails.version")
+        result = client.execute_query("Rails.version")
 
         if result["status"] == "success":
             print(f"Rails version: {result['output']}")
@@ -57,7 +57,7 @@ def test_rails_connection(
 
         # Run another command to test OpenProject environment
         print("Testing OpenProject environment...")
-        result = console.execute("User.count")
+        result = client.execute_query("User.count")
 
         if result["status"] == "success":
             print(f"OpenProject user count: {result['output']}")
@@ -96,14 +96,23 @@ def get_custom_fields(
     )
 
     try:
-        # Create a Rails console client
-        console = OpenProjectRailsClient(session_name=session_name, debug=debug)
+        # Create an OpenProject client
+        client = OpenProjectClient(tmux_session_name=session_name)
 
         # Execute command to get all custom fields with their attributes
-        command = "CustomField.all.map { |cf| { id: cf.id, name: cf.name, field_format: cf.field_format, type: cf.type, is_required: cf.is_required, is_for_all: cf.is_for_all, possible_values: cf.possible_values } }"
+        command = (
+            "CustomField.all.map { |cf| { "
+            "id: cf.id, "
+            "name: cf.name, "
+            "field_format: cf.field_format, "
+            "type: cf.type, "
+            "is_required: cf.is_required, "
+            "is_for_all: cf.is_for_all, "
+            "possible_values: cf.possible_values } }"
+        )
 
         print("Executing custom fields query...")
-        result = console.execute(command)
+        result = client.execute_query(command)
 
         if result["status"] == "error":
             print(

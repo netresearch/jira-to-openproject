@@ -81,7 +81,12 @@ class TestUserMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_users(
-        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test the extract_jira_users method."""
         # Setup mocks
@@ -112,7 +117,12 @@ class TestUserMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_openproject_users(
-        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test the extract_openproject_users method."""
         # Setup mocks
@@ -145,7 +155,13 @@ class TestUserMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_create_user_mapping(
         self,
-        mock_file: MagicMock, mock_exists: MagicMock, mock_tracker: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_tracker: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
         """Test the create_user_mapping method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
@@ -188,7 +204,14 @@ class TestUserMigration(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_create_missing_users(
         self,
-        mock_file: MagicMock, mock_exists: MagicMock, mock_logger: MagicMock, mock_tracker: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_logger: MagicMock,
+        mock_tracker: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
         """Test the create_missing_users method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value

@@ -47,7 +47,7 @@ class CompanyMigration(BaseMigration):
             op_client: OpenProjectClient instance.
             data_dir: Path to data directory for storing mappings.
         """
-        super().__init__(jira_client, op_client, None)
+        super().__init__(jira_client, op_client)
 
         # Configure paths
         self.data_dir = Path(data_dir or config.get_path("data"))

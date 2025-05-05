@@ -109,7 +109,7 @@ def load(
         return default
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
 
         # Convert dict to model instance
@@ -150,7 +150,7 @@ def load_dict(
         return default
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
 
         config.logger.info(f"Loaded dictionary data from {filepath}")
@@ -189,7 +189,7 @@ def load_list(
         return default
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
 
         config.logger.info(f"Loaded list data from {filepath}")
@@ -255,7 +255,7 @@ def load_from_path(
         return default
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
 
         # Convert dict to model instance
