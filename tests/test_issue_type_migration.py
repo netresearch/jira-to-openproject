@@ -136,7 +136,6 @@ class TestIssueTypeMigration(unittest.TestCase):
 
     @patch("src.migrations.issue_type_migration.JiraClient")
     @patch("src.migrations.issue_type_migration.OpenProjectClient")
-    @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
     @patch("src.migrations.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
@@ -147,7 +146,6 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_rails_client: MagicMock,
         mock_op_client: MagicMock,
         mock_jira_client: MagicMock
     ) -> None:
@@ -155,7 +153,10 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Setup
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
-        mock_rails_instance = mock_rails_client.return_value
+        # Setup rails_client on the op_instance for the new architecture
+        mock_rails_instance = MagicMock()
+        mock_op_instance.rails_client = mock_rails_instance
+
         mock_jira_instance.get_issue_types.return_value = self.jira_issue_types
         mock_get_path.return_value = "/tmp/test_data"
         mock_exists.return_value = False
@@ -163,9 +164,9 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Mock the config to return force=True
         mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
-        # Execute
+        # Execute - no longer passing rails_console
         issue_migration = IssueTypeMigration(
-            mock_jira_instance, mock_op_instance, mock_rails_instance
+            mock_jira_instance, mock_op_instance
         )
         result = issue_migration.extract_jira_issue_types()
 
@@ -175,7 +176,6 @@ class TestIssueTypeMigration(unittest.TestCase):
         self.assertEqual(result, self.jira_issue_types)
 
     @patch("src.migrations.issue_type_migration.JiraClient")
-    @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
     @patch("src.migrations.issue_type_migration.config.migration_config")
@@ -187,7 +187,6 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_rails_client: MagicMock,
         mock_op_client: MagicMock,
         mock_jira_client: MagicMock
     ) -> None:
@@ -195,7 +194,10 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Setup
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
-        mock_rails_instance = mock_rails_client.return_value
+        # Setup rails_client on the op_instance for the new architecture
+        mock_rails_instance = MagicMock()
+        mock_op_instance.rails_client = mock_rails_instance
+
         mock_op_instance.get_work_package_types.return_value = (
             self.op_work_package_types
         )
@@ -205,9 +207,9 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Mock the config to return force=True
         mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
-        # Execute
+        # Execute - no longer passing rails_console
         issue_migration = IssueTypeMigration(
-            mock_jira_instance, mock_op_instance, mock_rails_instance
+            mock_jira_instance, mock_op_instance
         )
         result = issue_migration.extract_openproject_work_package_types()
 
@@ -231,6 +233,9 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Set up mocks
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
+
+        # Setup rails_client directly on mock_op_instance for new architecture
+        mock_op_instance.rails_client = mock_op_instance  # Using same mock for simplicity
 
         # Use a more direct approach of mocking the rails_console operations
         with patch("os.path.exists", return_value=True), \
@@ -261,11 +266,10 @@ class TestIssueTypeMigration(unittest.TestCase):
             mock_op_instance.transfer_file_to_container.return_value = True
             mock_op_instance.transfer_file_from_container.return_value = True
 
-            # Create test instance
+            # Create test instance - no longer passing rails_console parameter
             migration = IssueTypeMigration(
                 jira_client=mock_jira_instance,
-                op_client=mock_op_instance,
-                rails_console=mock_op_instance
+                op_client=mock_op_instance
             )
 
             # Set test data
@@ -303,6 +307,9 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
 
+        # Setup rails_client for new architecture
+        mock_op_instance.rails_client = MagicMock()
+
         # Create instance and patch migrate_issue_types_via_rails
         with patch.object(IssueTypeMigration, 'migrate_issue_types_via_rails', return_value=True), \
              patch.object(
@@ -320,10 +327,10 @@ class TestIssueTypeMigration(unittest.TestCase):
              patch.object(IssueTypeMigration, "create_issue_type_mapping"), \
              patch.object(IssueTypeMigration, "normalize_issue_types"):
 
+            # Create instance without rails_console parameter
             migration = IssueTypeMigration(
                 jira_client=mock_jira_instance,
-                op_client=mock_op_instance,
-                rails_console=mock_op_instance
+                op_client=mock_op_instance
             )
 
             # Set test data
@@ -357,15 +364,15 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
 
+        # Setup rails_client for new architecture
+        mock_op_instance.rails_client = MagicMock()
+
         mock_get_path.return_value = "/tmp/test_data"
         mock_exists.return_value = True
 
-        # Create a mock for rails_console
-        mock_rails_console = MagicMock()
-
-        # Create instance
+        # Create instance without rails_console parameter
         migration = IssueTypeMigration(
-            jira_client=mock_jira_instance, op_client=mock_op_instance, rails_console=mock_rails_console
+            jira_client=mock_jira_instance, op_client=mock_op_instance
         )
         migration.issue_type_mapping = cast(Dict[str, Dict[str, Any]], self.expected_mapping)
 
@@ -399,18 +406,18 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
 
+        # Setup rails_client for new architecture
+        mock_op_instance.rails_client = MagicMock()
+
         mock_get_path.return_value = "/tmp/test_data"
         mock_exists.return_value = True
 
-        # Create a mock for rails_console
-        mock_rails_console = MagicMock()
-
-        # Create instance and set data for the test
+        # Create instance and set data for the test - without rails_console parameter
         migration = IssueTypeMigration(
-            jira_client=mock_jira_instance, op_client=mock_op_instance, rails_console=mock_rails_console
+            jira_client=mock_jira_instance, op_client=mock_op_instance
         )
 
-        # Mock existing mapping file
+        # Rest of test is unchanged
         mock_exists.return_value = True
         mock_file.return_value.__enter__.return_value.read.return_value = json.dumps(
             {
@@ -486,17 +493,17 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
 
+        # Setup rails_client for new architecture
+        mock_op_instance.rails_client = MagicMock()
+
         mock_get_path.return_value = "/tmp/test_data"
 
         # Mock file exists check - file does not exist so we'll create a new mapping
         mock_exists.return_value = False
 
-        # Create a mock for rails_console
-        mock_rails_console = MagicMock()
-
-        # Create instance and set data
+        # Create instance - without rails_console parameter
         migration = IssueTypeMigration(
-            jira_client=mock_jira_instance, op_client=mock_op_instance, rails_console=mock_rails_console
+            jira_client=mock_jira_instance, op_client=mock_op_instance
         )
         migration.jira_issue_types = self.jira_issue_types
         migration.op_work_package_types = self.op_work_package_types
