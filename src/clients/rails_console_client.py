@@ -465,7 +465,7 @@ class RailsConsoleClient:
 
         return result
 
-    def _wait_for_console_output(self, target: str, marker: str, timeout: int) -> tuple[bool, str]:
+    def _wait_for_console_output(self, target: str, marker: str, timeout: int) -> tuple:
         """
         Wait for specific marker to appear in the console output.
         Uses adaptive polling for efficiency.
@@ -476,7 +476,7 @@ class RailsConsoleClient:
             timeout: Maximum time to wait in seconds
 
         Returns:
-            tuple[bool, str]: (marker_found, output)
+            tuple: (marker_found, output) - A tuple containing boolean for if marker was found and the output string
         """
         start_time = time.time()
         poll_interval = 0.05  # Start with very short interval

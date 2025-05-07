@@ -12,6 +12,10 @@ class BaseMigration:
     """
     Base class for all migration classes.
     Provides common functionality and initialization for all migration types.
+
+    Follows the layered client architecture:
+    1. OpenProjectClient - Manages all lower-level clients and operations
+    2. BaseMigration - Uses OpenProjectClient for migrations
     """
 
     def __init__(
@@ -21,11 +25,13 @@ class BaseMigration:
     ) -> None:
         """
         Initialize the base migration with common attributes.
+        Follows dependency injection pattern for the high-level clients only.
 
         Args:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
         """
+        # Initialize clients using dependency injection
         self.jira_client = jira_client or JiraClient()
         self.op_client = op_client or OpenProjectClient()
 

@@ -62,6 +62,9 @@ class OpenProjectClient:
         command_timeout: int = 180,
         retry_count: int = 3,
         retry_delay: float = 1.0,
+        ssh_client: Optional[SSHClient] = None,
+        docker_client: Optional[DockerClient] = None,
+        rails_client: Optional[RailsConsoleClient] = None,
     ) -> None:
         """
         Initialize the OpenProject client.
@@ -75,6 +78,9 @@ class OpenProjectClient:
             command_timeout: Command timeout in seconds (default: 180)
             retry_count: Number of retries for operations (default: 3)
             retry_delay: Delay between retries in seconds (default: 1.0)
+            ssh_client: Initialized SSHClient instance (will create if None)
+            docker_client: Initialized DockerClient instance (will create if None)
+            rails_client: Initialized RailsConsoleClient instance (will create if None)
         """
         # Load configuration
         op_config = config.openproject_config
@@ -98,9 +104,9 @@ class OpenProjectClient:
         # Initialize file manager
         self.file_manager = FileManager()
 
-        # Initialize clients in the correct order
-        # 1. First, create the SSH client which is the foundation
-        self.ssh_client = SSHClient(
+        # Initialize clients in the correct order, respecting dependency injection
+        # 1. First, create or use the SSH client which is the foundation
+        self.ssh_client = ssh_client or SSHClient(
             host=str(self.ssh_host),
             user=self.ssh_user,
             key_file=cast(Optional[str], self.ssh_key_file),
@@ -108,24 +114,31 @@ class OpenProjectClient:
             retry_count=self.retry_count,
             retry_delay=self.retry_delay,
         )
-        logger.debug(f"Initialized SSHClient for host {self.ssh_host}")
+        logger.debug(
+            f"{'Using provided' if ssh_client else 'Initialized'} SSHClient for host {self.ssh_host}"
+        )
 
-        # 2. Next, create the Docker client using the SSH client
-        self.docker_client = DockerClient(
+        # 2. Next, create or use the Docker client
+        self.docker_client = docker_client or DockerClient(
             container_name=str(self.container_name),
             ssh_client=self.ssh_client,  # Pass our SSH client instance
             command_timeout=self.command_timeout,
             retry_count=self.retry_count,
             retry_delay=self.retry_delay,
         )
-        logger.debug(f"Initialized DockerClient for container {self.container_name}")
+        logger.debug(
+            f"{'Using provided' if docker_client else 'Initialized'} DockerClient for container {self.container_name}"
+        )
 
-        # 3. Finally, create the Rails console client for executing commands
-        self.rails_client = RailsConsoleClient(
+        # 3. Finally, create or use the Rails console client for executing commands
+        self.rails_client = rails_client or RailsConsoleClient(
             tmux_session_name=self.tmux_session_name,
             command_timeout=self.command_timeout,
         )
-        logger.debug(f"Initialized RailsConsoleClient with tmux session {self.tmux_session_name}")
+        logger.debug(
+            f"{'Using provided' if rails_client else 'Initialized'} "
+            f"RailsConsoleClient with tmux session {self.tmux_session_name}"
+        )
 
         logger.success(f"OpenProjectClient initialized for host {self.ssh_host}, container {self.container_name}")
 

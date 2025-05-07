@@ -31,6 +31,9 @@ from src.migrations.work_package_migration import WorkPackageMigration
 from src.migrations.account_migration import AccountMigration
 from src.types import ComponentName, BackupDir
 from src.utils import data_handler
+from src.clients.ssh_client import SSHClient
+from src.clients.docker_client import DockerClient
+from src.clients.rails_console_client import RailsConsoleClient
 
 
 class AvailableComponents(TypedDict):
@@ -218,8 +221,26 @@ def run_migration(
 
         # Initialize clients
         config.logger.info("Initializing API clients...", extra={"markup": True})
+
+        # Create clients in the correct hierarchical order
+        # 1. First, create the SSH client which is the foundation
+        ssh_client = SSHClient()
+
+        # 2. Next, create the Docker client using the SSH client
+        docker_client = DockerClient(ssh_client=ssh_client)
+
+        # 3. Create the Rails console client
+        rails_client = RailsConsoleClient()
+
+        # 4. Finally, create the Jira client and OpenProject client (which uses the other clients)
         jira_client = JiraClient()
-        op_client = OpenProjectClient()
+        op_client = OpenProjectClient(
+            ssh_client=ssh_client,
+            docker_client=docker_client,
+            rails_client=rails_client
+        )
+
+        config.logger.success("All clients initialized successfully", extra={"markup": True})
 
         # Initialize mappings
         config.mappings = Mappings(
@@ -228,17 +249,39 @@ def run_migration(
 
         # Define all available migration components
         available_components = AvailableComponents(
-            users=UserMigration(jira_client, op_client),
-            custom_fields=CustomFieldMigration(
-                jira_client, op_client
+            users=UserMigration(
+                jira_client=jira_client,
+                op_client=op_client
             ),
-            companies=CompanyMigration(jira_client, op_client),
-            projects=ProjectMigration(jira_client, op_client),
-            link_types=LinkTypeMigration(jira_client, op_client),
-            issue_types=IssueTypeMigration(jira_client, op_client),
-            status_types=StatusMigration(jira_client, op_client),
+            custom_fields=CustomFieldMigration(
+                jira_client=jira_client,
+                op_client=op_client
+            ),
+            companies=CompanyMigration(
+                jira_client=jira_client,
+                op_client=op_client
+            ),
+            projects=ProjectMigration(
+                jira_client=jira_client,
+                op_client=op_client
+            ),
+            link_types=LinkTypeMigration(
+                jira_client=jira_client,
+                op_client=op_client
+            ),
+            issue_types=IssueTypeMigration(
+                jira_client=jira_client,
+                op_client=op_client
+            ),
+            status_types=StatusMigration(
+                jira_client=jira_client,
+                op_client=op_client
+            ),
             work_packages=None,  # Initialized later if needed
-            accounts=AccountMigration(jira_client, op_client)
+            accounts=AccountMigration(
+                jira_client=jira_client,
+                op_client=op_client
+            )
         )
 
         # If components parameter is not provided, use default component order
@@ -272,11 +315,10 @@ def run_migration(
 
         # Initialize work package migration if it's in the components list
         if "work_packages" in components:
-
             available_components["work_packages"] = WorkPackageMigration(
-                jira_client,
-                op_client,
-                data_dir=config.get_path("data"),
+                jira_client=jira_client,
+                op_client=op_client,
+                data_dir=config.get_path("data")
             )
 
         # Run each component in order
@@ -645,10 +687,6 @@ def main() -> None:
     # Parse command-line arguments
     args = parse_args()
 
-    # Initialize clients
-    jira_client = JiraClient()
-    op_client = OpenProjectClient()
-
     try:
         if args.setup_tmux:
             setup_tmux_session()
@@ -664,6 +702,18 @@ def main() -> None:
             return
 
         if args.update_mapping:
+            # Initialize clients properly using dependency injection
+            # Create clients in the correct hierarchical order
+            ssh_client = SSHClient()
+            docker_client = DockerClient(ssh_client=ssh_client)
+            rails_client = RailsConsoleClient()
+            jira_client = JiraClient()
+            op_client = OpenProjectClient(
+                ssh_client=ssh_client,
+                docker_client=docker_client,
+                rails_client=rails_client
+            )
+
             # List options to choose which mapping to update
             print("\nSelect mapping to update:")
             print("1. Custom Field mapping")
@@ -674,7 +724,8 @@ def main() -> None:
                     choice = input("Enter choice (1-2): ")
                     if choice == "1":
                         custom_field_migration = CustomFieldMigration(
-                            jira_client, op_client
+                            jira_client=jira_client,
+                            op_client=op_client
                         )
                         cf_mapping_update_result = custom_field_migration.update_mapping_file()
                         if cf_mapping_update_result:
@@ -687,7 +738,10 @@ def main() -> None:
                             )
                         break
                     elif choice == "2":
-                        issue_type_migration = IssueTypeMigration(jira_client, op_client)
+                        issue_type_migration = IssueTypeMigration(
+                            jira_client=jira_client,
+                            op_client=op_client
+                        )
                         issue_type_mapping_update_result = issue_type_migration.update_mapping_file()
                         if issue_type_mapping_update_result:
                             config.logger.success(

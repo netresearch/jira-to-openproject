@@ -11,8 +11,6 @@ from typing import Any
 
 import requests
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult
@@ -32,19 +30,23 @@ class UserMigration(BaseMigration):
 
     def __init__(
         self,
-        jira_client: JiraClient,
-        op_client: OpenProjectClient,
-        data_dir: str | None = None,
+        jira_client=None,
+        op_client=None,
+        data_dir=None,
     ) -> None:
         """
         Initialize the user migration tools.
 
         Args:
-            jira_client: Initialized Jira client instance.
-            op_client: Initialized OpenProject client instance.
-            data_dir: Path to data directory for storing mappings.
+            jira_client: Initialized Jira client instance
+            op_client: Initialized OpenProject client instance
+            data_dir: Path to data directory for storing mappings
         """
-        super().__init__(jira_client, op_client)
+        # Initialize base migration with client dependencies
+        super().__init__(
+            jira_client=jira_client,
+            op_client=op_client,
+        )
 
         # Configure paths
         self.data_dir = Path(data_dir or config.get_path("data"))
