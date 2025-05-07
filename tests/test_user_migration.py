@@ -3,7 +3,7 @@ Tests for the user migration component.
 """
 
 import unittest
-from unittest.mock import ANY, MagicMock, mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from src.migrations.user_migration import UserMigration
 
@@ -228,16 +228,20 @@ class TestUserMigration(unittest.TestCase):
             }  # Second call returns the user (after creation)
         ]
 
-        mock_op_instance.create_user.return_value = {
-            "id": 3,
-            "login": "user2",
-            "email": "user2@example.com",
-        }
-        mock_op_instance._request = MagicMock()
-        mock_op_instance._request.return_value = {
-            "id": 3,
-            "login": "user2",
-            "email": "user2@example.com",
+        # Mock the new bulk creation method
+        mock_op_instance.create_users_in_bulk = MagicMock()
+        mock_op_instance.create_users_in_bulk.return_value = {
+            "status": "success",
+            "created_count": 1,
+            "failed_count": 0,
+            "created_users": [
+                {
+                    "id": 3,
+                    "login": "user2",
+                    "email": "user2@example.com",
+                }
+            ],
+            "failed_users": []
         }
 
         mock_get_path.return_value = "/tmp/test_data"
@@ -255,11 +259,18 @@ class TestUserMigration(unittest.TestCase):
 
         # Mock the _save_to_json method to avoid serialization issues
         with patch.object(migration, "_save_to_json"):
-            # Call create_missing_users
-            result = migration.create_missing_users()
+            # Call create_missing_users with a smaller batch size for testing
+            result = migration.create_missing_users(batch_size=5)
 
-            # Verify _request was called with the expected POST parameters
-            mock_op_instance._request.assert_called_with("POST", "/users", data=ANY)
+            # Verify create_users_in_bulk was called
+            mock_op_instance.create_users_in_bulk.assert_called_once()
+
+            # The first argument should be a list containing user attributes
+            users_arg = mock_op_instance.create_users_in_bulk.call_args[0][0]
+            self.assertIsInstance(users_arg, list)
+            self.assertEqual(len(users_arg), 1)  # We expect one user to be created
+            self.assertEqual(users_arg[0]["login"], "user2")
+            self.assertEqual(users_arg[0]["email"], "user2@example.com")
 
             # Check that the updated mapping has the expected values
             self.assertIn("user2", result)

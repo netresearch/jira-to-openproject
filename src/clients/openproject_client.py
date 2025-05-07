@@ -1311,3 +1311,78 @@ class OpenProjectClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"API request error: {str(e)}")
             raise
+
+    def create_users_in_bulk(self, users: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Create multiple users in a single transaction.
+
+        Args:
+            users: List of user attribute dictionaries
+
+        Returns:
+            Dict with status, created users, and any error information
+        """
+        logger.debug(f"Creating {len(users)} users in bulk")
+
+        # Convert the Python list of user dictionaries to a Ruby array of hashes
+        users_json = json.dumps(users).replace('"', "'")
+
+        # Build script to create all users in a single transaction
+        script = f"""
+        created_users = []
+        failed_users = []
+
+        ActiveRecord::Base.transaction do
+          users_data = {users_json}
+
+          users_data.each do |user_attrs|
+            # Create the user record
+            user = User.new(user_attrs)
+
+            if user.save
+              created_users << user.as_json
+            else
+              failed_users << {{
+                attributes: user_attrs,
+                errors: user.errors.full_messages
+              }}
+            end
+          end
+
+          # If any user creation failed, raise an exception to rollback
+          if failed_users.any?
+            raise ActiveRecord::Rollback
+          end
+        end
+
+        # Return the results
+        {{
+          success: failed_users.empty?,
+          created_count: created_users.length,
+          failed_count: failed_users.length,
+          created_users: created_users,
+          failed_users: failed_users
+        }}
+        """
+
+        result = self._transfer_and_execute_script(script)
+
+        if result.get("status") == "success":
+            output = result.get("output", {})
+            if isinstance(output, dict):
+                return {
+                    "status": "success" if output.get("success") else "error",
+                    "created_count": output.get("created_count", 0),
+                    "failed_count": output.get("failed_count", 0),
+                    "created_users": output.get("created_users", []),
+                    "failed_users": output.get("failed_users", [])
+                }
+
+        return {
+            "status": "error",
+            "error": result.get("error", "Failed to create users in bulk"),
+            "created_count": 0,
+            "failed_count": len(users),
+            "created_users": [],
+            "failed_users": []
+        }

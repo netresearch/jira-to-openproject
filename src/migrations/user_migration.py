@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-import requests
 from src import config
 from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration
@@ -218,9 +217,13 @@ class UserMigration(BaseMigration):
 
         return mapping
 
-    def create_missing_users(self) -> dict[str, Any]:
+    def create_missing_users(self, batch_size: int = 50) -> dict[str, Any]:
         """
         Create users in OpenProject that don't have a match.
+        Uses bulk creation for better performance.
+
+        Args:
+            batch_size: Number of users to create in each batch (default: 50)
 
         Returns:
             Updated user mapping with newly created users
@@ -249,8 +252,10 @@ class UserMigration(BaseMigration):
         failed_count = 0
         found_existing_count = 0
 
+        # First check for existing users by email
+        users_to_create = []
         with ProgressTracker(
-            "Creating missing users", len(unmatched_users), "Recently Created Users"
+            "Checking for existing users", len(unmatched_users), "User Checks"
         ) as tracker:
             for user_data in unmatched_users:
                 jira_key = user_data["jira_key"]
@@ -258,7 +263,7 @@ class UserMigration(BaseMigration):
                 jira_email = user_data["jira_email"]
                 jira_display_name = user_data["jira_display_name"]
 
-                tracker.update_description(f"Creating user: {jira_display_name}")
+                tracker.update_description(f"Checking user: {jira_display_name}")
 
                 if not jira_name or not jira_email:
                     self.logger.warning(
@@ -269,18 +274,6 @@ class UserMigration(BaseMigration):
                     skipped_count += 1
                     tracker.increment()
                     continue
-
-                cleaned_display_name = jira_display_name
-                has_special_handling = False
-
-                # Handle special cases
-                if "(" in cleaned_display_name:
-                    # Try to clean the display name if it contains parentheses
-                    try:
-                        cleaned_display_name = re.sub(r'\s*\([^)]*\)', '', cleaned_display_name).strip()
-                        has_special_handling = True
-                    except Exception as e:
-                        self.logger.warning(f"Failed to clean display name {cleaned_display_name}: {str(e)}")
 
                 # First, check if a user with this email already exists
                 existing_user = None
@@ -325,6 +318,18 @@ class UserMigration(BaseMigration):
                     tracker.increment()
                     continue
 
+                cleaned_display_name = jira_display_name
+                has_special_handling = False
+
+                # Handle special cases
+                if "(" in cleaned_display_name:
+                    # Try to clean the display name if it contains parentheses
+                    try:
+                        cleaned_display_name = re.sub(r'\s*\([^)]*\)', '', cleaned_display_name).strip()
+                        has_special_handling = True
+                    except Exception as e:
+                        self.logger.warning(f"Failed to clean display name {cleaned_display_name}: {str(e)}")
+
                 # Format first/last name from display name
                 first_name = ""
                 last_name = ""
@@ -352,81 +357,104 @@ class UserMigration(BaseMigration):
                         first_name = jira_display_name
                         last_name = "."
 
-                # Create the user in OpenProject
-                try:
-                    # Prepare user data
-                    user_data = {
-                        "login": jira_name,
-                        "email": jira_email,
-                        "firstName": first_name,
-                        "lastName": last_name,
-                        "admin": False,
-                        "status": "active",
-                        "language": "en",
-                    }
-
-                    # Create user with a fake password (since LDAP will be used for authentication)
-                    user_data["password"] = "ChangeMe123!"
-
-                    # Use the _request method directly to ensure compatibility with test mocks
-                    created_user = self.op_client._request("POST", "/users", data=user_data)
-
-                    if created_user:
-                        # Update the mapping with the newly created user
-                        self.user_mapping[jira_key] = {
-                            "jira_key": jira_key,
-                            "jira_name": jira_name,
-                            "jira_email": jira_email,
-                            "jira_display_name": jira_display_name,
-                            "openproject_id": created_user.get("id"),
-                            "openproject_login": created_user.get("login"),
-                            "openproject_email": created_user.get("email"),
-                            "matched_by": "created",
-                        }
-                        tracker.add_log_item(
-                            f"Created: {jira_display_name} → {created_user.get('login')}"
-                        )
-                        created_count += 1
-                    else:
-                        tracker.add_log_item(f"Failed to create: {jira_display_name}")
-                        failed_count += 1
-                except requests.exceptions.HTTPError as e:
-                    error_msg = str(e)
-                    if "422" in error_msg:  # Validation error
-                        # Try to extract error details
-                        error_details = "Unknown validation error"
-                        try:
-                            if hasattr(e, "response") and e.response is not None:
-                                error_json = e.response.json()
-                                if "_embedded" in error_json and "errors" in error_json["_embedded"]:
-                                    errors = error_json["_embedded"]["errors"]
-                                    error_details = "; ".join([
-                                        error.get("message", "") for error in errors
-                                    ])
-                        except Exception:
-                            pass
-
-                        self.logger.warning(
-                            f"Validation error creating user {jira_display_name}: {error_details}",
-                            extra={"markup": True},
-                        )
-                        tracker.add_log_item(f"Validation error: {jira_display_name} - {error_details}")
-                    else:
-                        self.logger.warning(
-                            f"HTTP error creating user {jira_display_name}: {str(e)}",
-                            extra={"markup": True},
-                        )
-                        tracker.add_log_item(f"HTTP error: {jira_display_name} - {str(e)}")
-                    failed_count += 1
-                except Exception as e:
-                    self.logger.warning(
-                        f"Error creating user {jira_display_name}: {str(e)}",
-                        extra={"markup": True},
-                    )
-                    tracker.add_log_item(f"Error: {jira_display_name} - {str(e)}")
-                    failed_count += 1
-
+                # Add user to the list for bulk creation
+                users_to_create.append({
+                    "jira_key": jira_key,
+                    "jira_name": jira_name,
+                    "jira_email": jira_email,
+                    "jira_display_name": jira_display_name,
+                    "login": jira_name,
+                    "email": jira_email,
+                    "firstName": first_name,
+                    "lastName": last_name,
+                    "admin": False,
+                    "status": "active",
+                    "language": "en",
+                    "password": "ChangeMe123!"  # Temporary password (LDAP will be used later)
+                })
                 tracker.increment()
+
+        # Now create users in bulk batches
+        if users_to_create:
+            with ProgressTracker(
+                "Creating users in batches",
+                (len(users_to_create) + batch_size - 1) // batch_size,  # Ceiling division
+                "User Creation Batches"
+            ) as tracker:
+                for i in range(0, len(users_to_create), batch_size):
+                    batch = users_to_create[i:i+batch_size]
+                    batch_users_to_create = [{
+                        key: user[key] for key in [
+                            "login", "email", "firstName", "lastName",
+                            "admin", "status", "language", "password"
+                        ]
+                    } for user in batch]
+
+                    tracker.update_description(f"Creating batch {i//batch_size + 1} ({len(batch)} users)")
+
+                    try:
+                        # Create users in bulk
+                        bulk_result = self.op_client.create_users_in_bulk(batch_users_to_create)
+
+                        if bulk_result["status"] == "success":
+                            created_users = bulk_result.get("created_users", [])
+                            created_count += len(created_users)
+
+                            # Map created users back to Jira users
+                            created_users_by_login = {
+                                user.get("login"): user for user in created_users
+                            }
+
+                            # Update mapping with newly created users
+                            for user in batch:
+                                jira_key = user["jira_key"]
+                                login = user["login"]
+
+                                if login in created_users_by_login:
+                                    created_user = created_users_by_login[login]
+                                    self.user_mapping[jira_key] = {
+                                        "jira_key": jira_key,
+                                        "jira_name": user["jira_name"],
+                                        "jira_email": user["jira_email"],
+                                        "jira_display_name": user["jira_display_name"],
+                                        "openproject_id": created_user.get("id"),
+                                        "openproject_login": created_user.get("login"),
+                                        "openproject_email": created_user.get("email"),
+                                        "matched_by": "created",
+                                    }
+                                    tracker.add_log_item(f"Created: {user['jira_display_name']} → {login}")
+                                else:
+                                    failed_count += 1
+                                    tracker.add_log_item(f"Failed to create: {user['jira_display_name']}")
+
+                            # Log failed users
+                            failed_users = bulk_result.get("failed_users", [])
+                            for failed_user in failed_users:
+                                failed_count += 1
+                                attrs = failed_user.get("attributes", {})
+                                errors = failed_user.get("errors", [])
+                                error_msg = "; ".join(errors) if errors else "Unknown error"
+                                self.logger.warning(
+                                    f"Failed to create user {attrs.get('login')}: {error_msg}",
+                                    extra={"markup": True},
+                                )
+                        else:
+                            error_msg = bulk_result.get("error", "Unknown error")
+                            self.logger.warning(
+                                f"Bulk creation failed: {error_msg}",
+                                extra={"markup": True},
+                            )
+                            tracker.add_log_item(f"Batch failed: {error_msg}")
+                            failed_count += len(batch)
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Error in bulk user creation: {str(e)}",
+                            extra={"markup": True},
+                        )
+                        tracker.add_log_item(f"Batch error: {str(e)}")
+                        failed_count += len(batch)
+
+                    tracker.increment()
 
         # Save the updated mapping
         self._save_to_json(self.user_mapping, "user_mapping.json")
