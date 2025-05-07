@@ -222,23 +222,30 @@ def run_migration(
         # Initialize clients
         config.logger.info("Initializing API clients...", extra={"markup": True})
 
+        # Debug: print available config keys to help identify the correct ones
+        config.logger.info(f"Available OpenProject config keys: {list(config.openproject_config.keys())}")
+
         # Create clients in the correct hierarchical order
         # 1. First, create the SSH client which is the foundation
         ssh_client = SSHClient(
-            host=str(config.openproject_config["ssh_host"]),
-            user=config.openproject_config["ssh_user"],
-            key_file=config.openproject_config["ssh_key_file"],
+            host=str(config.openproject_config.get(
+                "server", "localhost"  # Use 'server' instead of falling back to URL
+            )),
+            user=config.openproject_config.get("user", None),
+            key_file=config.openproject_config.get("key_file", None),
         )
 
         # 2. Next, create the Docker client using the SSH client
         docker_client = DockerClient(
-            container_name=str(config.openproject_config["container_name"]),
+            container_name=str(config.openproject_config.get(
+                "container_name", config.openproject_config.get("container", "openproject")
+            )),
             ssh_client=ssh_client
         )
 
         # 3. Create the Rails console client
         rails_client = RailsConsoleClient(
-            tmux_session_name=config.openproject_config["tmux_session_name"]
+            tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console")
         )
 
         # 4. Finally, create the Jira client and OpenProject client (which uses the other clients)
@@ -713,19 +720,27 @@ def main() -> None:
         if args.update_mapping:
             # Initialize clients properly using dependency injection
             # Create clients in the correct hierarchical order
+
+            # Debug: print available config keys
+            config.logger.info(f"Available OpenProject config keys: {list(config.openproject_config.keys())}")
+
             ssh_client = SSHClient(
-                host=str(config.openproject_config["ssh_host"]),
-                user=config.openproject_config["ssh_user"],
-                key_file=config.openproject_config["ssh_key_file"],
+                host=str(config.openproject_config.get(
+                    "server", "localhost"  # Use 'server' instead of falling back to URL
+                )),
+                user=config.openproject_config.get("user", None),
+                key_file=config.openproject_config.get("key_file", None),
             )
 
             docker_client = DockerClient(
-                container_name=str(config.openproject_config["container_name"]),
+                container_name=str(config.openproject_config.get(
+                    "container_name", config.openproject_config.get("container", "openproject")
+                )),
                 ssh_client=ssh_client
             )
 
             rails_client = RailsConsoleClient(
-                tmux_session_name=config.openproject_config["tmux_session_name"]
+                tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console")
             )
 
             jira_client = JiraClient()
@@ -791,7 +806,11 @@ def main() -> None:
 
         # Display migration results summary
         if migration_result:
-            overall_status = migration_result.get("overall", {}).get("status", "unknown")
+            # Fix: Access MigrationResult properties correctly (it's an object, not a dict)
+            overall_status = (
+                migration_result.overall.get("status", "unknown")
+                if hasattr(migration_result, "overall") else "unknown"
+            )
 
             # Show summary header based on status
             if overall_status == "success":
@@ -810,7 +829,12 @@ def main() -> None:
 
             # Print component results
             config.logger.info("Component results:", extra={"markup": True})
-            for component, comp_result in migration_result.get("components", {}).items():
+            # Fix: Access components property correctly
+            component_items = (
+                migration_result.components.items()
+                if hasattr(migration_result, "components") else {}
+            )
+            for component, comp_result in component_items:
                 # Access status from details
                 status = comp_result.details.get("status", "unknown") if comp_result.details else "unknown"
                 if status == "success":
