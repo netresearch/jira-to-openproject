@@ -115,6 +115,13 @@ docker_client.copy_file_to_container("/local/path/script.rb", "/app/script.rb")
 - **Recent Improvements**:
   - Simplified to focus only on tmux session interactions (Task #23)
   - Enhanced execute method with direct output capture using unique markers (Task #24)
+  - Optimized performance with:
+    - Console prompt detection (avoids unnecessary stabilization)
+    - Adaptive polling (starts at 0.05s and scales up to 0.5s based on output changes)
+    - Minimal wait times between operations (0.1s vs previous 0.5-1.0s)
+    - Smart error handling with pattern detection for common Ruby errors
+  - Provides detailed debug logs for troubleshooting
+  - Independent of SSH and Docker concerns (clean separation of responsibilities)
 
 Example usage:
 ```python

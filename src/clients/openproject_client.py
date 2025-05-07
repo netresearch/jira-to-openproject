@@ -179,6 +179,18 @@ class OpenProjectClient:
         remote_script_path = f"/tmp/{script_filename}"
 
         try:
+            # Verify local file exists before transfer
+            if not os.path.exists(local_script_path):
+                logger.error(f"Local script file does not exist: {local_script_path}")
+                return {"status": "error", "error": f"Local script file not found: {local_script_path}"}
+
+            if not os.access(local_script_path, os.R_OK):
+                logger.error(f"Local script file is not readable: {local_script_path}")
+                return {"status": "error", "error": f"Local script file not readable: {local_script_path}"}
+
+            logger.debug(f"Verified local script file exists: {local_script_path}")
+            logger.debug(f"File size: {os.path.getsize(local_script_path)} bytes")
+
             # Transfer file to remote server
             logger.debug(f"Transferring script {script_filename} to remote server")
 
@@ -625,6 +637,18 @@ class OpenProjectClient:
         container_script_path = f"/tmp/{script_filename}"
 
         try:
+            # Verify local file exists before transfer
+            if not os.path.exists(local_script_path):
+                logger.error(f"Local script file does not exist: {local_script_path}")
+                return {"status": "error", "error": f"Local script file not found: {local_script_path}"}
+
+            if not os.access(local_script_path, os.R_OK):
+                logger.error(f"Local script file is not readable: {local_script_path}")
+                return {"status": "error", "error": f"Local script file not readable: {local_script_path}"}
+
+            logger.debug(f"Verified local script file exists: {local_script_path}")
+            logger.debug(f"File size: {os.path.getsize(local_script_path)} bytes")
+
             # First, transfer the script file to the remote host
             ssh_result = self.ssh_client.copy_file_to_remote(local_script_path, remote_script_path)
             if ssh_result.get("status") != "success":

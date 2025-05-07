@@ -83,6 +83,50 @@ class OpenProjectCleaner:
             )
             return False
 
+    def _count_records_direct(self, model: str) -> int:
+        """
+        Count records for a model using direct Rails console access.
+        This avoids the file transfer issues in dry-run mode.
+
+        Args:
+            model: Model name (e.g., "WorkPackage", "Project")
+
+        Returns:
+            Number of records or -1 if error
+        """
+        if not self._ensure_client():
+            return -1
+
+        try:
+            # Execute count command directly in Rails console
+            command = f"{model}.count"
+            result = self.op_client.rails_client.execute(command)
+
+            if result.get("status") == "success":
+                output = result.get("output", "")
+                if isinstance(output, str):
+                    # Try to extract numeric count from the output
+                    # Remove any Rails console prompts or whitespace
+                    output = output.strip()
+                    # Extract the first number we can find
+                    import re
+                    numbers = re.findall(r'\d+', output)
+                    if numbers:
+                        return int(numbers[0])
+                else:
+                    # If it's already a number, just return it
+                    try:
+                        return int(output)
+                    except (ValueError, TypeError):
+                        pass
+
+            # If we couldn't get a valid count
+            return -1
+
+        except Exception as e:
+            logger.error(f"Error counting {model} records: {str(e)}", extra={"markup": True})
+            return -1
+
     def cleanup_work_packages(self) -> int:
         """
         Remove all work packages from OpenProject.
@@ -104,37 +148,44 @@ class OpenProjectCleaner:
                 "DRY RUN: Would delete all work packages",
                 extra={"markup": True},
             )
-            # Get count for reporting
-            try:
-                wp_count = self.op_client.count_records("WorkPackage")
+            # Get count for reporting using direct method
+            wp_count = self._count_records_direct("WorkPackage")
+            logger.info(
+                f"DRY RUN: Would delete {wp_count} work packages",
+                extra={"markup": True},
+            )
+            return wp_count
+
+        # Get count before deletion
+        try:
+            wp_count_before = self._count_records_direct("WorkPackage")
+
+            if wp_count_before <= 0:
                 logger.info(
-                    f"DRY RUN: Would delete {wp_count} work packages",
-                    extra={"markup": True},
-                )
-                return wp_count
-            except Exception as e:
-                logger.error(
-                    f"Failed to get work package count: {str(e)}",
-                    extra={"markup": True},
+                    "No work packages found to delete",
+                    extra={"markup": True}
                 )
                 return 0
 
-        # Get count first for reporting
-        try:
-            wp_count = self.op_client.count_records("WorkPackage")
+            # Execute deletion command directly using Rails console client
+            command = "WorkPackage.delete_all; puts 'SUCCESS'"
+            result = self.op_client.rails_client.execute(command)
 
-            # Execute bulk deletion
-            success = self.op_client.delete_all_work_packages()
+            success = result.get("status") == "success"
 
             if success:
+                # Get count after deletion to determine actual number deleted
+                wp_count_after = self._count_records_direct("WorkPackage")
+                actual_deleted = max(0, wp_count_before - wp_count_after)
+
                 logger.success(
-                    f"Successfully deleted all {wp_count} work packages",
-                    extra={"markup": True},
+                    f"Successfully deleted {actual_deleted} work packages",
+                    extra={"markup": True}
                 )
-                return wp_count
+                return actual_deleted
             else:
                 logger.error(
-                    "Failed to delete work packages",
+                    f"Failed to delete work packages: {result.get('error', 'Unknown error')}",
                     extra={"markup": True},
                 )
                 return 0
@@ -167,37 +218,44 @@ class OpenProjectCleaner:
                 "DRY RUN: Would delete all projects",
                 extra={"markup": True},
             )
-            # Get count for reporting
-            try:
-                project_count = self.op_client.count_records("Project")
+            # Get count for reporting using direct method
+            project_count = self._count_records_direct("Project")
+            logger.info(
+                f"DRY RUN: Would delete {project_count} projects",
+                extra={"markup": True}
+            )
+            return project_count
+
+        # Get count before deletion
+        try:
+            project_count_before = self._count_records_direct("Project")
+
+            if project_count_before <= 0:
                 logger.info(
-                    f"DRY RUN: Would delete {project_count} projects",
+                    "No projects found to delete",
                     extra={"markup": True}
-                )
-                return project_count
-            except Exception as e:
-                logger.error(
-                    f"Failed to get project count: {str(e)}",
-                    extra={"markup": True},
                 )
                 return 0
 
-        # Get count first for reporting
-        try:
-            project_count = self.op_client.count_records("Project")
+            # Execute deletion command directly using Rails console client
+            command = "Project.delete_all; puts 'SUCCESS'"
+            result = self.op_client.rails_client.execute(command)
 
-            # Execute bulk deletion
-            success = self.op_client.delete_all_projects()
+            success = result.get("status") == "success"
 
             if success:
+                # Get count after deletion to determine actual number deleted
+                project_count_after = self._count_records_direct("Project")
+                actual_deleted = max(0, project_count_before - project_count_after)
+
                 logger.success(
-                    f"Successfully deleted all {project_count} projects",
-                    extra={"markup": True},
+                    f"Successfully deleted {actual_deleted} projects",
+                    extra={"markup": True}
                 )
-                return project_count
+                return actual_deleted
             else:
                 logger.error(
-                    "Failed to delete projects",
+                    f"Failed to delete projects: {result.get('error', 'Unknown error')}",
                     extra={"markup": True},
                 )
                 return 0
@@ -232,43 +290,118 @@ class OpenProjectCleaner:
                 "DRY RUN: Would delete all custom fields",
                 extra={"markup": True},
             )
-            # Get count for reporting
-            try:
-                cf_count = self.op_client.count_records("CustomField")
-                logger.info(
-                    f"DRY RUN: Would delete {cf_count} custom fields",
-                    extra={"markup": True},
-                )
-                return cf_count
-            except Exception as e:
-                logger.error(
-                    f"Failed to get custom field count: {str(e)}",
-                    extra={"markup": True},
-                )
-                return 0
+            # Get count for reporting using direct method
+            cf_count = self._count_records_direct("CustomField")
+            logger.info(
+                f"DRY RUN: Would delete {cf_count} custom fields",
+                extra={"markup": True},
+            )
+            return cf_count
 
-        # Get count first for reporting
+        # Get count first for reporting using direct method
         try:
-            cf_count = self.op_client.count_records("CustomField")
+            cf_count_before = self._count_records_direct("CustomField")
 
-            if cf_count == 0:
+            if cf_count_before == 0:
                 logger.info("No custom fields found to delete", extra={"markup": True})
                 return 0
 
-            logger.info(f"Found {cf_count} custom fields to delete", extra={"markup": True})
+            logger.info(f"Found {cf_count_before} custom fields to delete", extra={"markup": True})
 
-            # Execute bulk deletion
-            success = self.op_client.delete_all_custom_fields()
+            # Try a more direct approach for custom fields
+            # Get IDs first, then delete one by one in batches to avoid timeouts
+            logger.info("Using batch deletion approach for custom fields", extra={"markup": True})
 
-            if success:
-                logger.success(
-                    f"Successfully deleted all {cf_count} custom fields",
-                    extra={"markup": True},
-                )
-                return cf_count
+            # Get IDs of all custom fields
+            command = "puts CustomField.pluck(:id).join(',')"
+            result = self.op_client.rails_client.execute(command)
+
+            if result.get("status") == "success":
+                output = result.get("output", "")
+                if isinstance(output, str) and "," in output:
+                    try:
+                        # Extract comma-separated IDs
+                        ids_output = output.strip().split("\n")[0]  # Take first line in case of multiple lines
+                        ids = [int(id_str) for id_str in ids_output.split(",") if id_str.strip().isdigit()]
+
+                        if not ids:
+                            logger.warning("No custom field IDs found to delete", extra={"markup": True})
+                            return 0
+
+                        total_ids = len(ids)
+                        logger.info(f"Processing {total_ids} custom field IDs in batches", extra={"markup": True})
+
+                        # Process in batches of 100
+                        batch_size = 100
+                        deleted_count = 0
+
+                        for i in range(0, total_ids, batch_size):
+                            batch = ids[i:i+batch_size]
+                            batch_command = f"CustomField.where(id: {batch}).destroy_all"
+                            batch_result = self.op_client.rails_client.execute(batch_command)
+
+                            if batch_result.get("status") != "error":
+                                logger.info(
+                                    f"Processed batch {i//batch_size + 1}/"
+                                    f"{(total_ids + batch_size - 1)//batch_size}",
+                                    extra={"markup": True}
+                                )
+                                deleted_count += len(batch)
+                            else:
+                                logger.error(
+                                    f"Error processing batch {i//batch_size + 1}: "
+                                    f"{batch_result.get('error')}",
+                                    extra={"markup": True}
+                                )
+
+                        # Verify deletion
+                        cf_count_after = self._count_records_direct("CustomField")
+                        if cf_count_after < cf_count_before:
+                            logger.success(
+                                f"Successfully deleted {cf_count_before - cf_count_after} custom fields",
+                                extra={"markup": True}
+                            )
+                            return cf_count_before - cf_count_after
+                        else:
+                            logger.warning(
+                                f"Expected custom field count to decrease but it didn't: {cf_count_before} -> {cf_count_after}",
+                                extra={"markup": True}
+                            )
+                            return 0
+                    except Exception as e:
+                        logger.error(f"Error processing custom field IDs: {str(e)}", extra={"markup": True})
+                else:
+                    logger.error("Failed to get custom field IDs", extra={"markup": True})
             else:
                 logger.error(
-                    "Failed to delete custom fields",
+                    f"Failed to get custom field IDs: {result.get('error', 'Unknown error')}",
+                    extra={"markup": True}
+                )
+
+            # Fallback to direct approach if the batch method failed
+            logger.info("Falling back to direct deletion", extra={"markup": True})
+            command = "CustomField.destroy_all"
+            result = self.op_client.rails_client.execute(command)
+
+            if result.get("status") != "error":
+                # Check count after deletion to verify success
+                cf_count_after = self._count_records_direct("CustomField")
+                if cf_count_after < cf_count_before:
+                    deleted_count = cf_count_before - cf_count_after
+                    logger.success(
+                        f"Successfully deleted {deleted_count} custom fields",
+                        extra={"markup": True},
+                    )
+                    return deleted_count
+                else:
+                    logger.warning(
+                        f"Failed to delete custom fields (count before: {cf_count_before}, after: {cf_count_after})",
+                        extra={"markup": True},
+                    )
+                    return 0
+            else:
+                logger.error(
+                    f"Failed to delete custom fields: {result.get('error', 'Unknown error')}",
                     extra={"markup": True},
                 )
                 return 0
@@ -298,28 +431,49 @@ class OpenProjectCleaner:
             return 0
 
         try:
-            # Execute bulk deletion of non-default types
-            result = self.op_client.delete_non_default_issue_types()
+            # Execute deletion command directly using Rails console client
+            command = """
+            non_default_types = Type.where(is_default: false, is_standard: false)
+            count = non_default_types.count
+            if count > 0
+              non_default_types.destroy_all
+              puts "DELETED #{count} non-default issue types"
+            else
+              puts "No non-default issue types found to delete"
+            end
+            puts "END_MARKER"
+            """
+            result = self.op_client.rails_client.execute(command)
 
-            if isinstance(result, dict) and "count" in result:
-                count = result["count"]
-                if count > 0:
-                    logger.success(
-                        f"Successfully deleted {count} non-default issue types",
-                        extra={"markup": True},
-                    )
-                else:
-                    logger.info(
-                        "No non-default issue types found to delete",
-                        extra={"markup": True}
-                    )
-                return count
-            else:
-                logger.error(
-                    "Unexpected result format from issue type cleanup",
-                    extra={"markup": True},
-                )
-                return 0
+            if result.get("status") == "success":
+                output = result.get("output", "")
+                if isinstance(output, str):
+                    # Check if we have a success indicator
+                    if "DELETED" in output:
+                        # Try to extract the count using regex
+                        import re
+                        match = re.search(r"DELETED\s+(\d+)", output)
+                        if match:
+                            count = int(match.group(1))
+                            logger.success(
+                                f"Successfully deleted {count} non-default issue types",
+                                extra={"markup": True},
+                            )
+                            return count
+
+                    # If we can't extract a number but we see no types to delete
+                    if "No non-default issue types found to delete" in output:
+                        logger.info(
+                            "No non-default issue types found to delete",
+                            extra={"markup": True}
+                        )
+                        return 0
+
+            logger.error(
+                "Failed to clean up issue types",
+                extra={"markup": True},
+            )
+            return 0
 
         except Exception as e:
             logger.error(
@@ -346,28 +500,49 @@ class OpenProjectCleaner:
             return 0
 
         try:
-            # Execute bulk deletion of non-default statuses
-            result = self.op_client.delete_non_default_issue_statuses()
+            # Execute deletion command directly using Rails console client
+            command = """
+            non_default_statuses = Status.where(is_default: false)
+            count = non_default_statuses.count
+            if count > 0
+              non_default_statuses.destroy_all
+              puts "DELETED #{count} non-default issue statuses"
+            else
+              puts "No non-default issue statuses found to delete"
+            end
+            puts "END_MARKER"
+            """
+            result = self.op_client.rails_client.execute(command)
 
-            if isinstance(result, dict) and "count" in result:
-                count = result["count"]
-                if count > 0:
-                    logger.success(
-                        f"Successfully deleted {count} non-default issue statuses",
-                        extra={"markup": True},
-                    )
-                else:
-                    logger.info(
-                        "No non-default issue statuses found to delete",
-                        extra={"markup": True}
-                    )
-                return count
-            else:
-                logger.error(
-                    "Unexpected result format from issue status cleanup",
-                    extra={"markup": True},
-                )
-                return 0
+            if result.get("status") == "success":
+                output = result.get("output", "")
+                if isinstance(output, str):
+                    # Check if we have a success indicator
+                    if "DELETED" in output:
+                        # Try to extract the count using regex
+                        import re
+                        match = re.search(r"DELETED\s+(\d+)", output)
+                        if match:
+                            count = int(match.group(1))
+                            logger.success(
+                                f"Successfully deleted {count} non-default issue statuses",
+                                extra={"markup": True},
+                            )
+                            return count
+
+                    # If we can't extract a number but we see no statuses to delete
+                    if "No non-default issue statuses found to delete" in output:
+                        logger.info(
+                            "No non-default issue statuses found to delete",
+                            extra={"markup": True}
+                        )
+                        return 0
+
+            logger.error(
+                "Failed to clean up issue statuses",
+                extra={"markup": True},
+            )
+            return 0
 
         except Exception as e:
             logger.error(
@@ -394,36 +569,80 @@ class OpenProjectCleaner:
             return 0
 
         try:
-            # Execute bulk deletion of custom link types
-            result = self.op_client.delete_custom_issue_link_types()
+            # Execute deletion command directly using Rails console client
+            command = """
+            begin
+              # Check if TypedRelation exists in the system
+              if !defined?(TypedRelation)
+                puts "TypedRelation model not found in OpenProject"
+              else
+                # Get all relation types that aren't default
+                custom_types = []
+                default_types = Relation::TYPES.keys.map(&:to_s)
 
-            if isinstance(result, dict):
-                if "model_not_found" in result and result["model_not_found"]:
-                    # Handle the case where TypedRelation model doesn't exist
-                    logger.warning(
-                        "TypedRelation model not found in OpenProject. Skipping.",
-                        extra={"markup": True},
-                    )
-                    return 0
+                # Find TypedRelation records where name is not in default types
+                TypedRelation.all.each do |rel|
+                  if !default_types.include?(rel.name) && !default_types.include?(rel.reverse_name)
+                    custom_types << rel
+                  end
+                end
 
-                count = result.get("count", 0)
-                if count > 0:
-                    logger.success(
-                        f"Successfully deleted {count} custom issue link types",
-                        extra={"markup": True},
-                    )
-                else:
-                    logger.info(
-                        "No custom issue link types found to delete",
-                        extra={"markup": True}
-                    )
-                return count
-            else:
-                logger.error(
-                    "Unexpected result format from issue link type cleanup",
-                    extra={"markup": True},
-                )
-                return 0
+                count = custom_types.length
+                if count > 0
+                  custom_types.each(&:destroy)
+                  puts "DELETED #{count} custom issue link types"
+                else
+                  puts "No custom issue link types found to delete"
+                end
+              end
+              puts "END_MARKER"
+            rescue => e
+              puts "ERROR: #{e.message}"
+            end
+            """
+            result = self.op_client.rails_client.execute(command)
+
+            if result.get("status") == "success":
+                output = result.get("output", "")
+                if isinstance(output, str):
+                    if "TypedRelation model not found" in output:
+                        logger.warning(
+                            "TypedRelation model not found in OpenProject. Skipping.",
+                            extra={"markup": True},
+                        )
+                        return 0
+                    # Check if we have a success indicator
+                    elif "DELETED" in output:
+                        # Try to extract the count using regex
+                        import re
+                        match = re.search(r"DELETED\s+(\d+)", output)
+                        if match:
+                            count = int(match.group(1))
+                            logger.success(
+                                f"Successfully deleted {count} custom issue link types",
+                                extra={"markup": True},
+                            )
+                            return count
+                    # If we can't extract a number but we see no types to delete
+                    elif "No custom issue link types found" in output:
+                        logger.info(
+                            "No custom issue link types found to delete",
+                            extra={"markup": True}
+                        )
+                        return 0
+                    elif "ERROR:" in output:
+                        error_msg = output.split("ERROR:")[1].strip()
+                        logger.error(
+                            f"Error in issue link type cleanup: {error_msg}",
+                            extra={"markup": True}
+                        )
+                        return 0
+
+            logger.error(
+                "Failed to clean up issue link types",
+                extra={"markup": True},
+            )
+            return 0
 
         except Exception as e:
             logger.error(
@@ -432,7 +651,7 @@ class OpenProjectCleaner:
             )
             return 0
 
-    def get_all_work_packages(self) -> list[Dict[str, Any]]:
+    def get_all_work_packages(self) -> list[dict[str, Any]]:
         """
         Get all work packages from OpenProject.
 
@@ -466,7 +685,7 @@ class OpenProjectCleaner:
             )
             return []
 
-    def get_all_projects(self) -> list[Dict[str, Any]]:
+    def get_all_projects(self) -> list[dict[str, Any]]:
         """
         Get all projects from OpenProject.
 
