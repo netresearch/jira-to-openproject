@@ -74,44 +74,51 @@ def test_openproject_client():
 
         # Test a direct, simple file creation command
         print("Testing file creation in container...")
-        test_command = """
-        # Try to create a simple test file in /tmp
-        test_file = '/tmp/python_test_file.txt'
-        content = 'Test content from Python'
-        File.write(test_file, content)
-        if File.exist?(test_file)
-          "✅ SUCCESS: Created test file #{test_file} with content '#{content}'"
+
+        # Step 1: Create a unique filename and content
+        test_file = f"/tmp/python_test_file_{int(time.time())}.txt"
+        test_content = f"Test content from Python at {time.strftime('%H:%M:%S')}"
+
+        # Step 2: Simple command to create the file
+        create_file_cmd = f"""
+        File.write('{test_file}', '{test_content}')
+        File.exist?('{test_file}')
+        """
+
+        # Execute the file creation command
+        create_result = client.rails_client.execute(create_file_cmd)
+
+        # Step 3: Direct command to check if file exists and return content
+        verify_file_cmd = f"""
+        if File.exist?('{test_file}')
+          content = File.read('{test_file}')
+          "✅ VERIFIED: File exists with content: " + content
         else
-          "❌ ERROR: Failed to create test file #{test_file}"
+          "❌ FAILED: File does not exist"
         end
         """
 
-        # Execute the test command
-        result = client.rails_client.execute(test_command)
-        print(f"Command result: {result}")
+        # Execute verification command
+        verify_result = client.rails_client.execute(verify_file_cmd)
 
-        # Check for success in the raw output
-        output_str = str(result)
-        if "SUCCESS" in output_str:
-            print("✅ File creation test successful (found SUCCESS marker in output)")
+        # Check verification results
+        output_str = str(verify_result.get("output", ""))
+
+        if "✅ VERIFIED" in output_str:
+            print(f"✅ File creation test successful - file {test_file} verified")
             return True
-        elif result.get("status") == "success":
-            print("✅ File creation test successful (status is success)")
+        elif create_result.get("status") == "success" and "true" in str(create_result.get("output", "")):
+            print("✅ File creation command succeeded but verification not confirmed")
             return True
         else:
-            print(f"❌ File creation test failed: {result.get('error', 'Unknown error')}")
+            print(f"❌ File creation test failed: {verify_result.get('error', 'Unknown error')}")
             return False
-
-        # Now test the is_connected method
-        if client.is_connected():
-            print("✅ is_connected() reports successful connection")
-        else:
-            print("❌ Client reports connection failure")
 
     except Exception as e:
         print(f"❌ Error during client test: {str(e)}")
         import traceback
         traceback.print_exc()
+        return False
 
 
 def main():

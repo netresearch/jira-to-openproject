@@ -30,9 +30,9 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.mock_subprocess.run.return_value.returncode = 0
         self.mock_subprocess.run.return_value.stdout = (
             "Test tmux output\n"
-            "STARTtest_unique_id\n"
+            "--EXEC_START--test_unique_id\n"
             "Command output\n"
-            "ENDtest_unique_id"
+            "--EXEC_END--test_unique_id"
         )
 
         # Make subprocess.SubprocessError available to the code
@@ -74,9 +74,9 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.mock_send_command = self.send_command_patcher.start()
         self.mock_send_command.return_value = (
             "Console output\n"
-            "STARTtest_unique_id\n"
+            "--EXEC_START--test_unique_id\n"
             "Command result\n"
-            "ENDtest_unique_id\n"
+            "--EXEC_END--test_unique_id\n"
         )
 
         # Initialize RailsConsoleClient after all mocks are set up
@@ -124,9 +124,9 @@ class TestRailsConsoleClient(unittest.TestCase):
         # Configure mock_send_command for a successful execution
         self.mock_send_command.return_value = (
             "Console output\n"
-            "STARTtest_unique_id\n"
+            "--EXEC_START--test_unique_id\n"
             "Command result\n"
-            "ENDtest_unique_id\n"
+            "--EXEC_END--test_unique_id\n"
         )
 
         # Execute a Ruby script
@@ -149,10 +149,10 @@ class TestRailsConsoleClient(unittest.TestCase):
         # Configure mock for an error scenario
         self.mock_send_command.return_value = (
             "Console output\n"
-            "STARTtest_unique_id\n"
-            "ERRORtest_unique_id\n"
+            "--EXEC_START--test_unique_id\n"
+            "--EXEC_ERROR--test_unique_id\n"
             "Ruby error: NameError: undefined local variable\n"
-            "ENDtest_unique_id\n"
+            "--EXEC_END--test_unique_id\n"
         )
 
         # Execute the command that causes an error
@@ -167,9 +167,9 @@ class TestRailsConsoleClient(unittest.TestCase):
         # Configure mock for a SUCCESS scenario
         self.mock_send_command.return_value = (
             "Console output\n"
-            "STARTtest_unique_id\n"
+            "--EXEC_START--test_unique_id\n"
             "SUCCESS\n"
-            "ENDtest_unique_id\n"
+            "--EXEC_END--test_unique_id\n"
         )
 
         # Execute the command
