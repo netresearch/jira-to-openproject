@@ -75,8 +75,8 @@ class TestUserMigration(unittest.TestCase):
             },
         }
 
-    @patch("src.migrations.user_migration.JiraClient")
-    @patch("src.migrations.user_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.user_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -111,8 +111,8 @@ class TestUserMigration(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(migration.jira_users, self.jira_users)
 
-    @patch("src.migrations.user_migration.JiraClient")
-    @patch("src.migrations.user_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.user_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -147,8 +147,8 @@ class TestUserMigration(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(migration.op_users, self.op_users)
 
-    @patch("src.migrations.user_migration.JiraClient")
-    @patch("src.migrations.user_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.user_migration.config.get_path")
     @patch("src.migrations.user_migration.ProgressTracker")
     @patch("os.path.exists")
@@ -195,8 +195,8 @@ class TestUserMigration(unittest.TestCase):
         self.assertIsNone(result["user2"]["openproject_email"])
         self.assertEqual(result["user2"]["matched_by"], "none")
 
-    @patch("src.migrations.user_migration.JiraClient")
-    @patch("src.migrations.user_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.user_migration.config.get_path")
     @patch("src.migrations.user_migration.ProgressTracker")
     @patch("src.migrations.user_migration.logger")
