@@ -35,7 +35,6 @@ class IssueTypeMigration(BaseMigration):
         self,
         jira_client: JiraClient,
         op_client: OpenProjectClient,
-        rails_console: OpenProjectClient,
     ) -> None:
         """
         Initialize the issue type migration process.
@@ -43,7 +42,6 @@ class IssueTypeMigration(BaseMigration):
         Args:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
-            rails_console: Initialized OpenProjectClient instance (optional)
         """
         super().__init__(jira_client, op_client)
 
@@ -51,7 +49,8 @@ class IssueTypeMigration(BaseMigration):
         self.op_work_package_types: list[dict[str, Any]] = []
         self.issue_type_mapping: dict[str, dict[str, Any]] = {}
         self.issue_type_id_mapping: dict[str, int] = {}
-        self.rails_console = rails_console
+        # Get rails_client from op_client instead of requiring it directly
+        self.rails_console = op_client.rails_client
 
         # Default mappings for default jira issue types to default openproject work package types
         self.default_mappings: dict[str, dict[str, str]] = {
