@@ -72,3 +72,5 @@ node_modules/
 *.sw?
 # OS specific
 # Task files
+
+.cursor/mcp.json
