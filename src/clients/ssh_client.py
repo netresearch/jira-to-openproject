@@ -13,7 +13,8 @@ This is the foundation of the layered client architecture:
 import os
 import subprocess
 import time
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from src import config
 from src.utils.file_manager import FileManager
@@ -30,8 +31,8 @@ class SSHClient:
     def __init__(
         self,
         host: str,
-        user: Optional[str] = None,
-        key_file: Optional[str] = None,
+        user: str | None = None,
+        key_file: str | None = None,
         connect_timeout: int = 10,
         operation_timeout: int = 60,
         retry_count: int = 3,
@@ -79,7 +80,7 @@ class SSHClient:
         """
         return self.test_connection()
 
-    def get_ssh_base_command(self) -> List[str]:
+    def get_ssh_base_command(self) -> list[str]:
         """
         Get the base SSH command with common options.
 
@@ -103,7 +104,7 @@ class SSHClient:
 
         return cmd
 
-    def get_scp_base_command(self) -> List[str]:
+    def get_scp_base_command(self) -> list[str]:
         """
         Get the base SCP command with common options.
 
@@ -163,10 +164,10 @@ class SSHClient:
     def execute_command(
         self,
         command: str,
-        timeout: Optional[int] = None,
+        timeout: int | None = None,
         check: bool = True,
         retry: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute a command on the remote host.
 
@@ -255,7 +256,7 @@ class SSHClient:
         local_path: str,
         remote_path: str,
         retry: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Copy a file from local to remote host using scp.
 
@@ -349,7 +350,7 @@ class SSHClient:
         remote_path: str,
         local_path: str,
         retry: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Copy a file from remote host to local using scp.
 
@@ -469,7 +470,7 @@ class SSHClient:
             return True
         return False
 
-    def get_remote_file_size(self, remote_path: str) -> Optional[int]:
+    def get_remote_file_size(self, remote_path: str) -> int | None:
         """
         Get the size of a file on the remote host.
 
@@ -490,10 +491,10 @@ class SSHClient:
 
     def with_retry(
         self,
-        operation: Callable[..., Dict[str, Any]],
+        operation: Callable[..., dict[str, Any]],
         *args: Any,
         **kwargs: Any
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute an operation with retry logic.
 
