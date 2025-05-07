@@ -13,6 +13,7 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import console
 from src.models import ComponentResult
+from src.migrations.custom_field_migration import CustomFieldMigration
 
 # Get logger from config
 logger = config.logger
@@ -144,25 +145,41 @@ class LinkTypeMigration:
                     result.message = f"DRY RUN: {len(unmapped_link_types)} link types would be created as custom fields."
                     result.details["status"] = "success"
                 else:
-                    # TODO: Implement custom field creation for unmapped link types
-                    logger.warning(
-                        f"MANUAL ACTION REQUIRED: {len(unmapped_link_types)} link types need "
-                        f"to be created as custom fields in OpenProject."
-                    )
-                    # List the link types that need custom fields
-                    for jira_id, mapping in unmapped_link_types:
-                        logger.info(
-                            f"Custom field needed for: {mapping['jira_name']} "
-                            f"(Inward: {mapping['jira_inward']}, Outward: {mapping['jira_outward']})"
-                        )
+                    # Create custom fields for unmapped link types
+                    cf_result = self.create_custom_fields_for_link_types(unmapped_link_types)
 
-                    result.details["success_count"] = total_link_types - len(unmapped_link_types)
-                    result.details["custom_field_count"] = len(unmapped_link_types)
-                    result.message = (
-                        f"Mapped {result.details['success_count']} link types to default OpenProject relations. "
-                        f"ACTION REQUIRED: {len(unmapped_link_types)} link types need custom fields."
-                    )
-                    result.details["status"] = "partial_success"
+                    # Update the result based on the custom field creation outcome
+                    if cf_result["success"]:
+                        created_count = cf_result["created_count"]
+                        error_count = cf_result["error_count"]
+
+                        result.details["success_count"] = total_link_types - error_count
+                        result.details["custom_field_count"] = created_count
+                        result.details["failed_count"] = error_count
+
+                        if error_count == 0:
+                            result.message = (
+                                f"Successfully migrated all {total_link_types} link types: "
+                                f"{total_link_types - created_count} mapped to standard relations, "
+                                f"{created_count} created as custom fields."
+                            )
+                            result.details["status"] = "success"
+                        else:
+                            result.message = (
+                                f"Partially migrated {total_link_types} link types: "
+                                f"{total_link_types - created_count - error_count} mapped to standard relations, "
+                                f"{created_count} created as custom fields, "
+                                f"{error_count} failed."
+                            )
+                            result.details["status"] = "partial_success"
+                    else:
+                        result.details["success_count"] = total_link_types - len(unmapped_link_types)
+                        result.details["failed_count"] = len(unmapped_link_types)
+                        result.message = (
+                            f"Mapped {result.details['success_count']} link types to default OpenProject relations. "
+                            f"Failed to create custom fields for {len(unmapped_link_types)} link types."
+                        )
+                        result.details["status"] = "partial_success"
 
             # Update overall status string based on success flag
             if result.details["status"] != "partial_success":
@@ -651,3 +668,107 @@ class LinkTypeMigration:
 
         logger.info(f"Generated user mapping template at {output_path}")
         return output_path
+
+    def create_custom_fields_for_link_types(self, unmapped_link_types: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+        """
+        Create custom fields in OpenProject for unmapped link types.
+
+        Args:
+            unmapped_link_types: List of tuples (jira_id, mapping_data) for link types that need custom fields
+
+        Returns:
+            Dictionary with results of the operation
+        """
+        logger.info(f"Creating custom fields for {len(unmapped_link_types)} unmapped link types")
+
+        # Initialize a CustomFieldMigration instance
+        custom_field_migration = CustomFieldMigration(
+            jira_client=self.jira_client,
+            op_client=self.op_client
+        )
+
+        # Prepare the fields to create
+        fields_to_create = []
+
+        for jira_id, mapping in unmapped_link_types:
+            # Create a field definition for each unmapped link type
+            field_definition = {
+                "jira_id": jira_id,  # Use the Jira link type ID as a reference
+                # Prefix with 'Link:' to distinguish link type fields
+                "jira_name": f"Link: {mapping['jira_name']}",
+                "openproject_type": "text",  # Use text field for link types
+                "openproject_field_type": "WorkPackageCustomField",
+                "is_required": False,
+                "is_for_all": True,  # Make available for all work package types
+                "description": (
+                    f"Custom field for Jira link type: {mapping['jira_name']} "
+                    f"(Outward: {mapping['jira_outward']}, Inward: {mapping['jira_inward']})"
+                )
+            }
+
+            fields_to_create.append(field_definition)
+
+        if not fields_to_create:
+            logger.info("No custom fields to create")
+            return {
+                "success": True,
+                "created_count": 0,
+                "error_count": 0,
+                "message": "No custom fields to create"
+            }
+
+        # Use the batch method for efficiency
+        success = custom_field_migration.migrate_custom_fields_via_json(fields_to_create)
+
+        if not success:
+            logger.error("Failed to create custom fields for link types")
+            return {
+                "success": False,
+                "created_count": 0,
+                "error_count": len(fields_to_create),
+                "message": "Failed to create custom fields"
+            }
+
+        # Update our mapping with the newly created custom field IDs
+        created_count = 0
+        error_count = 0
+
+        # Refresh the list of OpenProject custom fields
+        op_custom_fields = custom_field_migration.extract_openproject_custom_fields()
+
+        # Create a dictionary of OpenProject custom fields by name for easy lookup
+        op_fields_by_name = {}
+        for field in op_custom_fields:
+            field_name = field.get("name", "").lower()
+            if field_name:
+                op_fields_by_name[field_name] = field
+
+        # Update our mapping
+        for jira_id, mapping in unmapped_link_types:
+            field_name = f"Link: {mapping['jira_name']}".lower()
+
+            if field_name in op_fields_by_name:
+                # Found the custom field - update the mapping
+                op_field = op_fields_by_name[field_name]
+                self.link_type_mapping[jira_id].update({
+                    "openproject_id": str(op_field.get("id")),
+                    "openproject_name": op_field.get("name"),
+                    "openproject_type": op_field.get("field_format", "text"),
+                    "matched_by": "custom_field",
+                    "status": "mapped",
+                    "custom_field_id": op_field.get("id")
+                })
+                created_count += 1
+            else:
+                error_count += 1
+                logger.warning(f"Could not find created custom field: {field_name}")
+
+        # Save the updated mapping
+        self._save_to_json(self.link_type_mapping, "link_type_mapping.json")
+
+        return {
+            "success": created_count > 0,
+            "created_count": created_count,
+            "error_count": error_count,
+            "message": f"Created {created_count} custom fields for link types ({error_count} errors)"
+        }
