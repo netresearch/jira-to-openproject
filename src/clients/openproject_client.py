@@ -29,6 +29,7 @@ from src.clients.rails_console_client import RailsConsoleClient
 from src.clients.docker_client import DockerClient
 from src.clients.ssh_client import SSHClient
 from src.utils.file_manager import FileManager
+import requests
 
 logger = config.logger
 
@@ -218,21 +219,23 @@ class OpenProjectClient:
                 logger.error(f"Failed to transfer script to remote host: {error_msg}")
                 return {"status": "error", "error": f"File transfer to remote host failed: {error_msg}"}
 
-            # Now copy from remote host to container using Docker client
+            # Now transfer from remote host to container using Docker command directly
+            # instead of using copy_file_to_container which expects a local path
             docker_container_path = f"/tmp/{script_filename}"
-            copy_result = self.docker_client.copy_file_to_container(
-                remote_script_path,
-                docker_container_path
-            )
+            container = self.docker_client.container_name
+            docker_cp_cmd = f"docker cp {remote_script_path} {container}:{docker_container_path}"
+
+            # Execute docker cp command via SSH client
+            copy_result = self.ssh_client.execute_command(docker_cp_cmd)
 
             if copy_result.get("status") != "success":
-                error_msg = copy_result.get("error", "Unknown error transferring file")
+                error_msg = copy_result.get("stderr", "Unknown error transferring file")
                 logger.error(f"Failed to transfer script to container: {error_msg}")
                 return {"status": "error", "error": f"File transfer to container failed: {error_msg}"}
 
             logger.debug(f"Successfully transferred script to {docker_container_path}")
 
-            # Verify the file exists in the container
+            # Verify the file exists in the container using the docker_client
             if not self.docker_client.check_file_exists_in_container(docker_container_path):
                 error_msg = f"Script file not found in container at {docker_container_path}"
                 logger.error(error_msg)
@@ -1204,3 +1207,107 @@ class OpenProjectClient:
         except Exception as e:
             logger.error(f"Error testing Rails console connection: {str(e)}")
             return False
+
+    def get_users(self) -> List[Dict[str, Any]]:
+        """
+        Get all users from OpenProject.
+
+        Returns:
+            List of OpenProject users
+        """
+        logger.debug("Retrieving users from OpenProject")
+
+        # Execute a Rails console query to retrieve all users
+        query = "User.all.as_json(only: [:id, :login, :firstname, :lastname, :email, :admin, :status])"
+        result = self.execute_query(query)
+
+        if result["status"] == "success" and result["output"] is not None:
+            users = result["output"]
+            if isinstance(users, list):
+                logger.debug(f"Retrieved {len(users)} users from OpenProject")
+                return users
+            else:
+                logger.error(f"Expected a list of users, got {type(users)}")
+                return []
+        else:
+            error = result.get("error", "Unknown error")
+            logger.error(f"Failed to retrieve users from OpenProject: {error}")
+            return []
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a user by email address.
+
+        Args:
+            email: Email address of the user
+
+        Returns:
+            User data or None if not found
+        """
+        logger.debug(f"Looking up user with email: {email}")
+
+        # Execute a Rails console query to find user by email
+        query = (
+            f"User.find_by(email: '{email}')&.as_json("
+            "only: [:id, :login, :firstname, :lastname, :email, :admin, :status])"
+        )
+        result = self.execute_query(query)
+
+        if result["status"] == "success" and result["output"] is not None:
+            user = result["output"]
+            if isinstance(user, dict):
+                logger.debug(f"Found user with email {email}")
+                return user
+            else:
+                logger.debug(f"No user found with email {email}")
+                return None
+        else:
+            error = result.get("error", "Unknown error")
+            logger.error(f"Failed to retrieve user by email from OpenProject: {error}")
+            return None
+
+    def _request(self, method: str, path: str, data: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Make a request to the OpenProject API.
+
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE)
+            path: API path (without base URL)
+            data: Request data for POST/PUT requests
+
+        Returns:
+            Response data as JSON
+        """
+        logger.debug(f"Making {method} request to {path}")
+
+        # Construct the full URL
+        url = f"{config.openproject_config['url']}/api/v3{path}"
+        headers = {
+            "Authorization": f"Bearer {config.openproject_config['api_token']}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            # Make the request
+            if method == "GET":
+                response = requests.get(url, headers=headers, timeout=self.command_timeout)
+            elif method == "POST":
+                response = requests.post(url, headers=headers, json=data, timeout=self.command_timeout)
+            elif method == "PUT":
+                response = requests.put(url, headers=headers, json=data, timeout=self.command_timeout)
+            elif method == "DELETE":
+                response = requests.delete(url, headers=headers, timeout=self.command_timeout)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            # Handle HTTP errors
+            response.raise_for_status()
+
+            # Return the JSON response if available, otherwise return None
+            if response.text and response.headers.get('Content-Type', '').startswith('application/json'):
+                return response.json()
+            return None
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request error: {str(e)}")
+            raise
