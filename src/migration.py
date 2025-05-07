@@ -225,20 +225,20 @@ def run_migration(
         # Create clients in the correct hierarchical order
         # 1. First, create the SSH client which is the foundation
         ssh_client = SSHClient(
-            host=str(config.get("openproject.ssh_host")),
-            user=config.get("openproject.ssh_user"),
-            key_file=config.get("openproject.ssh_key_file"),
+            host=str(config.openproject_config["ssh_host"]),
+            user=config.openproject_config["ssh_user"],
+            key_file=config.openproject_config["ssh_key_file"],
         )
 
         # 2. Next, create the Docker client using the SSH client
         docker_client = DockerClient(
-            container_name=str(config.get("openproject.container_name")),
+            container_name=str(config.openproject_config["container_name"]),
             ssh_client=ssh_client
         )
 
         # 3. Create the Rails console client
         rails_client = RailsConsoleClient(
-            tmux_session_name=config.get("openproject.tmux_session_name")
+            tmux_session_name=config.openproject_config["tmux_session_name"]
         )
 
         # 4. Finally, create the Jira client and OpenProject client (which uses the other clients)
@@ -714,18 +714,18 @@ def main() -> None:
             # Initialize clients properly using dependency injection
             # Create clients in the correct hierarchical order
             ssh_client = SSHClient(
-                host=str(config.get("openproject.ssh_host")),
-                user=config.get("openproject.ssh_user"),
-                key_file=config.get("openproject.ssh_key_file"),
+                host=str(config.openproject_config["ssh_host"]),
+                user=config.openproject_config["ssh_user"],
+                key_file=config.openproject_config["ssh_key_file"],
             )
 
             docker_client = DockerClient(
-                container_name=str(config.get("openproject.container_name")),
+                container_name=str(config.openproject_config["container_name"]),
                 ssh_client=ssh_client
             )
 
             rails_client = RailsConsoleClient(
-                tmux_session_name=config.get("openproject.tmux_session_name")
+                tmux_session_name=config.openproject_config["tmux_session_name"]
             )
 
             jira_client = JiraClient()
