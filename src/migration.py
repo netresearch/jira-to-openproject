@@ -224,13 +224,22 @@ def run_migration(
 
         # Create clients in the correct hierarchical order
         # 1. First, create the SSH client which is the foundation
-        ssh_client = SSHClient()
+        ssh_client = SSHClient(
+            host=str(config.get("openproject.ssh_host")),
+            user=config.get("openproject.ssh_user"),
+            key_file=config.get("openproject.ssh_key_file"),
+        )
 
         # 2. Next, create the Docker client using the SSH client
-        docker_client = DockerClient(ssh_client=ssh_client)
+        docker_client = DockerClient(
+            container_name=str(config.get("openproject.container_name")),
+            ssh_client=ssh_client
+        )
 
         # 3. Create the Rails console client
-        rails_client = RailsConsoleClient()
+        rails_client = RailsConsoleClient(
+            tmux_session_name=config.get("openproject.tmux_session_name")
+        )
 
         # 4. Finally, create the Jira client and OpenProject client (which uses the other clients)
         jira_client = JiraClient()
@@ -704,9 +713,21 @@ def main() -> None:
         if args.update_mapping:
             # Initialize clients properly using dependency injection
             # Create clients in the correct hierarchical order
-            ssh_client = SSHClient()
-            docker_client = DockerClient(ssh_client=ssh_client)
-            rails_client = RailsConsoleClient()
+            ssh_client = SSHClient(
+                host=str(config.get("openproject.ssh_host")),
+                user=config.get("openproject.ssh_user"),
+                key_file=config.get("openproject.ssh_key_file"),
+            )
+
+            docker_client = DockerClient(
+                container_name=str(config.get("openproject.container_name")),
+                ssh_client=ssh_client
+            )
+
+            rails_client = RailsConsoleClient(
+                tmux_session_name=config.get("openproject.tmux_session_name")
+            )
+
             jira_client = JiraClient()
             op_client = OpenProjectClient(
                 ssh_client=ssh_client,
