@@ -1,0 +1,92 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+- **Use Pipe Operator for Union Types**
+  - Use the `|` operator for Union types (Python 3.10+) instead of `Union[]`
+  - For optional types, use `T | None` instead of `Optional[T]`
+
+  ```python
+  # ✅ DO: Use pipe operator for Union types
+  def process_data(value: int | str) -> bool | None:
+      pass
+
+  # ❌ DON'T: Use Union[] or Optional[]
+  from typing import Optional, Union
+  def process_data(value: Union[int, str]) -> Optional[bool]:
+      pass
+  ```
+
+  ```python
+  # ✅ DO: Use T | None for optional parameters
+  def get_user(user_id: int, config: dict | None = None) -> User | None:
+      pass
+
+  # ❌ DON'T: Use Optional[T]
+  from typing import Optional
+  def get_user(user_id: int, config: Optional[dict] = None) -> Optional[User]:
+      pass
+  ```
+
+- **Use Built-in Collection Types (Python 3.9+)**
+  - Use built-in collection types directly instead of importing from typing
+  - Replace `Dict`, `List`, `Tuple`, `Set` with `dict`, `list`, `tuple`, `set`
+
+  ```python
+  # ✅ DO: Use built-in types for annotations
+  def process_items(items: list[str], config: dict[str, int]) -> tuple[bool, list[str]]:
+      pass
+
+  # ❌ DON'T: Import from typing module
+  from typing import Dict, List, Tuple
+  def process_items(items: List[str], config: Dict[str, int]) -> Tuple[bool, List[str]]:
+      pass
+  ```
+
+  | Type | Modern (3.9+) | Legacy |
+  |------|---------------|--------|
+  | Dictionary | `dict[str, int]` | `Dict[str, int]` |
+  | List | `list[str]` | `List[str]` |
+  | Tuple | `tuple[int, str]` | `Tuple[int, str]` |
+  | Set | `set[int]` | `Set[int]` |
+  | Type | `type[User]` | `Type[User]` |
+  | Optional | `int | None` | `Optional[int]` |
+  | Union | `int | str` | `Union[int, str]` |
+
+- **Import ABC Classes from collections.abc (Python 3.9+)**
+  - Import abstract base classes from `collections.abc` instead of `typing`
+  - Classes like `Callable`, `Iterable`, `Mapping`, `Sequence` should come from `collections.abc`
+
+  ```python
+  # ✅ DO: Import from collections.abc
+  from collections.abc import Callable, Sequence, Mapping
+
+  def process_data(callback: Callable[[int], str], items: Sequence[int]) -> Mapping[str, int]:
+      pass
+
+  # ❌ DON'T: Import from typing
+  from typing import Callable, Sequence, Mapping
+
+  def process_data(callback: Callable[[int], str], items: Sequence[int]) -> Mapping[str, int]:
+      pass
+  ```
+
+  | ABC Class | Modern Import (3.9+) | Legacy Import |
+  |-----------|----------------------|--------------|
+  | `Callable` | `from collections.abc import Callable` | `from typing import Callable` |
+  | `Iterable` | `from collections.abc import Iterable` | `from typing import Iterable` |
+  | `Sequence` | `from collections.abc import Sequence` | `from typing import Sequence` |
+  | `Mapping` | `from collections.abc import Mapping` | `from typing import Mapping` |
+  | `Set` | `from collections.abc import Set` | `from typing import Set` |
+  | `MutableMapping` | `from collections.abc import MutableMapping` | `from typing import MutableMapping` |
+
+- **Import Guidelines for Python <3.9 Codebases**
+  - For Python <3.9 codebases, continue using `Dict`, `List`, etc. from `typing`
+  - For Python ≥3.9 codebases, use built-in types and remove unnecessary imports
+  - For Python ≥3.10 codebases, use the pipe operator syntax as well
+
+- **Type Import Best Practices**
+  - Import type-related utilities from `typing` at the top of the file
+  - Group type imports together for better readability
+  - Consider using `from __future__ import annotations` for string-based annotations
