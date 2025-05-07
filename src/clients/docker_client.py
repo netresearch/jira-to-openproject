@@ -4,11 +4,16 @@ DockerClient
 
 Manages Docker container interactions, including command execution and file transfers.
 Uses SSHClient for remote operations.
+Part of the layered client architecture where:
+1. SSHClient is the foundation for all SSH operations
+2. DockerClient uses SSHClient for remote Docker operations
+3. RailsConsoleClient uses DockerClient for container interactions
+4. OpenProjectClient coordinates all clients and operations
 """
 
 import os
 import time
-from typing import Any
+from typing import Any, Optional
 
 from src import config
 from src.clients.ssh_client import SSHClient
@@ -20,14 +25,19 @@ logger = config.logger
 class DockerClient:
     """
     Client for interacting with Docker containers on remote servers.
+    Part of the layered client architecture where:
+    1. OpenProjectClient owns SSHClient, DockerClient, and RailsConsoleClient
+    2. DockerClient uses SSHClient for remote Docker operations
+    3. RailsConsoleClient uses DockerClient for container interactions
     """
 
     def __init__(
         self,
         container_name: str,
-        ssh_host: str,
-        ssh_user: str | None = None,
-        ssh_key_file: str | None = None,
+        ssh_client: Optional[SSHClient] = None,
+        ssh_host: Optional[str] = None,
+        ssh_user: Optional[str] = None,
+        ssh_key_file: Optional[str] = None,
         command_timeout: int = 60,
         retry_count: int = 3,
         retry_delay: float = 1.0,
@@ -37,9 +47,10 @@ class DockerClient:
 
         Args:
             container_name: Name or ID of the Docker container
-            ssh_host: SSH host where Docker is running
-            ssh_user: SSH username (default: current user)
-            ssh_key_file: Path to SSH key file (default: use SSH agent)
+            ssh_client: Existing SSHClient instance (preferred method)
+            ssh_host: SSH host where Docker is running (used only if ssh_client is None)
+            ssh_user: SSH username (used only if ssh_client is None)
+            ssh_key_file: Path to SSH key file (used only if ssh_client is None)
             command_timeout: Default timeout for commands in seconds
             retry_count: Number of retries for operations
             retry_delay: Delay between retries in seconds
@@ -49,20 +60,32 @@ class DockerClient:
         self.retry_count = retry_count
         self.retry_delay = retry_delay
 
-        # Initialize SSH client
-        self.ssh_client = SSHClient(
-            host=ssh_host,
-            user=ssh_user,
-            key_file=ssh_key_file,
-            operation_timeout=command_timeout
-        )
+        # Use provided SSHClient or create a new one
+        if ssh_client:
+            self.ssh_client = ssh_client
+            logger.debug("Using provided SSHClient")
+        else:
+            # Require ssh_host parameter if ssh_client not provided
+            if not ssh_host:
+                raise ValueError("Either ssh_client or ssh_host must be provided")
+
+            # Initialize SSH client
+            self.ssh_client = SSHClient(
+                host=ssh_host,
+                user=ssh_user,
+                key_file=ssh_key_file,
+                operation_timeout=command_timeout,
+                retry_count=retry_count,
+                retry_delay=retry_delay
+            )
+            logger.debug(f"Created new SSHClient for host {ssh_host}")
 
         # Get file manager instance
         self.file_manager = FileManager()
 
         # Verify container exists
         if not self.check_container_exists():
-            raise ValueError(f"Docker container not found: {container_name}")
+            raise ValueError(f"Docker container not found or not running: {container_name}")
 
         logger.debug(f"DockerClient initialized for container {container_name}")
 

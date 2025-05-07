@@ -367,3 +367,85 @@ Each component migration follows an Extract-Transform-Load (ETL) pattern:
 2. Only changed data is updated during subsequent runs
 3. Manually added or modified data in OpenProject is preserved
 4. Performance remains consistent across multiple executions
+
+# Client Architecture Refactoring PRD
+
+## Overview
+
+This document outlines the requirements for refactoring the client architecture in the Jira to OpenProject migration tool to follow a clear layered design pattern. The goal is to establish proper ownership relationships between the different client components and ensure clean separation of responsibilities.
+
+## Background
+
+The current client architecture has evolved organically, leading to some inconsistencies in how components interact. There are cases where lower-level components (e.g., DockerClient) are owned by higher-level components that should not be responsible for their lifecycle. This refactoring aims to establish a clearer ownership model.
+
+## Objectives
+
+- Implement a layered client architecture with clear ownership relationships
+- Ensure proper dependency injection between components
+- Improve error handling and reliability
+- Update documentation to reflect the new architecture
+- Streamline file transfer and command execution workflows
+- Enhance debugging capabilities
+
+## Requirements
+
+### Architecture Requirements
+
+1. OpenProjectClient should:
+   - Be the top-level API for OpenProject interactions
+   - Directly own and instantiate SSHClient, DockerClient, and RailsConsoleClient
+   - Coordinate file transfers and command execution
+   - Handle result processing and error management
+
+2. RailsConsoleClient should:
+   - Accept an existing DockerClient instance during initialization
+   - Interact with tmux for Rails console access
+   - Handle command execution and output parsing
+   - Use direct output capture with markers for reliable output extraction
+
+3. DockerClient should:
+   - Accept an existing SSHClient instance during initialization
+   - Handle container operations using the provided SSHClient
+   - Manage file transfers to/from the container
+
+4. SSHClient should:
+   - Be initialized first in the chain
+   - Handle direct SSH connections to the remote host
+   - Provide file transfer and command execution primitives
+
+### File Handling and Command Execution
+
+1. Improve the command execution workflow:
+   - Use a direct output capture approach with unique markers
+   - Parse output between markers instead of relying on files for all results
+   - Implement proper error handling and reporting
+
+2. Enhance file transfers:
+   - Clearly define file transfer paths through the component hierarchy
+   - Use SSHClient for transfers to the remote host
+   - Use DockerClient (via SSHClient) for transfers to the container
+
+### Documentation Updates
+
+1. Update the client architecture documentation:
+   - Create a detailed client architecture document
+   - Include a visual diagram showing component relationships
+   - Document data flow patterns between components
+
+2. Update the main README:
+   - Update architecture diagram to reflect the new design
+   - Add references to the new architecture documentation
+
+## Success Criteria
+
+- All client components follow the defined ownership hierarchy
+- File transfers and command execution work reliably
+- Clear documentation describing the architecture is available
+- Error handling is comprehensive and provides useful debugging information
+- Tests pass and verify the integrity of the architecture
+
+## Future Considerations
+
+- Consider implementing a more robust connection pool for Rails console sessions
+- Evaluate alternatives to tmux for console interaction if needed
+- Explore options for more concurrent operations using the new architecture

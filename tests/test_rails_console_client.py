@@ -9,6 +9,7 @@ import os
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
+import subprocess
 
 from src.clients.rails_console_client import RailsConsoleClient
 
@@ -22,25 +23,43 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
 
         # Create patchers
-        self.docker_client_patcher = patch('src.clients.rails_console_client.DockerClient')
-        self.mock_docker_client_class = self.docker_client_patcher.start()
-        self.mock_docker_client = MagicMock()
-        self.mock_docker_client_class.return_value = self.mock_docker_client
+        self.subprocess_patcher = patch('src.clients.rails_console_client.subprocess')
+        self.mock_subprocess = self.subprocess_patcher.start()
 
-        # Set up SSH client mock within Docker client
-        self.mock_ssh_client = MagicMock()
-        self.mock_docker_client.ssh_client = self.mock_ssh_client
+        # Mock successful tmux session check
+        self.mock_subprocess.run.return_value.returncode = 0
+        self.mock_subprocess.run.return_value.stdout = (
+            "Test tmux output\n"
+            "STARTtest_unique_id\n"
+            "Command output\n"
+            "ENDtest_unique_id"
+        )
+
+        # Make subprocess.SubprocessError available to the code
+        self.mock_subprocess.SubprocessError = subprocess.SubprocessError
+        self.mock_subprocess.CalledProcessError = subprocess.CalledProcessError
 
         self.logger_patcher = patch('src.clients.rails_console_client.logger')
         self.mock_logger = self.logger_patcher.start()
 
         self.time_patcher = patch('src.clients.rails_console_client.time')
         self.mock_time = self.time_patcher.start()
+        # Make time.time() return incrementing values
+        self.mock_time.time.side_effect = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        self.mock_time.sleep = MagicMock()  # Mock sleep to do nothing
 
         # Mock file operations
         self.os_patcher = patch('src.clients.rails_console_client.os')
         self.mock_os = self.os_patcher.start()
         self.mock_os.path.join = os.path.join  # Use real path join
+
+        # Mock os.path.exists to return True
+        self.mock_os.path.exists.return_value = True
+
+        # Mock open file operations
+        self.mock_file = MagicMock()
+        self.mock_open_patcher = patch('builtins.open', return_value=self.mock_file)
+        self.mock_open = self.mock_open_patcher.start()
 
         # File manager mock
         self.file_manager_patcher = patch('src.clients.rails_console_client.FileManager')
@@ -48,35 +67,33 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.mock_file_manager = MagicMock()
         self.mock_file_manager.generate_unique_id.return_value = "test_unique_id"
         self.mock_file_manager.create_debug_session.return_value = "/path/to/debug/session"
-        self.mock_file_manager.create_data_file.return_value = "/path/to/data.json"
-        self.mock_file_manager.create_script_file.return_value = "/path/to/script.rb"
-        self.mock_file_manager.data_dir = "/data/dir"
         self.mock_file_manager_class.return_value = self.mock_file_manager
 
-        # Configure mocks for successful tmux session check for the default instance
-        self.mock_ssh_client.execute_command.return_value = {
-            "status": "success",
-            "stdout": "EXISTS\n",
-            "stderr": "",
-            "returncode": 0
-        }
+        # Mock _send_command_to_tmux method
+        self.send_command_patcher = patch.object(RailsConsoleClient, '_send_command_to_tmux')
+        self.mock_send_command = self.send_command_patcher.start()
+        self.mock_send_command.return_value = (
+            "Console output\n"
+            "STARTtest_unique_id\n"
+            "Command result\n"
+            "ENDtest_unique_id\n"
+        )
 
         # Initialize RailsConsoleClient after all mocks are set up
         self.rails_client = RailsConsoleClient(
-            container_name="test_container",
-            ssh_host="testhost",
-            ssh_user="testuser",
             tmux_session_name="test_session"
         )
 
     def tearDown(self) -> None:
         """Clean up after each test."""
         # Stop all patchers
-        self.docker_client_patcher.stop()
+        self.subprocess_patcher.stop()
         self.logger_patcher.stop()
         self.time_patcher.stop()
         self.os_patcher.stop()
         self.file_manager_patcher.stop()
+        self.mock_open_patcher.stop()
+        self.send_command_patcher.stop()
 
         # Clean up temp directory
         if os.path.exists(self.temp_dir):
@@ -92,126 +109,75 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.assertEqual(self.rails_client.command_timeout, 180)
         self.assertEqual(self.rails_client.inactivity_timeout, 30)
 
-        # Verify DockerClient was initialized with correct parameters
-        self.mock_docker_client_class.assert_called_once_with(
-            container_name="test_container",
-            ssh_host="testhost",
-            ssh_user="testuser",
-            ssh_key_file=None,
-            command_timeout=180
-        )
-
-        # Verify session existence was checked
-        self.mock_ssh_client.execute_command.assert_any_call(
-            "tmux has-session -t test_session 2>/dev/null && echo 'EXISTS' || echo 'NOT_EXISTS'"
+        # Verify session existence was checked using tmux directly
+        self.mock_subprocess.run.assert_any_call(
+            ["tmux", "has-session", "-t", "test_session"],
+            capture_output=True,
+            text=True
         )
 
         # Verify success message was logged
         self.mock_logger.success.assert_called_once()
 
     def test_execute_script(self) -> None:
-        """Test executing a Ruby script."""
-        # Reset mocks
-        self.mock_file_manager.create_script_file.reset_mock()
-        self.mock_docker_client.copy_file_to_container.reset_mock()
-
-        # Mock script file creation
-        self.mock_file_manager.create_script_file.return_value = "/path/to/script.rb"
-
-        # Mock successful file copy to container
-        self.mock_docker_client.copy_file_to_container.return_value = {"status": "success"}
-
-        # Setup execute method mock with success result
-        with patch.object(
-            self.rails_client, 'execute',
-            return_value={"status": "success", "output": "script result"}
-        ) as mock_execute:
-            # Execute the script
-            result = self.rails_client.execute_script("puts 'Hello from script'")
-
-            # Verify execute was called with the load command
-            mock_execute.assert_called_once()
-            execute_cmd = mock_execute.call_args[0][0]
-            self.assertIn("load '/tmp/test_unique_id_script.rb'", execute_cmd)
-
-        # Verify the script file was created
-        self.mock_file_manager.create_script_file.assert_called_once()
-        script_content = self.mock_file_manager.create_script_file.call_args[0][0]
-        self.assertIn("puts 'Hello from script'", script_content)
-
-        # Verify the script was copied to the container
-        self.mock_docker_client.copy_file_to_container.assert_called_once_with(
-            "/path/to/script.rb", "/tmp/test_unique_id_script.rb"
+        """Test executing a Ruby command."""
+        # Configure mock_send_command for a successful execution
+        self.mock_send_command.return_value = (
+            "Console output\n"
+            "STARTtest_unique_id\n"
+            "Command result\n"
+            "ENDtest_unique_id\n"
         )
+
+        # Execute a Ruby script
+        test_script = "puts 'Hello from Ruby'"
+        result = self.rails_client.execute(test_script)
 
         # Verify the result is correct
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["output"], "script result")
+        self.assertEqual(result["output"], "Command result")
 
-    def test_execute_with_data(self) -> None:
-        """Test executing a script with data."""
-        # Reset mocks
-        self.mock_file_manager.create_data_file.reset_mock()
-        self.mock_file_manager.create_script_file.reset_mock()
-        self.mock_docker_client.copy_file_to_container.reset_mock()
+        # Verify _send_command_to_tmux was called with the right parameters
+        self.mock_send_command.assert_called_once()
+        # The first argument should be the wrapped command
+        self.assertIn(test_script, self.mock_send_command.call_args[0][0])
+        # The second argument should be the timeout
+        self.assertEqual(self.mock_send_command.call_args[0][1], 180)
 
-        # Mock file creation
-        self.mock_file_manager.create_data_file.return_value = "/path/to/data.json"
-        self.mock_file_manager.create_script_file.return_value = "/path/to/script.rb"
-
-        # Mock successful file copies to container
-        self.mock_docker_client.copy_file_to_container.side_effect = [
-            {"status": "success"},  # data file
-            {"status": "success"}   # script file
-        ]
-
-        # Setup execute method mock with success result
-        with patch.object(
-            self.rails_client, 'execute',
-            return_value={"status": "success", "output": "data script result"}
-        ) as mock_execute:
-            # Execute the script with data
-            data = {"key": "value", "items": [1, 2, 3]}
-            result = self.rails_client.execute_with_data(
-                "puts input_data.inspect",
-                data
-            )
-
-            # Verify execute was called
-            mock_execute.assert_called_once()
-
-        # Verify the data file was created
-        self.mock_file_manager.create_data_file.assert_called_once_with(
-            data,
-            filename="test_unique_id_data.json",
-            session_dir="/path/to/debug/session"
+    def test_execute_with_error(self) -> None:
+        """Test executing a command that causes an error."""
+        # Configure mock for an error scenario
+        self.mock_send_command.return_value = (
+            "Console output\n"
+            "STARTtest_unique_id\n"
+            "ERRORtest_unique_id\n"
+            "Ruby error: NameError: undefined local variable\n"
+            "ENDtest_unique_id\n"
         )
 
-        # Verify the script file was created
-        self.mock_file_manager.create_script_file.assert_called_once()
-        script_content = self.mock_file_manager.create_script_file.call_args[0][0]
-        # Script should include data loading code
-        self.assertIn("require 'json'", script_content)
-        self.assertIn("input_data = JSON.parse", script_content)
-        # Original script should be included
-        self.assertIn("puts input_data.inspect", script_content)
+        # Execute the command that causes an error
+        result = self.rails_client.execute("undefined_variable + 1")
 
-        # Verify both files were copied to the container
-        self.assertEqual(self.mock_docker_client.copy_file_to_container.call_count, 2)
+        # Verify the error was detected
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Ruby error", result.get("error", ""))
 
-        # First call should copy data file
-        first_call = self.mock_docker_client.copy_file_to_container.call_args_list[0]
-        self.assertEqual(first_call[0][0], "/path/to/data.json")
-        self.assertEqual(first_call[0][1], "/tmp/test_unique_id_data.json")
+    def test_execute_with_success_keyword(self) -> None:
+        """Test executing a command with SUCCESS keyword."""
+        # Configure mock for a SUCCESS scenario
+        self.mock_send_command.return_value = (
+            "Console output\n"
+            "STARTtest_unique_id\n"
+            "SUCCESS\n"
+            "ENDtest_unique_id\n"
+        )
 
-        # Second call should copy script file
-        second_call = self.mock_docker_client.copy_file_to_container.call_args_list[1]
-        self.assertEqual(second_call[0][0], "/path/to/script.rb")
-        self.assertEqual(second_call[0][1], "/tmp/test_unique_id_script.rb")
+        # Execute the command
+        result = self.rails_client.execute("puts 'SUCCESS'")
 
-        # Verify the result is correct
+        # Verify the success was detected
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["output"], "data script result")
+        self.assertTrue(result["output"]["success"])
 
 
 if __name__ == "__main__":
