@@ -8,6 +8,7 @@ This project provides a robust, modular, and configurable toolset for migrating 
 * **Tasks & Status:** [TASKS.md](TASKS.md)
 * **Configuration:** [docs/configuration.md](docs/configuration.md)
 * **Development Setup & Guidelines:** [docs/development.md](docs/development.md)
+* **Client Architecture:** [docs/client_architecture.md](docs/client_architecture.md)
 * **Initial Plan:** [PLANNING.md](PLANNING.md)
 * **Source Code Overview:** [src/README.md](src/README.md)
 * **Scripts Overview:** [scripts/README.md](scripts/README.md)
@@ -17,37 +18,42 @@ This project provides a robust, modular, and configurable toolset for migrating 
 
 ## Architecture
 
-This project uses a layered architecture for interacting with OpenProject:
+This project uses a layered architecture for interacting with OpenProject. For a detailed overview with visual diagrams of the client architecture, see [docs/client_architecture.md](docs/client_architecture.md).
 
 ```plain
-┌─────────────────────────┐
-│    OpenProjectClient    │  High-level API for OpenProject operations
-└───────────┬─────────────┘
-            │
-┌───────────▼─────────────┐
-│   RailsConsoleClient    │  Handles Rails console interactions
-└───────────┬─────────────┘
-            │
-┌───────────▼─────────────┐
-│      DockerClient       │  Manages Docker container operations
-└───────────┬─────────────┘
-            │
-┌───────────▼─────────────┐
-│        SSHClient        │  Handles SSH operations to remote servers
-└───────────┬─────────────┘
-            │
-┌───────────▼─────────────┐
-│      FileManager        │  Manages file operations and tracking
-└─────────────────────────┘
+┌───────────────────────────────────────┐
+│          OpenProjectClient            │  High-level API & Main Orchestrator
+└───┬──────────────┬─────────────┬──────┘
+    │              │             │
+    │ owns         │ owns        │ owns
+    ▼              ▼             ▼
+┌─────────┐   ┌──────────┐  ┌────────────────┐
+│SSHClient│◄──┤DockerClient│ │RailsConsoleClient│
+└─────────┘   └──────────┘  └────────────────┘
+    │
+┌───┴─────────────────────────────────┐
+│              FileManager            │  Manages file operations and tracking
+└─────────────────────────────────────┘
 ```
 
-Each layer has a specific responsibility:
+Each layer has a specific responsibility in the dependency hierarchy:
 
-* **OpenProjectClient**: The main API for OpenProject operations, providing high-level methods for record management.
-* **RailsConsoleClient**: Handles the execution of Ruby code in the Rails console.
-* **DockerClient**: Manages Docker container operations, including file transfers and command execution.
-* **SSHClient**: Handles SSH connections and command execution on remote servers.
-* **FileManager**: Centralizes file operations, including creation, tracking, and cleanup.
+* **OpenProjectClient**: The top-level orchestrator that initializes and owns all client components. It provides high-level methods for record management while coordinating the workflow between components.
+
+* **SSHClient**: The foundation layer that handles all SSH operations including connection management, command execution, and file transfers. It provides robust error handling and retry logic for network operations.
+
+* **DockerClient**: Uses SSHClient (via dependency injection) to execute Docker commands. It's responsible for container operations and file transfers to/from the Docker container.
+
+* **RailsConsoleClient**: Focused exclusively on interacting with Rails console via tmux sessions. It implements a sophisticated marker-based error detection system to reliably distinguish between actual errors and text in command outputs.
+
+* **FileManager**: Centralized utility for managing file operations, including tracking temporary files and creating debug sessions.
+
+The architecture follows a clear dependency injection pattern, where:
+1. OpenProjectClient initializes and owns all other clients
+2. DockerClient receives SSHClient as a constructor parameter
+3. Each component has a single, well-defined responsibility
+
+This layered design ensures clean separation of concerns and makes the system highly testable and maintainable.
 
 ## Introduction
 

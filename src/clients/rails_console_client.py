@@ -3,16 +3,20 @@
 RailsConsoleClient
 
 Client for interacting with Rails console in a tmux session.
-Uses Docker client for container operations.
+This client is part of the layered client architecture where:
+1. RailsConsoleClient interacts only with the tmux session running Rails console
+2. It does not know about Docker or SSH - it purely handles sending commands to and
+   capturing output from the tmux session
+3. OpenProjectClient coordinates all clients, including file transfers via SSHClient/DockerClient
+   and command execution via RailsConsoleClient
 """
 
 import os
-import json
 import time
-from typing import Any
+import subprocess
+from typing import Any, Dict, Optional
 
 from src import config
-from src.clients.docker_client import DockerClient
 from src.utils.file_manager import FileManager
 
 logger = config.logger
@@ -20,15 +24,15 @@ logger = config.logger
 
 class RailsConsoleClient:
     """
-    Client for interacting with Rails console via tmux in a Docker container.
+    Client for interacting with Rails console via a local tmux session.
+    This client only knows how to:
+    1. Send commands to a tmux session containing a Rails console
+    2. Capture and parse the output from these commands
+    3. It does not directly interact with Docker or SSH
     """
 
     def __init__(
         self,
-        container_name: str,
-        ssh_host: str,
-        ssh_user: str | None = None,
-        ssh_key_file: str | None = None,
         tmux_session_name: str = "rails_console",
         window: int = 0,
         pane: int = 0,
@@ -39,10 +43,6 @@ class RailsConsoleClient:
         Initialize the Rails console client.
 
         Args:
-            container_name: Name of the Docker container
-            ssh_host: SSH host where Docker is running
-            ssh_user: SSH username (default: current user)
-            ssh_key_file: Path to SSH key file (default: use SSH agent)
             tmux_session_name: tmux session name (default: "rails_console")
             window: tmux window number (default: 0)
             pane: tmux pane number (default: 0)
@@ -57,15 +57,6 @@ class RailsConsoleClient:
 
         # Initialize file manager
         self.file_manager = FileManager()
-
-        # Initialize Docker client
-        self.docker_client = DockerClient(
-            container_name=container_name,
-            ssh_host=ssh_host,
-            ssh_user=ssh_user,
-            ssh_key_file=ssh_key_file,
-            command_timeout=command_timeout
-        )
 
         # Rails console command
         self._rails_command = "bundle exec rails console"
@@ -84,15 +75,19 @@ class RailsConsoleClient:
 
     def _session_exists(self) -> bool:
         """
-        Check if the specified tmux session exists.
+        Check if the specified tmux session exists locally.
 
         Returns:
             True if session exists, False otherwise
         """
-        cmd = f"tmux has-session -t {self.tmux_session_name} 2>/dev/null && echo 'EXISTS' || echo 'NOT_EXISTS'"
-        result = self.docker_client.ssh_client.execute_command(cmd)
-
-        return result["status"] == "success" and "EXISTS" in result["stdout"]
+        try:
+            # Check if the tmux session exists locally
+            cmd = ["tmux", "has-session", "-t", self.tmux_session_name]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            return result.returncode == 0
+        except Exception as e:
+            logger.error(f"Error checking local tmux session: {str(e)}")
+            return False
 
     def _get_target(self) -> str:
         """
@@ -133,31 +128,35 @@ class RailsConsoleClient:
         puts "IRB configuration commands sent successfully"
         """
 
-        # Send the command to the tmux session
+        # Send the command to the local tmux session
         target = self._get_target()
-        send_cmd = f"tmux send-keys -t {target} '{config_cmd}' Enter"
 
-        result = self.docker_client.ssh_client.execute_command(send_cmd)
+        try:
+            # Use local tmux command to send keys to the session
+            send_cmd = ["tmux", "send-keys", "-t", target, config_cmd, "Enter"]
+            subprocess.run(send_cmd, capture_output=True, text=True, check=True)
 
-        if result["status"] == "success":
             logger.debug("IRB configuration commands sent successfully")
             time.sleep(1)  # Give more time for settings to apply
-        else:
-            logger.error(f"Failed to configure IRB settings: {result.get('error', 'Unknown error')}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to configure IRB settings: {str(e)}")
             raise RuntimeError("Failed to configure IRB settings")
+        except Exception as e:
+            logger.error(f"Unexpected error configuring IRB: {str(e)}")
+            raise RuntimeError(f"Failed to configure IRB settings: {str(e)}")
 
     def _clear_pane(self) -> None:
         """
         Clear the tmux pane to prepare for command output.
         """
         target = self._get_target()
-        # Send Ctrl+L to clear the screen
-        clear_cmd = f"tmux send-keys -t {target} C-l"
 
-        result = self.docker_client.ssh_client.execute_command(clear_cmd)
-
-        if result["status"] != "success":
-            logger.warning("Failed to clear tmux pane")
+        try:
+            # Send Ctrl+L to clear the screen using local tmux
+            clear_cmd = ["tmux", "send-keys", "-t", target, "C-l"]
+            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)
+        except Exception as e:
+            logger.warning(f"Failed to clear tmux pane: {str(e)}")
 
     def _stabilize_console(self) -> bool:
         """
@@ -168,18 +167,15 @@ class RailsConsoleClient:
         """
         try:
             target = self._get_target()
-            # Send a space and Enter to reset terminal state
-            send_cmd = f"tmux send-keys -t {target} ' ' Enter"
 
-            self.docker_client.ssh_client.execute_command(send_cmd)
+            # Send a space and Enter to reset terminal state using local tmux
+            send_cmd = ["tmux", "send-keys", "-t", target, " ", "Enter"]
+            subprocess.run(send_cmd, capture_output=True, text=True, check=True)
             time.sleep(0.5)  # Small delay
 
             # Clear the screen
-            clear_cmd = f"tmux send-keys -t {target} C-l"
-            clear_result = self.docker_client.ssh_client.execute_command(clear_cmd)
-
-            if clear_result["status"] != "success":
-                logger.debug("Non-critical error when clearing screen")
+            clear_cmd = ["tmux", "send-keys", "-t", target, "C-l"]
+            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)
 
             logger.debug("Console state stabilized")
             return True
@@ -189,7 +185,10 @@ class RailsConsoleClient:
 
     def _escape_command(self, command: str) -> str:
         """
-        Escape a command for shell execution.
+        Escape a command for tmux send-keys.
+
+        When sending to tmux, we don't need to escape double quotes the same way as shell.
+        This was causing syntax errors in the Ruby code.
 
         Args:
             command: Command to escape
@@ -197,35 +196,21 @@ class RailsConsoleClient:
         Returns:
             Escaped command
         """
-        # Replace all double quotes with escaped double quotes
-        # Also escape backticks, dollar signs and backslashes
+        # Only escape characters that would interact with the shell
+        # Do NOT escape double quotes - they should be passed through as-is to Ruby
         escaped = command.replace("\\", "\\\\") \
-                         .replace('"', '\\"') \
                          .replace('`', '\\`') \
                          .replace('$', '\\$')
         return escaped
 
-    def _create_result_file_path(self, marker_id: str) -> tuple[str, str]:
-        """
-        Create paths for result files.
-
-        Args:
-            marker_id: Unique marker ID
-
-        Returns:
-            Tuple of (container_path, local_path)
-        """
-        # Path in the container
-        container_path = f"/tmp/{marker_id}_result.json"
-
-        # Local path
-        local_path = os.path.join(self.file_manager.data_dir, f"{marker_id}_result.json")
-
-        return container_path, local_path
-
-    def execute(self, command: str, timeout: int | None = None) -> dict[str, Any]:
+    def execute(self, command: str, timeout: Optional[int] = None) -> Dict[str, Any]:
         """
         Execute a command in the Rails console and wait for completion.
+
+        This method uses a direct output capture approach:
+        1. Sends the Ruby command to tmux with unique markers
+        2. Captures output from tmux session
+        3. Extracts the output between markers
 
         Args:
             command: Ruby command to execute
@@ -251,53 +236,55 @@ class RailsConsoleClient:
             f"Command: {command}\n"
         )
 
-        # Define markers for output
-        start_marker = f"RAILSCMD_{marker_id}_START"
-        end_marker = f"RAILSCMD_{marker_id}_END"
+        # Create unique marker strings that will be rendered differently by puts
+        # When puts receives multiple string arguments, it concatenates them without spaces
+        start_marker_cmd = f"puts \"START\" \"{marker_id}\""  # Command looks like: puts "START" "abc123"
+        start_marker_out = f"START{marker_id}"  # Output looks like: STARTabc123
 
-        # Create paths for result file
-        container_result_path, local_result_path = self._create_result_file_path(marker_id)
+        end_marker_cmd = f"puts \"END\" \"{marker_id}\""  # Command looks like: puts "END" "abc123"
+        end_marker_out = f"END{marker_id}"  # Output looks like: ENDabc123
 
-        # Wrap the command with code to write results to a file
-        file_based_command = f"""
+        error_marker_cmd = f"puts \"ERROR\" \"{marker_id}\""  # Command looks like: puts "ERROR" "abc123"
+        error_marker_out = f"ERROR{marker_id}"  # Output looks like: ERRORadc123
+
+        # Use a template string to execute the command with markers
+        template = """
+        # Print start marker
+        %s
+
+        # Execute the actual command
         begin
-          puts "{start_marker}"
-          result = nil
-          begin
-            # Execute the original command and capture the result
-            result = (
-              {command}
-            )
+          result = %s
 
-            # Write the result to a file to handle large outputs
-            File.write('{container_result_path}', {{
-              status: 'success',
-              output: result.nil? ? "nil" : result.inspect
-            }}.to_json)
-
-            # Print a short confirmation to stdout
-            puts "Command executed, results written to {container_result_path}"
-          rescue => e
-            # Write error information to the file
-            File.write('{container_result_path}', {{
-              status: 'error',
-              error: e.message,
-              backtrace: e.backtrace
-            }}.to_json)
-            puts "ERROR: #{{e.class.name}}: #{{e.message}}"
-          end
-          puts "{end_marker}"
+          # Print the result and end marker
+          puts result.inspect
+          %s
+          nil  # Return nil to avoid printing result twice
+        rescue => e
+          # Print error marker and details
+          %s
+          puts "Ruby error: #{e.class}: #{e.message}"
+          %s
           nil
         end
         """
 
+        # Format the template with our values
+        wrapped_command = template % (
+            start_marker_cmd,
+            command,
+            end_marker_cmd,
+            error_marker_cmd,
+            end_marker_cmd
+        )
+
         # Save the command to the debug session
         command_path = os.path.join(debug_session_dir, "ruby_command.rb")
         with open(command_path, 'w') as f:
-            f.write(file_based_command)
+            f.write(wrapped_command)
 
         # Execute the command via tmux
-        tmux_output = self._send_command_to_tmux(file_based_command, timeout)
+        tmux_output = self._send_command_to_tmux(wrapped_command, timeout)
 
         # Save tmux output to debug session
         tmux_output_path = os.path.join(debug_session_dir, "tmux_output.txt")
@@ -311,84 +298,80 @@ class RailsConsoleClient:
             f"Size: {len(tmux_output)} bytes\n"
         )
 
-        # Check if the command executed successfully
-        if end_marker not in tmux_output:
-            error_msg = "Command did not complete (end marker not found)"
-            logger.error(error_msg)
-            self.file_manager.add_to_debug_log(debug_session_dir, f"ERROR: {error_msg}")
-            return {"status": "error", "error": error_msg}
-
-        # Check for error messages in the tmux output
-        for line in tmux_output.splitlines():
-            if line.strip().startswith("ERROR: "):
-                error_line = line.strip()
-                logger.error(f"Error executing command: {error_line}")
-                self.file_manager.add_to_debug_log(debug_session_dir, f"ERROR: {error_line}")
-                return {"status": "error", "error": error_line}
-
-        # Copy the result file from the container
-        self.file_manager.add_to_debug_log(
-            debug_session_dir,
-            f"COPYING RESULT FILE: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"Container path: {container_result_path}\n"
-            f"Local path: {local_result_path}\n"
-        )
-
-        result = self.docker_client.copy_file_from_container(container_result_path, local_result_path)
-
-        if result["status"] != "success":
-            error_msg = f"Failed to copy result file: {result.get('error', 'Unknown error')}"
-            logger.error(error_msg)
-            self.file_manager.add_to_debug_log(debug_session_dir, f"ERROR: {error_msg}")
-            return {"status": "error", "error": error_msg}
-
-        # Read and parse the JSON result file
+        # Extract the output between markers
         try:
-            with open(local_result_path) as f:
-                result_data = json.load(f)
+            # Look for our output markers (not the commands)
+            start_idx = tmux_output.find(start_marker_out)
+            if start_idx == -1:
+                logger.error(f"Start marker '{start_marker_out}' not found in output")
+                return {"status": "error", "error": "Start marker not found in command output"}
 
-            # Add debug log entry
-            self.file_manager.add_to_debug_log(
-                debug_session_dir,
-                f"RESULT PARSED: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"Status: {result_data.get('status')}\n"
-            )
+            # Extract output after start marker
+            start_idx += len(start_marker_out)
+            remainder = tmux_output[start_idx:]
 
-            # Return the result data
-            if result_data.get("status") == "success":
-                output = result_data.get("output")
-                # Handle nil values from Ruby
-                if output == "nil":
-                    return {"status": "success", "output": None}
-                return {"status": "success", "output": output}
-            else:
-                error_msg = result_data.get("error", "Unknown error")
-                backtrace = result_data.get("backtrace", [])
-                error_with_trace = f"{error_msg}\n" + "\n".join(backtrace) if backtrace else error_msg
+            # Find the end marker
+            end_idx = remainder.find(end_marker_out)
+            if end_idx == -1:
+                logger.error(f"End marker '{end_marker_out}' not found in output")
+                return {"status": "error", "error": "End marker not found in command output"}
 
-                # Log the error
-                self.file_manager.add_to_debug_log(
-                    debug_session_dir,
-                    f"ERROR IN RESULT: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"{error_with_trace}\n"
-                )
+            # Extract the content between start and end markers
+            command_output = remainder[:end_idx].strip()
 
-                return {"status": "error", "error": error_with_trace}
+            # First priority: Check for error marker in the extracted section
+            # This must be checked before success to catch actual errors
+            error_idx = remainder.find(error_marker_out)
+            if error_idx != -1 and error_idx < end_idx:
+                # Found an error marker in the valid output range
+                logger.error("Error marker found in output, indicating a Ruby error")
 
-        except json.JSONDecodeError as e:
-            error_msg = f"Error parsing JSON result: {str(e)}"
-            logger.error(error_msg)
-            self.file_manager.add_to_debug_log(debug_session_dir, f"ERROR: {error_msg}")
-            return {"status": "error", "error": error_msg}
+                # Extract the error message
+                if "Ruby error:" in command_output:
+                    error_content = command_output[command_output.find("Ruby error:"):]
+                    error_line = error_content.split("\n")[0].strip()
+                    return {"status": "error", "error": error_line}
+
+                return {"status": "error", "error": "Ruby error detected"}
+
+            # If no error was found, check for success keywords in the extracted content
+            # Note: Only check the actual command output, not the entire tmux buffer
+            if "SUCCESS" in command_output:
+                logger.debug("SUCCESS keyword found in command output")
+                return {"status": "success", "output": {"success": True, "raw_output": command_output}}
+
+            # No explicit error or success indicator, return the content as success
+            logger.debug(f"Command executed successfully, extracted {len(command_output)} chars of output")
+            return {"status": "success", "output": command_output}
+
         except Exception as e:
-            error_msg = f"Error processing result: {str(e)}"
-            logger.error(error_msg)
-            self.file_manager.add_to_debug_log(debug_session_dir, f"ERROR: {error_msg}")
-            return {"status": "error", "error": error_msg}
+            logger.error(f"Error processing command output: {str(e)}")
+            return {"status": "error", "error": f"Error processing command output: {str(e)}"}
+
+    def _parse_ruby_output(self, ruby_output: str) -> Any:
+        """
+        Parse Ruby output into appropriate Python data structures.
+
+        Args:
+            ruby_output: The raw output from the Ruby console
+
+        Returns:
+            Parsed Python data structure or the original string if parsing fails
+        """
+        # Handle success indicators
+        if "SUCCESS" in ruby_output:
+            return {"success": True, "raw_output": ruby_output}
+
+        # If empty or nil, return None
+        if not ruby_output or ruby_output == "nil":
+            return None
+
+        # Return the raw output as a fallback
+        return ruby_output
 
     def _send_command_to_tmux(self, command: str, timeout: int) -> str:
         """
-        Send a command to the tmux session and capture output.
+        Send a command to the local tmux session and capture output.
 
         Args:
             command: Command to send
@@ -400,168 +383,104 @@ class RailsConsoleClient:
         target = self._get_target()
 
         # Stabilize the console first
+        logger.debug("Stabilizing console before command execution")
         self._stabilize_console()
 
         # Escape the command for tmux send-keys
         escaped_command = self._escape_command(command)
 
-        # Build the tmux command
-        send_cmd = f"tmux send-keys -t {target} '{escaped_command}' Enter"
+        try:
+            # Add markers to the command for easier parsing
+            # We'll wrap the command with puts statements to mark the beginning and end
+            marker_id = self.file_manager.generate_unique_id()
+            start_marker = f"TMUX_CMD_START_{marker_id}"
+            end_marker = f"TMUX_CMD_END_{marker_id}"
 
-        # Execute the command
-        result = self.docker_client.ssh_client.execute_command(send_cmd)
-
-        if result["status"] != "success":
-            logger.error(f"Failed to send command to tmux: {result.get('error', 'Unknown error')}")
-            return ""
-
-        # Wait a bit for the command to start execution
-        time.sleep(1)
-
-        # Capture the output with timeout
-        start_time = time.time()
-        last_output = ""
-        last_change_time = start_time
-
-        while time.time() - start_time < timeout:
-            # Capture the current pane content
-            capture_cmd = f"tmux capture-pane -p -t {target}"
-            result = self.docker_client.ssh_client.execute_command(capture_cmd)
-
-            if result["status"] != "success":
-                logger.error(f"Failed to capture tmux pane: {result.get('error', 'Unknown error')}")
-                return last_output
-
-            current_output = result["stdout"]
-
-            # Check if output has changed
-            if current_output != last_output:
-                last_output = current_output
-                last_change_time = time.time()
-            # Check for inactivity timeout
-            elif time.time() - last_change_time > self.inactivity_timeout:
-                logger.debug("Output inactivity timeout reached")
-                break
-
-            # Small delay before next capture
+            # First, clear current line and any partial input
+            logger.debug("Clearing current input line in tmux session")
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, "C-c"],
+                capture_output=True,
+                text=True
+            )
             time.sleep(0.5)
 
-        # Stabilize the console after command
-        self._stabilize_console()
+            # Send a unique start marker so we can identify where our output begins
+            logger.debug(f"Sending start marker to tmux session: {start_marker}")
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, f"puts '{start_marker}'", "Enter"],
+                capture_output=True,
+                text=True
+            )
+            time.sleep(0.5)
 
-        return last_output
+            # Execute the command
+            logger.debug("Sending command to tmux session: (truncated for brevity)")
+            logger.debug(f"Command length: {len(escaped_command)} bytes")
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, escaped_command, "Enter"],
+                capture_output=True,
+                text=True
+            )
 
-    def execute_script(self, script_content: str, timeout: int | None = None) -> dict[str, Any]:
-        """
-        Execute a Ruby script in the Rails console.
+            # Send an end marker after the command
+            time.sleep(1.0)  # Give more time for the main command to start executing
+            logger.debug(f"Sending end marker to tmux session: {end_marker}")
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, f"puts '{end_marker}'", "Enter"],
+                capture_output=True,
+                text=True
+            )
 
-        Args:
-            script_content: Ruby script content
-            timeout: Command timeout in seconds (default: self.command_timeout)
+            # Wait for result and capture output
+            logger.debug(f"Waiting for command completion (timeout: {timeout}s)")
+            start_time = time.time()
+            last_output = ""
+            found_end_marker = False
 
-        Returns:
-            Dict with status and output or error
-        """
-        # Generate a unique marker ID
-        marker_id = self.file_manager.generate_unique_id()
+            # Loop until we find the end marker or timeout
+            while time.time() - start_time < timeout:
+                # Capture the current pane content
+                capture = subprocess.run(
+                    ["tmux", "capture-pane", "-p", "-S", "-100", "-t", target],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                current_output = capture.stdout
 
-        # Create a script file
-        script_path = self.file_manager.create_script_file(
-            script_content,
-            filename=f"{marker_id}_script.rb"
-        )
+                # Check if the end marker is in the output
+                if end_marker in current_output:
+                    logger.debug(f"Found end marker after {time.time() - start_time:.1f}s")
+                    last_output = current_output
+                    found_end_marker = True
+                    break
 
-        # Create paths for the script in the container
-        container_script_path = f"/tmp/{marker_id}_script.rb"
+                # Update last output if it has changed
+                if current_output != last_output:
+                    last_output = current_output
 
-        # Copy the script to the container
-        result = self.docker_client.copy_file_to_container(script_path, container_script_path)
+                # Small delay to prevent hammering the tmux session
+                time.sleep(0.5)
 
-        if result["status"] != "success":
-            return {
-                "status": "error",
-                "error": f"Failed to copy script to container: {result.get('error', 'Unknown error')}"
-            }
+            if not found_end_marker:
+                logger.warning(f"End marker not found after {timeout}s")
+                logger.debug("Capturing final output")
+                # One final capture
+                capture = subprocess.run(
+                    ["tmux", "capture-pane", "-p", "-S", "-200", "-t", target],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                last_output = capture.stdout
 
-        # Execute the script with load command
-        load_command = f"load '{container_script_path}'"
+            # Save the output for debugging
+            return last_output
 
-        return self.execute(load_command, timeout)
-
-    def execute_with_data(
-        self, script_content: str, data: Any, timeout: int | None = None
-    ) -> dict[str, Any]:
-        """
-        Execute a Ruby script with provided data.
-
-        Args:
-            script_content: Ruby script content
-            data: Data to provide to the script (will be converted to JSON)
-            timeout: Command timeout in seconds (default: self.command_timeout)
-
-        Returns:
-            Dict with status and output or error
-        """
-        # Generate a unique marker ID
-        marker_id = self.file_manager.generate_unique_id()
-
-        # Create a debug session
-        debug_session_dir = self.file_manager.create_debug_session(marker_id)
-
-        # Create a data file
-        data_path = self.file_manager.create_data_file(
-            data,
-            filename=f"{marker_id}_data.json",
-            session_dir=debug_session_dir
-        )
-
-        # Create paths for container files
-        container_script_path = f"/tmp/{marker_id}_script.rb"
-        container_data_path = f"/tmp/{marker_id}_data.json"
-
-        # Copy the data file to the container
-        result = self.docker_client.copy_file_to_container(data_path, container_data_path)
-
-        if result["status"] != "success":
-            return {
-                "status": "error",
-                "error": f"Failed to copy data file to container: {result.get('error', 'Unknown error')}"
-            }
-
-        # Create a script file with code to load the data
-        script_with_data = f"""
-        # Load data from JSON file
-        require 'json'
-        begin
-          puts "Loading data from container path: {container_data_path}"
-          file_content = File.read('{container_data_path}')
-          input_data = JSON.parse(file_content)
-          puts "Successfully loaded data with #{{input_data.size}} records"
-        rescue => err
-          puts "Error loading data: #{{err.message}}"
-          raise err
-        end
-
-        # Main script
-        {script_content}
-        """
-
-        script_path = self.file_manager.create_script_file(
-            script_with_data,
-            filename=f"{marker_id}_script.rb",
-            session_dir=debug_session_dir
-        )
-
-        # Copy the script to the container
-        result = self.docker_client.copy_file_to_container(script_path, container_script_path)
-
-        if result["status"] != "success":
-            return {
-                "status": "error",
-                "error": f"Failed to copy script to container: {result.get('error', 'Unknown error')}"
-            }
-
-        # Execute the script with load command
-        load_command = f"load '{container_script_path}'"
-
-        return self.execute(load_command, timeout)
+        except subprocess.SubprocessError as e:
+            logger.error(f"Tmux command failed: {str(e)}")
+            return f"ERROR: {str(e)}"
+        except Exception as e:
+            logger.error(f"Error sending command to tmux: {str(e)}")
+            return f"ERROR: {str(e)}"
