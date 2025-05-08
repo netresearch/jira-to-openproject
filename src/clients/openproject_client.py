@@ -220,7 +220,6 @@ class OpenProjectClient:
                 return {"status": "error", "error": f"File transfer to remote host failed: {error_msg}"}
 
             # Now transfer from remote host to container using Docker command directly
-            # instead of using copy_file_to_container which expects a local path
             docker_container_path = f"/tmp/{script_filename}"
             container = self.docker_client.container_name
             docker_cp_cmd = f"docker cp {remote_script_path} {container}:{docker_container_path}"
@@ -233,13 +232,34 @@ class OpenProjectClient:
                 logger.error(f"Failed to transfer script to container: {error_msg}")
                 return {"status": "error", "error": f"File transfer to container failed: {error_msg}"}
 
-            logger.debug(f"Successfully transferred script to {docker_container_path}")
+            logger.debug("Docker cp command executed, verifying file in container")
 
-            # Verify the file exists in the container using the docker_client
-            if not self.docker_client.check_file_exists_in_container(docker_container_path):
-                error_msg = f"Script file not found in container at {docker_container_path}"
-                logger.error(error_msg)
-                return {"status": "error", "error": error_msg}
+            # Verify the file exists in the container with explicit check
+            check_cmd = f"docker exec {container} bash -c 'ls -la {docker_container_path}'"
+            check_result = self.ssh_client.execute_command(check_cmd)
+
+            if check_result.get("status") != "success" or "No such file" in check_result.get("stderr", ""):
+                error_detail = check_result.get("stderr", "Unknown error")
+                logger.error(f"File not found in container after transfer: {error_detail}")
+                return {"status": "error", "error": "File not found in container after transfer"}
+
+            logger.debug(f"File found in container: {check_result.get('stdout', '')}")
+
+            # Set permissions to ensure the file is readable
+            chmod_cmd = f"docker exec {container} bash -c 'chmod 644 {docker_container_path}'"
+            chmod_result = self.ssh_client.execute_command(chmod_cmd)
+
+            if chmod_result.get("status") != "success":
+                logger.warning(f"Failed to set file permissions: {chmod_result.get('stderr', 'Unknown error')}")
+
+            # For additional verification, cat the file content to ensure it's valid
+            cat_cmd = f"docker exec {container} bash -c 'head -5 {docker_container_path}'"
+            cat_result = self.ssh_client.execute_command(cat_cmd)
+
+            if cat_result.get("status") == "success":
+                logger.debug(f"First few lines of script: {cat_result.get('stdout', '')}")
+            else:
+                logger.warning(f"Failed to read file content: {cat_result.get('stderr', 'Unknown error')}")
 
             # Execute the script in Rails console
             logger.debug(f"Executing script via Rails console: {docker_container_path}")
