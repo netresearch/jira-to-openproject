@@ -2,21 +2,13 @@
 """
 RailsConsoleClient
 
-Client for interacting with Rails console in a tmux session.
-This client is part of the layered client architecture where:
-1. SSHClient - Base component for SSH operations
-2. DockerClient - Uses SSHClient for Docker operations
-3. RailsConsoleClient - Interacts directly with tmux session running Rails console
-4. OpenProjectClient - Coordinates all clients and operations
-
-The RailsConsoleClient is responsible only for sending commands to and capturing
-output from the tmux session. It does not interact with Docker or SSH directly.
+Client for executing commands on a Rails console running in a tmux session.
+Uses exception-based error handling for all operations.
 """
 
 import os
 import time
 import subprocess
-from typing import Any, Dict, Optional
 
 from src import config
 from src.utils.file_manager import FileManager
@@ -24,17 +16,34 @@ from src.utils.file_manager import FileManager
 logger = config.logger
 
 
+class RailsConsoleError(Exception):
+    """Base exception for all Rails Console errors."""
+    pass
+
+
+class TmuxSessionError(RailsConsoleError):
+    """Error when interacting with tmux session."""
+    pass
+
+
+class ConsoleNotReadyError(RailsConsoleError):
+    """Error when Rails console is not in a ready state."""
+    pass
+
+
+class CommandExecutionError(RailsConsoleError):
+    """Error when executing a Ruby command in the Rails console."""
+    pass
+
+
+class RubyError(CommandExecutionError):
+    """Error when Ruby reports a specific error."""
+    pass
+
+
 class RailsConsoleClient:
     """
     Client for interacting with Rails console via a local tmux session.
-
-    This client is focused solely on tmux interactions:
-    1. Send commands to a tmux session containing a Rails console
-    2. Capture and parse the output from these commands
-    3. Manage the Rails console state
-
-    It has no dependencies on Docker or SSH, which are handled by higher-level
-    components in the architecture.
     """
 
     def __init__(
@@ -54,30 +63,27 @@ class RailsConsoleClient:
             pane: tmux pane number (default: 0)
             command_timeout: Command timeout in seconds (default: 180)
             inactivity_timeout: Inactivity timeout in seconds (default: 30)
+
+        Raises:
+            TmuxSessionError: If tmux session does not exist
         """
         self.tmux_session_name = tmux_session_name
         self.window = window
         self.pane = pane
         self.command_timeout = command_timeout
         self.inactivity_timeout = inactivity_timeout
-
-        # Initialize file manager
         self.file_manager = FileManager()
-
-        # Rails console command
         self._rails_command = "bundle exec rails console"
 
-        # Check if tmux session exists
         if not self._session_exists():
-            raise ValueError(f"tmux session '{self.tmux_session_name}' does not exist")
+            raise TmuxSessionError(f"tmux session '{self.tmux_session_name}' does not exist")
 
         logger.success(f"Connected to tmux session '{self.tmux_session_name}'")
 
-        # Configure IRB settings during initialization
         try:
             self._configure_irb_settings()
         except Exception as e:
-            logger.warning(f"Could not configure IRB settings: {str(e)}")
+            logger.warning(f"Failed to configure IRB settings: {str(e)}")
 
     def _session_exists(self) -> bool:
         """
@@ -87,12 +93,11 @@ class RailsConsoleClient:
             True if session exists, False otherwise
         """
         try:
-            # Check if the tmux session exists locally
             cmd = ["tmux", "has-session", "-t", self.tmux_session_name]
             result = subprocess.run(cmd, capture_output=True, text=True)
             return result.returncode == 0
-        except Exception as e:
-            logger.error(f"Error checking local tmux session: {str(e)}")
+        except subprocess.SubprocessError as e:
+            logger.error(f"Error checking tmux session: {str(e)}")
             return False
 
     def _get_target(self) -> str:
@@ -107,102 +112,94 @@ class RailsConsoleClient:
     def _configure_irb_settings(self) -> None:
         """
         Configure IRB settings for better output and interaction.
+
+        Raises:
+            TmuxSessionError: If failed to configure IRB settings
         """
-        # Disable color output, ensure large objects can be displayed,
-        # and configure readline settings to avoid IO errors
         config_cmd = """
         IRB.conf[:USE_COLORIZE] = false
         IRB.conf[:INSPECT_MODE] = :to_s
 
-        # Additional settings to prevent IO errors with Ruby 3.4's Reline library
+        # Handle non-interactive terminals better
         begin
-          # Handle non-interactive terminals better
           if defined?(Reline)
             Reline.output_modifier_proc = nil
             Reline.completion_proc = nil
             Reline.prompt_proc = nil
-            puts "Applied Reline configuration"
           end
 
-          # Configure history behavior to avoid file access issues
           IRB.conf[:SAVE_HISTORY] = nil
           IRB.conf[:HISTORY_FILE] = nil
         rescue => e
           puts "Error during IRB configuration: #{e.message}"
         end
 
-        puts "IRB configuration commands sent successfully"
+        puts "IRB configuration complete"
         """
 
-        # Send the command to the local tmux session
         target = self._get_target()
 
         try:
-            # Use local tmux command to send keys to the session
             send_cmd = ["tmux", "send-keys", "-t", target, config_cmd, "Enter"]
             subprocess.run(send_cmd, capture_output=True, text=True, check=True)
-
             logger.debug("IRB configuration commands sent successfully")
-        except subprocess.CalledProcessError as e:
+        except subprocess.SubprocessError as e:
             logger.error(f"Failed to configure IRB settings: {str(e)}")
-            raise RuntimeError("Failed to configure IRB settings")
-        except Exception as e:
-            logger.error(f"Unexpected error configuring IRB: {str(e)}")
-            raise RuntimeError(f"Failed to configure IRB settings: {str(e)}")
+            raise TmuxSessionError(f"Failed to configure IRB settings: {str(e)}")
 
     def _clear_pane(self) -> None:
         """
         Clear the tmux pane to prepare for command output.
+
+        Raises:
+            TmuxSessionError: If failed to clear tmux pane
         """
         target = self._get_target()
 
         try:
-            # Send Ctrl+L to clear the screen using local tmux
             clear_cmd = ["tmux", "send-keys", "-t", target, "C-l"]
             subprocess.run(clear_cmd, capture_output=True, text=True, check=True)
-        except Exception as e:
+        except subprocess.SubprocessError as e:
             logger.warning(f"Failed to clear tmux pane: {str(e)}")
+            raise TmuxSessionError(f"Failed to clear tmux pane: {str(e)}")
 
-    def _stabilize_console(self) -> bool:
+    def _stabilize_console(self) -> None:
         """
         Send a harmless command to stabilize console state.
 
-        Returns:
-            True if successful, False otherwise
+        Raises:
+            ConsoleNotReadyError: If console cannot be stabilized
         """
         try:
             target = self._get_target()
 
-            # Send a space and Enter to reset terminal state using local tmux
+            # Send a space and Enter to reset terminal state
             send_cmd = ["tmux", "send-keys", "-t", target, " ", "Enter"]
             subprocess.run(send_cmd, capture_output=True, text=True, check=True)
-            time.sleep(0.3)  # Small delay
+            time.sleep(0.3)
 
             # Clear the screen
             clear_cmd = ["tmux", "send-keys", "-t", target, "C-l"]
             subprocess.run(clear_cmd, capture_output=True, text=True, check=True)
-            time.sleep(0.2)  # Small delay
+            time.sleep(0.2)
 
             # Send Ctrl+C to abort any pending operation
             subprocess.run(
                 ["tmux", "send-keys", "-t", target, "C-c"],
                 capture_output=True,
-                text=True
+                text=True,
+                check=True
             )
-            time.sleep(0.2)  # Small delay to let Ctrl+C take effect
+            time.sleep(0.2)
 
             logger.debug("Console state stabilized")
-            return True
-        except Exception as e:
-            logger.debug(f"Non-critical error when stabilizing console: {str(e)}")
-            return False
+        except subprocess.SubprocessError as e:
+            logger.error(f"Failed to stabilize console: {str(e)}")
+            raise ConsoleNotReadyError(f"Failed to stabilize console: {str(e)}")
 
     def _escape_command(self, command: str) -> str:
         """
         Escape a command for tmux send-keys.
-
-        When sending to tmux, we don't need to escape double quotes the same way as shell.
-        This was causing syntax errors in the Ruby code.
 
         Args:
             command: Command to escape
@@ -210,21 +207,11 @@ class RailsConsoleClient:
         Returns:
             Escaped command
         """
-        # Only escape characters that would interact with the shell
-        # Do NOT escape double quotes - they should be passed through as-is to Ruby
-        escaped = command.replace("\\", "\\\\") \
-                         .replace('`', '\\`') \
-                         .replace('$', '\\$')
-        return escaped
+        return command.replace("\\", "\\\\").replace('`', '\\`').replace('$', '\\$')
 
-    def execute(self, command: str, timeout: Optional[int] = None) -> str:
+    def execute(self, command: str, timeout: int | None = None) -> str:
         """
         Execute a command in the Rails console and wait for completion.
-
-        This method uses a direct output capture approach:
-        1. Sends the Ruby command to tmux with unique markers
-        2. Captures output from tmux session
-        3. Extracts the output between markers
 
         Args:
             command: Ruby command to execute
@@ -234,27 +221,21 @@ class RailsConsoleClient:
             Extracted command output as a string
 
         Raises:
-            Exception: If command execution fails or error markers are found
+            CommandExecutionError: If command execution fails
+            RubyError: If Ruby reports an error in the executed code
         """
-        # Use the provided timeout or the default
         if timeout is None:
             timeout = self.command_timeout
 
-        # Generate a unique marker ID
         marker_id = self.file_manager.generate_unique_id()
-
-        # Create debug session directory
         debug_session_dir = self.file_manager.create_debug_session(marker_id)
 
-        # Log the command to the debug log
         self.file_manager.add_to_debug_log(
             debug_session_dir,
             f"COMMAND EXECUTION START: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Command: {command}\n"
         )
 
-        # Create unique marker strings that will be rendered differently by puts
-        # Use more distinctive markers to prevent accidental matches
         start_marker_cmd = f"puts \"--EXEC_START--\" \"{marker_id}\""
         start_marker_out = f"--EXEC_START--{marker_id}"
 
@@ -264,7 +245,6 @@ class RailsConsoleClient:
         error_marker_cmd = f"puts \"--EXEC_ERROR--\" \"{marker_id}\""
         error_marker_out = f"--EXEC_ERROR--{marker_id}"
 
-        # Create a cleaner template that makes better use of Ruby's error handling
         template = """
         # Print start marker
         %s
@@ -286,7 +266,6 @@ class RailsConsoleClient:
         end
         """
 
-        # Format the template with our values
         wrapped_command = template % (
             start_marker_cmd,
             command,
@@ -295,70 +274,53 @@ class RailsConsoleClient:
             end_marker_cmd
         )
 
-        # Save the command to the debug session
         command_path = os.path.join(debug_session_dir, "ruby_command.rb")
         with open(command_path, 'w') as f:
             f.write(wrapped_command)
 
-        # Execute the command via tmux
         tmux_output = self._send_command_to_tmux(wrapped_command, timeout)
 
-        # Save tmux output to debug session
         tmux_output_path = os.path.join(debug_session_dir, "tmux_output.txt")
         with open(tmux_output_path, 'w') as f:
             f.write(tmux_output)
 
-        # Add debug log entry
         self.file_manager.add_to_debug_log(
             debug_session_dir,
             f"TMUX OUTPUT RECEIVED: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Size: {len(tmux_output)} bytes\n"
         )
 
-        # Look for our output markers (not the commands)
         start_idx = tmux_output.find(start_marker_out)
         if start_idx == -1:
-            raise Exception(f"Start marker '{start_marker_out}' not found in output")
+            raise CommandExecutionError(f"Start marker '{start_marker_out}' not found in output")
 
-        # Extract output after start marker
         start_idx += len(start_marker_out)
         remainder = tmux_output[start_idx:]
 
-        # Find the end marker
         end_idx = remainder.find(end_marker_out)
         if end_idx == -1:
             logger.error(f"End marker '{end_marker_out}' not found in output")
 
-            # Log the end of the output to help debug
-            logger.debug(f"Last 1000 chars of output: {tmux_output[-100:].strip()}")
-
-            # Check if there's a prompt at the end, which might indicate completion
             if self._get_console_state(tmux_output[-20:])["ready"]:
                 logger.debug("Console prompt found at end of output - command may have completed")
 
-            raise Exception(f"End marker '{end_marker_out}' not found in output")
+            raise CommandExecutionError(f"End marker '{end_marker_out}' not found in output")
 
-        # Extract the content between start and end markers
         command_output = remainder[:end_idx].strip()
 
-        # Check for error marker in the extracted section
         error_idx = remainder.find(error_marker_out)
         if error_idx != -1 and error_idx < end_idx:
-            # Found an error marker in the valid output range
             logger.error("Error marker found in output, indicating a Ruby error")
 
-            # Extract the error message - more robust pattern matching
             error_message = "Ruby error detected"
             if "Ruby error:" in command_output:
-                # Find the line with the error
                 for line in command_output.split("\n"):
                     if "Ruby error:" in line:
                         error_message = line.strip()
                         break
 
-            raise Exception(error_message)
+            raise RubyError(error_message)
 
-        # Look for common Ruby error patterns even if error marker wasn't found
         error_patterns = [
             "SyntaxError:",
             "NameError:",
@@ -371,83 +333,47 @@ class RailsConsoleClient:
         for pattern in error_patterns:
             if pattern in command_output:
                 logger.warning(f"Ruby error pattern '{pattern}' detected in output")
-                # Find the line with the error
                 for line in command_output.split("\n"):
                     if pattern in line:
-                        raise Exception(line.strip())
+                        raise RubyError(line.strip())
 
         return command_output
-
-    def _parse_ruby_output(self, ruby_output: str) -> Any:
-        """
-        Parse Ruby output into appropriate Python data structures.
-
-        Args:
-            ruby_output: The raw output from the Ruby console
-
-        Returns:
-            Parsed Python data structure or the original string if parsing fails
-        """
-        # Handle success indicators
-        if "SUCCESS" in ruby_output:
-            return {"success": True, "raw_output": ruby_output}
-
-        # If empty or nil, return None
-        if not ruby_output or ruby_output == "nil":
-            return None
-
-        # Return the raw output as a fallback
-        return ruby_output
 
     def _get_console_state(self, output: str) -> dict:
         """
         Check if the Rails console is ready for input by looking for the prompt.
-        Returns console state details.
 
         Args:
             output: Current tmux pane output
 
         Returns:
-            Dictionary with state information:
-            {
-                "ready": True/False,  # Is console ready for input
-                "state": "ready"|"awaiting_input"|"multiline_string"|"unknown",  # Console state
-                "prompt": "text"  # The actual prompt found, if any
-            }
+            Dictionary with state information
         """
-        # Common Rails console prompt patterns to look for
-        # Using simple string matching for more reliable detection
         ready_patterns = ["irb(main):", ">", ">>", "irb>", "pry>"]
         awaiting_patterns = ["*"]
         string_patterns = ["\"", "'"]
 
-        # Default state - not ready
         result = {
             "ready": False,
             "state": "unknown",
             "prompt": None
         }
 
-        # Get all lines and find the last non-empty one
         lines = [line.strip() for line in output.strip().split("\n")]
-        # Filter out empty lines
         non_empty_lines = [line for line in lines if line]
 
         if not non_empty_lines:
             return result
 
-        # Check only the last non-empty line, which should be the current prompt
         last_line = non_empty_lines[-1]
         logger.debug(f"Last line: '{last_line}'")
 
-        # Check if it's a ready prompt (contains any of the ready patterns)
         if any(pattern in last_line for pattern in ready_patterns) or last_line.endswith(">"):
             result["prompt"] = last_line
             result["state"] = "ready"
             result["ready"] = True
             return result
 
-        # Check for other prompt states
         if any(pattern in last_line for pattern in awaiting_patterns):
             result["prompt"] = last_line
             result["state"] = "awaiting_input"
@@ -463,7 +389,6 @@ class RailsConsoleClient:
     def _wait_for_console_output(self, target: str, marker: str, timeout: int) -> tuple:
         """
         Wait for specific marker to appear in the console output.
-        Uses adaptive polling for efficiency.
 
         Args:
             target: tmux target (session:window.pane)
@@ -471,41 +396,40 @@ class RailsConsoleClient:
             timeout: Maximum time to wait in seconds
 
         Returns:
-            tuple: (marker_found, output) - A tuple containing boolean for if marker was found and the output string
+            tuple: (marker_found, output)
+
+        Raises:
+            CommandExecutionError: If timeout waiting for marker
         """
         start_time = time.time()
-        poll_interval = 0.05  # Start with very short interval
-        max_interval = 0.5    # Maximum polling interval
+        poll_interval = 0.05
+        max_interval = 0.5
 
         logger.debug(f"Waiting for marker '{marker}' in console output")
 
         while time.time() - start_time < timeout:
-            # Capture the current pane content
-            capture = subprocess.run(
-                ["tmux", "capture-pane", "-p", "-S", "-200", "-t", target],
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            current_output = capture.stdout
+            try:
+                capture = subprocess.run(
+                    ["tmux", "capture-pane", "-p", "-S", "-200", "-t", target],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                current_output = capture.stdout
 
-            # Check if our marker is in the output
-            if marker in current_output:
-                logger.debug(f"Marker found after {time.time() - start_time:.2f}s")
-                return True, current_output
+                if marker in current_output:
+                    logger.debug(f"Marker found after {time.time() - start_time:.2f}s")
+                    return True, current_output
 
-            # Check console state to see if we're ready for new input
-            console_state = self._get_console_state(current_output)
-            if console_state["ready"]:
-                # If console is ready but marker not found, command might have completed
-                # without generating the marker (possible error)
-                if time.time() - start_time > 3:  # Only log after waiting a bit
+                console_state = self._get_console_state(current_output)
+                if console_state["ready"] and time.time() - start_time > 3:
                     logger.debug("Console ready but marker not found yet")
 
-            # Adapt polling interval - start short, then get longer
-            time.sleep(poll_interval)
-            # Increase interval up to max_interval
-            poll_interval = min(poll_interval * 1.5, max_interval)
+                time.sleep(poll_interval)
+                poll_interval = min(poll_interval * 1.5, max_interval)
+            except subprocess.SubprocessError as e:
+                logger.error(f"Error capturing tmux pane: {str(e)}")
+                raise CommandExecutionError(f"Error capturing tmux pane: {str(e)}")
 
         logger.warning(f"Marker '{marker}' not found after {timeout}s")
         return False, current_output
@@ -520,54 +444,54 @@ class RailsConsoleClient:
 
         Returns:
             bool: True if console is ready, False if timed out
+
+        Raises:
+            ConsoleNotReadyError: If console cannot be made ready
         """
         logger.debug(f"Waiting for console ready state (timeout: {timeout}s)")
         start_time = time.time()
-        poll_interval = 0.05  # Start with very short interval
+        poll_interval = 0.05
         attempts = 0
 
         while time.time() - start_time < timeout:
-            # Capture the current pane content
-            capture = subprocess.run(
-                ["tmux", "capture-pane", "-p", "-S", "-10", "-t", target],
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            current_output = capture.stdout
-
-            # Check console state
-            console_state = self._get_console_state(current_output)
-            if console_state["ready"]:
-                logger.debug(f"Console ready after {time.time() - start_time:.2f}s")
-                return True
-
-            # If console is in a known non-ready state, try to reset it
-            if console_state["state"] in ["awaiting_input", "multiline_string"]:
-                # Send Ctrl+C to abort the current operation
-                logger.debug(f"Console in {console_state['state']} state, sending Ctrl+C to reset")
-                subprocess.run(
-                    ["tmux", "send-keys", "-t", target, "C-c"],
+            try:
+                capture = subprocess.run(
+                    ["tmux", "capture-pane", "-p", "-S", "-10", "-t", target],
                     capture_output=True,
-                    text=True
+                    text=True,
+                    check=True
                 )
-                # Give more time for Ctrl+C to take effect
-                time.sleep(0.3)
-                attempts += 1
+                current_output = capture.stdout
 
-                # If we've tried Ctrl+C a few times but it's not working, try a full stabilization
-                if attempts >= 2:
-                    logger.debug("Multiple Ctrl+C attempts failed, trying full stabilization")
-                    self._stabilize_console()
-                    attempts = 0
+                console_state = self._get_console_state(current_output)
+                if console_state["ready"]:
+                    logger.debug(f"Console ready after {time.time() - start_time:.2f}s")
+                    return True
 
-            # Log state but with shortened output to avoid line length issues
-            logger.debug(
-                f"Waiting {poll_interval}s for ready state, current: {console_state['state']}"
-            )
-            # Wait before checking again
-            time.sleep(poll_interval)
-            poll_interval *= 2
+                if console_state["state"] in ["awaiting_input", "multiline_string"]:
+                    logger.debug(f"Console in {console_state['state']} state, sending Ctrl+C to reset")
+                    subprocess.run(
+                        ["tmux", "send-keys", "-t", target, "C-c"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    time.sleep(0.3)
+                    attempts += 1
+
+                    if attempts >= 2:
+                        logger.debug("Multiple Ctrl+C attempts failed, trying full stabilization")
+                        self._stabilize_console()
+                        attempts = 0
+
+                logger.debug(
+                    f"Waiting {poll_interval}s for ready state, current: {console_state['state']}"
+                )
+                time.sleep(poll_interval)
+                poll_interval *= 2
+            except subprocess.SubprocessError as e:
+                logger.error(f"Error checking console state: {str(e)}")
+                raise ConsoleNotReadyError(f"Error checking console state: {str(e)}")
 
         logger.warning(f"Console not ready after {timeout}s")
         return False
@@ -575,7 +499,6 @@ class RailsConsoleClient:
     def _send_command_to_tmux(self, command: str, timeout: int) -> str:
         """
         Send a command to the local tmux session and capture output.
-        Uses adaptive polling with prompt detection for efficiency.
 
         Args:
             command: Command to send
@@ -583,71 +506,65 @@ class RailsConsoleClient:
 
         Returns:
             Command output as a string
+
+        Raises:
+            TmuxSessionError: If tmux command fails
+            ConsoleNotReadyError: If console cannot be made ready
+            CommandExecutionError: If command execution fails
         """
         target = self._get_target()
 
-        # First, always ensure the console is in a ready state
         if not self._wait_for_console_ready(target, timeout=10):
-            # If console doesn't become ready even after waiting, try full stabilization
             logger.warning("Console not ready, forcing full stabilization")
             self._stabilize_console()
 
-            # Check one more time after stabilization
             if not self._wait_for_console_ready(target, timeout=5):
-                logger.error("Console could not be made ready, command likely to fail")
+                raise ConsoleNotReadyError("Console could not be made ready")
 
-        # Escape the command for tmux send-keys
         escaped_command = self._escape_command(command)
 
         try:
-            # Add markers to the command for easier parsing
             marker_id = self.file_manager.generate_unique_id()
             start_marker = f"TMUX_CMD_START_{marker_id}"
             end_marker = f"TMUX_CMD_END_{marker_id}"
 
-            # Send a unique start marker so we can identify where our output begins
             logger.debug(f"Sending start marker to tmux session: {start_marker}")
             subprocess.run(
                 ["tmux", "send-keys", "-t", target, f"puts '{start_marker}'", "Enter"],
                 capture_output=True,
-                text=True
+                text=True,
+                check=True
             )
 
-            # Execute the command - after making sure start marker was handled
-            logger.debug("Sending command to tmux session: (truncated for brevity)")
-            logger.debug(f"Command length: {len(escaped_command)} bytes")
+            logger.debug(f"Sending command (length: {len(escaped_command)} bytes)")
             subprocess.run(
                 ["tmux", "send-keys", "-t", target, escaped_command, "Enter"],
                 capture_output=True,
-                text=True
+                text=True,
+                check=True
             )
             self._wait_for_console_ready(target, timeout)
 
-            # Send end marker after the command
             logger.debug(f"Sending end marker to tmux session: {end_marker}")
             subprocess.run(
                 ["tmux", "send-keys", "-t", target, f"puts '{end_marker}'", "Enter"],
                 capture_output=True,
-                text=True
+                text=True,
+                check=True
             )
 
-            # Wait for the end marker to appear
             found_end, last_output = self._wait_for_console_output(target, end_marker, timeout)
 
-            # Handle end marker not found
             if not found_end:
-                raise RuntimeError("End marker not found.")
+                raise CommandExecutionError("End marker not found in tmux output")
 
-            # Return the output for further processing
             return last_output
 
         except subprocess.SubprocessError as e:
             logger.error(f"Tmux command failed: {str(e)}")
-            # Try to stabilize on error
             self._stabilize_console()
-            return f"ERROR: {str(e)}"
+            raise TmuxSessionError(f"Tmux command failed: {str(e)}")
         except Exception as e:
             logger.error(f"Error sending command to tmux: {str(e)}")
-            # Try to stabilize on error
             self._stabilize_console()
-            return f"ERROR: {str(e)}"
+            raise CommandExecutionError(f"Error sending command to tmux: {str(e)}")

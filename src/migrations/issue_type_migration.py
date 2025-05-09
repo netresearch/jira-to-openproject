@@ -488,9 +488,7 @@ class IssueTypeMigration(BaseMigration):
                     return []
                 logger.info(f"File {temp_file_path} confirmed to exist in container.")
             except subprocess.SubprocessError as e:
-                logger.error(f"Error running docker exec ls command: {str(e)}")
-                if "console" in globals():
-                    console.print_exception(show_locals=True)
+                logger.exception(f"Error running docker exec ls command: {str(e)}")
                 return []
 
             logger.info(f"Reading {temp_file_path} using ssh + docker exec...")
@@ -523,16 +521,12 @@ class IssueTypeMigration(BaseMigration):
                 return []
 
         except subprocess.SubprocessError as e:
-            logger.error(f"Error running docker exec command: {str(e)}")
-            if "console" in globals():
-                console.print_exception(show_locals=True)
+            logger.exception(f"Error running docker exec command: {str(e)}")
             return []
         except Exception as e:
-            logger.error(
+            logger.exception(
                 f"Unexpected error during work package type retrieval: {str(e)}"
             )
-            if "console" in globals():
-                console.print_exception(show_locals=True)
             return []
         finally:
             try:

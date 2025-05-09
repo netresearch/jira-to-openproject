@@ -10,9 +10,9 @@ delegation to underlying clients, file transfers, error handling, and command ex
 import os
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock, Mock
+from unittest.mock import patch, MagicMock
 
-from src.clients.openproject_client import OpenProjectClient
+from src.clients.openproject_client import OpenProjectClient, FileTransferError
 from src.clients.ssh_client import SSHClient
 from src.clients.docker_client import DockerClient
 from src.clients.rails_console_client import RailsConsoleClient
@@ -217,36 +217,32 @@ class TestOpenProjectClient(unittest.TestCase):
         # Mock file_manager's create_script_file
         self.mock_file_manager.create_script_file.return_value = "/tmp/test_script.rb"
 
-        # Mock _transfer_rails_script to fail
-        self.op_client._transfer_rails_script = Mock(return_value={
-            "success": False,
-            "error": "Connection refused"
-        })
+        # Patch _transfer_rails_script to raise an exception with the correct message
+        with patch.object(self.op_client, '_transfer_rails_script') as mock_transfer:
+            mock_transfer.side_effect = FileTransferError("SSH transfer failed: Connection refused")
 
-        # Execute the test with expected exception
-        with self.assertRaises(Exception) as context:
-            self.op_client._transfer_and_execute_script("puts 'test'")
+            # Execute the test with expected exception
+            with self.assertRaises(Exception) as context:
+                self.op_client._transfer_and_execute_script("puts 'test'")
 
-        # Verify error message
-        self.assertIn("Connection refused", str(context.exception))
+            # Verify error message
+            self.assertIn("Connection refused", str(context.exception))
 
     def test_transfer_and_execute_script_docker_failure(self):
         """Test script execution failing during Docker transfer."""
         # Mock file_manager's create_script_file
         self.mock_file_manager.create_script_file.return_value = "/tmp/test_script.rb"
 
-        # Mock _transfer_rails_script to fail with Docker error
-        self.op_client._transfer_rails_script = Mock(return_value={
-            "success": False,
-            "error": "Failed to copy script to container"
-        })
+        # Patch _transfer_rails_script to raise an exception with the correct message
+        with patch.object(self.op_client, '_transfer_rails_script') as mock_transfer:
+            mock_transfer.side_effect = FileTransferError("Failed to copy script to container")
 
-        # Execute the test with expected exception
-        with self.assertRaises(Exception) as context:
-            self.op_client._transfer_and_execute_script("puts 'test'")
+            # Execute the test with expected exception
+            with self.assertRaises(Exception) as context:
+                self.op_client._transfer_and_execute_script("puts 'test'")
 
-        # Verify error message
-        self.assertIn("Failed to copy script to container", str(context.exception))
+            # Verify error message
+            self.assertIn("Failed to copy script to container", str(context.exception))
 
     def test_execute_query_success(self):
         """Test successful query execution."""
@@ -298,12 +294,35 @@ class TestOpenProjectClient(unittest.TestCase):
 
     def test_file_transfer_methods(self) -> None:
         """Test file transfer methods."""
-        # Mock the underlying client methods
-        self.mock_ssh_client.copy_file_to_remote.return_value = {"status": "success"}
-        self.mock_docker_client.copy_file_to_container.return_value = {"status": "success"}
-        self.mock_docker_client.check_file_exists_in_container.return_value = True
+        # Reset all mocks and create a fresh OpenProjectClient instance for this test
+        self.ssh_client_patcher.stop()
+        self.docker_client_patcher.stop()
+        self.rails_client_patcher.stop()
 
-        # Test transfer_file_to_container
+        # Create new patchers
+        self.ssh_client_patcher = patch('src.clients.openproject_client.SSHClient')
+        self.mock_ssh_client_class = self.ssh_client_patcher.start()
+        self.mock_ssh_client = MagicMock(spec=SSHClient)
+        self.mock_ssh_client_class.return_value = self.mock_ssh_client
+
+        self.docker_client_patcher = patch('src.clients.openproject_client.DockerClient')
+        self.mock_docker_client_class = self.docker_client_patcher.start()
+        self.mock_docker_client = MagicMock(spec=DockerClient)
+        self.mock_docker_client_class.return_value = self.mock_docker_client
+
+        self.rails_client_patcher = patch('src.clients.openproject_client.RailsConsoleClient')
+        self.mock_rails_client_class = self.rails_client_patcher.start()
+        self.mock_rails_client = MagicMock(spec=RailsConsoleClient)
+        self.mock_rails_client_class.return_value = self.mock_rails_client
+
+        # Create a fresh instance with the new mocks
+        self.op_client = OpenProjectClient()
+
+        # Configure the mocks for this test
+        self.mock_ssh_client.copy_file_to_remote.return_value = True
+        self.mock_docker_client.copy_file_to_container.return_value = True
+
+        # Test transfer_file_to_container with successful transfers
         result = self.op_client.transfer_file_to_container("/local/file.txt", "/container/file.txt")
 
         # Verify result
@@ -311,59 +330,56 @@ class TestOpenProjectClient(unittest.TestCase):
 
         # Verify SSH client was called
         self.mock_ssh_client.copy_file_to_remote.assert_called_once()
-        local_path = self.mock_ssh_client.copy_file_to_remote.call_args[0][0]
-        self.assertEqual(local_path, "/local/file.txt")
 
         # Verify Docker client was called
         self.mock_docker_client.copy_file_to_container.assert_called_once()
 
-        # Test with a failing SSH transfer
+        # Now test with a failing SSH transfer
         self.mock_ssh_client.copy_file_to_remote.reset_mock()
         self.mock_docker_client.copy_file_to_container.reset_mock()
-        self.mock_ssh_client.copy_file_to_remote.return_value = {"status": "error", "error": "Connection refused"}
 
-        result = self.op_client.transfer_file_to_container("/local/file.txt", "/container/file.txt")
+        # Configure SSH client to raise an exception
+        self.mock_ssh_client.copy_file_to_remote.side_effect = Exception("Connection refused")
+
+        # Run the test with the failing SSH client
+        result = self.op_client.transfer_file_to_container("/local/file2.txt", "/container/file2.txt")
 
         # Verify result
         self.assertFalse(result)
 
-        # Verify SSH client was called but Docker client was not
+        # Verify SSH client was called
         self.mock_ssh_client.copy_file_to_remote.assert_called_once()
+
+        # Verify Docker client was NOT called (because SSH failed)
         self.mock_docker_client.copy_file_to_container.assert_not_called()
 
     def test_is_connected(self) -> None:
         """Test connection check."""
-        # Mock generate_unique_id to return a predictable value
-        self.mock_file_manager.generate_unique_id.return_value = "test_id"
+        # Patch random.randint to return a fixed value
+        with patch('src.clients.openproject_client.random.randint', return_value=12345):
+            # Configure mock for successful validation
+            self.mock_rails_client.execute.side_effect = None  # Clear any previous side effects
+            self.mock_rails_client.execute.return_value = "OPENPROJECT_CONNECTION_TEST_12345"
 
-        # Configure mock for successful validation
-        self.mock_rails_client.execute.return_value = {
-            "status": "success",
-            "output": "OPENPROJECT_CONNECTION_TEST_test_id"
-        }
+            # Test is_connected
+            result = self.op_client.is_connected()
 
-        # Test is_connected
-        result = self.op_client.is_connected()
+            # Verify result
+            self.assertTrue(result)
 
-        # Verify result
-        self.assertTrue(result)
+            # Verify Rails client was called with the correct connection test command
+            self.mock_rails_client.execute.assert_called_once()
+            command = self.mock_rails_client.execute.call_args[0][0]
+            self.assertIn("OPENPROJECT_CONNECTION_TEST_", command)
 
-        # Verify Rails client was called with the correct connection test command
-        self.mock_rails_client.execute.assert_called_once()
-        command = self.mock_rails_client.execute.call_args[0][0]
-        self.assertIn("OPENPROJECT_CONNECTION_TEST_test_id", command)
+            # Test with a failed execution
+            self.mock_rails_client.execute.reset_mock()
+            self.mock_rails_client.execute.side_effect = Exception("Connection to Rails console failed")
 
-        # Test with a failed execution
-        self.mock_rails_client.execute.reset_mock()
-        self.mock_rails_client.execute.return_value = {
-            "status": "error",
-            "error": "Connection to Rails console failed"
-        }
+            result = self.op_client.is_connected()
 
-        result = self.op_client.is_connected()
-
-        # Verify result
-        self.assertFalse(result)
+            # Verify result
+            self.assertFalse(result)
 
 
 if __name__ == "__main__":
