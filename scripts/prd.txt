@@ -351,7 +351,6 @@ Each component migration follows an Extract-Transform-Load (ETL) pattern:
 9. Tempo account structures and hierarchies properly represented
 10. Inline attachments within text correctly rendered and accessible
 11. Metadata and audit information correctly preserved (creation dates, authors, assignees)
-12. Manually imported data safely preserved during incremental updates
 
 #### Syntax Conversion Quality
 1. **Jira to OpenProject Markdown**: Proper conversion of Jira's wiki markup to OpenProject's markdown format
@@ -449,3 +448,113 @@ The current client architecture has evolved organically, leading to some inconsi
 - Consider implementing a more robust connection pool for Rails console sessions
 - Evaluate alternatives to tmux for console interaction if needed
 - Explore options for more concurrent operations using the new architecture
+
+### Response Handling Standardization
+
+To improve reliability and maintainability, the OpenProject client response handling needs standardization:
+
+**Current Issue**: The `OpenProjectClient` inconsistently handles response formats from the Rails console:
+- Some responses are automatically parsed into Python data structures
+- Others return as strings with Ruby syntax (using `=>` instead of `:`)
+- Some queries, particularly those returning large datasets, fail with interactive console formatting issues
+- This requires duplicate parsing logic in multiple methods, increasing error potential
+
+**Requirements**:
+1. Create a centralized response parser that normalizes all Rails console outputs
+2. Modify `execute_query()` to consistently return properly formatted Python objects
+3. Update all dependent methods to expect standardized response formats
+4. For large data queries (like retrieving all users), use the file-based approach with direct Rails runner commands
+5. Add proper caching mechanisms to minimize repeated calls for the same data
+6. Add better error handling for nil responses and empty results
+
+**Implementation details**:
+- Add specific methods for large data operations (users, projects, etc.) that use file-based approaches
+- Update existing methods to normalize responses and handle Ruby-specific syntax
+- Add logging for response format details to make debugging easier
+- Implement consistent caching with configurable TTL for each data type
+
+# Client Architecture YOLO Refactoring
+
+## Overview
+
+This high-priority task outlines the requirements for refactoring the client architecture in the Jira to OpenProject migration tool following the YOLO (You Only Live Once) and Exception-based development approach. The goal is to establish proper ownership relationships and clean separation of responsibilities between client components while aggressively removing legacy code patterns.
+
+## Priority and Approach
+
+This refactoring is a **high priority** task that must be completed before proceeding with the Link Type Migration work. The implementation will follow the YOLO development principles, which include:
+
+- Immediate removal of legacy patterns and compatibility layers
+- Aggressive simplification of component interfaces
+- No backwards compatibility considerations
+- Clean exception-based error handling
+- Direct dependency relationships without adapters
+
+## Requirements
+
+### Component Refactoring Requirements
+
+1. **SSHClient (Foundation Level)**
+   - Streamline implementation to focus solely on SSH operations
+   - Remove any OpenProject-specific code from this layer
+   - Implement robust exception handling instead of returning status dictionaries
+   - Use direct file-based imports to eliminate circular dependencies
+
+2. **DockerClient (Container Level)**
+   - Accept SSHClient instance directly through constructor injection
+   - Remove all OpenProject-specific logic
+   - Implement proper exception handling that passes errors up the stack
+   - Simplify file transfer logic with clear error messages
+
+3. **RailsConsoleClient (Console Level)**
+   - Accept DockerClient instance directly through constructor injection
+   - Implement clean error handling with descriptive exception types
+   - Standardize command execution with reliable output parsing
+   - Ensure robust error detection and reporting
+
+4. **OpenProjectClient (Application Level)**
+   - Own and coordinate all other client components
+   - Initialize components in the correct hierarchical order
+   - Implement consistent response parsing
+   - Provide a clean high-level API
+
+### Implementation Requirements
+
+1. **Exception Handling**
+   - Replace status dictionaries with proper exception classes
+   - Implement appropriate exception hierarchies
+   - Use try/except blocks with specific exception types
+   - Propagate exceptions up the stack with contextual information
+
+2. **Dependency Injection**
+   - Components should accept dependencies via constructor parameters
+   - Ensure clear ownership of component lifecycles
+   - No implicit dependency creation within methods
+
+3. **File-Based Imports**
+   - Use direct imports from files to prevent circular dependencies
+   - Organize imports to reflect component hierarchy
+
+## Implementation Plan
+
+1. Start with the User component as a blueprint for the refactoring
+2. Refactor components from the bottom up:
+   - SSHClient first
+   - DockerClient second
+   - RailsConsoleClient third
+   - OpenProjectClient last
+3. Test each component thoroughly after refactoring
+4. Document the new architecture and component relationships
+
+## Success Criteria
+
+- All components follow the defined hierarchy
+- Clean exception-based error handling
+- No circular dependencies
+- Tests pass and verify the integrity of the architecture
+- Clear documentation reflecting the new design
+
+## Deliverables
+
+1. Refactored client components with clean interfaces
+2. Updated documentation showing component relationships
+3. Comprehensive test coverage for the refactored components
