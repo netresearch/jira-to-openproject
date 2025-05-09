@@ -8,10 +8,16 @@ This module contains test cases for validating Rails console interactions.
 import os
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock, Mock
+from unittest.mock import patch, MagicMock
 import subprocess
 
-from src.clients.rails_console_client import RailsConsoleClient
+from src.clients.rails_console_client import (
+    RailsConsoleClient,
+    TmuxSessionError,
+    ConsoleNotReadyError,
+    CommandExecutionError,
+    RubyError
+)
 
 
 class TestRailsConsoleClient(unittest.TestCase):
@@ -119,6 +125,15 @@ class TestRailsConsoleClient(unittest.TestCase):
         # Verify success message was logged
         self.mock_logger.success.assert_called_once()
 
+    def test_session_not_exists(self) -> None:
+        """Test initialization failure when tmux session doesn't exist."""
+        # Mock session check to fail
+        self.mock_subprocess.run.return_value.returncode = 1
+
+        # Test initialization with non-existent session
+        with self.assertRaises(TmuxSessionError):
+            RailsConsoleClient(tmux_session_name="nonexistent_session")
+
     def test_execute_script(self):
         """Test executing a script in the Rails console."""
         # Define some sample output
@@ -160,34 +175,75 @@ irb(main):002:0>
             # Mock _send_command_to_tmux to return sample output
             with patch.object(self.rails_client, '_send_command_to_tmux', return_value=output):
                 # Execute the test with expected exception
-                with self.assertRaises(Exception) as context:
+                with self.assertRaises(RubyError) as context:
                     self.rails_client.execute("undefined_variable + 1")
 
                 # Verify error message
                 self.assertIn("NameError: undefined local variable", str(context.exception))
 
-    def test_execute_with_success_keyword(self):
-        """Test executing a script with a success keyword in the output."""
-        # Define some sample output
+    def test_start_marker_not_found(self):
+        """Test handling when start marker is not found in output."""
+        output = """
+irb(main):001:0> load '/tmp/test_script.rb'
+Some unexpected output
+irb(main):002:0>
+"""
+        with patch.object(self.rails_client, '_send_command_to_tmux', return_value=output):
+            with self.assertRaises(CommandExecutionError) as context:
+                self.rails_client.execute("load '/tmp/test_script.rb'")
+
+            self.assertIn("Start marker", str(context.exception))
+
+    def test_end_marker_not_found(self):
+        """Test handling when end marker is not found in output."""
         marker_id = "abcd1234"
         output = f"""
-irb(main):001:0> puts 'success marker found'
+irb(main):001:0> load '/tmp/test_script.rb'
 --EXEC_START--{marker_id}
-success marker found
+Some output but no end marker
+irb(main):002:0>
+"""
+        with patch.object(self.rails_client.file_manager, 'generate_unique_id', return_value=marker_id):
+            with patch.object(self.rails_client, '_send_command_to_tmux', return_value=output):
+                with patch.object(self.rails_client, '_get_console_state', return_value={"ready": False, "state": "unknown"}):
+                    with self.assertRaises(CommandExecutionError) as context:
+                        self.rails_client.execute("load '/tmp/test_script.rb'")
+
+                    self.assertIn("End marker", str(context.exception))
+
+    def test_ruby_error_pattern_detection(self):
+        """Test detection of Ruby error patterns in output."""
+        marker_id = "abcd1234"
+        output = f"""
+irb(main):001:0> load '/tmp/test_script.rb'
+--EXEC_START--{marker_id}
+SyntaxError: unexpected token at line 10
 --EXEC_END--{marker_id}
 => nil
 irb(main):002:0>
 """
-        # Mock generate_unique_id to return a fixed ID
         with patch.object(self.rails_client.file_manager, 'generate_unique_id', return_value=marker_id):
-            # Mock _send_command_to_tmux to return sample output
             with patch.object(self.rails_client, '_send_command_to_tmux', return_value=output):
-                # Execute the test
-                result = self.rails_client.execute("puts 'success marker found'")
+                with self.assertRaises(RubyError) as context:
+                    self.rails_client.execute("load '/tmp/test_script.rb'")
 
-                # Verify result is the actual output text
-                self.assertEqual(result, "success marker found")
-                self.assertIn("success marker found", result)
+                self.assertIn("SyntaxError:", str(context.exception))
+
+    def test_tmux_command_failure(self):
+        """Test handling of tmux command failure."""
+        # Mock _send_command_to_tmux to raise subprocess error
+        with patch.object(self.rails_client, '_send_command_to_tmux',
+                         side_effect=TmuxSessionError("Tmux command failed")):
+            with self.assertRaises(TmuxSessionError):
+                self.rails_client.execute("some command")
+
+    def test_console_not_ready(self):
+        """Test handling when console is not ready."""
+        # Mock _send_command_to_tmux to raise ConsoleNotReadyError
+        with patch.object(self.rails_client, '_send_command_to_tmux',
+                         side_effect=ConsoleNotReadyError("Console not ready")):
+            with self.assertRaises(ConsoleNotReadyError):
+                self.rails_client.execute("some command")
 
 
 if __name__ == "__main__":
