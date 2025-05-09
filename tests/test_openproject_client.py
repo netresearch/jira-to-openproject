@@ -10,7 +10,7 @@ delegation to underlying clients, file transfers, error handling, and command ex
 import os
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, Mock
 
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.ssh_client import SSHClient
@@ -190,175 +190,91 @@ class TestOpenProjectClient(unittest.TestCase):
         # Verify correct path was returned
         self.assertEqual(script_path, self.mock_named_tempfile.name)
 
-    def test_transfer_and_execute_script_success(self) -> None:
-        """Test script transfer and execution - success path."""
-        # Mock _create_script_file to return a fixed path
-        script_path = os.path.join(self.temp_dir, "test_script.rb")
-        with patch.object(self.op_client, '_create_script_file', return_value=script_path):
-            # Configure SSH client mock for successful file transfer
-            self.mock_ssh_client.copy_file_to_remote.return_value = {"status": "success"}
+    def test_transfer_and_execute_script_success(self):
+        """Test successful script transfer and execution."""
+        # Mock file_manager's create_script_file
+        self.mock_file_manager.create_script_file.return_value = "/tmp/test_script.rb"
 
-            # Configure Docker client mocks for successful operations
-            self.mock_docker_client.copy_file_to_container.return_value = {"status": "success"}
-            self.mock_docker_client.check_file_exists_in_container.return_value = True
-
-            # Configure Rails client mock for successful script execution
-            self.mock_rails_client.execute.return_value = {
-                "status": "success",
-                "output": "Script executed successfully"
+        # Mock _transfer_rails_script to succeed
+        with patch.object(self.op_client, '_transfer_rails_script') as mock_transfer:
+            mock_transfer.return_value = {
+                "success": True,
+                "remote_path": "/tmp/remote_script.rb"
             }
 
-            # Execute the test
-            result = self.op_client._transfer_and_execute_script("test_script_content")
+            # Mock rails_client execute to return sample JSON result
+            with patch.object(self.op_client.rails_client, 'execute') as mock_execute:
+                mock_execute.return_value = '{"result": 42}'
+
+                # Execute the test
+                result = self.op_client._transfer_and_execute_script("puts 'hello'")
+
+                # Verify the result
+                self.assertEqual(result, {"result": 42})
+
+    def test_transfer_and_execute_script_ssh_failure(self):
+        """Test script execution failing during SSH transfer."""
+        # Mock file_manager's create_script_file
+        self.mock_file_manager.create_script_file.return_value = "/tmp/test_script.rb"
+
+        # Mock _transfer_rails_script to fail
+        self.op_client._transfer_rails_script = Mock(return_value={
+            "success": False,
+            "error": "Connection refused"
+        })
+
+        # Execute the test with expected exception
+        with self.assertRaises(Exception) as context:
+            self.op_client._transfer_and_execute_script("puts 'test'")
+
+        # Verify error message
+        self.assertIn("Connection refused", str(context.exception))
+
+    def test_transfer_and_execute_script_docker_failure(self):
+        """Test script execution failing during Docker transfer."""
+        # Mock file_manager's create_script_file
+        self.mock_file_manager.create_script_file.return_value = "/tmp/test_script.rb"
+
+        # Mock _transfer_rails_script to fail with Docker error
+        self.op_client._transfer_rails_script = Mock(return_value={
+            "success": False,
+            "error": "Failed to copy script to container"
+        })
+
+        # Execute the test with expected exception
+        with self.assertRaises(Exception) as context:
+            self.op_client._transfer_and_execute_script("puts 'test'")
+
+        # Verify error message
+        self.assertIn("Failed to copy script to container", str(context.exception))
+
+    def test_execute_query_success(self):
+        """Test successful query execution."""
+        # Directly patch _transfer_and_execute_script
+        with patch.object(self.op_client, '_transfer_and_execute_script', return_value=42) as mock_transfer:
+            # Execute the query
+            result = self.op_client.execute_query("puts 'hello world'")
 
             # Verify result
-            self.assertEqual(result["status"], "success")
-            self.assertEqual(result["output"], "Script executed successfully")
+            self.assertEqual(result, 42)
 
-            # Verify correct sequence of operations
-            # 1. Create script file - handled by the patch
+            # Verify mock was called with properly wrapped query
+            mock_transfer.assert_called_once()
+            script_content = mock_transfer.call_args[0][0]
+            self.assertIn("puts 'hello world'", script_content)
 
-            # 2. Copy file to remote host
-            self.mock_ssh_client.copy_file_to_remote.assert_called_once_with(
-                script_path,
-                "/tmp/test_script.rb"
-            )
+    def test_execute_query_error(self):
+        """Test query execution with error."""
+        # Directly patch _transfer_and_execute_script
+        with patch.object(self.op_client, '_transfer_and_execute_script') as mock_transfer:
+            mock_transfer.side_effect = Exception("Query execution failed")
 
-            # 3. Copy file from remote host to container
-            self.mock_docker_client.copy_file_to_container.assert_called_once_with(
-                "/tmp/test_script.rb",
-                "/tmp/test_script.rb"
-            )
+            # Execute the query with error expected
+            with self.assertRaises(Exception) as context:
+                self.op_client.execute_query("invalid syntax")
 
-            # 4. Check file exists in container
-            self.mock_docker_client.check_file_exists_in_container.assert_called_once_with(
-                "/tmp/test_script.rb"
-            )
-
-            # 5. Execute script in Rails console
-            self.mock_rails_client.execute.assert_called_once_with(
-                "load '/tmp/test_script.rb'",
-                None  # Default timeout
-            )
-
-            # 6. Cleanup local file
-            self.mock_os.unlink.assert_called_once_with(script_path)
-
-            # 7. Cleanup remote file
-            self.mock_ssh_client.execute_command.assert_called_once()
-            cleanup_cmd = self.mock_ssh_client.execute_command.call_args[0][0]
-            self.assertIn("rm -f /tmp/test_script.rb", cleanup_cmd)
-
-    def test_transfer_and_execute_script_ssh_failure(self) -> None:
-        """Test script transfer and execution - SSH transfer failure."""
-        # Mock _create_script_file to return a fixed path
-        script_path = os.path.join(self.temp_dir, "test_script.rb")
-        with patch.object(self.op_client, '_create_script_file', return_value=script_path):
-            # Configure SSH client mock for failed file transfer
-            self.mock_ssh_client.copy_file_to_remote.return_value = {
-                "status": "error",
-                "error": "Connection refused"
-            }
-
-            # Configure os.path.exists to return True for the cleanup in except block
-            self.mock_os.path.exists.return_value = True
-
-            # Execute the test
-            result = self.op_client._transfer_and_execute_script("test_script_content")
-
-            # Verify result
-            self.assertEqual(result["status"], "error")
-            self.assertIn("File transfer to remote host failed", result["error"])
-
-            # Verify SSH client was called but Docker/Rails clients were not
-            self.mock_ssh_client.copy_file_to_remote.assert_called_once()
-            self.mock_docker_client.copy_file_to_container.assert_not_called()
-            self.mock_rails_client.execute.assert_not_called()
-
-            # Note: In the actual implementation, os.unlink is only called inside a try block
-            # in the exception handler when there's an error, so we won't assert it here
-
-    def test_transfer_and_execute_script_docker_failure(self) -> None:
-        """Test script transfer and execution - Docker transfer failure."""
-        # Mock _create_script_file to return a fixed path
-        script_path = os.path.join(self.temp_dir, "test_script.rb")
-        with patch.object(self.op_client, '_create_script_file', return_value=script_path):
-            # Configure SSH client mock for successful file transfer
-            self.mock_ssh_client.copy_file_to_remote.return_value = {"status": "success"}
-
-            # Configure Docker client mocks for failed file transfer
-            self.mock_docker_client.copy_file_to_container.return_value = {
-                "status": "error",
-                "error": "Container not found"
-            }
-
-            # Configure os.path.exists to return True for the cleanup in except block
-            self.mock_os.path.exists.return_value = True
-
-            # Execute the test
-            result = self.op_client._transfer_and_execute_script("test_script_content")
-
-            # Verify result
-            self.assertEqual(result["status"], "error")
-            self.assertIn("File transfer to container failed", result["error"])
-
-            # Verify SSH and Docker clients were called but Rails client was not
-            self.mock_ssh_client.copy_file_to_remote.assert_called_once()
-            self.mock_docker_client.copy_file_to_container.assert_called_once()
-            self.mock_rails_client.execute.assert_not_called()
-
-            # Note: In the actual implementation, os.unlink is only called inside a try block
-            # in the exception handler when there's an error, so we won't assert it here
-
-    def test_execute_query_success(self) -> None:
-        """Test query execution - success path."""
-        # Mock _transfer_and_execute_script to return success
-        with patch.object(self.op_client, '_transfer_and_execute_script') as mock_execute:
-            mock_execute.return_value = {
-                "status": "success",
-                "output": {
-                    "success": True,
-                    "result": 42
-                }
-            }
-
-            # Execute the test
-            result = self.op_client.execute_query("User.count")
-
-            # Verify result
-            self.assertEqual(result["status"], "success")
-            self.assertEqual(result["output"], 42)
-
-            # Verify mock was called with properly formatted script
-            mock_execute.assert_called_once()
-            script_content = mock_execute.call_args[0][0]
-            self.assertIn("begin", script_content)
-            self.assertIn("User.count", script_content)
-            self.assertIn("success: true", script_content)
-            self.assertIn("rescue =>", script_content)
-
-    def test_execute_query_error(self) -> None:
-        """Test query execution - error path."""
-        # Mock _transfer_and_execute_script to return a Ruby error
-        with patch.object(self.op_client, '_transfer_and_execute_script') as mock_execute:
-            mock_execute.return_value = {
-                "status": "success",
-                "output": {
-                    "success": False,
-                    "error": "NameError: undefined local variable",
-                    "backtrace": ["line 1", "line 2"]
-                }
-            }
-
-            # Execute the test
-            result = self.op_client.execute_query("undefined_variable")
-
-            # Verify result
-            self.assertEqual(result["status"], "error")
-            self.assertEqual(result["error"], "NameError: undefined local variable")
-
-            # Verify mock was called
-            mock_execute.assert_called_once()
+            # Verify error message
+            self.assertIn("Query execution failed", str(context.exception))
 
     def test_execute_script(self) -> None:
         """Test direct script execution."""

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 User migration module for Jira to OpenProject migration.
 Handles the migration of users and their accounts from Jira to OpenProject.
@@ -5,7 +6,6 @@ Handles the migration of users and their accounts from Jira to OpenProject.
 
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +101,7 @@ class UserMigration(BaseMigration):
         """
         self.logger.info("Extracting users from OpenProject...", extra={"markup": True})
 
+        # Use the standard get_users method which now has the robust implementation
         self.op_users = self.op_client.get_users()
 
         self.logger.info(
@@ -217,255 +218,121 @@ class UserMigration(BaseMigration):
 
         return mapping
 
-    def create_missing_users(self, batch_size: int = 50) -> dict[str, Any]:
+    def create_missing_users(self, batch_size: int = 10) -> dict[str, Any]:
         """
-        Create users in OpenProject that don't have a match.
-        Uses bulk creation for better performance.
+        Create users in OpenProject that exist in Jira but not in OpenProject.
+
+        This method:
+        1. Gets all users from both systems
+        2. Finds users that exist in Jira but not in OpenProject
+        3. Creates those users in OpenProject
 
         Args:
-            batch_size: Number of users to create in each batch (default: 50)
+            batch_size: Number of users to create in a single batch operation
 
         Returns:
-            Updated user mapping with newly created users
+            Dictionary with stats about created users
         """
-        if not self.user_mapping:
-            self.create_user_mapping()
+        # Get Jira users using Jira client API
+        jira_users = self.jira_client.get_users()
+        jira_users_dict = {}
+        for jira_user in jira_users:
+            key = jira_user.get("key")
+            if key:
+                jira_users_dict[key] = jira_user
 
-        unmatched_users = [
-            user for user in self.user_mapping.values() if user["matched_by"] == "none"
-        ]
+        if not jira_users_dict:
+            logger.warning("No Jira users found to create in OpenProject")
+            return {
+                "created_count": 0,
+                "total_users": 0
+            }
 
-        if not unmatched_users:
-            self.logger.info(
-                "All users have a match in OpenProject, no need to create new users",
-                extra={"markup": True},
-            )
-            return self.user_mapping
+        # Get mapping and existing users
+        mapping_dict = self.user_mapping  # Access directly as a dictionary
+        existing_emails = set()
 
-        self.logger.info(
-            f"Creating {len(unmatched_users)} missing users in OpenProject...",
-            extra={"markup": True},
-        )
+        # Get existing OpenProject users to avoid conflicts
+        op_users = self.op_client.get_users()
+        for user in op_users:
+            if user.get("email"):
+                existing_emails.add(user.get("email").lower())
 
-        created_count = 0
-        skipped_count = 0
-        failed_count = 0
-        found_existing_count = 0
-
-        # First check for existing users by email
+        # Prepare users to create in bulk
         users_to_create = []
-        with ProgressTracker(
-            "Checking for existing users", len(unmatched_users), "User Checks"
-        ) as tracker:
-            for user_data in unmatched_users:
-                jira_key = user_data["jira_key"]
-                jira_name = user_data["jira_name"]
-                jira_email = user_data["jira_email"]
-                jira_display_name = user_data["jira_display_name"]
+        for user_key, jira_user in jira_users_dict.items():
+            # Skip if user is already mapped
+            if user_key in mapping_dict and mapping_dict[user_key] is not None:
+                continue
 
-                tracker.update_description(f"Checking user: {jira_display_name}")
+            # Get user details
+            email = jira_user.get("emailAddress")
+            if not email:
+                logger.warning(f"Missing email for Jira user {user_key}, cannot create OpenProject user")
+                continue
 
-                if not jira_name or not jira_email:
-                    self.logger.warning(
-                        f"Skipping user {jira_display_name} - missing username or email",
-                        extra={"markup": True},
-                    )
-                    tracker.add_log_item(f"Skipped (missing data): {jira_display_name}")
-                    skipped_count += 1
-                    tracker.increment()
-                    continue
+            # Skip if user already exists in OpenProject
+            if email.lower() in existing_emails:
+                logger.debug(f"User with email {email} already exists in OpenProject, skipping")
+                continue
 
-                # First, check if a user with this email already exists
-                existing_user = None
-                try:
-                    existing_user = self.op_client.get_user_by_email(jira_email)
-                    if existing_user:
-                        self.logger.info(
-                            f"Found existing user with email {jira_email}: {existing_user.get('login')}",
-                            extra={"markup": True},
-                        )
-                        # Update mapping
-                        self.user_mapping[jira_key] = {
-                            "jira_key": jira_key,
-                            "jira_name": jira_name,
-                            "jira_email": jira_email,
-                            "jira_display_name": jira_display_name,
-                            "openproject_id": existing_user.get("id"),
-                            "openproject_login": existing_user.get("login"),
-                            "openproject_email": existing_user.get("email"),
-                            "matched_by": "email_existing",
-                        }
-                        tracker.add_log_item(
-                            f"Found existing user: {jira_display_name} → {existing_user.get('login')}"
-                        )
-                        found_existing_count += 1
-                        tracker.increment()
-                        continue
-                except Exception as e:
-                    self.logger.warning(
-                        f"Error checking for existing user with email {jira_email}: {str(e)}",
-                        extra={"markup": True},
-                    )
+            # Parse name
+            display_name = jira_user.get("displayName", "")
+            name_parts = display_name.split(" ", 1)
+            firstname = name_parts[0] if len(name_parts) > 0 else "Unknown"
+            lastname = name_parts[1] if len(name_parts) > 1 else "User"
 
-                # If in dry run mode, skip the actual creation
-                if config.migration_config.get("dry_run"):
-                    self.logger.info(
-                        f"DRY RUN: Would create user {jira_name} ({jira_email})",
-                        extra={"markup": True},
-                    )
-                    tracker.add_log_item(f"Would create: {jira_display_name}")
-                    skipped_count += 1
-                    tracker.increment()
-                    continue
+            # Create user attributes
+            user_attrs = {
+                "login": email.split("@")[0],
+                "firstname": firstname,
+                "lastname": lastname,
+                "email": email,
+                "admin": False,
+                "status": "active"
+            }
 
-                cleaned_display_name = jira_display_name
-                has_special_handling = False
+            # Add to bulk creation list
+            users_to_create.append(user_attrs)
 
-                # Handle special cases
-                if "(" in cleaned_display_name:
-                    # Try to clean the display name if it contains parentheses
-                    try:
-                        cleaned_display_name = re.sub(r'\s*\([^)]*\)', '', cleaned_display_name).strip()
-                        has_special_handling = True
-                    except Exception as e:
-                        self.logger.warning(f"Failed to clean display name {cleaned_display_name}: {str(e)}")
+        # No users to create
+        if not users_to_create:
+            logger.info("No new users to create in OpenProject")
+            return {
+                "created_count": 0,
+                "total_users": len(jira_users_dict)
+            }
 
-                # Format first/last name from display name
-                first_name = ""
-                last_name = ""
+        # Create users in bulk
+        logger.info(f"Creating {len(users_to_create)} users in OpenProject in bulk")
+        result = self.op_client.create_users_in_bulk(users_to_create)
 
-                # Use special handling to split the name based on spaces
-                if has_special_handling and " " in cleaned_display_name:
-                    name_parts = cleaned_display_name.split()
-                    if len(name_parts) >= 2:
-                        first_name = name_parts[0]
-                        last_name = " ".join(name_parts[1:])
-                    else:
-                        first_name = cleaned_display_name
-                        last_name = "."
-                else:
-                    # Otherwise use the regular display name
-                    if " " in jira_display_name:
-                        name_parts = jira_display_name.split()
-                        if len(name_parts) >= 2:
-                            first_name = name_parts[0]
-                            last_name = " ".join(name_parts[1:])
-                        else:
-                            first_name = jira_display_name
-                            last_name = "."
-                    else:
-                        first_name = jira_display_name
-                        last_name = "."
+        created_count = result.get("created_count", 0)
+        logger.success(f"Successfully created {created_count} users in OpenProject")
 
-                # Add user to the list for bulk creation
-                users_to_create.append({
-                    "jira_key": jira_key,
-                    "jira_name": jira_name,
-                    "jira_email": jira_email,
-                    "jira_display_name": jira_display_name,
-                    "login": jira_name,
-                    "email": jira_email,
-                    "firstName": first_name,
-                    "lastName": last_name,
-                    "admin": False,
-                    "status": "active",
-                    "language": "en",
-                    "password": "ChangeMe123!"  # Temporary password (LDAP will be used later)
-                })
-                tracker.increment()
+        # Update mapping with newly created users
+        created_users = result.get("created_users", [])
+        for user in created_users:
+            email = user.get("email")
+            if not email:
+                continue
 
-        # Now create users in bulk batches
-        if users_to_create:
-            with ProgressTracker(
-                "Creating users in batches",
-                (len(users_to_create) + batch_size - 1) // batch_size,  # Ceiling division
-                "User Creation Batches"
-            ) as tracker:
-                for i in range(0, len(users_to_create), batch_size):
-                    batch = users_to_create[i:i+batch_size]
-                    batch_users_to_create = [{
-                        key: user[key] for key in [
-                            "login", "email", "firstName", "lastName",
-                            "admin", "status", "language", "password"
-                        ]
-                    } for user in batch]
-
-                    tracker.update_description(f"Creating batch {i//batch_size + 1} ({len(batch)} users)")
-
-                    try:
-                        # Create users in bulk
-                        bulk_result = self.op_client.create_users_in_bulk(batch_users_to_create)
-
-                        if bulk_result["status"] == "success":
-                            created_users = bulk_result.get("created_users", [])
-                            created_count += len(created_users)
-
-                            # Map created users back to Jira users
-                            created_users_by_login = {
-                                user.get("login"): user for user in created_users
-                            }
-
-                            # Update mapping with newly created users
-                            for user in batch:
-                                jira_key = user["jira_key"]
-                                login = user["login"]
-
-                                if login in created_users_by_login:
-                                    created_user = created_users_by_login[login]
-                                    self.user_mapping[jira_key] = {
-                                        "jira_key": jira_key,
-                                        "jira_name": user["jira_name"],
-                                        "jira_email": user["jira_email"],
-                                        "jira_display_name": user["jira_display_name"],
-                                        "openproject_id": created_user.get("id"),
-                                        "openproject_login": created_user.get("login"),
-                                        "openproject_email": created_user.get("email"),
-                                        "matched_by": "created",
-                                    }
-                                    tracker.add_log_item(f"Created: {user['jira_display_name']} → {login}")
-                                else:
-                                    failed_count += 1
-                                    tracker.add_log_item(f"Failed to create: {user['jira_display_name']}")
-
-                            # Log failed users
-                            failed_users = bulk_result.get("failed_users", [])
-                            for failed_user in failed_users:
-                                failed_count += 1
-                                attrs = failed_user.get("attributes", {})
-                                errors = failed_user.get("errors", [])
-                                error_msg = "; ".join(errors) if errors else "Unknown error"
-                                self.logger.warning(
-                                    f"Failed to create user {attrs.get('login')}: {error_msg}",
-                                    extra={"markup": True},
-                                )
-                        else:
-                            error_msg = bulk_result.get("error", "Unknown error")
-                            self.logger.warning(
-                                f"Bulk creation failed: {error_msg}",
-                                extra={"markup": True},
-                            )
-                            tracker.add_log_item(f"Batch failed: {error_msg}")
-                            failed_count += len(batch)
-                    except Exception as e:
-                        self.logger.warning(
-                            f"Error in bulk user creation: {str(e)}",
-                            extra={"markup": True},
-                        )
-                        tracker.add_log_item(f"Batch error: {str(e)}")
-                        failed_count += len(batch)
-
-                    tracker.increment()
+            # Find matching Jira user
+            for user_key, jira_user in jira_users_dict.items():
+                if jira_user.get("emailAddress") == email:
+                    op_id = user.get("id")
+                    if op_id:
+                        self.user_mapping[user_key] = str(op_id)
+                        break
 
         # Save the updated mapping
         self._save_to_json(self.user_mapping, "user_mapping.json")
 
-        self.logger.info(
-            f"Created {created_count} users, found {found_existing_count} existing users, "
-            f"skipped {skipped_count}, failed {failed_count}",
-            extra={"markup": True},
-        )
-
-        return self.user_mapping
+        # Return simple dictionary with created_count to avoid issues with user_mapping format
+        return {
+            "created_count": created_count,
+            "total_users": len(self.user_mapping),
+        }
 
     def analyze_user_mapping(self) -> dict[str, Any]:
         """
@@ -593,3 +460,17 @@ class UserMigration(BaseMigration):
                 failed_count=len(self.jira_users) if self.jira_users else 0,
                 total_count=len(self.jira_users) if self.jira_users else 0,
             )
+
+    def get_jira_users(self) -> dict[str, Any]:
+        """
+        Get Jira users from the migration data.
+
+        Returns:
+            Dictionary of Jira users indexed by key
+        """
+        users = {}
+        for jira_user in self.jira_users:
+            key = jira_user.get("key")
+            if key:
+                users[key] = jira_user
+        return users

@@ -13,6 +13,7 @@ Part of the layered client architecture where:
 
 import os
 import time
+import random
 from typing import Any, Optional
 
 from src import config
@@ -239,122 +240,84 @@ class DockerClient:
                 "error": str(e)
             }
 
-    def copy_file_from_container(
-        self,
-        container_path: str,
-        local_path: str,
-        retries: int | None = None,
-    ) -> dict[str, Any]:
+    def copy_file_from_container(self, container_path: str, local_path: str) -> dict[str, Any]:
         """
-        Copy a file from the Docker container to the local machine.
+        Copy a file from the Docker container to the local system.
+        This uses a direct approach to copy the file from container to local.
 
         Args:
-            container_path: Path in container
-            local_path: Path to save file locally
-            retries: Number of retries (default: self.retry_count)
+            container_path: Path to the file in the container
+            local_path: Path where to save the file locally
 
         Returns:
-            Dict with status and error information
+            Dictionary with status and error information
         """
-        if retries is None:
-            retries = self.retry_count
+        # Create a unique temporary filename on the remote host
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        unique_id = '%06x' % random.randrange(16**6)
+        remote_temp_path = f"/tmp/{timestamp}_{unique_id}_{os.path.basename(container_path)}"
 
-        # Strategy: first copy from container to remote host, then to local
-        for attempt in range(retries):
-            if attempt > 0:
-                logger.warning(f"Retrying file copy from container (attempt {attempt+1}/{retries})")
-                time.sleep(self.retry_delay * attempt)
+        try:
+            # Step 1: Check if file exists in container
+            exists_cmd = (
+                f"docker exec {self.container_name} bash -c "
+                f"\"test -e {container_path} && echo 'EXISTS' || echo 'NOT_EXISTS'\""
+            )
+            exists_result = self.ssh_client.execute_command(exists_cmd)
+            if "EXISTS" not in exists_result.get("stdout", ""):
+                logger.error(f"File not found in container: {container_path}")
+                return {"status": "error", "error": f"File not found in container: {container_path}"}
 
+            # Step 2: Copy from container to remote host
+            docker_cmd = f"docker cp {self.container_name}:{container_path} {remote_temp_path}"
+            logger.debug(f"Running docker cp command: {docker_cmd}")
+            result = self.ssh_client.execute_command(docker_cmd)
+
+            if result.get("status") != "success":
+                logger.error(f"Docker cp failed: {result.get('stderr', 'Unknown error')}")
+                err = result.get('stderr', 'Unknown error')
+                return {"status": "error", "error": f"Failed to copy file from container: {err}"}
+
+            # Step 3: Verify the file exists on remote host
+            verify_cmd = f"test -e {remote_temp_path} && echo 'EXISTS' || echo 'NOT_EXISTS'"
+            verify_result = self.ssh_client.execute_command(verify_cmd)
+            if "EXISTS" not in verify_result.get("stdout", ""):
+                logger.error(f"File not found on remote host after docker cp: {remote_temp_path}")
+                return {
+                    "status": "error",
+                    "error": f"File not found on remote host after docker cp: {remote_temp_path}"
+                }
+
+            # Step 4: Use SCP to copy the file from remote to local
+            logger.debug(f"Copying file from remote to local: {remote_temp_path} -> {local_path}")
+            scp_result = self.ssh_client.copy_file_from_remote(remote_temp_path, local_path)
+
+            if scp_result.get("status") != "success":
+                logger.error(f"SCP failed: {scp_result.get('error', 'Unknown error')}")
+                err = scp_result.get('error', 'Unknown error')
+                return {"status": "error", "error": f"Failed to copy file from remote host: {err}"}
+
+            # Step 5: Verify local file exists and has content
+            if not os.path.exists(local_path):
+                logger.error(f"Local file not found after copy: {local_path}")
+                return {"status": "error", "error": f"Local file not found after copy: {local_path}"}
+
+            local_size = os.path.getsize(local_path)
+            logger.debug(f"File copied successfully: {local_path} ({local_size} bytes)")
+
+            return {"status": "success"}
+
+        except Exception as e:
+            logger.exception(f"Error in copy_file_from_container: {str(e)}")
+            return {"status": "error", "error": f"Exception during file copy: {str(e)}"}
+
+        finally:
+            # Clean up the temporary file on the remote host
             try:
-                # Generate a unique filename for the intermediate file on the remote host
-                unique_id = self.file_manager.generate_unique_id()
-                remote_temp_path = f"/tmp/{unique_id}_{os.path.basename(container_path)}"
-
-                # Step 1: Check if file exists in container
-                check_result = self.execute_command(f"test -e {container_path} && echo 'EXISTS' || echo 'NOT_EXISTS'")
-
-                if "NOT_EXISTS" in check_result.get("stdout", ""):
-                    # Skip retry if file definitely doesn't exist
-                    return {
-                        "status": "error",
-                        "error": f"File does not exist in container: {container_path}"
-                    }
-
-                # Step 2: Copy from container to remote host
-                logger.debug(f"Copying file from container to remote host: {container_path} -> {remote_temp_path}")
-
-                # Create docker cp command
-                docker_cp_cmd = f"docker cp {self.container_name}:{container_path} {remote_temp_path}"
-
-                # Execute via SSH
-                result = self.ssh_client.execute_command(docker_cp_cmd)
-
-                if result["status"] != "success":
-                    if attempt < retries - 1:
-                        continue
-                    return {
-                        "status": "error",
-                        "error":
-                            "Failed to copy file from container:"
-                            f" {result.get('error', result.get('stderr', 'Unknown error'))}"
-                    }
-
-                # Step 3: Check if file was copied to remote host
-                check_result = self.ssh_client.execute_command(
-                    f"test -e {remote_temp_path} && echo 'EXISTS' || echo 'NOT_EXISTS'"
-                )
-
-                if "NOT_EXISTS" in check_result.get("stdout", ""):
-                    if attempt < retries - 1:
-                        continue
-                    return {
-                        "status": "error",
-                        "error": f"File was not copied to remote host: {remote_temp_path}"
-                    }
-
-                # Step 4: Copy from remote host to local
-                logger.debug(f"Copying file from remote host to local: {remote_temp_path} -> {local_path}")
-
-                result = self.ssh_client.copy_file_from_remote(remote_temp_path, local_path)
-
-                # Step 5: Cleanup remote temp file (in background, don't care about result)
-                cleanup_cmd = f"rm -f {remote_temp_path} &>/dev/null"
-                self.ssh_client.execute_command(cleanup_cmd, check=False)
-
-                if result["status"] == "success":
-                    if os.path.exists(local_path):
-                        file_size = os.path.getsize(local_path)
-                        logger.debug(
-                            "File copied successfully from container:"
-                            f" {container_path} -> {local_path} ({file_size} bytes)"
-                        )
-                        return {
-                            "status": "success",
-                            "local_path": local_path,
-                            "file_size": file_size
-                        }
-
-                if attempt < retries - 1:
-                    continue
-                return {
-                    "status": "error",
-                    "error": f"Failed to copy file from remote host: {result.get('error', 'Unknown error')}"
-                }
-
-            except Exception as e:
-                logger.error(f"Error copying file from container (attempt {attempt+1}): {str(e)}")
-                if attempt < retries - 1:
-                    continue
-                return {
-                    "status": "error",
-                    "error": str(e)
-                }
-
-        # This should never be reached, but just in case
-        return {
-            "status": "error",
-            "error": "Failed to copy file after all retry attempts"
-        }
+                self.ssh_client.execute_command(f"rm -f {remote_temp_path}", check=False)
+            except Exception:
+                # Non-critical error, just log it
+                logger.warning(f"Failed to clean up temporary file: {remote_temp_path}")
 
     def check_file_exists_in_container(self, container_path: str) -> bool:
         """

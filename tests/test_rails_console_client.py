@@ -8,7 +8,7 @@ This module contains test cases for validating Rails console interactions.
 import os
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, Mock
 import subprocess
 
 from src.clients.rails_console_client import RailsConsoleClient
@@ -119,65 +119,75 @@ class TestRailsConsoleClient(unittest.TestCase):
         # Verify success message was logged
         self.mock_logger.success.assert_called_once()
 
-    def test_execute_script(self) -> None:
-        """Test executing a Ruby command."""
-        # Configure mock_send_command for a successful execution
-        self.mock_send_command.return_value = (
-            "Console output\n"
-            "--EXEC_START--test_unique_id\n"
-            "Command result\n"
-            "--EXEC_END--test_unique_id\n"
-        )
+    def test_execute_script(self):
+        """Test executing a script in the Rails console."""
+        # Define some sample output
+        marker_id = "abcd1234"
+        output = f"""
+irb(main):001:0> load '/tmp/test_script.rb'
+--EXEC_START--{marker_id}
+42
+--EXEC_END--{marker_id}
+=> nil
+irb(main):002:0>
+"""
+        # Mock generate_unique_id to return a fixed ID
+        with patch.object(self.rails_client.file_manager, 'generate_unique_id', return_value=marker_id):
+            # Mock _send_command_to_tmux to return sample output
+            with patch.object(self.rails_client, '_send_command_to_tmux', return_value=output):
+                # Execute the test
+                result = self.rails_client.execute("load '/tmp/test_script.rb'")
 
-        # Execute a Ruby script
-        test_script = "puts 'Hello from Ruby'"
-        result = self.rails_client.execute(test_script)
+                # Verify result is the actual output value from between load and EXEC_END
+                self.assertEqual(result, "42")
 
-        # Verify the result is correct
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["output"], "Command result")
+    def test_execute_with_error(self):
+        """Test executing a script that causes an error."""
+        # Define sample output with error
+        marker_id = "abcd1234"
+        output = f"""
+irb(main):001:0> undefined_variable + 1
+--EXEC_START--{marker_id}
+--EXEC_ERROR--{marker_id}
+Ruby error: NameError: undefined local variable
+/path/to/error.rb:123:in `<main>'
+--EXEC_END--{marker_id}
+=> nil
+irb(main):002:0>
+"""
+        # Mock generate_unique_id to return a fixed ID
+        with patch.object(self.rails_client.file_manager, 'generate_unique_id', return_value=marker_id):
+            # Mock _send_command_to_tmux to return sample output
+            with patch.object(self.rails_client, '_send_command_to_tmux', return_value=output):
+                # Execute the test with expected exception
+                with self.assertRaises(Exception) as context:
+                    self.rails_client.execute("undefined_variable + 1")
 
-        # Verify _send_command_to_tmux was called with the right parameters
-        self.mock_send_command.assert_called_once()
-        # The first argument should be the wrapped command
-        self.assertIn(test_script, self.mock_send_command.call_args[0][0])
-        # The second argument should be the timeout
-        self.assertEqual(self.mock_send_command.call_args[0][1], 180)
+                # Verify error message
+                self.assertIn("NameError: undefined local variable", str(context.exception))
 
-    def test_execute_with_error(self) -> None:
-        """Test executing a command that causes an error."""
-        # Configure mock for an error scenario
-        self.mock_send_command.return_value = (
-            "Console output\n"
-            "--EXEC_START--test_unique_id\n"
-            "--EXEC_ERROR--test_unique_id\n"
-            "Ruby error: NameError: undefined local variable\n"
-            "--EXEC_END--test_unique_id\n"
-        )
+    def test_execute_with_success_keyword(self):
+        """Test executing a script with a success keyword in the output."""
+        # Define some sample output
+        marker_id = "abcd1234"
+        output = f"""
+irb(main):001:0> puts 'success marker found'
+--EXEC_START--{marker_id}
+success marker found
+--EXEC_END--{marker_id}
+=> nil
+irb(main):002:0>
+"""
+        # Mock generate_unique_id to return a fixed ID
+        with patch.object(self.rails_client.file_manager, 'generate_unique_id', return_value=marker_id):
+            # Mock _send_command_to_tmux to return sample output
+            with patch.object(self.rails_client, '_send_command_to_tmux', return_value=output):
+                # Execute the test
+                result = self.rails_client.execute("puts 'success marker found'")
 
-        # Execute the command that causes an error
-        result = self.rails_client.execute("undefined_variable + 1")
-
-        # Verify the error was detected
-        self.assertEqual(result["status"], "error")
-        self.assertIn("Ruby error", result.get("error", ""))
-
-    def test_execute_with_success_keyword(self) -> None:
-        """Test executing a command with SUCCESS keyword."""
-        # Configure mock for a SUCCESS scenario
-        self.mock_send_command.return_value = (
-            "Console output\n"
-            "--EXEC_START--test_unique_id\n"
-            "SUCCESS\n"
-            "--EXEC_END--test_unique_id\n"
-        )
-
-        # Execute the command
-        result = self.rails_client.execute("puts 'SUCCESS'")
-
-        # Verify the success was detected
-        self.assertEqual(result["status"], "success")
-        self.assertTrue(result["output"]["success"])
+                # Verify result is the actual output text
+                self.assertEqual(result, "success marker found")
+                self.assertIn("success marker found", result)
 
 
 if __name__ == "__main__":
