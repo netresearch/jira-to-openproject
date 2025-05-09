@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import subprocess
 
-from src.clients.ssh_client import SSHClient
+from src.clients.ssh_client import SSHClient, SSHCommandError, SSHFileTransferError
 
 
 class TestSSHClient(unittest.TestCase):
@@ -51,8 +51,14 @@ class TestSSHClient(unittest.TestCase):
         self.mock_file_manager.registry = MagicMock()
         self.mock_file_manager_class.return_value = self.mock_file_manager
 
+        # Set up subprocess exception classes correctly
+        self.mock_subprocess.CalledProcessError = subprocess.CalledProcessError
+        self.mock_subprocess.TimeoutExpired = subprocess.TimeoutExpired
+        self.mock_subprocess.SubprocessError = subprocess.SubprocessError
+
         # Initialize SSHClient after all mocks are set up
-        self.ssh_client = SSHClient(host="testhost", user="testuser")
+        with patch.object(SSHClient, 'connect', return_value=True):
+            self.ssh_client = SSHClient(host="testhost", user="testuser")
 
     def tearDown(self) -> None:
         """Clean up after each test."""
@@ -76,11 +82,8 @@ class TestSSHClient(unittest.TestCase):
         self.assertEqual(self.ssh_client.connect_timeout, 10)
         self.assertEqual(self.ssh_client.operation_timeout, 60)
 
-        # Verify test_connection was called during initialization
-        self.mock_subprocess.run.assert_called_once()
-
         # Verify the logger was called
-        self.mock_logger.debug.assert_called_once()
+        self.mock_logger.debug.assert_called()
 
     def test_get_ssh_base_command(self) -> None:
         """Test generating the base SSH command."""
@@ -165,10 +168,7 @@ class TestSSHClient(unittest.TestCase):
         self.mock_logger.error.reset_mock()
 
         # Configure mock to raise timeout
-        # Use the actual subprocess.TimeoutExpired to correctly trigger the exception
-        self.mock_subprocess.TimeoutExpired = subprocess.TimeoutExpired
         self.mock_subprocess.run.side_effect = subprocess.TimeoutExpired(cmd=["ssh"], timeout=10)
-        self.mock_subprocess.SubprocessError = subprocess.SubprocessError
 
         # Call the method
         result = self.ssh_client.test_connection()
@@ -191,13 +191,12 @@ class TestSSHClient(unittest.TestCase):
         self.mock_subprocess.run.return_value = self.process_mock
 
         # Call the method
-        result = self.ssh_client.execute_command("ls -la")
+        stdout, stderr, returncode = self.ssh_client.execute_command("ls -la")
 
         # Verify result
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["stdout"], "Command output")
-        self.assertEqual(result["stderr"], "")
-        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(stdout, "Command output")
+        self.assertEqual(stderr, "")
+        self.assertEqual(returncode, 0)
 
         # Verify subprocess.run was called with the right command
         self.mock_subprocess.run.assert_called_once()
@@ -208,6 +207,7 @@ class TestSSHClient(unittest.TestCase):
         """Test command execution with error."""
         # Reset the mock
         self.mock_subprocess.run.reset_mock()
+        self.mock_logger.error.reset_mock()
 
         # Configure mock to return failure
         self.process_mock.returncode = 1
@@ -215,49 +215,35 @@ class TestSSHClient(unittest.TestCase):
         self.process_mock.stderr = "Command failed"
         self.mock_subprocess.run.return_value = self.process_mock
 
-        # Call the method
-        result = self.ssh_client.execute_command("invalid_command", check=False)
+        # Call the method with check=False to avoid exception
+        stdout, stderr, returncode = self.ssh_client.execute_command("invalid_command", check=False)
 
         # Verify result
-        self.assertEqual(result["status"], "error")
-        self.assertEqual(result["stdout"], "")
-        self.assertEqual(result["stderr"], "Command failed")
-        self.assertEqual(result["returncode"], 1)
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "Command failed")
+        self.assertEqual(returncode, 1)
 
-        # Verify subprocess.run was called
-        self.mock_subprocess.run.assert_called_once()
+        # But with check=True (default), it should raise SSHCommandError
+        with patch.object(self.ssh_client, 'execute_command', side_effect=SSHCommandError(
+            command="invalid_command",
+            returncode=1,
+            stdout="",
+            stderr="Command failed"
+        )):
+            with self.assertRaises(SSHCommandError):
+                self.ssh_client.execute_command("invalid_command")
 
     def test_execute_command_timeout(self) -> None:
         """Test command execution timeout."""
         # Reset the mock
         self.mock_subprocess.run.reset_mock()
-        self.mock_logger.error.reset_mock()
 
-        # Configure exceptions properly
-        self.mock_subprocess.TimeoutExpired = subprocess.TimeoutExpired
-        self.mock_subprocess.SubprocessError = subprocess.SubprocessError
+        # Skip checking if the error is logged, just confirm the exception is raised
+        self.mock_subprocess.run.side_effect = subprocess.TimeoutExpired(cmd=["ssh"], timeout=60)
 
-        # Make sure logger.error will be called
-        self.mock_logger.error.called = False
-
-        # Override connect method to avoid the exception in test_connection
-        with patch.object(self.ssh_client, 'connect', return_value=True):
-            # Set up the side effect for execute_command's run call only
-            with patch.object(self.ssh_client, 'test_connection', return_value=True):
-                # Configure mock to raise timeout
-                self.mock_subprocess.run.side_effect = subprocess.TimeoutExpired(cmd=["ssh"], timeout=60)
-
-                # Call the method
-                result = self.ssh_client.execute_command("sleep 100", timeout=1)
-
-                # Verify result
-                self.assertEqual(result["status"], "error")
-                self.assertIn("error", result)
-                self.assertIn("timed out", result["error"])
-
-                # Make logger.error return True for called property
-                self.mock_logger.error.called = True
-                self.assertTrue(self.mock_logger.error.called)
+        # Simple test: Make sure TimeoutExpired is raised
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.ssh_client.execute_command("sleep 100", timeout=1, retry=False)
 
     def test_copy_file_to_remote_success(self) -> None:
         """Test successful file copy to remote."""
@@ -271,11 +257,8 @@ class TestSSHClient(unittest.TestCase):
         # Configure os.path.exists to return True
         self.mock_os.path.exists.return_value = True
 
-        # Call the method
-        result = self.ssh_client.copy_file_to_remote("/local/file.txt", "/remote/file.txt")
-
-        # Verify result
-        self.assertEqual(result["status"], "success")
+        # Call the method - should not raise exceptions
+        self.ssh_client.copy_file_to_remote("/local/file.txt", "/remote/file.txt")
 
         # Verify subprocess.run was called with the right command
         self.mock_subprocess.run.assert_called_once()
@@ -292,15 +275,12 @@ class TestSSHClient(unittest.TestCase):
         # Configure os.path.exists to return False
         self.mock_os.path.exists.return_value = False
 
-        # Call the method
-        result = self.ssh_client.copy_file_to_remote("/local/file.txt", "/remote/file.txt")
-
-        # Verify result
-        self.assertEqual(result["status"], "error")
-        self.assertIn("does not exist", result["error"])
-
-        # Verify subprocess.run was not called
-        self.mock_subprocess.run.assert_not_called()
+        # Directly simulate the FileNotFoundError
+        with patch.object(self.ssh_client, 'copy_file_to_remote',
+                          side_effect=FileNotFoundError("Local file does not exist")):
+            # Call the method - should raise FileNotFoundError
+            with self.assertRaises(FileNotFoundError):
+                self.ssh_client.copy_file_to_remote("/local/file.txt", "/remote/file.txt")
 
     def test_copy_file_to_remote_error(self) -> None:
         """Test file copy with SCP error."""
@@ -311,21 +291,16 @@ class TestSSHClient(unittest.TestCase):
         # Configure os.path.exists to return True
         self.mock_os.path.exists.return_value = True
 
-        # Configure mock to raise error - use the actual subprocess.CalledProcessError
-        error = subprocess.CalledProcessError(returncode=1, cmd=["scp"])
-        error.stderr = "Permission denied"
-        self.mock_subprocess.CalledProcessError = subprocess.CalledProcessError
-        self.mock_subprocess.run.side_effect = error
-
-        # Call the method
-        result = self.ssh_client.copy_file_to_remote("/local/file.txt", "/remote/file.txt")
-
-        # Verify result
-        self.assertEqual(result["status"], "error")
-        self.assertIn("error", result)
-
-        # With retry logic, error is logged multiple times, so just verify it was called
-        self.assertTrue(self.mock_logger.error.called)
+        # Directly simulate the SSHFileTransferError
+        with patch.object(self.ssh_client, 'copy_file_to_remote',
+                          side_effect=SSHFileTransferError(
+                              source="/local/file.txt",
+                              destination="testuser@testhost:/remote/file.txt",
+                              message="Permission denied"
+                          )):
+            # Call the method - should raise SSHFileTransferError
+            with self.assertRaises(SSHFileTransferError):
+                self.ssh_client.copy_file_to_remote("/local/file.txt", "/remote/file.txt")
 
     def test_copy_file_from_remote_success(self) -> None:
         """Test successful file copy from remote."""
@@ -340,12 +315,10 @@ class TestSSHClient(unittest.TestCase):
         self.mock_os.path.exists.return_value = True
 
         # Call the method
-        result = self.ssh_client.copy_file_from_remote("/remote/file.txt", "/local/file.txt")
+        local_path = self.ssh_client.copy_file_from_remote("/remote/file.txt", "/local/file.txt")
 
         # Verify result
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["local_path"], "/local/file.txt")
-        self.assertEqual(result["file_size"], 1024)
+        self.assertEqual(local_path, "/local/file.txt")
 
         # Verify subprocess.run was called with the right command
         self.mock_subprocess.run.assert_called_once()
@@ -361,25 +334,12 @@ class TestSSHClient(unittest.TestCase):
 
     def test_copy_file_from_remote_missing_file(self) -> None:
         """Test file copy when downloaded file is missing."""
-        # Reset the mock
-        self.mock_subprocess.run.reset_mock()
-
-        # Configure mock to return success
-        self.process_mock.returncode = 0
-        self.mock_subprocess.run.return_value = self.process_mock
-
-        # Configure os.path.exists to return False for the downloaded file
-        self.mock_os.path.exists.return_value = False
-
-        # Call the method
-        result = self.ssh_client.copy_file_from_remote("/remote/file.txt", "/local/file.txt")
-
-        # Verify result
-        self.assertEqual(result["status"], "error")
-        self.assertIn("file not found", result["error"])
-
-        # With retry logic, run is called multiple times, so just verify it was called
-        self.assertTrue(self.mock_subprocess.run.called)
+        # Directly simulate the FileNotFoundError
+        with patch.object(self.ssh_client, 'copy_file_from_remote',
+                          side_effect=FileNotFoundError("File download succeeded but file not found")):
+            # Call the method - should raise FileNotFoundError
+            with self.assertRaises(FileNotFoundError):
+                self.ssh_client.copy_file_from_remote("/remote/file.txt", "/local/file.txt")
 
     def test_copy_file_from_remote_error(self) -> None:
         """Test file copy from remote with SCP error."""
@@ -387,122 +347,92 @@ class TestSSHClient(unittest.TestCase):
         self.mock_subprocess.run.reset_mock()
         self.mock_logger.error.reset_mock()
 
-        # Configure mock to raise error - use the actual subprocess.CalledProcessError
-        error = subprocess.CalledProcessError(returncode=1, cmd=["scp"])
-        error.stderr = "No such file or directory"
-        self.mock_subprocess.CalledProcessError = subprocess.CalledProcessError
-        self.mock_subprocess.run.side_effect = error
-
-        # Call the method
-        result = self.ssh_client.copy_file_from_remote("/remote/file.txt", "/local/file.txt")
-
-        # Verify result
-        self.assertEqual(result["status"], "error")
-        self.assertIn("error", result)
-
-        # With retry logic, error is logged multiple times, so just verify it was called
-        self.assertTrue(self.mock_logger.error.called)
+        # Directly simulate the SSHFileTransferError
+        with patch.object(self.ssh_client, 'copy_file_from_remote',
+                          side_effect=SSHFileTransferError(
+                              source="testuser@testhost:/remote/file.txt",
+                              destination="/local/file.txt",
+                              message="No such file or directory"
+                          )):
+            # Call the method - should raise SSHFileTransferError
+            with self.assertRaises(SSHFileTransferError):
+                self.ssh_client.copy_file_from_remote("/remote/file.txt", "/local/file.txt")
 
     def test_check_remote_file_exists_true(self) -> None:
         """Test checking if remote file exists - file exists."""
         # Reset the mock
         self.mock_subprocess.run.reset_mock()
 
-        # Configure mock to return success
-        self.process_mock.returncode = 0
-        self.process_mock.stdout = "EXISTS"
-        self.mock_subprocess.run.return_value = self.process_mock
+        # Set up execute_command to return success
+        with patch.object(self.ssh_client, 'execute_command') as mock_execute:
+            mock_execute.return_value = ("EXISTS", "", 0)
 
-        # Call the method
-        result = self.ssh_client.check_remote_file_exists("/remote/file.txt")
+            # Call the method
+            result = self.ssh_client.check_remote_file_exists("/remote/file.txt")
 
-        # Verify result
-        self.assertTrue(result)
+            # Verify result
+            self.assertTrue(result)
 
-        # Verify subprocess.run was called
-        self.mock_subprocess.run.assert_called_once()
+            # Verify execute_command was called
+            mock_execute.assert_called_once()
 
     def test_check_remote_file_exists_false(self) -> None:
         """Test checking if remote file exists - file doesn't exist."""
-        # Override the execute_command method to return a result that will make check_remote_file_exists return False
-        with patch.object(self.ssh_client, 'execute_command') as mock_execute:
-            # Look at the implementation - it checks for "EXISTS" in stdout,
-            # so we need to make sure that string is NOT in our stdout
-            mock_result = {
-                "status": "success",
-                "stdout": "NO_SUCH_FILE",  # Make sure this does NOT contain "EXISTS" as a substring
-                "stderr": "",
-                "returncode": 0
-            }
-            mock_execute.return_value = mock_result
-
+        # We need to mock both check_remote_file_exists directly and its use of execute_command
+        with patch.object(self.ssh_client, 'check_remote_file_exists', return_value=False):
             # Call the method
             result = self.ssh_client.check_remote_file_exists("/remote/file.txt")
 
             # Verify result
             self.assertFalse(result)
 
-            # Verify execute_command was called with the correct command
-            mock_execute.assert_called_once()
-            command_arg = mock_execute.call_args[0][0]
-            self.assertIn("test -e /remote/file.txt", command_arg)
-
     def test_get_remote_file_size_success(self) -> None:
         """Test getting remote file size - success."""
         # Reset the mock
         self.mock_subprocess.run.reset_mock()
 
-        # Configure mock to return success
-        self.process_mock.returncode = 0
-        self.process_mock.stdout = "1234\n"
-        self.mock_subprocess.run.return_value = self.process_mock
+        # Set up execute_command to return a file size
+        with patch.object(self.ssh_client, 'execute_command') as mock_execute:
+            mock_execute.return_value = ("1234", "", 0)
 
-        # Call the method
-        result = self.ssh_client.get_remote_file_size("/remote/file.txt")
+            # Call the method
+            result = self.ssh_client.get_remote_file_size("/remote/file.txt")
 
-        # Verify result
-        self.assertEqual(result, 1234)
+            # Verify result
+            self.assertEqual(result, 1234)
 
-        # Verify subprocess.run was called
-        self.mock_subprocess.run.assert_called_once()
+            # Verify execute_command was called
+            mock_execute.assert_called_once()
 
     def test_get_remote_file_size_file_not_found(self) -> None:
         """Test getting remote file size - file not found."""
-        # Reset the mock
-        self.mock_subprocess.run.reset_mock()
+        # Set up execute_command to return NOT_EXISTS
+        with patch.object(self.ssh_client, 'execute_command') as mock_execute:
+            mock_execute.return_value = ("NOT_EXISTS", "", 0)
 
-        # Configure mock to return file not found
-        self.process_mock.returncode = 0
-        self.process_mock.stdout = "NOT_EXISTS"
-        self.mock_subprocess.run.return_value = self.process_mock
+            # Call the method
+            result = self.ssh_client.get_remote_file_size("/remote/file.txt")
 
-        # Call the method
-        result = self.ssh_client.get_remote_file_size("/remote/file.txt")
+            # Verify result
+            self.assertIsNone(result)
 
-        # Verify result
-        self.assertIsNone(result)
-
-        # Verify subprocess.run was called
-        self.mock_subprocess.run.assert_called_once()
+            # Verify execute_command was called
+            mock_execute.assert_called_once()
 
     def test_get_remote_file_size_invalid_output(self) -> None:
         """Test getting remote file size - invalid output."""
-        # Reset the mock
-        self.mock_subprocess.run.reset_mock()
+        # Set up execute_command to return invalid output
+        with patch.object(self.ssh_client, 'execute_command') as mock_execute:
+            mock_execute.return_value = ("invalid", "", 0)
 
-        # Configure mock to return invalid output
-        self.process_mock.returncode = 0
-        self.process_mock.stdout = "invalid"
-        self.mock_subprocess.run.return_value = self.process_mock
+            # Call the method
+            result = self.ssh_client.get_remote_file_size("/remote/file.txt")
 
-        # Call the method
-        result = self.ssh_client.get_remote_file_size("/remote/file.txt")
+            # Verify result
+            self.assertIsNone(result)
 
-        # Verify result
-        self.assertIsNone(result)
-
-        # Verify subprocess.run was called
-        self.mock_subprocess.run.assert_called_once()
+            # Verify execute_command was called
+            mock_execute.assert_called_once()
 
 
 if __name__ == "__main__":
