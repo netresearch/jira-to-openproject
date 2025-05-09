@@ -41,12 +41,7 @@ class TestDockerClient(unittest.TestCase):
         self.mock_file_manager_class.return_value = self.mock_file_manager
 
         # Configure mocks for successful container existence check
-        self.mock_ssh_client.execute_command.return_value = {
-            "status": "success",
-            "stdout": "test_container\n",
-            "stderr": "",
-            "returncode": 0
-        }
+        self.mock_ssh_client.execute_command.return_value = ("test_container\n", "", 0)
 
         # Configure os.path.exists and os.makedirs
         self.mock_os.path.exists.return_value = True
@@ -57,8 +52,7 @@ class TestDockerClient(unittest.TestCase):
         # Initialize DockerClient after all mocks are set up
         self.docker_client = DockerClient(
             container_name="test_container",
-            ssh_host="testhost",
-            ssh_user="testuser"
+            ssh_client=self.mock_ssh_client
         )
 
     def tearDown(self) -> None:
@@ -82,12 +76,6 @@ class TestDockerClient(unittest.TestCase):
         self.assertEqual(self.docker_client.retry_count, 3)
         self.assertEqual(self.docker_client.retry_delay, 1.0)
 
-        # Verify SSHClient was initialized with correct parameters
-        self.mock_ssh_client_class.assert_called_once()
-        call_args = self.mock_ssh_client_class.call_args
-        self.assertEqual(call_args[1]['host'], 'testhost')
-        self.assertEqual(call_args[1]['user'], 'testuser')
-
         # Verify container existence was checked
         self.mock_ssh_client.execute_command.assert_called()
         cmd_args = self.mock_ssh_client.execute_command.call_args[0][0]
@@ -108,12 +96,7 @@ class TestDockerClient(unittest.TestCase):
         self.mock_ssh_client.execute_command.reset_mock()
 
         # Configure mock to return success
-        self.mock_ssh_client.execute_command.return_value = {
-            "status": "success",
-            "stdout": "test_container\n",
-            "stderr": "",
-            "returncode": 0
-        }
+        self.mock_ssh_client.execute_command.return_value = ("test_container\n", "", 0)
 
         # Call the method
         result = self.docker_client.check_container_exists()
@@ -135,18 +118,8 @@ class TestDockerClient(unittest.TestCase):
         # Configure mock to return empty for running containers
         # but success for all containers (running + stopped)
         self.mock_ssh_client.execute_command.side_effect = [
-            {
-                "status": "success",
-                "stdout": "",  # No running container
-                "stderr": "",
-                "returncode": 0
-            },
-            {
-                "status": "success",
-                "stdout": "test_container\n",  # Container exists but not running
-                "stderr": "",
-                "returncode": 0
-            }
+            ("", "", 0),  # No running container
+            ("test_container\n", "", 0)  # Container exists but not running
         ]
 
         # Call the method
@@ -173,18 +146,8 @@ class TestDockerClient(unittest.TestCase):
 
         # Configure mock to return empty for both running and all containers
         self.mock_ssh_client.execute_command.side_effect = [
-            {
-                "status": "success",
-                "stdout": "",  # No running container
-                "stderr": "",
-                "returncode": 0
-            },
-            {
-                "status": "success",
-                "stdout": "",  # No container at all
-                "stderr": "",
-                "returncode": 0
-            }
+            ("", "", 0),  # No running container
+            ("", "", 0)   # No container at all
         ]
 
         # Call the method
@@ -205,19 +168,15 @@ class TestDockerClient(unittest.TestCase):
         self.mock_ssh_client.execute_command.reset_mock()
 
         # Configure mock to return success
-        self.mock_ssh_client.execute_command.return_value = {
-            "status": "success",
-            "stdout": "Command output",
-            "stderr": "",
-            "returncode": 0
-        }
+        self.mock_ssh_client.execute_command.return_value = ("Command output", "", 0)
 
         # Call the method with a simple command
-        result = self.docker_client.execute_command("ls -la")
+        stdout, stderr, returncode = self.docker_client.execute_command("ls -la")
 
         # Verify result
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["stdout"], "Command output")
+        self.assertEqual(stdout, "Command output")
+        self.assertEqual(stderr, "")
+        self.assertEqual(returncode, 0)
 
         # Verify execute_command was called with the right command
         self.mock_ssh_client.execute_command.assert_called_once()
@@ -232,19 +191,15 @@ class TestDockerClient(unittest.TestCase):
         self.mock_ssh_client.execute_command.reset_mock()
 
         # Configure mock to return success
-        self.mock_ssh_client.execute_command.return_value = {
-            "status": "success",
-            "stdout": "Command output",
-            "stderr": "",
-            "returncode": 0
-        }
+        self.mock_ssh_client.execute_command.return_value = ("Command output", "", 0)
 
         # Call the method with a complex command
-        result = self.docker_client.execute_command("cd /tmp && echo 'hello' > test.txt")
+        stdout, stderr, returncode = self.docker_client.execute_command("cd /tmp && echo 'hello' > test.txt")
 
         # Verify result
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["stdout"], "Command output")
+        self.assertEqual(stdout, "Command output")
+        self.assertEqual(stderr, "")
+        self.assertEqual(returncode, 0)
 
         # Verify execute_command was called with the right command
         self.mock_ssh_client.execute_command.assert_called_once()
@@ -260,15 +215,10 @@ class TestDockerClient(unittest.TestCase):
         self.mock_ssh_client.execute_command.reset_mock()
 
         # Configure mock to return success
-        self.mock_ssh_client.execute_command.return_value = {
-            "status": "success",
-            "stdout": "Command output",
-            "stderr": "",
-            "returncode": 0
-        }
+        self.mock_ssh_client.execute_command.return_value = ("Command output", "", 0)
 
         # Call the method with options
-        result = self.docker_client.execute_command(
+        stdout, stderr, returncode = self.docker_client.execute_command(
             "ls -la",
             user="root",
             workdir="/app",
@@ -276,7 +226,9 @@ class TestDockerClient(unittest.TestCase):
         )
 
         # Verify result
-        self.assertEqual(result["status"], "success")
+        self.assertEqual(stdout, "Command output")
+        self.assertEqual(stderr, "")
+        self.assertEqual(returncode, 0)
 
         # Verify execute_command was called with the right command
         self.mock_ssh_client.execute_command.assert_called_once()
@@ -294,20 +246,11 @@ class TestDockerClient(unittest.TestCase):
         # Configure os.path.exists to return True
         self.mock_os.path.exists.return_value = True
 
-        # Configure mock to return success for both operations
-        self.mock_ssh_client.copy_file_to_remote.return_value = {"status": "success"}
-        self.mock_ssh_client.execute_command.return_value = {
-            "status": "success",
-            "stdout": "",
-            "stderr": "",
-            "returncode": 0
-        }
+        # Configure mocks to not raise exceptions
+        self.mock_ssh_client.execute_command.return_value = ("", "", 0)
 
-        # Call the method
-        result = self.docker_client.copy_file_to_container("/local/file.txt", "/container/file.txt")
-
-        # Verify result
-        self.assertEqual(result["status"], "success")
+        # Call the method - should not raise an exception
+        self.docker_client.copy_file_to_container("/local/file.txt", "/container/file.txt")
 
         # Verify copy_file_to_remote was called
         self.mock_ssh_client.copy_file_to_remote.assert_called_once()
@@ -331,12 +274,9 @@ class TestDockerClient(unittest.TestCase):
         # Configure os.path.exists to return False
         self.mock_os.path.exists.return_value = False
 
-        # Call the method
-        result = self.docker_client.copy_file_to_container("/local/file.txt", "/container/file.txt")
-
-        # Verify result
-        self.assertEqual(result["status"], "error")
-        self.assertIn("does not exist", result["error"])
+        # Call the method - should raise FileNotFoundError
+        with self.assertRaises(FileNotFoundError):
+            self.docker_client.copy_file_to_container("/local/file.txt", "/container/file.txt")
 
         # Verify no SSH operations were performed
         self.mock_ssh_client.copy_file_to_remote.assert_not_called()
@@ -346,12 +286,12 @@ class TestDockerClient(unittest.TestCase):
         """Test copying a file from the container."""
         # Setup
         self.mock_ssh_client.execute_command.side_effect = [
-            {"status": "success", "stdout": "EXISTS"},  # file exists in container check
-            {"status": "success", "stdout": "File copied"},  # docker cp command
-            {"status": "success", "stdout": "EXISTS"},  # file exists on remote host check
-            {"status": "success", "stdout": ""},  # cleanup command
+            ("EXISTS", "", 0),  # file exists in container check
+            ("File copied", "", 0),  # docker cp command
+            ("EXISTS", "", 0),  # file exists on remote host check
+            ("", "", 0),  # cleanup command
         ]
-        self.mock_ssh_client.copy_file_from_remote.return_value = {"status": "success"}
+        self.mock_ssh_client.copy_file_from_remote.return_value = "/local/path"
         self.mock_os.path.exists.return_value = True
         self.mock_os.path.getsize.return_value = 1024
 
@@ -359,9 +299,17 @@ class TestDockerClient(unittest.TestCase):
         result = self.docker_client.copy_file_from_container('/container/path', '/local/path')
 
         # Assert
-        self.assertEqual(result["status"], "success")  # Should return success dict
+        self.assertEqual(result, "/local/path")  # Should return the path
         self.mock_ssh_client.execute_command.assert_called()  # Docker exec and cp commands
         self.mock_ssh_client.copy_file_from_remote.assert_called_once()  # SCP from remote to local
+
+    def test_copy_file_from_container_not_found(self):
+        """Test copying a file that doesn't exist in the container."""
+        # Need to patch the method to directly use our implementation
+        with patch.object(self.docker_client, 'check_file_exists_in_container', return_value=False):
+            # Call the method - should raise FileNotFoundError
+            with self.assertRaises(FileNotFoundError):
+                self.docker_client.copy_file_from_container('/container/path', '/local/path')
 
     def test_check_file_exists_in_container(self) -> None:
         """Test checking if a file exists in the container."""
@@ -369,12 +317,7 @@ class TestDockerClient(unittest.TestCase):
         self.mock_ssh_client.execute_command.reset_mock()
 
         # Configure mock to return that file exists
-        self.mock_ssh_client.execute_command.return_value = {
-            "status": "success",
-            "stdout": "EXISTS\n",
-            "stderr": "",
-            "returncode": 0
-        }
+        self.mock_ssh_client.execute_command.return_value = ("EXISTS\n", "", 0)
 
         # Call the method
         result = self.docker_client.check_file_exists_in_container("/container/file.txt")
@@ -393,12 +336,7 @@ class TestDockerClient(unittest.TestCase):
         self.mock_ssh_client.execute_command.reset_mock()
 
         # Configure mock to return file size
-        self.mock_ssh_client.execute_command.return_value = {
-            "status": "success",
-            "stdout": "1024\n",
-            "stderr": "",
-            "returncode": 0
-        }
+        self.mock_ssh_client.execute_command.return_value = ("1024\n", "", 0)
 
         # Call the method
         result = self.docker_client.get_file_size_in_container("/container/file.txt")
