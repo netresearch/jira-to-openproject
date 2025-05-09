@@ -447,3 +447,17 @@ class FileManager:
         """
         attempted, deleted = self.registry.cleanup()
         logger.info(f"Cleaned up {deleted} registered files (attempted {attempted})")
+
+    def register_debug_file(self) -> str:
+        """
+        Register a debug file and return a unique ID.
+        This ID can be used to track debug information across operations.
+
+        Returns:
+            A unique identifier string for debug tracing
+        """
+        debug_id = self.generate_unique_id()
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        debug_dir = os.path.join(self.debug_dir, f"debug_{timestamp}_{debug_id}")
+        os.makedirs(debug_dir, exist_ok=True)
+        return debug_id

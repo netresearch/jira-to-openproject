@@ -4,11 +4,13 @@ RailsConsoleClient
 
 Client for interacting with Rails console in a tmux session.
 This client is part of the layered client architecture where:
-1. RailsConsoleClient interacts only with the tmux session running Rails console
-2. It does not know about Docker or SSH - it purely handles sending commands to and
-   capturing output from the tmux session
-3. OpenProjectClient coordinates all clients, including file transfers via SSHClient/DockerClient
-   and command execution via RailsConsoleClient
+1. SSHClient - Base component for SSH operations
+2. DockerClient - Uses SSHClient for Docker operations
+3. RailsConsoleClient - Interacts directly with tmux session running Rails console
+4. OpenProjectClient - Coordinates all clients and operations
+
+The RailsConsoleClient is responsible only for sending commands to and capturing
+output from the tmux session. It does not interact with Docker or SSH directly.
 """
 
 import os
@@ -25,10 +27,14 @@ logger = config.logger
 class RailsConsoleClient:
     """
     Client for interacting with Rails console via a local tmux session.
-    This client only knows how to:
+
+    This client is focused solely on tmux interactions:
     1. Send commands to a tmux session containing a Rails console
     2. Capture and parse the output from these commands
-    3. It does not directly interact with Docker or SSH
+    3. Manage the Rails console state
+
+    It has no dependencies on Docker or SSH, which are handled by higher-level
+    components in the architecture.
     """
 
     def __init__(
@@ -211,7 +217,7 @@ class RailsConsoleClient:
                          .replace('$', '\\$')
         return escaped
 
-    def execute(self, command: str, timeout: Optional[int] = None) -> Dict[str, Any]:
+    def execute(self, command: str, timeout: Optional[int] = None) -> str:
         """
         Execute a command in the Rails console and wait for completion.
 
@@ -225,7 +231,10 @@ class RailsConsoleClient:
             timeout: Command timeout in seconds (default: self.command_timeout)
 
         Returns:
-            Dict with status and output or error
+            Extracted command output as a string
+
+        Raises:
+            Exception: If command execution fails or error markers are found
         """
         # Use the provided timeout or the default
         if timeout is None:
@@ -306,82 +315,68 @@ class RailsConsoleClient:
             f"Size: {len(tmux_output)} bytes\n"
         )
 
-        # Extract the output between markers
-        try:
-            # Look for our output markers (not the commands)
-            start_idx = tmux_output.find(start_marker_out)
-            if start_idx == -1:
-                logger.error(f"Start marker '{start_marker_out}' not found in output")
-                return {"status": "error", "error": "Start marker not found in command output"}
+        # Look for our output markers (not the commands)
+        start_idx = tmux_output.find(start_marker_out)
+        if start_idx == -1:
+            raise Exception(f"Start marker '{start_marker_out}' not found in output")
 
-            # Extract output after start marker
-            start_idx += len(start_marker_out)
-            remainder = tmux_output[start_idx:]
+        # Extract output after start marker
+        start_idx += len(start_marker_out)
+        remainder = tmux_output[start_idx:]
 
-            # Find the end marker
-            end_idx = remainder.find(end_marker_out)
-            if end_idx == -1:
-                logger.error(f"End marker '{end_marker_out}' not found in output")
+        # Find the end marker
+        end_idx = remainder.find(end_marker_out)
+        if end_idx == -1:
+            logger.error(f"End marker '{end_marker_out}' not found in output")
 
-                # Log the end of the output to help debug
-                logger.debug(f"Last 100 chars of output: {tmux_output[-100:].strip()}")
+            # Log the end of the output to help debug
+            logger.debug(f"Last 1000 chars of output: {tmux_output[-100:].strip()}")
 
-                # Check if there's a prompt at the end, which might indicate completion
-                if self._get_console_state(tmux_output[-20:])["ready"]:
-                    logger.debug("Console prompt found at end of output - command may have completed")
+            # Check if there's a prompt at the end, which might indicate completion
+            if self._get_console_state(tmux_output[-20:])["ready"]:
+                logger.debug("Console prompt found at end of output - command may have completed")
 
-                return {"status": "error", "error": "End marker not found in command output"}
+            raise Exception(f"End marker '{end_marker_out}' not found in output")
 
-            # Extract the content between start and end markers
-            command_output = remainder[:end_idx].strip()
+        # Extract the content between start and end markers
+        command_output = remainder[:end_idx].strip()
 
-            # Check for error marker in the extracted section
-            error_idx = remainder.find(error_marker_out)
-            if error_idx != -1 and error_idx < end_idx:
-                # Found an error marker in the valid output range
-                logger.error("Error marker found in output, indicating a Ruby error")
+        # Check for error marker in the extracted section
+        error_idx = remainder.find(error_marker_out)
+        if error_idx != -1 and error_idx < end_idx:
+            # Found an error marker in the valid output range
+            logger.error("Error marker found in output, indicating a Ruby error")
 
-                # Extract the error message - more robust pattern matching
-                error_message = "Ruby error detected"
-                if "Ruby error:" in command_output:
-                    # Find the line with the error
-                    for line in command_output.split("\n"):
-                        if "Ruby error:" in line:
-                            error_message = line.strip()
-                            break
+            # Extract the error message - more robust pattern matching
+            error_message = "Ruby error detected"
+            if "Ruby error:" in command_output:
+                # Find the line with the error
+                for line in command_output.split("\n"):
+                    if "Ruby error:" in line:
+                        error_message = line.strip()
+                        break
 
-                return {"status": "error", "error": error_message}
+            raise Exception(error_message)
 
-            # Look for common Ruby error patterns even if error marker wasn't found
-            error_patterns = [
-                "SyntaxError:",
-                "NameError:",
-                "NoMethodError:",
-                "ArgumentError:",
-                "TypeError:",
-                "RuntimeError:"
-            ]
+        # Look for common Ruby error patterns even if error marker wasn't found
+        error_patterns = [
+            "SyntaxError:",
+            "NameError:",
+            "NoMethodError:",
+            "ArgumentError:",
+            "TypeError:",
+            "RuntimeError:"
+        ]
 
-            for pattern in error_patterns:
-                if pattern in command_output:
-                    logger.warning(f"Ruby error pattern '{pattern}' detected in output")
-                    # Find the line with the error
-                    for line in command_output.split("\n"):
-                        if pattern in line:
-                            return {"status": "error", "error": line.strip()}
+        for pattern in error_patterns:
+            if pattern in command_output:
+                logger.warning(f"Ruby error pattern '{pattern}' detected in output")
+                # Find the line with the error
+                for line in command_output.split("\n"):
+                    if pattern in line:
+                        raise Exception(line.strip())
 
-            # If no error was found, check for success keywords
-            if "SUCCESS" in command_output:
-                logger.debug("SUCCESS keyword found in command output")
-                return {"status": "success", "output": {"success": True, "raw_output": command_output}}
-
-            # No explicit error or success indicator, return the content as success
-            logger.debug(f"Command executed successfully, extracted {len(command_output)} chars of output")
-            return {"status": "success", "output": command_output}
-
-        except Exception as e:
-            logger.error(f"Error processing command output: {str(e)}")
-            return {"status": "error", "error": f"Error processing command output: {str(e)}"}
+        return command_output
 
     def _parse_ruby_output(self, ruby_output: str) -> Any:
         """

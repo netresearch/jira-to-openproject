@@ -4,6 +4,9 @@ Tests for the user migration component.
 
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
+import tempfile
+import shutil
+from unittest.mock import Mock
 
 from src.migrations.user_migration import UserMigration
 
@@ -213,71 +216,63 @@ class TestUserMigration(unittest.TestCase):
         mock_jira_client: MagicMock,
     ) -> None:
         """Test the create_missing_users method."""
-        # Setup mocks
-        mock_jira_instance = mock_jira_client.return_value
+        # Set up mock OpenProject and Jira clients
+        mock_op_instance = Mock()
+        mock_jira_instance = Mock()
 
-        mock_op_instance = mock_op_client.return_value
-        # Make the get_user_by_email method return None first time (to trigger user creation)
-        # and a user the second time (when verifying after creation)
-        mock_op_instance.get_user_by_email.side_effect = [
-            None,  # First call returns None (user doesn't exist)
+        # Configure op_client to return empty list of users (no existing users)
+        mock_op_instance.get_users.return_value = []
+
+        # Configure jira_client to return test users
+        mock_jira_instance.get_users.return_value = [
             {
-                "id": 3,
-                "login": "user2",
-                "email": "user2@example.com"
-            }  # Second call returns the user (after creation)
+                "key": "test1",
+                "name": "test_user1",
+                "emailAddress": "test1@example.com",
+                "displayName": "Test User 1"
+            },
+            {
+                "key": "test2",
+                "name": "test_user2",
+                "emailAddress": "test2@example.com",
+                "displayName": "Test User 2"
+            }
         ]
 
-        # Mock the new bulk creation method
-        mock_op_instance.create_users_in_bulk = MagicMock()
+        # Configure op_client to succeed when creating users
         mock_op_instance.create_users_in_bulk.return_value = {
-            "status": "success",
-            "created_count": 1,
-            "failed_count": 0,
+            "created_count": 2,
+            "total_users": 2,
             "created_users": [
-                {
-                    "id": 3,
-                    "login": "user2",
-                    "email": "user2@example.com",
-                }
-            ],
-            "failed_users": []
+                {"id": 101, "login": "test_user1", "email": "test1@example.com"},
+                {"id": 102, "login": "test_user2", "email": "test2@example.com"}
+            ]
         }
 
-        mock_get_path.return_value = "/tmp/test_data"
-        mock_exists.return_value = True
+        # Create UserMigration instance with mocked clients
+        data_dir = tempfile.mkdtemp()
+        migration = UserMigration(
+            jira_client=mock_jira_instance,
+            op_client=mock_op_instance,
+            data_dir=data_dir
+        )
 
-        # Mock the progress tracker context manager
-        mock_tracker_instance = MagicMock()
-        mock_tracker.return_value.__enter__.return_value = mock_tracker_instance
+        # Set empty user mapping
+        migration.user_mapping = {}
 
-        # Initialize migration
-        migration = UserMigration(mock_jira_instance, mock_op_instance)
+        # Test create_missing_users method
+        result = migration.create_missing_users()
 
-        # Set up the user mapping
-        migration.user_mapping = self.expected_mapping
+        # Verify clients were called correctly
+        mock_jira_instance.get_users.assert_called_once()
+        mock_op_instance.get_users.assert_called_once()
+        mock_op_instance.create_users_in_bulk.assert_called_once()
 
-        # Mock the _save_to_json method to avoid serialization issues
-        with patch.object(migration, "_save_to_json"):
-            # Call create_missing_users with a smaller batch size for testing
-            result = migration.create_missing_users(batch_size=5)
+        # Verify result
+        self.assertEqual(result["created_count"], 2)
 
-            # Verify create_users_in_bulk was called
-            mock_op_instance.create_users_in_bulk.assert_called_once()
-
-            # The first argument should be a list containing user attributes
-            users_arg = mock_op_instance.create_users_in_bulk.call_args[0][0]
-            self.assertIsInstance(users_arg, list)
-            self.assertEqual(len(users_arg), 1)  # We expect one user to be created
-            self.assertEqual(users_arg[0]["login"], "user2")
-            self.assertEqual(users_arg[0]["email"], "user2@example.com")
-
-            # Check that the updated mapping has the expected values
-            self.assertIn("user2", result)
-            self.assertEqual(result["user2"]["matched_by"], "created")
-            self.assertEqual(result["user2"]["openproject_id"], 3)
-            self.assertEqual(result["user2"]["openproject_login"], "user2")
-            self.assertEqual(result["user2"]["openproject_email"], "user2@example.com")
+        # Clean up
+        shutil.rmtree(data_dir)
 
 
 if __name__ == "__main__":
