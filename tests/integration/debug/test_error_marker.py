@@ -4,11 +4,12 @@ Test script to verify Rails console error marker handling
 """
 
 import sys
+import pytest
 
 from src.clients.rails_console_client import RailsConsoleClient
 
 
-def test_error_marker_detection():
+def test_error_marker_detection() -> None:
     """Test if Rails console client can distinguish between error markers in source code and actual errors"""
     print("TESTING ERROR MARKER DETECTION")
     print("==============================")
@@ -23,7 +24,7 @@ def test_error_marker_detection():
         print("✅ Connected to Rails console")
     except Exception as e:
         print(f"❌ Failed to connect to Rails console: {str(e)}")
-        return False
+        pytest.fail(f"Could not connect to Rails console: {str(e)}")
 
     print("\nTest 1: Command with error markers in the code (should succeed)")
     command1 = """
@@ -33,13 +34,19 @@ def test_error_marker_detection():
     "SUCCESS: Test completed"
     """
 
-    result1 = rails_client.execute(command1)
-    print(f"Command result: {result1}")
-
-    if result1.get("status") == "success":
+    try:
+        result1 = rails_client.execute(command1)
+        print(f"Command result: {result1}")
+        # Instead of checking for "Ruby error:" which might be in the template,
+        # check for "Ruby error:" followed by actual error details, indicating a real error
+        assert "ERROR_MARKER" in result1, "Test string marker not found in output"
+        assert "Ruby error: NameError:" not in result1, "Unexpected actual error detected in output"
+        assert "Ruby error: SyntaxError:" not in result1, "Unexpected actual error detected in output"
+        assert "Command output: This is just a test ERROR_MARKER string" in result1, "Expected output string not found"
         print("✅ TEST 1 PASSED: Command with error markers in code correctly detected as success")
-    else:
-        print("❌ TEST 1 FAILED: Command with error markers in code incorrectly detected as error")
+    except Exception as e:
+        print(f"❌ TEST 1 FAILED with exception: {str(e)}")
+        pytest.fail(f"Test 1 failed with exception: {str(e)}")
 
     print("\nTest 2: Command that deliberately causes an error")
     command2 = """
@@ -48,13 +55,13 @@ def test_error_marker_detection():
     "Should never reach here"
     """
 
-    result2 = rails_client.execute(command2)
-    print(f"Command result: {result2}")
+    # Test 2 should raise an exception
+    with pytest.raises(Exception):
+        result2 = rails_client.execute(command2)
+        print("❌ TEST 2 FAILED: Expected an exception but got result")
+        print(f"Result: {result2}")
 
-    if result2.get("status") == "error":
-        print("✅ TEST 2 PASSED: Actual error correctly detected")
-    else:
-        print("❌ TEST 2 FAILED: Actual error incorrectly detected as success")
+    print("✅ TEST 2 PASSED: Correctly caught error")
 
     print("\nTest 3: Command with success marker in text")
     command3 = """
@@ -63,27 +70,15 @@ def test_error_marker_detection():
     "Completed successfully"
     """
 
-    result3 = rails_client.execute(command3)
-    print(f"Command result: {result3}")
-
-    if result3.get("status") == "success":
+    try:
+        result3 = rails_client.execute(command3)
+        print(f"Command result: {result3}")
+        assert "SUCCESS" in result3, "Success marker not found in output"
+        assert "Ruby error: NameError:" not in result3, "Unexpected error detected in output"
         print("✅ TEST 3 PASSED: Command with success marker correctly detected as success")
-    else:
-        print("❌ TEST 3 FAILED: Command with success marker incorrectly detected as error")
-
-    # Summary
-    all_passed = (
-        result1.get("status") == "success" and
-        result2.get("status") == "error" and
-        result3.get("status") == "success"
-    )
-
-    if all_passed:
-        print("\n✅ ALL TESTS PASSED!")
-        return True
-    else:
-        print("\n❌ SOME TESTS FAILED!")
-        return False
+    except Exception as e:
+        print(f"❌ TEST 3 FAILED with exception: {str(e)}")
+        pytest.fail(f"Test 3 failed with exception: {str(e)}")
 
 
 if __name__ == "__main__":

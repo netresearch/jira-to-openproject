@@ -9,7 +9,7 @@ import pathlib
 import time
 from typing import Any
 
-from src.models import ComponentResult
+from src.models import ComponentResult, MigrationError
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 
@@ -46,10 +46,10 @@ class CustomFieldMigration(BaseMigration):
             rails_console: Initialized OpenProjectClient instance (optional)
         """
         super().__init__(jira_client, op_client)
-        self.jira_custom_fields: list[dict[str, Any]] = []
-        self.op_custom_fields: list[dict[str, Any]] = []
-        self.mapping: dict[str, dict[str, Any]] = {}
-        self.analysis: dict[str, Any] = {}
+        self.jira_custom_fields: list = []
+        self.op_custom_fields: list = []
+        self.mapping: dict = {}
+        self.analysis: dict = {}
         self.rails_console = rails_console
 
         self._load_data()
@@ -72,12 +72,15 @@ class CustomFieldMigration(BaseMigration):
             f"Loaded analysis with {len(self.analysis)} keys: {list(self.analysis.keys())}"
         )
 
-    def extract_jira_custom_fields(self) -> list[dict[str, Any]]:
+    def extract_jira_custom_fields(self) -> list:
         """
         Extract custom field information from Jira.
 
         Returns:
             List of Jira custom fields
+
+        Raises:
+            MigrationError: If extraction fails
         """
         custom_fields_file = os.path.join(self.data_dir, "jira_custom_fields.json")
 
@@ -155,15 +158,19 @@ class CustomFieldMigration(BaseMigration):
 
             return self.jira_custom_fields
         except Exception as e:
-            self.logger.error(f"Failed to extract custom fields from Jira: {str(e)}")
-            return []
+            error_msg = f"Failed to extract custom fields from Jira: {str(e)}"
+            self.logger.error(error_msg)
+            raise MigrationError(error_msg) from e
 
-    def extract_openproject_custom_fields(self) -> list[dict[str, Any]]:
+    def extract_openproject_custom_fields(self) -> list:
         """
         Extract custom field information from OpenProject and save to a JSON file.
 
         Returns:
             List of custom field dictionaries retrieved from OpenProject
+
+        Raises:
+            MigrationError: If extraction fails
         """
         self.logger.info("Starting OpenProject custom field extraction...")
 
@@ -196,28 +203,17 @@ class CustomFieldMigration(BaseMigration):
             all_fields = self.op_client.get_custom_fields(force_refresh=True)
 
             if not all_fields:
-                self.logger.info(
-                    "No custom fields found in OpenProject - this is normal for a new installation"
-                )
-                return []
+                raise MigrationError("Failed to retrieve custom fields from OpenProject")
 
-            self.logger.info(
-                f"Retrieved {len(all_fields)} custom fields from OpenProject"
-            )
-
-            # Save the extracted data
-            self.logger.info(
-                f"Saving {len(all_fields)} OpenProject custom fields to {output_file}"
-            )
-            with open(output_file, "w", encoding="utf-8") as f:
-                json.dump(all_fields, f, indent=2)
+            # Process and save the fields
+            self.op_custom_fields = all_fields
+            self._save_to_json(all_fields, "op_custom_fields.json")
 
             return all_fields
-
         except Exception as e:
-            self.logger.error(f"Error extracting OpenProject custom fields: {str(e)}")
-            self.logger.debug("Error details:", exc_info=True)
-            return []
+            error_msg = f"Failed to extract custom fields from OpenProject: {str(e)}"
+            self.logger.error(error_msg)
+            raise MigrationError(error_msg) from e
 
     def map_jira_field_to_openproject_format(self, jira_field: dict[str, Any]) -> str:
         """

@@ -265,3 +265,26 @@ def load_from_path(
     except Exception as e:
         config.logger.exception(f"Failed to load data from {filepath}: {e}")
         return default
+
+
+def save_dict(
+    data: dict[str, Any],
+    filepath: str,
+    indent: int = 2,
+    ensure_ascii: bool = False
+) -> bool:
+    """
+    Save dictionary data to a JSON file.
+
+    This is a convenience wrapper around save_to_path for dictionaries.
+
+    Args:
+        data: Dictionary to save
+        filepath: Full file path to save to
+        indent: JSON indentation level
+        ensure_ascii: Whether to escape non-ASCII characters
+
+    Returns:
+        True if save was successful, False otherwise
+    """
+    return save_to_path(data, filepath, indent, ensure_ascii)

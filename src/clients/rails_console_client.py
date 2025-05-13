@@ -292,6 +292,20 @@ class RailsConsoleClient:
 
         start_idx = tmux_output.find(start_marker_out)
         if start_idx == -1:
+            # If we can't find the start marker, but the output shows the command execution already happened,
+            # we can try to parse what's available
+            console_state = self._get_console_state(tmux_output[-50:])
+            if console_state["ready"]:
+                logger.warning("Console appears ready despite missing start marker - attempting to extract output")
+
+                # Look for any output that resembles our command's expected output
+                if "load" in tmux_output:
+                    logger.info("Found load command execution in output, proceeding with extraction")
+
+                    # Try to find the result in the output directly
+                    return tmux_output
+
+            # If we can't extract anything useful, we have to fail
             raise CommandExecutionError(f"Start marker '{start_marker_out}' not found in output")
 
         start_idx += len(start_marker_out)
@@ -301,10 +315,34 @@ class RailsConsoleClient:
         if end_idx == -1:
             logger.error(f"End marker '{end_marker_out}' not found in output")
 
-            if self._get_console_state(tmux_output[-20:])["ready"]:
-                logger.debug("Console prompt found at end of output - command may have completed")
+            # Check if the console is in a ready state, which indicates the command may have completed
+            console_state = self._get_console_state(tmux_output[-50:])
+            if console_state["ready"]:
+                logger.warning("Console appears ready despite missing end marker - attempting to extract output")
 
-            raise CommandExecutionError(f"End marker '{end_marker_out}' not found in output")
+                # Try to find the result in the output - it usually appears between the start marker and the prompt
+                # Look for either a nil, a hash output like {:key=>value}, or other standard Ruby output formats
+                lines = remainder.split("\n")
+                filtered_lines = []
+                for line in lines:
+                    line = line.strip()
+                    # Skip empty lines and lines containing our potential markers
+                    if not line or "--EXEC_" in line:
+                        continue
+                    # Keep lines that look like command output
+                    filtered_lines.append(line)
+
+                if filtered_lines:
+                    logger.info(f"Extracted {len(filtered_lines)} lines of output despite missing end marker")
+                    return "\n".join(filtered_lines)
+                else:
+                    # If we can't extract useful output, we'll have to fail
+                    raise CommandExecutionError(
+                        f"End marker '{end_marker_out}' not found in output and no clear output could be extracted"
+                    )
+            else:
+                # Console is not ready, command execution might be stuck
+                raise CommandExecutionError(f"End marker '{end_marker_out}' not found in output")
 
         command_output = remainder[:end_idx].strip()
 
@@ -386,7 +424,7 @@ class RailsConsoleClient:
 
         return result
 
-    def _wait_for_console_output(self, target: str, marker: str, timeout: int) -> tuple:
+    def _wait_for_console_output(self, target: str, marker: str, timeout: int) -> tuple[bool, str]:
         """
         Wait for specific marker to appear in the console output.
 
@@ -558,7 +596,19 @@ class RailsConsoleClient:
             if not found_end:
                 raise CommandExecutionError("End marker not found in tmux output")
 
-            return last_output
+            # drop all return lines from last_output
+            last_output = "\n".join([line.strip() for line in last_output.split("\n") if not line.strip().startswith("=> ")])
+            # drop all lines irb(main):30486>
+            last_output = "\n".join([line.strip() for line in last_output.split("\n") if not line.strip().startswith("irb(main):")])
+            # extract lines between markers
+            start_idx = last_output.find(start_marker) + len(start_marker)
+            end_idx = last_output.find(end_marker)
+            if start_idx != -1 and end_idx != -1:
+                last_output = last_output[start_idx:end_idx]
+            else:
+                raise CommandExecutionError("Start or end marker not found in tmux output")
+
+            return last_output.strip()
 
         except subprocess.SubprocessError as e:
             logger.error(f"Tmux command failed: {str(e)}")

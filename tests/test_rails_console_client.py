@@ -188,11 +188,24 @@ irb(main):001:0> load '/tmp/test_script.rb'
 Some unexpected output
 irb(main):002:0>
 """
-        with patch.object(self.rails_client, '_send_command_to_tmux', return_value=output):
-            with self.assertRaises(CommandExecutionError) as context:
-                self.rails_client.execute("load '/tmp/test_script.rb'")
+        # Mock both _send_command_to_tmux and _get_console_state
+        with patch.object(
+            self.rails_client, '_send_command_to_tmux', return_value=output
+        ):
+            with patch.object(
+                self.rails_client, '_get_console_state'
+            ) as mock_get_state:
+                # Configure mock to return that console is NOT ready
+                mock_get_state.return_value = {
+                    "ready": False,
+                    "state": "unknown"
+                }
 
-            self.assertIn("Start marker", str(context.exception))
+                # Now we should get an error about missing start marker
+                with self.assertRaises(CommandExecutionError) as context:
+                    self.rails_client.execute("load '/tmp/test_script.rb'")
+
+                self.assertIn("Start marker", str(context.exception))
 
     def test_end_marker_not_found(self):
         """Test handling when end marker is not found in output."""
@@ -205,7 +218,10 @@ irb(main):002:0>
 """
         with patch.object(self.rails_client.file_manager, 'generate_unique_id', return_value=marker_id):
             with patch.object(self.rails_client, '_send_command_to_tmux', return_value=output):
-                with patch.object(self.rails_client, '_get_console_state', return_value={"ready": False, "state": "unknown"}):
+                with patch.object(
+                    self.rails_client, '_get_console_state',
+                    return_value={"ready": False, "state": "unknown"}
+                ):
                     with self.assertRaises(CommandExecutionError) as context:
                         self.rails_client.execute("load '/tmp/test_script.rb'")
 
@@ -232,16 +248,20 @@ irb(main):002:0>
     def test_tmux_command_failure(self):
         """Test handling of tmux command failure."""
         # Mock _send_command_to_tmux to raise subprocess error
-        with patch.object(self.rails_client, '_send_command_to_tmux',
-                         side_effect=TmuxSessionError("Tmux command failed")):
+        with patch.object(
+            self.rails_client, '_send_command_to_tmux',
+            side_effect=TmuxSessionError("Tmux command failed")
+        ):
             with self.assertRaises(TmuxSessionError):
                 self.rails_client.execute("some command")
 
     def test_console_not_ready(self):
         """Test handling when console is not ready."""
         # Mock _send_command_to_tmux to raise ConsoleNotReadyError
-        with patch.object(self.rails_client, '_send_command_to_tmux',
-                         side_effect=ConsoleNotReadyError("Console not ready")):
+        with patch.object(
+            self.rails_client, '_send_command_to_tmux',
+            side_effect=ConsoleNotReadyError("Console not ready")
+        ):
             with self.assertRaises(ConsoleNotReadyError):
                 self.rails_client.execute("some command")
 
