@@ -1,5 +1,4 @@
-"""
-Tests for the project migration component.
+"""Tests for the project migration component.
 """
 
 import json
@@ -228,7 +227,7 @@ class TestProjectMigration(unittest.TestCase):
                 "openproject_id": 123,
                 "tempo_key": "CUST7",
                 "tempo_name": "AcmeCorp",
-            }
+            },
         }
         parent = migration.find_parent_company_for_project({"key": "ACMEWEB"})
         self.assertIsNotNone(parent)
@@ -251,8 +250,7 @@ class TestProjectMigration(unittest.TestCase):
 
 
 def project_migration_test_steps() -> Any:
-    """
-    Testing steps for project migration validation.
+    """Testing steps for project migration validation.
 
     These steps should be executed in a real environment to validate
     the project migration functionality:

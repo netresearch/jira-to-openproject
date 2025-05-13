@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test script to verify file access permissions in Rails console.
+"""Test script to verify file access permissions in Rails console.
 
 This script:
 1. Creates a simple Ruby script locally
@@ -21,7 +20,7 @@ from src.clients.rails_console_client import RailsConsoleClient
 from src.clients.ssh_client import SSHClient
 
 
-def main():
+def main() -> None:
     """Run the file permission test."""
     print("Testing file permissions for Rails console...")
 
@@ -42,7 +41,7 @@ def main():
     docker_client = DockerClient(container_name=op_config.get("container"), ssh_client=ssh_client, command_timeout=30)
 
     rails_client = RailsConsoleClient(
-        tmux_session_name=op_config.get("tmux_session_name", "rails_console"), command_timeout=30
+        tmux_session_name=op_config.get("tmux_session_name", "rails_console"), command_timeout=30,
     )
 
     op_client = OpenProjectClient(
@@ -106,7 +105,7 @@ def main():
         print("\nTest completed successfully!")
 
     except Exception as e:
-        print(f"Error during test: {str(e)}")
+        print(f"Error during test: {e!s}")
     finally:
         # Clean up
         try:
@@ -117,7 +116,7 @@ def main():
                     f.unlink()
                 temp_dir.rmdir()
         except Exception as e:
-            print(f"Cleanup error: {str(e)}")
+            print(f"Cleanup error: {e!s}")
 
 
 if __name__ == "__main__":

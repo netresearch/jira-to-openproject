@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Summarize Custom Fields
+"""Summarize Custom Fields
 
 This script reads the custom fields data from the JSON file
 and provides a summary of the different field types and attributes.
@@ -14,14 +13,14 @@ from typing import Any
 
 
 def summarize_custom_fields(json_file: str) -> dict[str, Any]:
-    """
-    Summarize the custom fields data.
+    """Summarize the custom fields data.
 
     Args:
         json_file: Path to the JSON file with custom fields data
 
     Returns:
         Dictionary with summary information
+
     """
     # Read the JSON file
     with open(json_file) as f:
@@ -67,11 +66,11 @@ def summarize_custom_fields(json_file: str) -> dict[str, Any]:
 
 
 def print_summary(summary: dict[str, Any]) -> None:
-    """
-    Print the summary information in a readable format.
+    """Print the summary information in a readable format.
 
     Args:
         summary: Dictionary with summary information
+
     """
     print("Custom Fields Summary")
     print("===================\n")

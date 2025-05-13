@@ -1,5 +1,4 @@
-"""
-Tests for the link type migration component.
+"""Tests for the link type migration component.
 """
 
 import json
@@ -22,21 +21,21 @@ class TestLinkTypeMigration(unittest.TestCase):
                 "name": "Blocks",
                 "inward": "is blocked by",
                 "outward": "blocks",
-                "self": "https://jira.example.com/rest/api/2/issueLinkType/10100",
+                "self": "https://jira.local/rest/api/2/issueLinkType/10100",
             },
             {
                 "id": "10101",
                 "name": "Cloners",
                 "inward": "is cloned by",
                 "outward": "clones",
-                "self": "https://jira.example.com/rest/api/2/issueLinkType/10101",
+                "self": "https://jira.local/rest/api/2/issueLinkType/10101",
             },
             {
                 "id": "10102",
                 "name": "Custom Link",
                 "inward": "is custom linked to",
                 "outward": "custom links to",
-                "self": "https://jira.example.com/rest/api/2/issueLinkType/10102",
+                "self": "https://jira.local/rest/api/2/issueLinkType/10102",
             },
         ]
 
@@ -339,7 +338,7 @@ class TestLinkTypeMigration(unittest.TestCase):
                 "name": "Link: Custom Link",
                 "field_format": "text",
                 "type": "WorkPackageCustomField",
-            }
+            },
         ]
         mock_custom_field_migration.extract_openproject_custom_fields.return_value = mock_op_custom_fields
 
@@ -361,7 +360,7 @@ class TestLinkTypeMigration(unittest.TestCase):
                     "status": "unmapped",
                     "create_custom_field": True,
                 },
-            )
+            ),
         ]
 
         # Set up the link type mapping
@@ -376,7 +375,7 @@ class TestLinkTypeMigration(unittest.TestCase):
                 "matched_by": "none",
                 "status": "unmapped",
                 "create_custom_field": True,
-            }
+            },
         }
 
         # Call the method under test
@@ -386,7 +385,7 @@ class TestLinkTypeMigration(unittest.TestCase):
 
         # 1. Check that the CustomFieldMigration was initialized correctly
         mock_custom_field_migration_class.assert_called_once_with(
-            jira_client=mock_jira_instance, op_client=mock_op_instance
+            jira_client=mock_jira_instance, op_client=mock_op_instance,
         )
 
         # 2. Check that migrate_custom_fields_via_json was called with correctly formatted data
@@ -451,7 +450,7 @@ class TestLinkTypeMigration(unittest.TestCase):
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
 
         # Mock the create_link_type_mapping method to return a known mapping
-        def mock_create_mapping():
+        def mock_create_mapping() -> dict[str, Any]:
             mapping = {
                 "10100": {
                     "jira_id": "10100",
@@ -480,7 +479,7 @@ class TestLinkTypeMigration(unittest.TestCase):
             return mapping
 
         # Mock the create_custom_fields_for_link_types method to return a success result
-        def mock_create_custom_fields(unmapped_link_types):
+        def mock_create_custom_fields(unmapped_link_types: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
             # Update the mapping to simulate successful custom field creation
             for jira_id, mapping in unmapped_link_types:
                 migration.link_type_mapping[jira_id].update(
@@ -490,7 +489,7 @@ class TestLinkTypeMigration(unittest.TestCase):
                         "matched_by": "custom_field",
                         "status": "mapped",
                         "custom_field_id": 123,
-                    }
+                    },
                 )
             return {
                 "success": True,
@@ -525,8 +524,7 @@ class TestLinkTypeMigration(unittest.TestCase):
 
 
 def link_type_migration_test_steps() -> Any:
-    """
-    Testing steps for link type migration validation.
+    """Testing steps for link type migration validation.
 
     These steps should be executed in a real environment to validate
     the link type migration functionality:

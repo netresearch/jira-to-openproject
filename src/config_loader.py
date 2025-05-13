@@ -1,5 +1,4 @@
-"""
-Configuration module for Jira to OpenProject migration.
+"""Configuration module for Jira to OpenProject migration.
 Handles loading and accessing configuration settings.
 """
 
@@ -25,16 +24,15 @@ config_logger = logging.getLogger("config_loader")
 
 
 class ConfigLoader:
-    """
-    Loads and provides access to configuration settings from YAML files and environment variables.
+    """Loads and provides access to configuration settings from YAML files and environment variables.
     """
 
     def __init__(self, config_file_path: str = "config/config.yaml"):
-        """
-        Initialize the configuration loader.
+        """Initialize the configuration loader.
 
         Args:
             config_file_path (str): Path to the YAML configuration file
+
         """
         # Load environment variables from .env file (default values)
         load_dotenv()
@@ -57,14 +55,14 @@ class ConfigLoader:
         self._apply_environment_overrides()
 
     def _load_yaml_config(self, config_file_path: str) -> ConfigDict:
-        """
-        Load configuration from YAML file.
+        """Load configuration from YAML file.
 
         Args:
             config_file_path (str): Path to the YAML configuration file
 
         Returns:
             dict: Configuration settings
+
         """
         try:
             with open(config_file_path) as config_file:
@@ -74,8 +72,7 @@ class ConfigLoader:
             return {}
 
     def _apply_environment_overrides(self) -> None:
-        """
-        Override configuration settings with environment variables.
+        """Override configuration settings with environment variables.
         """
         # Use pattern matching to organize environment variable processing
         for env_var, env_value in os.environ.items():
@@ -153,44 +150,43 @@ class ConfigLoader:
                 return value
 
     def get_config(self) -> ConfigDict:
-        """
-        Get the complete configuration dictionary.
+        """Get the complete configuration dictionary.
 
         Returns:
             dict: Configuration settings
+
         """
         return self.config
 
     def get_jira_config(self) -> JiraConfig:
-        """
-        Get Jira-specific configuration.
+        """Get Jira-specific configuration.
 
         Returns:
             dict: Jira configuration settings
+
         """
         return self.config.get("jira", {})
 
     def get_openproject_config(self) -> OpenProjectConfig:
-        """
-        Get OpenProject-specific configuration.
+        """Get OpenProject-specific configuration.
 
         Returns:
             dict: OpenProject configuration settings
+
         """
         return self.config.get("openproject", {})
 
     def get_migration_config(self) -> MigrationConfig:
-        """
-        Get migration-specific configuration.
+        """Get migration-specific configuration.
 
         Returns:
             dict: Migration configuration settings
+
         """
         return self.config.get("migration", {})
 
     def get_value(self, section: SectionName, key: str, default: Any = None) -> Any:
-        """
-        Get a specific configuration value.
+        """Get a specific configuration value.
 
         Args:
             section (str): Configuration section (jira, openproject, migration)
@@ -199,5 +195,6 @@ class ConfigLoader:
 
         Returns:
             Configuration value or default if not found
+
         """
         return self.config.get(section, {}).get(key, default)

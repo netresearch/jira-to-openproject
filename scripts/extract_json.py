@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Extract JSON from raw tmux output.
+"""Extract JSON from raw tmux output.
 
 This script extracts JSON data from the raw tmux output file
 by looking for specific markers in the output.
@@ -11,8 +10,7 @@ import sys
 
 
 def extract_json(input_file: str, output_file: str) -> bool:
-    """
-    Extract JSON from raw tmux output.
+    """Extract JSON from raw tmux output.
 
     Args:
         input_file: Path to input file with raw tmux output
@@ -20,6 +18,7 @@ def extract_json(input_file: str, output_file: str) -> bool:
 
     Returns:
         True if extraction was successful, False otherwise
+
     """
     # Read the raw output file
     with open(input_file) as f:
@@ -45,7 +44,7 @@ def extract_json(input_file: str, output_file: str) -> bool:
     for i in range(json_output_line + 1, min(json_output_line + 50, len(lines))):
         line = lines[i]
         # Stop if we reach JSON_END or another command
-        if "JSON_END" in line or line.startswith("irb(main):") and "puts" in line:
+        if "JSON_END" in line or (line.startswith("irb(main):") and "puts" in line):
             break
         json_lines.append(line)
 

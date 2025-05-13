@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-DockerClient
+"""DockerClient
 
 Manages Docker container interactions, including command execution and file transfers.
 Uses SSHClient for remote operations.
@@ -23,8 +22,7 @@ logger = config.logger
 
 
 class DockerClient:
-    """
-    Client for interacting with Docker containers on remote servers.
+    """Client for interacting with Docker containers on remote servers.
     Part of the layered client architecture where:
     1. OpenProjectClient owns SSHClient, DockerClient, and RailsConsoleClient
     2. DockerClient uses SSHClient for remote Docker operations
@@ -39,8 +37,7 @@ class DockerClient:
         retry_count: int = 3,
         retry_delay: float = 1.0,
     ) -> None:
-        """
-        Initialize the Docker client.
+        """Initialize the Docker client.
 
         Args:
             container_name: Name or ID of the Docker container
@@ -48,6 +45,7 @@ class DockerClient:
             command_timeout: Default timeout for commands in seconds
             retry_count: Number of retries for operations
             retry_delay: Delay between retries in seconds
+
         """
         self.container_name = container_name
         self.command_timeout = command_timeout
@@ -65,18 +63,18 @@ class DockerClient:
         logger.debug(f"DockerClient initialized for container {container_name}")
 
     def check_container_exists(self) -> bool:
-        """
-        Check if the specified container exists and is running.
+        """Check if the specified container exists and is running.
 
         Returns:
             True if container exists and is running, False otherwise
 
         Raises:
             Exception: If the SSH command fails
+
         """
         try:
             stdout, _, returncode = self.ssh_client.execute_command(
-                f"docker ps --filter name={self.container_name} --format '{{{{.Names}}}}'"
+                f"docker ps --filter name={self.container_name} --format '{{{{.Names}}}}'",
             )
 
             if returncode == 0 and self.container_name in stdout:
@@ -85,7 +83,7 @@ class DockerClient:
 
             # Check if container exists but is not running
             stdout, _, returncode = self.ssh_client.execute_command(
-                f"docker ps -a --filter name={self.container_name} --format '{{{{.Names}}}}'"
+                f"docker ps -a --filter name={self.container_name} --format '{{{{.Names}}}}'",
             )
 
             if returncode == 0 and self.container_name in stdout:
@@ -96,7 +94,7 @@ class DockerClient:
             return False
 
         except Exception as e:
-            logger.error(f"Error checking if container exists: {str(e)}")
+            logger.error(f"Error checking if container exists: {e!s}")
             raise
 
     def execute_command(
@@ -107,8 +105,7 @@ class DockerClient:
         timeout: int | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[str, str, int]:
-        """
-        Execute a command in the Docker container.
+        """Execute a command in the Docker container.
 
         Args:
             command: Command to execute
@@ -122,6 +119,7 @@ class DockerClient:
 
         Raises:
             Exception: If the SSH command fails
+
         """
         if timeout is None:
             timeout = self.command_timeout
@@ -161,8 +159,7 @@ class DockerClient:
         return self.ssh_client.execute_command(docker_cmd_str, timeout=timeout)
 
     def copy_file_to_container(self, local_path: str, container_path: str) -> None:
-        """
-        Copy a file from local machine to the Docker container.
+        """Copy a file from local machine to the Docker container.
 
         Args:
             local_path: Path to local file on the remote server
@@ -174,6 +171,7 @@ class DockerClient:
         Raises:
             ValueError: If the file transfer fails
             Exception: For other errors during command execution or file transfer
+
         """
         # We don't validate if the remote file exists, since this method is called
         # with a path on the remote server, not on the local machine
@@ -207,12 +205,11 @@ class DockerClient:
             return
 
         except Exception as e:
-            logger.error(f"Error copying file to container: {str(e)}")
-            raise ValueError(f"Failed to copy file to container: {str(e)}")
+            logger.error(f"Error copying file to container: {e!s}")
+            raise ValueError(f"Failed to copy file to container: {e!s}")
 
     def copy_file_from_container(self, container_path: str, local_path: str) -> str:
-        """
-        Copy a file from the Docker container to the local system.
+        """Copy a file from the Docker container to the local system.
         This uses a direct approach to copy the file from container to local.
 
         Args:
@@ -226,6 +223,7 @@ class DockerClient:
             FileNotFoundError: If the file doesn't exist in container or isn't created locally
             ValueError: If the file transfer fails
             Exception: For other errors during command execution or file transfer
+
         """
         # Create a unique temporary filename on the remote host
         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -284,31 +282,31 @@ class DockerClient:
                 logger.warning(f"Failed to clean up temporary file: {remote_temp_path}")
 
     def check_file_exists_in_container(self, container_path: str) -> bool:
-        """
-        Check if a file exists in the container.
+        """Check if a file exists in the container.
 
         Args:
             container_path: Path in container
 
         Returns:
             True if file exists, False otherwise
+
         """
         try:
             stdout, _, _ = self.execute_command(f"test -e {container_path} && echo 'EXISTS' || echo 'NOT_EXISTS'")
             return "EXISTS" in stdout
         except Exception as e:
-            logger.error(f"Error checking if file exists in container: {str(e)}")
+            logger.error(f"Error checking if file exists in container: {e!s}")
             return False
 
     def get_file_size_in_container(self, container_path: str) -> int | None:
-        """
-        Get the size of a file in the container.
+        """Get the size of a file in the container.
 
         Args:
             container_path: Path in container
 
         Returns:
             File size in bytes or None if file doesn't exist
+
         """
         try:
             stdout, _, _ = self.execute_command(f"stat -c %s {container_path} 2>/dev/null || echo 'NOT_EXISTS'")
@@ -321,12 +319,11 @@ class DockerClient:
                     return None
             return None
         except Exception as e:
-            logger.error(f"Error getting file size in container: {str(e)}")
+            logger.error(f"Error getting file size in container: {e!s}")
             return None
 
     def transfer_file_to_container(self, local_path: str, container_path: str) -> None:
-        """
-        Transfer a file directly from the local machine to the Docker container in one operation.
+        """Transfer a file directly from the local machine to the Docker container in one operation.
         This method handles:
         1. Copying the file from local machine to the remote server (via SSH)
         2. Copying the file from remote server to the container
@@ -338,6 +335,7 @@ class DockerClient:
 
         Raises:
             ValueError: If transfer fails at any step
+
         """
         # Use a temporary path on the remote server
         remote_temp_path = f"/tmp/{os.path.basename(local_path)}"
@@ -358,7 +356,7 @@ class DockerClient:
             # Step 3: Set proper permissions as root to ensure Rails can read it
             logger.debug(f"Setting permissions on file in container: {container_path}")
             stdout, stderr, rc = self.execute_command(
-                f"chmod 644 {container_path}", user="root"  # Execute as root user
+                f"chmod 644 {container_path}", user="root",  # Execute as root user
             )
 
             if rc != 0:
@@ -377,4 +375,4 @@ class DockerClient:
                 self.ssh_client.execute_command(f"rm -f {remote_temp_path}")
             except Exception as e:
                 # Non-critical error, just log it
-                logger.warning(f"Failed to clean up temporary file: {remote_temp_path}, Error: {str(e)}")
+                logger.warning(f"Failed to clean up temporary file: {remote_temp_path}, Error: {e!s}")

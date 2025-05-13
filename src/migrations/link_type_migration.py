@@ -1,5 +1,4 @@
-"""
-Link type migration module for Jira to OpenProject migration.
+"""Link type migration module for Jira to OpenProject migration.
 Handles the migration of issue link types from Jira to OpenProject.
 """
 
@@ -55,8 +54,7 @@ DEFAULT_RELATION_TYPES = [
 
 
 class LinkTypeMigration:
-    """
-    Handles the migration of issue link types from Jira to OpenProject.
+    """Handles the migration of issue link types from Jira to OpenProject.
 
     This class is responsible for:
     1. Extracting link type definitions from Jira
@@ -65,12 +63,12 @@ class LinkTypeMigration:
     """
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient):
-        """
-        Initialize the link type migration tools.
+        """Initialize the link type migration tools.
 
         Args:
             jira_client: Initialized Jira client instance.
             op_client: Initialized OpenProject client instance.
+
         """
         self.jira_client = jira_client
         self.op_client = op_client
@@ -84,11 +82,11 @@ class LinkTypeMigration:
         self.console = console
 
     def run(self) -> ComponentResult:
-        """
-        Run the link type migration process.
+        """Run the link type migration process.
 
         Returns:
             ComponentResult dictionary with migration status and counts
+
         """
         logger.info("Starting link type migration...")
         start_time = time.time()
@@ -198,16 +196,16 @@ class LinkTypeMigration:
         logger.info(
             f"Link type migration finished: Status={result.details.get('status')}, "
             f"Total={result.details.get('total_count', 0)}, Success={result.details.get('success_count', 0)}, "
-            f"Failed={result.details.get('failed_count', 0)}, Time={result.details.get('time', 0):.2f}s"
+            f"Failed={result.details.get('failed_count', 0)}, Time={result.details.get('time', 0):.2f}s",
         )
         return result
 
     def extract_jira_link_types(self) -> list[dict[str, Any]] | None:
-        """
-        Extract link types from Jira.
+        """Extract link types from Jira.
 
         Returns:
             List of Jira link type dictionaries or None if extraction fails.
+
         """
         filepath = os.path.join(self.data_dir, "jira_link_types.json")
         if not config.migration_config.get("force", False) and os.path.exists(filepath):
@@ -227,10 +225,9 @@ class LinkTypeMigration:
                 logger.info(f"Extracted {len(self.jira_link_types)} link types from Jira")
                 self._save_to_json(self.jira_link_types, "jira_link_types.json")
                 return self.jira_link_types
-            else:
-                logger.error("Failed to extract link types from Jira (API returned None)")
-                self.jira_link_types = []
-                return None
+            logger.error("Failed to extract link types from Jira (API returned None)")
+            self.jira_link_types = []
+            return None
         except Exception as e:
             logger.error(f"Error extracting link types from Jira: {e}", exc_info=True)
             self.jira_link_types = []
@@ -245,11 +242,11 @@ class LinkTypeMigration:
         logger.debug(f"Saved data to {filepath}")
 
     def create_link_type_mapping(self) -> dict[str, Any] | None:
-        """
-        Create a mapping between Jira link types and OpenProject relation types.
+        """Create a mapping between Jira link types and OpenProject relation types.
 
         Returns:
             Dictionary representing the mapping or None if creation fails.
+
         """
         filepath = os.path.join(self.data_dir, "link_type_mapping.json")
         analysis_filepath = os.path.join(self.data_dir, "link_type_mapping_analysis.json")
@@ -337,18 +334,18 @@ class LinkTypeMigration:
                             "openproject_reverse_name": op_type.get("reverseName"),
                             "matched_by": "user_defined",
                             "status": "matched",
-                        }
+                        },
                     )
                     mapping[jira_id] = match_info
                     continue
                 # If user specified it should be a custom field
-                elif user_mapping.get("create_custom_field", False):
+                if user_mapping.get("create_custom_field", False):
                     match_info.update(
                         {
                             "matched_by": "user_defined_custom_field",
                             "status": "unmapped",
                             "create_custom_field": True,
-                        }
+                        },
                     )
                     mapping[jira_id] = match_info
                     continue
@@ -363,7 +360,7 @@ class LinkTypeMigration:
                         "openproject_reverse_name": op_type.get("reverseName"),
                         "matched_by": "name",
                         "status": "matched",
-                    }
+                    },
                 )
                 mapping[jira_id] = match_info
                 continue
@@ -378,7 +375,7 @@ class LinkTypeMigration:
                         "openproject_reverse_name": op_type.get("reverseName"),
                         "matched_by": "outward",
                         "status": "matched",
-                    }
+                    },
                 )
                 mapping[jira_id] = match_info
                 continue
@@ -393,7 +390,7 @@ class LinkTypeMigration:
                         "openproject_reverse_name": op_type.get("reverseName"),
                         "matched_by": "inward",
                         "status": "matched",
-                    }
+                    },
                 )
                 mapping[jira_id] = match_info
                 continue
@@ -409,7 +406,7 @@ class LinkTypeMigration:
                             "openproject_reverse_name": op_type.get("reverseName"),
                             "matched_by": "similar_outward",
                             "status": "matched",
-                        }
+                        },
                     )
                     mapping[jira_id] = match_info
                     break
@@ -420,7 +417,7 @@ class LinkTypeMigration:
                     {
                         "status": "unmapped",
                         "create_custom_field": True,
-                    }
+                    },
                 )
                 mapping[jira_id] = match_info
 
@@ -438,11 +435,11 @@ class LinkTypeMigration:
                 self.link_type_id_mapping[jira_id] = mapping_data["openproject_id"]
 
     def analyze_link_type_mapping(self) -> dict[str, Any]:
-        """
-        Analyze the link type mapping to identify potential issues.
+        """Analyze the link type mapping to identify potential issues.
 
         Returns:
             Dictionary with analysis results
+
         """
         if not self.link_type_mapping:
             mapping_path = os.path.join(self.data_dir, "link_type_mapping.json")
@@ -496,7 +493,7 @@ class LinkTypeMigration:
                         "jira_name": type_data["jira_name"],
                         "jira_outward": type_data["jira_outward"],
                         "jira_inward": type_data["jira_inward"],
-                    }
+                    },
                 )
 
         analysis["unmapped_type_details"] = unmapped_types
@@ -510,7 +507,7 @@ class LinkTypeMigration:
             analysis["suggestions"] = []
             for unmapped in unmapped_types:
                 suggestions = self._suggest_relation_types(
-                    unmapped["jira_name"], unmapped["jira_outward"], unmapped["jira_inward"]
+                    unmapped["jira_name"], unmapped["jira_outward"], unmapped["jira_inward"],
                 )
                 if suggestions:
                     analysis["suggestions"].append(
@@ -518,7 +515,7 @@ class LinkTypeMigration:
                             "jira_id": unmapped["jira_id"],
                             "jira_name": unmapped["jira_name"],
                             "suggested_mappings": suggestions,
-                        }
+                        },
                     )
         else:
             analysis["message"] = (
@@ -532,8 +529,7 @@ class LinkTypeMigration:
         return analysis
 
     def _suggest_relation_types(self, jira_name: str, jira_outward: str, jira_inward: str) -> list[dict[str, Any]]:
-        """
-        Suggest appropriate OpenProject relation types for a given Jira link type.
+        """Suggest appropriate OpenProject relation types for a given Jira link type.
 
         Args:
             jira_name: Name of the Jira link type
@@ -542,6 +538,7 @@ class LinkTypeMigration:
 
         Returns:
             List of suggested OpenProject relation types
+
         """
         suggestions = []
 
@@ -585,7 +582,7 @@ class LinkTypeMigration:
                                     "reverseName": op_type.get("reverseName"),
                                     "confidence": "medium",
                                     "reason": f"Keyword '{keyword}' found in Jira link type",
-                                }
+                                },
                             )
 
         # If no suggestions, recommend the generic "relates" type
@@ -599,14 +596,13 @@ class LinkTypeMigration:
                             "reverseName": op_type.get("reverseName"),
                             "confidence": "low",
                             "reason": "Default fallback relation",
-                        }
+                        },
                     )
 
         return suggestions
 
     def generate_user_mapping_template(self, output_path: str | None = None) -> str | None:
-        """
-        Generate a template file for users to define their own link type mappings.
+        """Generate a template file for users to define their own link type mappings.
 
         Args:
             output_path: Optional path where to save the template. If not provided,
@@ -614,6 +610,7 @@ class LinkTypeMigration:
 
         Returns:
             Path to the generated template file
+
         """
         if not self.jira_link_types:
             self.extract_jira_link_types()
@@ -667,16 +664,16 @@ class LinkTypeMigration:
         return output_path
 
     def create_custom_fields_for_link_types(
-        self, unmapped_link_types: list[tuple[str, dict[str, Any]]]
+        self, unmapped_link_types: list[tuple[str, dict[str, Any]]],
     ) -> dict[str, Any]:
-        """
-        Create custom fields in OpenProject for unmapped link types.
+        """Create custom fields in OpenProject for unmapped link types.
 
         Args:
             unmapped_link_types: List of tuples (jira_id, mapping_data) for link types that need custom fields
 
         Returns:
             Dictionary with results of the operation
+
         """
         logger.info(f"Creating custom fields for {len(unmapped_link_types)} unmapped link types")
 
@@ -749,7 +746,7 @@ class LinkTypeMigration:
                         "matched_by": "custom_field",
                         "status": "mapped",
                         "custom_field_id": op_field.get("id"),
-                    }
+                    },
                 )
                 created_count += 1
             else:

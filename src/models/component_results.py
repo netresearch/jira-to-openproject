@@ -1,5 +1,4 @@
-"""
-Component result models for tracking migration operations.
+"""Component result models for tracking migration operations.
 """
 
 from typing import Any

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Get Custom Fields (Simple Approach)
+"""Get Custom Fields (Simple Approach)
 
 This script uses the most reliable approach to get custom fields from Rails console:
 1. Directly runs a simple command with clear markers in the Rails console

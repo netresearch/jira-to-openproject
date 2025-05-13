@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Main entry point for Jira to OpenProject migration tool.
+"""Main entry point for Jira to OpenProject migration tool.
 
 This script provides a unified interface for running both migration
 and export operations from a single command-line tool.
@@ -16,8 +15,7 @@ from src.migration import restore_backup, run_migration, setup_tmux_session
 
 
 def main() -> None:
-    """
-    Parse arguments and execute the appropriate command.
+    """Parse arguments and execute the appropriate command.
     """
     # Create the top-level parser
     parser = argparse.ArgumentParser(

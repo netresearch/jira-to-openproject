@@ -1,5 +1,4 @@
-"""
-Tests for the data_handler utility module.
+"""Tests for the data_handler utility module.
 """
 
 import os
@@ -31,7 +30,7 @@ class TestDataHandler(unittest.TestCase):
         """Test saving and loading a Pydantic model."""
         # Create a test model
         test_result = ComponentResult(
-            success=True, message="Test successful", details={"total": 10, "success": 8, "failed": 2}
+            success=True, message="Test successful", details={"total": 10, "success": 8, "failed": 2},
         )
 
         # Save the model

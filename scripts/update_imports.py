@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Script to update imports from OpenProjectRailsClient to OpenProjectClient.
+"""Script to update imports from OpenProjectRailsClient to OpenProjectClient.
 """
 
 import argparse
@@ -9,8 +8,7 @@ from pathlib import Path
 
 
 def update_file(file_path: str, dry_run: bool = False) -> bool:
-    """
-    Update imports in a single file.
+    """Update imports in a single file.
 
     Args:
         file_path: Path to the file to update
@@ -18,6 +16,7 @@ def update_file(file_path: str, dry_run: bool = False) -> bool:
 
     Returns:
         True if changes were made or would be made, False otherwise
+
     """
     with open(file_path, encoding="utf-8") as f:
         content = f.read()
@@ -34,7 +33,7 @@ def update_file(file_path: str, dry_run: bool = False) -> bool:
     new_content = re.sub(r"OpenProjectRailsClient\(", "OpenProjectClient(", new_content)
     new_content = re.sub(r"OpenProjectRailsClient\.", "OpenProjectClient.", new_content)
     new_content = re.sub(
-        r"isinstance\((.+?), OpenProjectRailsClient\)", r"isinstance(\1, OpenProjectClient)", new_content
+        r"isinstance\((.+?), OpenProjectRailsClient\)", r"isinstance(\1, OpenProjectClient)", new_content,
     )
 
     if content == new_content:

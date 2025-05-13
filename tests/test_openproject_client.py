@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test module for OpenProjectClient.
+"""Test module for OpenProjectClient.
 
 This module contains test cases for validating the OpenProjectClient as the top-level
 component in the refactored client architecture, focusing on proper dependency injection,
@@ -239,7 +238,7 @@ class TestOpenProjectClient(unittest.TestCase):
             mock_create.return_value = "/tmp/test_script.rb"
             # Make the docker client transfer_file_to_container method raise an exception
             self.mock_docker_client.transfer_file_to_container.side_effect = FileTransferError(
-                "Failed to copy script to container"
+                "Failed to copy script to container",
             )
 
             # Execute the test with expected exception

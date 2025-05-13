@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Extract Custom Fields from Tmux Output
+"""Extract Custom Fields from Tmux Output
 
 This script extracts the custom fields data directly from
 the tmux session output and saves it to a JSON file.

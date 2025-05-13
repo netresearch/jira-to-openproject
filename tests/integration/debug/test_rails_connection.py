@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
+"""Test script to verify Rails console connection.
 """
-Test script to verify Rails console connection.
-"""
-
-import sys
 
 import pytest
 
@@ -25,8 +22,8 @@ def test_simple_tmux_command() -> None:
         )
         print("✅ Connected to Rails console")
     except Exception as e:
-        print(f"❌ Failed to connect to Rails console: {str(e)}")
-        pytest.fail(f"Could not connect to Rails console: {str(e)}")
+        print(f"❌ Failed to connect to Rails console: {e!s}")
+        pytest.fail(f"Could not connect to Rails console: {e!s}")
 
     # Try to execute a simple command
     try:
@@ -35,8 +32,8 @@ def test_simple_tmux_command() -> None:
         print("✅ Successfully executed command")
         assert "2" in result, "Expected result '2' not found in output"
     except Exception as e:
-        print(f"❌ Failed to execute command: {str(e)}")
-        pytest.fail(f"Failed to execute command: {str(e)}")
+        print(f"❌ Failed to execute command: {e!s}")
+        pytest.fail(f"Failed to execute command: {e!s}")
 
 
 def test_openproject_client() -> None:
@@ -51,8 +48,8 @@ def test_openproject_client() -> None:
         print(f"✅ OpenProject client initialized, connected: {is_connected}")
         assert is_connected, "OpenProject client is not connected"
     except Exception as e:
-        print(f"❌ Failed to initialize OpenProject client: {str(e)}")
-        pytest.fail(f"Failed to initialize OpenProject client: {str(e)}")
+        print(f"❌ Failed to initialize OpenProject client: {e!s}")
+        pytest.fail(f"Failed to initialize OpenProject client: {e!s}")
 
     # Test script execution
     try:
@@ -75,10 +72,10 @@ def test_openproject_client() -> None:
 
         print("✅ Successfully executed script via OpenProject client")
     except Exception as e:
-        print(f"❌ Failed to execute script: {str(e)}")
-        pytest.fail(f"Failed to execute script: {str(e)}")
+        print(f"❌ Failed to execute script: {e!s}")
+        pytest.fail(f"Failed to execute script: {e!s}")
 
 
 if __name__ == "__main__":
-    success = test_simple_tmux_command() and test_openproject_client()
-    sys.exit(0 if success else 1)
+    test_simple_tmux_command()
+    test_openproject_client()

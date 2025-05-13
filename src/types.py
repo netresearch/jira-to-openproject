@@ -54,6 +54,11 @@ class OpenProjectConfig(TypedDict):
     tmux_session_name: str
     user: str
     password: str
+    server: str
+    container: str
+    container_user: str
+    container_password: str
+    key_file: str
 
 
 type JiraConfig = dict[str, str | bool | int | None]

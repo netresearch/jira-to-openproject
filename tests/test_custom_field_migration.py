@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test suite for the custom field migration component.
+"""Test suite for the custom field migration component.
 """
 
 import unittest
@@ -66,7 +65,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                         "custom": "com.atlassian.jira.plugin.system.customfieldtypes:datepicker",
                     },
                 },
-            ]
+            ],
         )
 
         # Mock get_field_metadata for the select field
@@ -76,8 +75,8 @@ class TestCustomFieldMigration(unittest.TestCase):
                     {"value": "Option 1"},
                     {"value": "Option 2"},
                     {"value": "Option 3"},
-                ]
-            }
+                ],
+            },
         )
 
         # Mock OpenProject custom fields
@@ -94,7 +93,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                     "field_format": "list",
                     "possible_values": ["Value 1", "Value 2"],
                 },
-            ]
+            ],
         )
 
         # Create a patch for os.path.exists to avoid reading real files
@@ -272,13 +271,13 @@ class TestCustomFieldMigration(unittest.TestCase):
                             "status": "created",
                             "id": 3,
                             "jira_id": "customfield_10001",
-                        }
+                        },
                     ],
                     "created_count": 1,
                     "existing_count": 0,
                     "error_count": 0,
                 },
-            }
+            },
         )
 
         # Mock successful return for execute method
@@ -293,13 +292,13 @@ class TestCustomFieldMigration(unittest.TestCase):
                             "status": "created",
                             "id": 3,
                             "jira_id": "customfield_10001",
-                        }
+                        },
                     ],
                     "created_count": 1,
                     "existing_count": 0,
                     "error_count": 0,
                 },
-            }
+            },
         )
 
         # Mock analyze_custom_field_mapping to return successful analysis
@@ -375,7 +374,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "openproject_name": "Test Field",
                 "openproject_type": "text",
                 "matched_by": "create",
-            }
+            },
         }
 
         # Replace json.dump to capture the data being written
@@ -430,7 +429,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "openproject_name": "Test Field",
                 "openproject_type": "text",
                 "matched_by": "create",
-            }
+            },
         }
 
         # Mock the transfer_file_to_container to simulate failure
@@ -465,7 +464,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "openproject_name": "Test Field",
                 "openproject_type": "text",
                 "matched_by": "create",
-            }
+            },
         }
 
         # Mock file operations
@@ -523,7 +522,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "openproject_type": "list",
                 "matched_by": "create",
                 "allowed_values": ["Option 1", "Option 2", "Option 3"],
-            }
+            },
         }
 
         # Mock analyze_custom_field_mapping to return successful analysis

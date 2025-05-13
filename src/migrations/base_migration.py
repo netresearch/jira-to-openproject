@@ -9,8 +9,7 @@ from src.models import ComponentResult
 
 
 class BaseMigration:
-    """
-    Base class for all migration classes.
+    """Base class for all migration classes.
     Provides common functionality and initialization for all migration types.
 
     Follows the layered client architecture:
@@ -23,13 +22,13 @@ class BaseMigration:
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
     ) -> None:
-        """
-        Initialize the base migration with common attributes.
+        """Initialize the base migration with common attributes.
         Follows dependency injection pattern for the high-level clients only.
 
         Args:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
+
         """
         # Initialize clients using dependency injection
         self.jira_client = jira_client or JiraClient()
@@ -47,8 +46,7 @@ class BaseMigration:
             config.mappings = Mappings(data_dir=self.data_dir)
 
     def _load_from_json(self, filename: str, default: Any = None) -> Any:
-        """
-        Load data from a JSON file in the data directory.
+        """Load data from a JSON file in the data directory.
 
         Args:
             filename: Name of the JSON file
@@ -56,6 +54,7 @@ class BaseMigration:
 
         Returns:
             Loaded JSON data or default value
+
         """
         filepath = os.path.join(self.data_dir, filename)
         if os.path.exists(filepath):
@@ -68,8 +67,7 @@ class BaseMigration:
         return default
 
     def _save_to_json(self, data: Any, filename: str) -> str:
-        """
-        Save data to a JSON file in the data directory.
+        """Save data to a JSON file in the data directory.
 
         Args:
             data: Data to save
@@ -77,6 +75,7 @@ class BaseMigration:
 
         Returns:
             Path to the saved file
+
         """
         filepath = os.path.join(self.data_dir, filename)
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -88,11 +87,11 @@ class BaseMigration:
         return filepath
 
     def run(self) -> ComponentResult:
-        """
-        Default implementation of the run method that all migration classes should implement.
+        """Default implementation of the run method that all migration classes should implement.
 
         Returns:
             Dictionary with migration results
+
         """
         self.logger.warning(f"The run method has not been implemented for {self.__class__.__name__}")
         return ComponentResult(

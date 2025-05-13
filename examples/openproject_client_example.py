@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Example usage of the OpenProjectClient
+"""Example usage of the OpenProjectClient
 
 This example demonstrates how to use the new OpenProjectClient
 to interact with OpenProject through the Rails console.
@@ -12,8 +11,7 @@ from src.clients.openproject_client import OpenProjectClient
 
 
 def main() -> None:
-    """
-    Example usage of OpenProjectClient
+    """Example usage of OpenProjectClient
     """
     print("Initializing OpenProjectClient...")
 
@@ -25,7 +23,7 @@ def main() -> None:
         # ssh_user="your-username",
         # ssh_key_file="/path/to/key",
         # tmux_session_name="rails_console",
-        command_timeout=180
+        command_timeout=180,
     )
 
     print("Connected to OpenProject. Running examples...")

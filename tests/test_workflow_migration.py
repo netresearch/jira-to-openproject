@@ -1,5 +1,4 @@
-"""
-Tests for the workflow migration component.
+"""Tests for the workflow migration component.
 """
 
 import unittest
@@ -146,7 +145,7 @@ class TestWorkflowMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_jira_instance.jira._session.get.return_value.json.return_value = self.jira_statuses
         mock_jira_instance.jira._session.get.return_value.raise_for_status = MagicMock()
-        mock_jira_instance.base_url = "https://jira.example.com"
+        mock_jira_instance.base_url = "https://jira.local"
 
         mock_op_instance = mock_op_client.return_value
         mock_get_path.return_value = "/tmp/test_data"
@@ -157,7 +156,7 @@ class TestWorkflowMigration(unittest.TestCase):
 
         # Assertions
         self.assertEqual(result, self.jira_statuses)
-        mock_jira_instance.jira._session.get.assert_called_once_with("https://jira.example.com/rest/api/2/status")
+        mock_jira_instance.jira._session.get.assert_called_once_with("https://jira.local/rest/api/2/status")
         mock_file.assert_called_with("/tmp/test_data/jira_statuses.json", "w")
         mock_file().write.assert_called()
 
@@ -405,7 +404,7 @@ class TestWorkflowMigration(unittest.TestCase):
         # Check that we opened a file with a specific name pattern for writing
         # The exact path may vary due to mock implementation details
         self.assertTrue(
-            any("/jira_workflows.json" in str(call) and "w" in str(call) for call in mock_file.call_args_list)
+            any("/jira_workflows.json" in str(call) and "w" in str(call) for call in mock_file.call_args_list),
         )
         mock_file().write.assert_called()
 
@@ -414,8 +413,7 @@ class TestWorkflowMigration(unittest.TestCase):
 
 
 def workflow_migration_test_steps() -> Any:
-    """
-    Testing steps for workflow migration validation.
+    """Testing steps for workflow migration validation.
 
     These steps should be executed in a real environment to validate
     the workflow migration functionality:

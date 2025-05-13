@@ -1,5 +1,4 @@
-"""
-Data mapping module for Jira to OpenProject migration.
+"""Data mapping module for Jira to OpenProject migration.
 Defines the mapping strategies between Jira and OpenProject data models.
 """
 
@@ -12,20 +11,19 @@ logger = config.logger
 
 
 class JiraToOPMapping:
-    """
-    Mapping between Jira and OpenProject data models.
+    """Mapping between Jira and OpenProject data models.
     """
 
     @staticmethod
     def map_issue_type(jira_issue_type: JiraData) -> OpenProjectData:
-        """
-        Map a Jira issue type to an OpenProject work package type.
+        """Map a Jira issue type to an OpenProject work package type.
 
         Args:
             jira_issue_type: A dictionary containing Jira issue type data
 
         Returns:
             Dictionary with mapped OpenProject work package type data
+
         """
         # Use pattern matching instead of dictionary mapping
         match jira_issue_type["name"].lower():
@@ -55,14 +53,14 @@ class JiraToOPMapping:
 
     @staticmethod
     def map_workflow_status(jira_status: JiraData) -> OpenProjectData:
-        """
-        Map a Jira workflow status to an OpenProject status.
+        """Map a Jira workflow status to an OpenProject status.
 
         Args:
             jira_status: A dictionary containing Jira status data
 
         Returns:
             Dictionary with mapped OpenProject status data
+
         """
         # Use pattern matching instead of dictionary mapping
         match jira_status["name"].lower():
@@ -93,14 +91,14 @@ class JiraToOPMapping:
 
     @staticmethod
     def map_project(jira_project: JiraData) -> OpenProjectData:
-        """
-        Map a Jira project to an OpenProject project.
+        """Map a Jira project to an OpenProject project.
 
         Args:
             jira_project: A dictionary containing Jira project data
 
         Returns:
             Dictionary with mapped OpenProject project data
+
         """
         # Create a lowercase, URL-friendly identifier
         identifier = jira_project["key"].lower().replace(" ", "-")
@@ -121,8 +119,7 @@ class JiraToOPMapping:
         type_mapping: TypeMapping,
         status_mapping: StatusMapping,
     ) -> OpenProjectData:
-        """
-        Map a Jira issue to an OpenProject work package.
+        """Map a Jira issue to an OpenProject work package.
 
         Args:
             jira_issue: A dictionary containing Jira issue data
@@ -131,6 +128,7 @@ class JiraToOPMapping:
 
         Returns:
             Dictionary with mapped OpenProject work package data
+
         """
         # Get corresponding OpenProject type ID
         jira_type_id = jira_issue["issue_type"]["id"]
@@ -153,14 +151,14 @@ class JiraToOPMapping:
 
     @staticmethod
     def map_user(jira_user: JiraData) -> OpenProjectData:
-        """
-        Map a Jira user to an OpenProject user.
+        """Map a Jira user to an OpenProject user.
 
         Args:
             jira_user: A dictionary containing Jira user data
 
         Returns:
             Dictionary with mapped OpenProject user data
+
         """
         # Extract the username from email or use the Jira username
         email = jira_user.get("email", "")
@@ -196,14 +194,14 @@ class JiraToOPMapping:
 
     @staticmethod
     def map_comment(jira_comment: JiraData) -> OpenProjectData:
-        """
-        Map a Jira comment to an OpenProject comment.
+        """Map a Jira comment to an OpenProject comment.
 
         Args:
             jira_comment: A dictionary containing Jira comment data
 
         Returns:
             Dictionary with mapped OpenProject comment data
+
         """
         return {
             "text": jira_comment["body"],

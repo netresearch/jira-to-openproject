@@ -2,11 +2,9 @@ import os
 import sys
 
 import pandas as pd
-import pytest
 import requests
 import yaml
 from dotenv import load_dotenv
-from jira import JIRA
 
 
 def test_python_version() -> None:
@@ -38,38 +36,14 @@ def test_env_file() -> None:
     # Check for prefixed or non-prefixed variables
     jira_url = os.getenv("JIRA_URL") or os.getenv("J2O_JIRA_URL")
     jira_token = os.getenv("JIRA_API_TOKEN") or os.getenv("J2O_JIRA_API_TOKEN")
-    webhook_url = os.getenv("MATRIX_HOOKSHOT_WEBHOOK_URL") or os.getenv("J2O_MATRIX_HOOKSHOT_WEBHOOK_URL")
 
     # If variables still not found, try loading from .env.test specifically
     if jira_url is None:
         load_dotenv(".env.test")
         jira_url = os.getenv("JIRA_URL") or os.getenv("J2O_JIRA_URL")
         jira_token = os.getenv("JIRA_API_TOKEN") or os.getenv("J2O_JIRA_API_TOKEN")
-        webhook_url = os.getenv("MATRIX_HOOKSHOT_WEBHOOK_URL") or os.getenv("J2O_MATRIX_HOOKSHOT_WEBHOOK_URL")
 
     assert jira_url is not None, "Neither JIRA_URL nor J2O_JIRA_URL found in environment"
     assert jira_token is not None, "Neither JIRA_API_TOKEN nor J2O_JIRA_API_TOKEN found in environment"
-    assert (
-        webhook_url is not None
-    ), "Neither MATRIX_HOOKSHOT_WEBHOOK_URL nor J2O_MATRIX_HOOKSHOT_WEBHOOK_URL found in environment"
 
 
-@pytest.mark.skip(reason="No Jira instance available in test environment")
-def test_jira_client_creation() -> None:
-    """Test JIRA client can be instantiated"""
-    load_dotenv()
-
-    # If JIRA_URL is not set, try loading from .env.test
-    if os.getenv("JIRA_URL") is None:
-        load_dotenv(".env.test")
-
-    # Get URL and token, asserting they exist
-    jira_url = os.getenv("JIRA_URL")
-    jira_token = os.getenv("JIRA_API_TOKEN")
-
-    assert jira_url is not None, "JIRA_URL environment variable is not set"
-    assert jira_token is not None, "JIRA_API_TOKEN environment variable is not set"
-
-    # Create JIRA client with valid strings
-    jira = JIRA(server=jira_url, token_auth=jira_token)
-    assert jira is not None

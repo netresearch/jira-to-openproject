@@ -1,5 +1,4 @@
-"""
-Data handler module for serialization and deserialization of data.
+"""Data handler module for serialization and deserialization of data.
 
 This module provides a consistent interface for loading and saving data,
 with special handling for Pydantic models.
@@ -15,10 +14,9 @@ T = TypeVar("T")
 
 
 def save_results(
-    data: Any, filename: str, directory: str | None = None, indent: int = 2, ensure_ascii: bool = False
+    data: Any, filename: str, directory: str | None = None, indent: int = 2, ensure_ascii: bool = False,
 ) -> bool:
-    """
-    Save data to a JSON file, automatically handling Pydantic models.
+    """Save data to a JSON file, automatically handling Pydantic models.
 
     Args:
         data: The data to save (Pydantic model or any JSON-serializable data)
@@ -29,6 +27,7 @@ def save_results(
 
     Returns:
         True if save was successful, False otherwise
+
     """
     if directory is None:
         directory = config.get_path("results")
@@ -37,8 +36,7 @@ def save_results(
 
 
 def save(data: Any, filename: str, directory: str | None = None, indent: int = 2, ensure_ascii: bool = False) -> bool:
-    """
-    Save data to a JSON file, automatically handling Pydantic models.
+    """Save data to a JSON file, automatically handling Pydantic models.
 
     Args:
         data: The data to save (Pydantic model or any JSON-serializable data)
@@ -49,6 +47,7 @@ def save(data: Any, filename: str, directory: str | None = None, indent: int = 2
 
     Returns:
         True if save was successful, False otherwise
+
     """
     if directory is None:
         directory = config.get_path("data")
@@ -72,8 +71,7 @@ def save(data: Any, filename: str, directory: str | None = None, indent: int = 2
 
 
 def load(model_class: type[T], filename: str, directory: str | None = None, default: Any | None = None) -> T | None:
-    """
-    Load data from a JSON file and convert to specified model type.
+    """Load data from a JSON file and convert to specified model type.
 
     Args:
         model_class: Pydantic model class to load into
@@ -83,6 +81,7 @@ def load(model_class: type[T], filename: str, directory: str | None = None, defa
 
     Returns:
         Instance of model_class or default value if loading fails
+
     """
     if directory is None:
         directory = config.get_path("data")
@@ -107,8 +106,7 @@ def load(model_class: type[T], filename: str, directory: str | None = None, defa
 
 
 def load_dict(filename: str, directory: str | None = None, default: dict[str, Any] | None = None) -> dict[str, Any]:
-    """
-    Load dictionary data from a JSON file.
+    """Load dictionary data from a JSON file.
 
     Args:
         filename: File to load from
@@ -117,6 +115,7 @@ def load_dict(filename: str, directory: str | None = None, default: dict[str, An
 
     Returns:
         Dictionary loaded from JSON or default value if loading fails
+
     """
     if default is None:
         default = {}
@@ -142,8 +141,7 @@ def load_dict(filename: str, directory: str | None = None, default: dict[str, An
 
 
 def load_list(filename: str, directory: str | None = None, default: list[Any] | None = None) -> list[Any]:
-    """
-    Load list data from a JSON file.
+    """Load list data from a JSON file.
 
     Args:
         filename: File to load from
@@ -152,6 +150,7 @@ def load_list(filename: str, directory: str | None = None, default: list[Any] | 
 
     Returns:
         List loaded from JSON or default value if loading fails
+
     """
     if default is None:
         default = []
@@ -177,8 +176,7 @@ def load_list(filename: str, directory: str | None = None, default: list[Any] | 
 
 
 def save_to_path(data: Any, filepath: str, indent: int = 2, ensure_ascii: bool = False) -> bool:
-    """
-    Save data to a JSON file at a specific path.
+    """Save data to a JSON file at a specific path.
 
     Args:
         data: The data to save (Pydantic model or any JSON-serializable data)
@@ -188,6 +186,7 @@ def save_to_path(data: Any, filepath: str, indent: int = 2, ensure_ascii: bool =
 
     Returns:
         True if save was successful, False otherwise
+
     """
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
@@ -207,8 +206,7 @@ def save_to_path(data: Any, filepath: str, indent: int = 2, ensure_ascii: bool =
 
 
 def load_from_path(model_class: type[T], filepath: str, default: Any | None = None) -> T | None:
-    """
-    Load data from a JSON file at a specific path.
+    """Load data from a JSON file at a specific path.
 
     Args:
         model_class: Pydantic model class to load into
@@ -217,6 +215,7 @@ def load_from_path(model_class: type[T], filepath: str, default: Any | None = No
 
     Returns:
         Instance of model_class or default value if loading fails
+
     """
     if not os.path.exists(filepath):
         config.logger.info(f"File not found: {filepath}, returning default")
@@ -236,8 +235,7 @@ def load_from_path(model_class: type[T], filepath: str, default: Any | None = No
 
 
 def save_dict(data: dict[str, Any], filepath: str, indent: int = 2, ensure_ascii: bool = False) -> bool:
-    """
-    Save dictionary data to a JSON file.
+    """Save dictionary data to a JSON file.
 
     This is a convenience wrapper around save_to_path for dictionaries.
 
@@ -249,5 +247,6 @@ def save_dict(data: dict[str, Any], filepath: str, indent: int = 2, ensure_ascii
 
     Returns:
         True if save was successful, False otherwise
+
     """
     return save_to_path(data, filepath, indent, ensure_ascii)

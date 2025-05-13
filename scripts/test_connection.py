@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Script to test connection to both Jira and OpenProject APIs.
+"""Script to test connection to both Jira and OpenProject APIs.
 """
 
 import logging
@@ -13,8 +12,7 @@ from src.config_loader import ConfigLoader
 
 
 def setup_logging() -> None:
-    """
-    Set up logging configuration.
+    """Set up logging configuration.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -24,8 +22,7 @@ def setup_logging() -> None:
 
 
 def main() -> None:
-    """
-    Main function to test connections.
+    """Main function to test connections.
     """
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -69,7 +66,7 @@ def main() -> None:
             if len(projects) > 5:
                 logger.info(f" - ... and {len(projects) - 5} more")
         except Exception as e:
-            logger.error(f"Failed to connect to OpenProject: {str(e)}")
+            logger.error(f"Failed to connect to OpenProject: {e!s}")
             logger.error("Check your API key and URL configuration")
 
 

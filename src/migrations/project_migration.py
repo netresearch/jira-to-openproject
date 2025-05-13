@@ -1,5 +1,4 @@
-"""
-Project migration module for Jira to OpenProject migration.
+"""Project migration module for Jira to OpenProject migration.
 Handles the migration of projects and their hierarchies from Jira to OpenProject.
 """
 
@@ -29,8 +28,7 @@ TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
 
 
 class ProjectMigration(BaseMigration):
-    """
-    Handles the migration of projects from Jira to OpenProject.
+    """Handles the migration of projects from Jira to OpenProject.
 
     This class is responsible for:
     1. Extracting projects from Jira
@@ -49,12 +47,12 @@ class ProjectMigration(BaseMigration):
         jira_client: JiraClient,
         op_client: OpenProjectClient,
     ):
-        """
-        Initialize the project migration tools.
+        """Initialize the project migration tools.
 
         Args:
             jira_client: Initialized Jira client instance.
             op_client: Initialized OpenProject client instance.
+
         """
         super().__init__(jira_client, op_client)
         self.jira_projects: list[dict[str, Any]] = []
@@ -74,11 +72,11 @@ class ProjectMigration(BaseMigration):
         self.company_mapping = config.mappings.get_mapping(Mappings.COMPANY_MAPPING_FILE)
 
     def extract_jira_projects(self) -> list[dict[str, Any]]:
-        """
-        Extract projects from Jira.
+        """Extract projects from Jira.
 
         Returns:
             List of Jira projects
+
         """
         if not config.migration_config.get("force", False):
             cached_projects = self._load_from_json(JIRA_PROJECTS_FILE, default=None)
@@ -98,11 +96,11 @@ class ProjectMigration(BaseMigration):
         return self.jira_projects
 
     def extract_openproject_projects(self) -> list[dict[str, Any]]:
-        """
-        Extract projects from OpenProject.
+        """Extract projects from OpenProject.
 
         Returns:
             List of OpenProject project dictionaries
+
         """
         if not config.migration_config.get("force", False):
             cached_projects = self._load_from_json(OP_PROJECTS_FILE, default=None)
@@ -122,11 +120,11 @@ class ProjectMigration(BaseMigration):
         return self.op_projects
 
     def load_account_mapping(self) -> dict[str, Any]:
-        """
-        Load the account mapping created by the account migration.
+        """Load the account mapping created by the account migration.
 
         Returns:
             Dictionary mapping Tempo account IDs to OpenProject custom field data
+
         """
         self.account_mapping = self._load_from_json(ACCOUNT_MAPPING_FILE, default={})
         if self.account_mapping:
@@ -138,16 +136,15 @@ class ProjectMigration(BaseMigration):
 
             logger.info(f"Account custom field ID: {self.account_custom_field_id}")
             return self.account_mapping
-        else:
-            logger.warning("No account mapping found. Account information won't be migrated.")
-            return {}
+        logger.warning("No account mapping found. Account information won't be migrated.")
+        return {}
 
     def load_company_mapping(self) -> dict[str, Any]:
-        """
-        Load the company mapping created by the company migration.
+        """Load the company mapping created by the company migration.
 
         Returns:
             Dictionary mapping Tempo company IDs to OpenProject project IDs
+
         """
         self.company_mapping = self._load_from_json(Mappings.COMPANY_MAPPING_FILE, default={})
         if self.company_mapping:
@@ -155,19 +152,18 @@ class ProjectMigration(BaseMigration):
             matched_count = sum(1 for c in self.company_mapping.values() if c.get("openproject_id"))
             logger.info(f"Loaded company mapping with {company_count} entries, {matched_count} matched to OpenProject.")
             return self.company_mapping
-        else:
-            logger.warning("No company mapping found. Projects won't be organized hierarchically.")
-            return {}
+        logger.warning("No company mapping found. Projects won't be organized hierarchically.")
+        return {}
 
     def extract_project_account_mapping(self) -> dict[str, Any]:
-        """
-        Extract the mapping between Jira projects and Tempo accounts using already fetched Tempo account data.
+        """Extract the mapping between Jira projects and Tempo accounts using already fetched Tempo account data.
 
         Instead of making individual API calls for each project, this method processes the account links
         already available in the Tempo accounts data from account migration.
 
         Returns:
             Dictionary mapping project keys to account IDs.
+
         """
         # Load existing data unless forced to refresh
         if self.project_account_mapping and not config.migration_config.get("force", False):
@@ -217,7 +213,7 @@ class ProjectMigration(BaseMigration):
                         "key": acct_key,
                         "name": acct_name,
                         "default": link.get("defaultAccount", False),
-                    }
+                    },
                 )
 
         # For each project, prioritize default accounts
@@ -234,8 +230,7 @@ class ProjectMigration(BaseMigration):
         return mapping
 
     def find_parent_company_for_project(self, jira_project: dict[str, Any]) -> dict[str, Any] | None:
-        """
-        Find the appropriate parent company for a Jira project based on its default Tempo account.
+        """Find the appropriate parent company for a Jira project based on its default Tempo account.
         """
         jira_key = jira_project.get("key")
 
@@ -261,7 +256,7 @@ class ProjectMigration(BaseMigration):
         company_id = acct_map.get("company_id")
         if not company_id:
             logger.warning(
-                f"Project {jira_key}: Tempo account {acct_id_str} missing company_id in acct_map: {acct_map}"
+                f"Project {jira_key}: Tempo account {acct_id_str} missing company_id in acct_map: {acct_map}",
             )
             return None
 
@@ -274,12 +269,12 @@ class ProjectMigration(BaseMigration):
         return company
 
     def bulk_migrate_projects(self) -> ComponentResult:
-        """
-        Migrate projects from Jira to OpenProject in bulk using Rails console.
+        """Migrate projects from Jira to OpenProject in bulk using Rails console.
         This is more efficient than creating each project individually with API calls.
 
         Returns:
             Dictionary mapping Jira project keys to OpenProject project IDs
+
         """
         logger.info("Starting bulk project migration using Rails client...")
 
@@ -579,7 +574,7 @@ class ProjectMigration(BaseMigration):
                             created_projects = result_data.get("created", [])
                             errors = result_data.get("errors", [])
                 except Exception as e:
-                    logger.error(f"Error reading result file: {str(e)}")
+                    logger.error(f"Error reading result file: {e!s}")
 
         # Create mapping from results
         mapping = {}
@@ -623,11 +618,11 @@ class ProjectMigration(BaseMigration):
         )
 
     def analyze_project_mapping(self) -> dict[str, Any]:
-        """
-        Analyze the project mapping to identify potential issues.
+        """Analyze the project mapping to identify potential issues.
 
         Returns:
             Dictionary with analysis results
+
         """
         if not self.project_mapping:
             if os.path.exists(os.path.join(self.data_dir, Mappings.PROJECT_MAPPING_FILE)):
@@ -675,18 +670,18 @@ class ProjectMigration(BaseMigration):
         logger.info(f"- Already existing: {analysis['existing_projects']}")
         logger.info(f"- With account information: {analysis['projects_with_accounts']}")
         logger.info(
-            f"- With parent company: {analysis['projects_with_parent']} ({analysis['hierarchical_percentage']:.1f}%)"
+            f"- With parent company: {analysis['projects_with_parent']} ({analysis['hierarchical_percentage']:.1f}%)",
         )
         logger.info(f"Failed projects: {analysis['failed_projects']}")
 
         return analysis
 
     def run(self) -> ComponentResult:
-        """
-        Run the project migration.
+        """Run the project migration.
 
         Returns:
             ComponentResult with migration results
+
         """
         # Extract Jira projects
         self.extract_jira_projects()

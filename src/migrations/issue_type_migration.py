@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Issue type migration module for Jira to OpenProject migration.
+"""Issue type migration module for Jira to OpenProject migration.
 Handles the migration of issue types from Jira to OpenProject work package types.
 """
 
@@ -23,8 +22,7 @@ logger = config.logger
 
 
 class IssueTypeMigration(BaseMigration):
-    """
-    Handles the migration of issue types from Jira to work package types in OpenProject.
+    """Handles the migration of issue types from Jira to work package types in OpenProject.
 
     This class supports two approaches:
     1. Generate a Ruby script for manual execution via Rails console (traditional approach)
@@ -36,12 +34,12 @@ class IssueTypeMigration(BaseMigration):
         jira_client: JiraClient,
         op_client: OpenProjectClient,
     ) -> None:
-        """
-        Initialize the issue type migration process.
+        """Initialize the issue type migration process.
 
         Args:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
+
         """
         super().__init__(jira_client, op_client)
 
@@ -88,11 +86,11 @@ class IssueTypeMigration(BaseMigration):
         logger.info(f"Loaded {len(self.issue_type_id_mapping)=} issue type ID mappings")
 
     def extract_jira_issue_types(self) -> list[dict[str, Any]]:
-        """
-        Extract issue types from Jira.
+        """Extract issue types from Jira.
 
         Returns:
             List of Jira issue type dictionaries
+
         """
         issue_types_file = os.path.join(self.data_dir, "jira_issue_types.json")
 
@@ -114,21 +112,21 @@ class IssueTypeMigration(BaseMigration):
 
             return issue_types
         except Exception as e:
-            logger.error(f"Failed to get issue types from Jira: {str(e)}")
+            logger.error(f"Failed to get issue types from Jira: {e!s}")
             return []
 
     def extract_openproject_work_package_types(self) -> list[dict[str, Any]]:
-        """
-        Extract work package types from OpenProject.
+        """Extract work package types from OpenProject.
 
         Returns:
             List of OpenProject work package type dictionaries
+
         """
         work_package_types_file = os.path.join(self.data_dir, "openproject_work_package_types.json")
 
         if os.path.exists(work_package_types_file) and not config.migration_config.get("force", False):
             logger.info(
-                "OpenProject work package types data already exists, skipping extraction (use --force to override)"
+                "OpenProject work package types data already exists, skipping extraction (use --force to override)",
             )
             with open(work_package_types_file) as f:
                 self.op_work_package_types = json.load(f)
@@ -139,7 +137,7 @@ class IssueTypeMigration(BaseMigration):
         try:
             self.op_work_package_types = self.op_client.get_work_package_types()
         except Exception as e:
-            logger.warning(f"Failed to get work package types from OpenProject: {str(e)}")
+            logger.warning(f"Failed to get work package types from OpenProject: {e!s}")
             logger.warning("Using an empty list of work package types for OpenProject")
             self.op_work_package_types = []
 
@@ -150,11 +148,11 @@ class IssueTypeMigration(BaseMigration):
         return self.op_work_package_types
 
     def create_issue_type_mapping(self) -> dict[str, Any]:
-        """
-        Create a mapping between Jira issue types and OpenProject work package types.
+        """Create a mapping between Jira issue types and OpenProject work package types.
 
         Returns:
             Dictionary mapping Jira issue types to OpenProject work package types
+
         """
         mapping_file = os.path.join(self.data_dir, "issue_type_mapping_template.json")
         if os.path.exists(mapping_file) and not config.migration_config.get("force", False):
@@ -199,7 +197,7 @@ class IssueTypeMigration(BaseMigration):
                         "color": op_type.get("color", "#1A67A3"),
                         "is_milestone": jira_type_name.lower() == "milestone",
                         "matched_by": "exact_match",
-                    }
+                    },
                 )
                 continue
 
@@ -216,7 +214,7 @@ class IssueTypeMigration(BaseMigration):
                             "color": default_mapping.get("color", "#1A67A3"),
                             "is_milestone": default_name.lower() == "milestone",
                             "matched_by": "default_mapping",
-                        }
+                        },
                     )
                 else:
                     mapping[jira_type_name].update(
@@ -226,7 +224,7 @@ class IssueTypeMigration(BaseMigration):
                             "color": default_mapping.get("color", "#1A67A3"),
                             "is_milestone": default_name.lower() == "milestone",
                             "matched_by": "default_mapping_to_create",
-                        }
+                        },
                     )
                 continue
 
@@ -237,7 +235,7 @@ class IssueTypeMigration(BaseMigration):
                     "color": "#1A67A3",
                     "is_milestone": jira_type_name.lower() == "milestone",
                     "matched_by": "same_name",
-                }
+                },
             )
 
         self.issue_type_mapping = mapping
@@ -255,8 +253,7 @@ class IssueTypeMigration(BaseMigration):
         return mapping
 
     def normalize_issue_types(self) -> dict[str, Any]:
-        """
-        Normalize issue types by mapping sub-types to their corresponding normal types.
+        """Normalize issue types by mapping sub-types to their corresponding normal types.
 
         This method identifies issue types starting with "Sub:" or "Sub-" and maps them
         to their corresponding "normal" issue types. This reduces the number of work
@@ -264,6 +261,7 @@ class IssueTypeMigration(BaseMigration):
 
         Returns:
             Updated issue type mapping dictionary
+
         """
         logger.info("Normalizing issue types...")
 
@@ -308,7 +306,7 @@ class IssueTypeMigration(BaseMigration):
                         "matched_by": "normalized_to_" + base_type_name,
                         "normalized_from": jira_type_name,
                         "normalized_to": base_type_name,
-                    }
+                    },
                 )
                 normalizations_applied += 1
                 logger.info(f"Normalized '{jira_type_name}' to '{base_type_name}'")
@@ -322,7 +320,7 @@ class IssueTypeMigration(BaseMigration):
                         "matched_by": "fallback_to_task",
                         "normalized_from": jira_type_name,
                         "normalized_to": "Task",
-                    }
+                    },
                 )
                 normalizations_applied += 1
                 logger.info(f"Could not find matching normal type for '{jira_type_name}', mapping to 'Task'")
@@ -346,12 +344,12 @@ class IssueTypeMigration(BaseMigration):
         return normalized_mapping
 
     def check_existing_work_package_types(self) -> list[dict[str, Any]]:
-        """
-        Check existing work package types in OpenProject by directly parsing
+        """Check existing work package types in OpenProject by directly parsing
         the JSON output from a file created via Rails console.
 
         Returns:
             List of existing work package types
+
         """
         logger.info("Checking existing work package types in OpenProject via Rails...")
 
@@ -390,7 +388,7 @@ class IssueTypeMigration(BaseMigration):
             ):
                 logger.error(f"Rails command reported an error during execution: {write_result['output']}")
                 return []
-            elif write_result.get("status") != "success":
+            if write_result.get("status") != "success":
                 error_msg = write_result.get("error", "Unknown error executing Rails command for file write")
                 logger.error(f"Failed to execute Rails command to write JSON file: {error_msg}")
                 return []
@@ -405,7 +403,7 @@ class IssueTypeMigration(BaseMigration):
             if not op_server:
                 logger.error(
                     "OpenProject server hostname is not configured "
-                    "(J2O_OPENPROJECT_SERVER). Cannot run remote docker commands."
+                    "(J2O_OPENPROJECT_SERVER). Cannot run remote docker commands.",
                 )
                 return []
 
@@ -420,12 +418,12 @@ class IssueTypeMigration(BaseMigration):
                     error_details = ls_result.stderr.strip()
                     logger.error(
                         f"File {temp_file_path} check failed (exit code {ls_result.returncode}). "
-                        f"ls stderr: {error_details}; stdout: {ls_result.stdout}"
+                        f"ls stderr: {error_details}; stdout: {ls_result.stdout}",
                     )
                     return []
                 logger.info(f"File {temp_file_path} confirmed to exist in container.")
             except subprocess.SubprocessError as e:
-                logger.exception(f"Error running docker exec ls command: {str(e)}")
+                logger.exception(f"Error running docker exec ls command: {e!s}")
                 return []
 
             logger.info(f"Reading {temp_file_path} using ssh + docker exec...")
@@ -450,10 +448,10 @@ class IssueTypeMigration(BaseMigration):
                 return []
 
         except subprocess.SubprocessError as e:
-            logger.exception(f"Error running docker exec command: {str(e)}")
+            logger.exception(f"Error running docker exec command: {e!s}")
             return []
         except Exception as e:
-            logger.exception(f"Unexpected error during work package type retrieval: {str(e)}")
+            logger.exception(f"Unexpected error during work package type retrieval: {e!s}")
             return []
         finally:
             try:
@@ -468,13 +466,13 @@ class IssueTypeMigration(BaseMigration):
                     else:
                         logger.warning(
                             f"Skipping final removal of temporary file {temp_file_path} "
-                            "due to missing server or container config."
+                            "due to missing server or container config.",
                         )
 
                 else:
                     logger.debug(
                         f"Skipping final removal of temporary file {temp_file_path} "
-                        "as container_name was not defined."
+                        "as container_name was not defined.",
                     )
             except Exception as final_e:
                 try:
@@ -486,16 +484,15 @@ class IssueTypeMigration(BaseMigration):
                 logger.warning(f"Failed during final removal of {temp_file_path} (Type: {error_type}): {error_message}")
 
     def create_work_package_type_via_rails(self, type_data: dict[str, Any]) -> dict[str, Any]:
-        """
-        Create a work package type in OpenProject via Rails console.
+        """Create a work package type in OpenProject via Rails console.
 
         Args:
             type_data: Dictionary with type data from Jira issue type mapping
 
         Returns:
             Dictionary with operation result status
-        """
 
+        """
         type_name = type_data.get("openproject_name", "")
         type_color = type_data.get("color", "#1A67A3")
         is_milestone = type_data.get("is_milestone", False)
@@ -527,8 +524,7 @@ class IssueTypeMigration(BaseMigration):
                     "message": "Work package type already exists",
                     "id": type_id,
                 }
-            else:
-                logger.warning(f"Failed to retrieve ID for existing type '{type_name}'")
+            logger.warning(f"Failed to retrieve ID for existing type '{type_name}'")
 
         # Create the type
         milestone_flag = "true" if is_milestone else "false"
@@ -555,7 +551,7 @@ class IssueTypeMigration(BaseMigration):
 
         if result["status"] != "success":
             logger.error(
-                f"Error executing Rails command to create type '{type_name}': {result.get('error', 'Unknown error')}"
+                f"Error executing Rails command to create type '{type_name}': {result.get('error', 'Unknown error')}",
             )
             return {
                 "status": "error",
@@ -587,8 +583,7 @@ class IssueTypeMigration(BaseMigration):
             if verify_result["status"] == "success" and "true" in verify_result["output"]:
                 logger.info(f"Verified work package type '{type_name}' with ID {type_id} exists")
                 return {"status": "success", "id": type_id, "name": type_name}
-            else:
-                logger.warning(f"Created type but failed verification: {verify_result.get('output', 'Unknown error')}")
+            logger.warning(f"Created type but failed verification: {verify_result.get('output', 'Unknown error')}")
 
         logger.warning(f"Failed to parse type ID from Rails response: {output}")
 
@@ -596,8 +591,7 @@ class IssueTypeMigration(BaseMigration):
         return {"status": "success", "name": type_name}
 
     def migrate_issue_types_via_rails(self, window: int = 0, pane: int = 0) -> bool:
-        """
-        Migrate issue types directly via the Rails console using a bulk operation.
+        """Migrate issue types directly via the Rails console using a bulk operation.
 
         This method creates all required work package types at once via a single Rails script,
         following the pattern used in other migration components.
@@ -608,6 +602,7 @@ class IssueTypeMigration(BaseMigration):
 
         Returns:
             bool: True if migration was successful, False otherwise
+
         """
         if not self.issue_type_mapping:
             self.create_issue_type_mapping()
@@ -644,7 +639,7 @@ class IssueTypeMigration(BaseMigration):
                             "is_milestone": type_data.get("is_milestone", False),
                             "is_default": op_type_name.lower() == "task",
                             "jira_type_name": type_name,  # Store original Jira type name for mapping
-                        }
+                        },
                     )
 
         if not types_to_create:
@@ -896,18 +891,18 @@ class IssueTypeMigration(BaseMigration):
             return error_count == 0
 
         except Exception as e:
-            logger.error(f"Error processing creation results: {str(e)}")
+            logger.error(f"Error processing creation results: {e!s}")
             import traceback
 
             logger.debug(traceback.format_exc())
             return False
 
     def migrate_issue_types(self) -> dict[str, Any]:
-        """
-        Prepare for migrating issue types from Jira to OpenProject.
+        """Prepare for migrating issue types from Jira to OpenProject.
 
         Returns:
             Updated mapping with analysis information
+
         """
         logger.info("Starting issue type migration preparation...")
 
@@ -935,10 +930,10 @@ class IssueTypeMigration(BaseMigration):
 
         if op_types_to_create:
             logger.info(
-                f"Need to create {len(op_types_to_create)} unique work package types in OpenProject via Rails console"
+                f"Need to create {len(op_types_to_create)} unique work package types in OpenProject via Rails console",
             )
             logger.info(
-                f"(This will map to {total_types_needing_creation} total Jira issue types " f"after deduplication)"
+                f"(This will map to {total_types_needing_creation} total Jira issue types after deduplication)",
             )
         else:
             logger.info("No new work package types need to be created in OpenProject")
@@ -956,11 +951,11 @@ class IssueTypeMigration(BaseMigration):
         return self.analyze_issue_type_mapping()
 
     def analyze_issue_type_mapping(self) -> dict[str, Any]:
-        """
-        Analyze the issue type mapping to identify potential issues.
+        """Analyze the issue type mapping to identify potential issues.
 
         Returns:
             Dictionary with analysis results
+
         """
         if not self.issue_type_mapping:
             self.create_issue_type_mapping()
@@ -1000,24 +995,23 @@ class IssueTypeMigration(BaseMigration):
         logger.info("\nIssue Type Mapping Analysis:")
         logger.info(f"Total Jira issue types: {total}")
         logger.info(
-            f"- Matched to OpenProject types: {analysis['matched_op_types']} ({analysis['match_percentage']:.1f}%)"
+            f"- Matched to OpenProject types: {analysis['matched_op_types']} ({analysis['match_percentage']:.1f}%)",
         )
         logger.info(
-            f"- Need creation in OpenProject: {analysis['types_to_create']} ({analysis['create_percentage']:.1f}%)"
+            f"- Need creation in OpenProject: {analysis['types_to_create']} ({analysis['create_percentage']:.1f}%)",
         )
 
         if analysis["types_to_create"] > 0:
             logger.info(
                 f"Action required: {analysis['types_to_create']} work package types "
                 "need creation via Rails console (direct or script). "
-                "Details in issue_type_analysis.json"
+                "Details in issue_type_analysis.json",
             )
 
         return analysis
 
     def _load_from_json(self, filename: str, default: Any = None) -> Any:
-        """
-        Load data from a JSON file in the data directory.
+        """Load data from a JSON file in the data directory.
 
         Args:
             filename: Name of the JSON file
@@ -1025,6 +1019,7 @@ class IssueTypeMigration(BaseMigration):
 
         Returns:
             Loaded JSON data or default value
+
         """
         filepath = os.path.join(self.data_dir, filename)
         if os.path.exists(filepath):
@@ -1037,14 +1032,14 @@ class IssueTypeMigration(BaseMigration):
         return default
 
     def update_mapping_file(self) -> bool:
-        """
-        Update the issue type mapping file with IDs from OpenProject.
+        """Update the issue type mapping file with IDs from OpenProject.
 
         This method is useful when work package types were created manually via a Ruby script
         execution and the mapping file needs to be updated with the created type IDs.
 
         Returns:
             True if mapping was updated successfully, False otherwise
+
         """
         logger.info("Updating issue type mapping file with IDs from OpenProject...")
 
@@ -1105,11 +1100,11 @@ class IssueTypeMigration(BaseMigration):
         return updated_count > 0 or already_mapped_count > 0
 
     def run(self) -> ComponentResult:
-        """
-        Run the issue type migration.
+        """Run the issue type migration.
 
         Returns:
             Dictionary with migration results
+
         """
         logger.info("Starting issue type migration...")
 

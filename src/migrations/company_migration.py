@@ -1,5 +1,4 @@
-"""
-Company migration module for Jira to OpenProject migration.
+"""Company migration module for Jira to OpenProject migration.
 Handles the migration of Tempo timesheet companies from Jira to OpenProject as top-level projects.
 """
 
@@ -19,8 +18,7 @@ from src.utils import data_handler
 
 
 class CompanyMigration(BaseMigration):
-    """
-    Handles the migration of companies from Tempo timesheet to OpenProject.
+    """Handles the migration of companies from Tempo timesheet to OpenProject.
 
     This class is responsible for:
     1. Extracting company information from Tempo timesheet in Jira
@@ -39,13 +37,13 @@ class CompanyMigration(BaseMigration):
         op_client: OpenProjectClient,
         data_dir: str | None = None,
     ) -> None:
-        """
-        Initialize the company migration.
+        """Initialize the company migration.
 
         Args:
             jira_client: JiraClient instance.
             op_client: OpenProjectClient instance.
             data_dir: Path to data directory for storing mappings.
+
         """
         super().__init__(jira_client, op_client)
 
@@ -72,14 +70,14 @@ class CompanyMigration(BaseMigration):
         self.company_mapping = self._load_from_json(Mappings.COMPANY_MAPPING_FILE) or {}
 
     def extract_tempo_companies(self) -> dict:
-        """
-        Extract companies from Tempo API.
+        """Extract companies from Tempo API.
 
         Returns:
             Dictionary of Tempo companies.
 
         Raises:
             MigrationError: If companies cannot be extracted from Tempo
+
         """
         if data_handler.load_dict(self.tempo_companies_file):
             loaded_data = data_handler.load_dict(self.tempo_companies_file)
@@ -144,8 +142,7 @@ class CompanyMigration(BaseMigration):
         return self.tempo_companies
 
     def extract_openproject_projects(self, force: bool = False) -> list:
-        """
-        Extract projects from OpenProject.
+        """Extract projects from OpenProject.
 
         Args:
             force: If True, forces re-extraction even if cached data exists.
@@ -155,6 +152,7 @@ class CompanyMigration(BaseMigration):
 
         Raises:
             MigrationError: If projects cannot be extracted from OpenProject
+
         """
         self.logger.info("Extracting projects from OpenProject...")
 
@@ -169,19 +167,19 @@ class CompanyMigration(BaseMigration):
 
             return self.op_projects
         except Exception as e:
-            error_msg = f"Failed to get projects from OpenProject: {str(e)}"
+            error_msg = f"Failed to get projects from OpenProject: {e!s}"
             self.logger.error(error_msg)
             raise MigrationError(error_msg) from e
 
     def create_company_mapping(self) -> dict:
-        """
-        Create a mapping between Tempo companies and OpenProject top-level projects.
+        """Create a mapping between Tempo companies and OpenProject top-level projects.
 
         Returns:
             Dictionary mapping Tempo company IDs to OpenProject project IDs
 
         Raises:
             MigrationError: If required data is missing
+
         """
         self.logger.info("Creating company mapping...")
 
@@ -224,7 +222,7 @@ class CompanyMigration(BaseMigration):
             tempo_name = tempo_company.get("name", f"Unknown Company {tempo_id}")
             tempo_name_lower = tempo_name.lower()
 
-            op_project = op_projects_by_name.get(tempo_name_lower, None)
+            op_project = op_projects_by_name.get(tempo_name_lower)
 
             if op_project:
                 mapping[tempo_id] = {
@@ -260,14 +258,14 @@ class CompanyMigration(BaseMigration):
         return mapping
 
     def analyze_company_mapping(self) -> dict:
-        """
-        Analyze the company mapping to identify potential issues.
+        """Analyze the company mapping to identify potential issues.
 
         Returns:
             Dictionary with analysis results
 
         Raises:
             MigrationError: If company mapping does not exist
+
         """
         if not self.company_mapping:
             mapping_path = os.path.join(self.data_dir, Mappings.COMPANY_MAPPING_FILE)
@@ -323,8 +321,7 @@ class CompanyMigration(BaseMigration):
         return analysis
 
     def migrate_companies_bulk(self) -> dict:
-        """
-        Migrate companies from Tempo timesheet to OpenProject as top-level projects using bulk creation.
+        """Migrate companies from Tempo timesheet to OpenProject as top-level projects using bulk creation.
         This method uses a JSON-based approach similar to work package migration.
 
         Returns:
@@ -332,6 +329,7 @@ class CompanyMigration(BaseMigration):
 
         Raises:
             MigrationError: If migration fails
+
         """
         self.logger.info("Starting bulk company migration...")
 
@@ -417,7 +415,7 @@ class CompanyMigration(BaseMigration):
                     "description": description,
                     "status": company.get("status", "ACTIVE"),
                     "public": False,
-                }
+                },
             )
 
         if not companies_data:
@@ -650,62 +648,61 @@ class CompanyMigration(BaseMigration):
                                     "error": ", ".join(error.get("errors", [])),
                                     "error_type": error.get("error_type"),
                                 }
+                # If direct output doesn't work, try to get the result file
+                elif self.op_client.rails_client.transfer_file_from_container(
+                    result_file_container, result_file_local,
+                ):
+                    try:
+                        with open(result_file_local) as f:
+                            result_data = json.load(f)
+
+                            if result_data.get("status") == "success":
+                                created_companies = result_data.get("created", [])
+                                created_count = len(created_companies)
+                                errors = result_data.get("errors", [])
+
+                                # Update the mapping
+                                for company in created_companies:
+                                    tempo_id = company.get("tempo_id")
+                                    if tempo_id:
+                                        self.company_mapping[tempo_id] = {
+                                            "tempo_id": tempo_id,
+                                            "tempo_key": company.get("tempo_key"),
+                                            "tempo_name": company.get("tempo_name"),
+                                            "openproject_id": company.get("openproject_id"),
+                                            "openproject_identifier": company.get("openproject_identifier"),
+                                            "openproject_name": company.get("openproject_name"),
+                                            "matched_by": "created",
+                                        }
+                                        self._created_companies += 1
+
+                                # Handle errors
+                                for error in errors:
+                                    tempo_id = error.get("tempo_id")
+                                    if tempo_id:
+                                        self.company_mapping[tempo_id] = {
+                                            "tempo_id": tempo_id,
+                                            "tempo_key": error.get("tempo_key"),
+                                            "tempo_name": error.get("tempo_name"),
+                                            "openproject_id": None,
+                                            "openproject_identifier": error.get("identifier"),
+                                            "openproject_name": None,
+                                            "matched_by": "error",
+                                            "error": ", ".join(error.get("errors", [])),
+                                            "error_type": error.get("error_type"),
+                                        }
+                    except Exception as e:
+                        self.logger.error(f"Error processing result file: {e!s}")
                 else:
-                    # If direct output doesn't work, try to get the result file
-                    if self.op_client.rails_client.transfer_file_from_container(
-                        result_file_container, result_file_local
-                    ):
-                        try:
-                            with open(result_file_local) as f:
-                                result_data = json.load(f)
+                    # Last resort - try to parse the console output
+                    self.logger.warning("Could not get result file - parsing console output")
+                    if isinstance(output, str):
+                        created_matches = re.findall(r"Created project #(\d+): (.+?)$", output, re.MULTILINE)
+                        created_count = len(created_matches)
+                        self.logger.info(f"Found {created_count} created projects in console output")
 
-                                if result_data.get("status") == "success":
-                                    created_companies = result_data.get("created", [])
-                                    created_count = len(created_companies)
-                                    errors = result_data.get("errors", [])
-
-                                    # Update the mapping
-                                    for company in created_companies:
-                                        tempo_id = company.get("tempo_id")
-                                        if tempo_id:
-                                            self.company_mapping[tempo_id] = {
-                                                "tempo_id": tempo_id,
-                                                "tempo_key": company.get("tempo_key"),
-                                                "tempo_name": company.get("tempo_name"),
-                                                "openproject_id": company.get("openproject_id"),
-                                                "openproject_identifier": company.get("openproject_identifier"),
-                                                "openproject_name": company.get("openproject_name"),
-                                                "matched_by": "created",
-                                            }
-                                            self._created_companies += 1
-
-                                    # Handle errors
-                                    for error in errors:
-                                        tempo_id = error.get("tempo_id")
-                                        if tempo_id:
-                                            self.company_mapping[tempo_id] = {
-                                                "tempo_id": tempo_id,
-                                                "tempo_key": error.get("tempo_key"),
-                                                "tempo_name": error.get("tempo_name"),
-                                                "openproject_id": None,
-                                                "openproject_identifier": error.get("identifier"),
-                                                "openproject_name": None,
-                                                "matched_by": "error",
-                                                "error": ", ".join(error.get("errors", [])),
-                                                "error_type": error.get("error_type"),
-                                            }
-                        except Exception as e:
-                            self.logger.error(f"Error processing result file: {str(e)}")
-                    else:
-                        # Last resort - try to parse the console output
-                        self.logger.warning("Could not get result file - parsing console output")
-                        if isinstance(output, str):
-                            created_matches = re.findall(r"Created project #(\d+): (.+?)$", output, re.MULTILINE)
-                            created_count = len(created_matches)
-                            self.logger.info(f"Found {created_count} created projects in console output")
-
-                            # We can't reliably match these back to tempo IDs, so just log success
-                            self._created_companies += created_count
+                        # We can't reliably match these back to tempo IDs, so just log success
+                        self._created_companies += created_count
 
             self.logger.info(f"Created {created_count} company projects (errors: {len(errors)})")
 
@@ -718,17 +715,17 @@ class CompanyMigration(BaseMigration):
             return self.company_mapping
 
         except Exception as e:
-            error_msg = f"Failed to migrate companies: {str(e)}"
+            error_msg = f"Failed to migrate companies: {e!s}"
             self.logger.error(error_msg)
             raise MigrationError(error_msg) from e
 
     def migrate_customer_metadata(self) -> dict[str, Any]:
-        """
-        Migrate customer metadata (address, contact info, etc.) to OpenProject projects.
+        """Migrate customer metadata (address, contact info, etc.) to OpenProject projects.
         This enhances company projects with additional metadata from Tempo.
 
         Returns:
             Dict with results stats
+
         """
         self.logger.info("Starting migration of customer metadata...")
 
@@ -1048,26 +1045,22 @@ class CompanyMigration(BaseMigration):
         errors = []
 
         output = result.get("output", {})
-        if isinstance(output, dict) and output.get("status") == "success":
+        if (isinstance(output, dict) and output.get("status") == "success") or isinstance(output, dict):
             updated_companies = output.get("updated", [])
             errors = output.get("errors", [])
-        elif isinstance(output, dict):
-            updated_companies = output.get("updated", [])
-            errors = output.get("errors", [])
-        else:
-            # Try to get result file from container
-            if self.op_client.rails_client.transfer_file_from_container(result_file_container, result_file_local):
-                try:
-                    with open(result_file_local) as f:
-                        result_data = json.load(f)
-                        if result_data.get("status") == "success":
-                            updated_companies = result_data.get("updated", [])
-                            errors = result_data.get("errors", [])
-                except Exception as e:
-                    self.logger.error(f"Error reading result file: {str(e)}")
-                    results["failed"] = len(companies_to_update)
-                    results["errors"].append(str(e))
-                    return results
+        # Try to get result file from container
+        elif self.op_client.rails_client.transfer_file_from_container(result_file_container, result_file_local):
+            try:
+                with open(result_file_local) as f:
+                    result_data = json.load(f)
+                    if result_data.get("status") == "success":
+                        updated_companies = result_data.get("updated", [])
+                        errors = result_data.get("errors", [])
+            except Exception as e:
+                self.logger.error(f"Error reading result file: {e!s}")
+                results["failed"] = len(companies_to_update)
+                results["errors"].append(str(e))
+                return results
 
         # Update results
         results["updated"] = len(updated_companies)
@@ -1088,11 +1081,11 @@ class CompanyMigration(BaseMigration):
         return results
 
     def run(self) -> ComponentResult:
-        """
-        Run the company migration process.
+        """Run the company migration process.
 
         Returns:
             Dictionary with migration results
+
         """
         self.logger.info("Starting company migration", extra={"markup": True})
 
@@ -1125,12 +1118,12 @@ class CompanyMigration(BaseMigration):
             )
         except Exception as e:
             self.logger.error(
-                f"Error during company migration: {str(e)}",
+                f"Error during company migration: {e!s}",
                 extra={"markup": True},
             )
             return ComponentResult(
                 success=False,
-                errors=[f"Error during company migration: {str(e)}"],
+                errors=[f"Error during company migration: {e!s}"],
                 success_count=0,
                 failed_count=len(self.tempo_companies) if self.tempo_companies else 0,
                 total_count=len(self.tempo_companies) if self.tempo_companies else 0,

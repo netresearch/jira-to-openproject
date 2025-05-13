@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test Rails Console Connection
+"""Test Rails Console Connection
 
 This script tests the connection to the OpenProject Rails console.
 It's useful for verifying connectivity before running migrations
@@ -27,8 +26,7 @@ except ImportError:
 
 
 def test_rails_connection(session_name: str = "rails_console", debug: bool = False) -> bool:
-    """
-    Test connection to the Rails console.
+    """Test connection to the Rails console.
 
     Args:
         session_name: tmux session name containing Rails console (default: rails_console)
@@ -36,6 +34,7 @@ def test_rails_connection(session_name: str = "rails_console", debug: bool = Fal
 
     Returns:
         bool: True if connection was successful, False otherwise
+
     """
     print(f"Testing Rails console connection to tmux session: {session_name}")
 
@@ -77,8 +76,7 @@ def test_rails_connection(session_name: str = "rails_console", debug: bool = Fal
 
 
 def get_custom_fields(session_name: str = "rails_console", debug: bool = False) -> list[dict[str, Any]]:
-    """
-    Retrieve all custom fields from OpenProject via Rails console.
+    """Retrieve all custom fields from OpenProject via Rails console.
 
     Args:
         session_name: tmux session name containing Rails console (default: rails_console)
@@ -86,6 +84,7 @@ def get_custom_fields(session_name: str = "rails_console", debug: bool = False) 
 
     Returns:
         List of custom fields with their attributes
+
     """
     print(f"Retrieving custom fields from OpenProject via Rails console in tmux session: {session_name}")
 
@@ -130,17 +129,16 @@ def get_custom_fields(session_name: str = "rails_console", debug: bool = False) 
                 print(f"Successfully retrieved {len(fields)} custom fields")
                 # Explicitly convert to the expected return type
                 return [dict(field) for field in fields]
-            elif isinstance(output, list):
+            if isinstance(output, list):
                 # Output may already be parsed by the client
                 print(f"Successfully retrieved {len(output)} custom fields")
                 # Ensure each item is a dict[str, Any]
                 return [dict(item) for item in output]
-            else:
-                print("Could not parse custom fields output as JSON")
-                print(f"Raw output: {output}")
-                return []
+            print("Could not parse custom fields output as JSON")
+            print(f"Raw output: {output}")
+            return []
         except Exception as e:
-            print(f"Error parsing custom fields output: {str(e)}")
+            print(f"Error parsing custom fields output: {e!s}")
             if debug:
                 import traceback
 
@@ -157,11 +155,11 @@ def get_custom_fields(session_name: str = "rails_console", debug: bool = False) 
 
 
 def parse_args() -> argparse.Namespace:
-    """
-    Parse command line arguments.
+    """Parse command line arguments.
 
     Returns:
         Parsed command line arguments
+
     """
     parser = argparse.ArgumentParser(
         description="Test Rails console connection",
@@ -188,11 +186,11 @@ Example:
 
 
 def main() -> None:
-    """
-    Main entry point.
+    """Main entry point.
 
     Returns:
         None
+
     """
     # Load environment variables
     load_dotenv()

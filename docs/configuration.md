@@ -94,17 +94,17 @@ Environment variables provide a secure way to handle secrets and allow for easy 
 
 | Variable                      | Example Value                         | Description                                                     |
 | :---------------------------- | :------------------------------------ | :-------------------------------------------------------------- |
-| `J2O_JIRA_URL`                | `https://jira.example.com`            | URL of the source Jira instance.                                |
+| `J2O_JIRA_URL`                | `https://jira.local`                  | URL of the source Jira instance.                                |
 | `J2O_JIRA_USERNAME`           | `migration_user`                      | Username for Jira API authentication.                           |
 | `J2O_JIRA_API_TOKEN`          | `your_jira_api_token`                 | API token or password for Jira API authentication.              |
-| `J2O_OPENPROJECT_URL`         | `https://openproject.example.com`     | URL of the target OpenProject instance.                         |
+| `J2O_OPENPROJECT_URL`         | `https://openproject.local`           | URL of the target OpenProject instance.                         |
 | `J2O_OPENPROJECT_API_KEY`     | `your_openproject_api_key`            | API key for OpenProject API authentication.                     |
 | `J2O_LOG_LEVEL`               | `INFO`                                | Logging level (DEBUG, INFO, NOTICE, SUCCESS, WARNING, ERROR, CRITICAL) |
 | `J2O_BATCH_SIZE`              | `50`                                  | Default batch size for processing items (can be overridden in YAML). |
 | `J2O_RATE_LIMIT_REQUESTS`     | `100`                                 | Max API requests per period (can be overridden in YAML).         |
 | `J2O_RATE_LIMIT_PERIOD`       | `60`                                  | Rate limit period in seconds (can be overridden in YAML).       |
 | `J2O_SSL_VERIFY`              | `false`                               | Set to `false` to disable SSL verification (use with caution). |
-| `J2O_OPENPROJECT_SERVER`      | `op.server.example.com`               | Hostname/IP for SSH access to OpenProject server (for Rails). |
+| `J2O_OPENPROJECT_SERVER`      | `openproject.local`                   | Hostname/IP for SSH access to OpenProject server (for Rails). |
 | `J2O_OPENPROJECT_SSH_USER`    | `deployer`                            | SSH username for OpenProject server (for Rails).                |
 | `J2O_OPENPROJECT_SSH_KEY_PATH`| `/home/user/.ssh/id_rsa_op`           | Path to SSH private key for OpenProject server (for Rails).     |
 | `J2O_OPENPROJECT_CONTAINER`   | `openproject-web-1`                   | Name of the OpenProject Docker container (for Rails).           |

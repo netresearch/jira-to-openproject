@@ -1,5 +1,4 @@
-"""
-Tests for the work package migration component.
+"""Tests for the work package migration component.
 """
 
 import unittest
@@ -35,8 +34,8 @@ class TestWorkPackageMigration(unittest.TestCase):
                             "id": "10001",
                             "body": "This is a comment",
                             "author": {"name": "janedoe"},
-                        }
-                    ]
+                        },
+                    ],
                 },
                 "attachment": [{"id": "10001", "filename": "test.txt", "content": "test content"}],
             },
@@ -69,7 +68,7 @@ class TestWorkPackageMigration(unittest.TestCase):
                     "assignee": {"href": "/api/v3/users/1", "title": "John Doe"},
                     "project": {"href": "/api/v3/projects/1", "title": "Test Project"},
                 },
-            }
+            },
         ]
 
         # Mapping data
@@ -138,7 +137,7 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_load_mappings(
-        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock,
     ) -> None:
         """Test the _load_mappings method."""
         # Setup mocks
@@ -173,7 +172,7 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.migrations.work_package_migration.OpenProjectClient")
     @patch("src.utils.data_handler.load_dict")
     def test_prepare_work_package(
-        self, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock,
     ) -> None:
         """Test the prepare_work_package method."""
         # Setup mocks
@@ -220,7 +219,6 @@ class TestWorkPackageMigration(unittest.TestCase):
         class MockedWorkPackageMigration(WorkPackageMigration):
             def _load_mappings(self) -> None:
                 """Mock implementation to skip the actual loading."""
-                pass
 
         # Create instance
         migration = MockedWorkPackageMigration(
@@ -238,7 +236,7 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_analyze_work_package_mapping(
-        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock,
     ) -> None:
         """Test the analyze_work_package_mapping method."""
         # Setup mocks
@@ -269,8 +267,7 @@ class TestWorkPackageMigration(unittest.TestCase):
 
 
 def work_package_migration_test_steps() -> Any:
-    """
-    Testing steps for work package migration validation.
+    """Testing steps for work package migration validation.
 
     These steps should be executed in a real environment to validate
     the work package migration functionality:

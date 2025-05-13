@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-SSHClient
+"""SSHClient
 
 Handles SSH operations to remote servers, including command execution and file transfers.
 This is the foundation of the layered client architecture:
@@ -25,7 +24,6 @@ logger = config.logger
 class SSHConnectionError(ConnectionError):
     """Exception raised for SSH connection errors."""
 
-    pass
 
 
 class SSHCommandError(Exception):
@@ -51,8 +49,7 @@ class SSHFileTransferError(Exception):
 
 
 class SSHClient:
-    """
-    Client for SSH operations to remote servers.
+    """Client for SSH operations to remote servers.
     Provides the foundation for all remote operations in the client architecture.
 
     This client implements exception-based error handling:
@@ -73,8 +70,7 @@ class SSHClient:
         retry_delay: float = 1.0,
         auto_reconnect: bool = True,
     ) -> None:
-        """
-        Initialize the SSH client.
+        """Initialize the SSH client.
 
         Args:
             host: SSH host (hostname or IP)
@@ -85,6 +81,7 @@ class SSHClient:
             retry_count: Number of retries for operations
             retry_delay: Delay between retries in seconds
             auto_reconnect: Automatically reconnect if connection fails
+
         """
         self.host = host
         self.user = user
@@ -106,20 +103,20 @@ class SSHClient:
         logger.debug(f"SSHClient initialized for host {self.host}")
 
     def connect(self) -> bool:
-        """
-        Establish connection to the SSH host.
+        """Establish connection to the SSH host.
 
         Returns:
             True if connection successful, False otherwise
+
         """
         return self.test_connection()
 
     def get_ssh_base_command(self) -> list[str]:
-        """
-        Get the base SSH command with common options.
+        """Get the base SSH command with common options.
 
         Returns:
             List of command parts
+
         """
         cmd = ["ssh"]
 
@@ -139,11 +136,11 @@ class SSHClient:
         return cmd
 
     def get_scp_base_command(self) -> list[str]:
-        """
-        Get the base SCP command with common options.
+        """Get the base SCP command with common options.
 
         Returns:
             List of command parts
+
         """
         cmd = ["scp"]
 
@@ -157,44 +154,43 @@ class SSHClient:
         return cmd
 
     def test_connection(self) -> bool:
-        """
-        Test SSH connection to the remote host.
+        """Test SSH connection to the remote host.
 
         Returns:
             True if connection successful, False otherwise
+
         """
         try:
             cmd = self.get_ssh_base_command()
             cmd.extend(["-o", "BatchMode=yes", "echo", "Connection successful"])
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.connect_timeout)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.connect_timeout, check=False)
 
             self._connected = result.returncode == 0 and "Connection successful" in result.stdout
             return self._connected
 
         except subprocess.SubprocessError as e:
-            logger.error(f"SSH connection test failed: {str(e)}")
+            logger.error(f"SSH connection test failed: {e!s}")
             self._connected = False
             return False
         except Exception as e:
-            logger.error(f"Unexpected error testing SSH connection: {str(e)}")
+            logger.error(f"Unexpected error testing SSH connection: {e!s}")
             self._connected = False
             return False
 
     def is_connected(self) -> bool:
-        """
-        Check if the client is currently connected.
+        """Check if the client is currently connected.
 
         Returns:
             True if connected, False otherwise
+
         """
         return self._connected
 
     def execute_command(
-        self, command: str, timeout: int | None = None, check: bool = True, retry: bool = True
+        self, command: str, timeout: int | None = None, check: bool = True, retry: bool = True,
     ) -> tuple[str, str, int]:
-        """
-        Execute a command on the remote host.
+        """Execute a command on the remote host.
 
         Args:
             command: Command to execute
@@ -210,6 +206,7 @@ class SSHClient:
             SSHCommandError: If check=True and the command fails
             subprocess.TimeoutExpired: If the command times out
             Exception: For other unexpected errors
+
         """
         if timeout is None:
             timeout = self.operation_timeout
@@ -236,7 +233,7 @@ class SSHClient:
                 logger.debug(f"Executing SSH command: {' '.join(cmd)}")
 
                 result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=timeout, check=False  # We'll handle checking ourselves
+                    cmd, capture_output=True, text=True, timeout=timeout, check=False,  # We'll handle checking ourselves
                 )
 
                 # Update connection status based on command success
@@ -245,7 +242,7 @@ class SSHClient:
                 # If check=True and command failed, raise our custom error
                 if check and result.returncode != 0:
                     raise SSHCommandError(
-                        command=command, returncode=result.returncode, stdout=result.stdout, stderr=result.stderr
+                        command=command, returncode=result.returncode, stdout=result.stdout, stderr=result.stderr,
                     )
 
                 return result.stdout, result.stderr, result.returncode
@@ -262,14 +259,14 @@ class SSHClient:
                 # This shouldn't be reached since we set check=False above
                 logger.exception(f"SSH command failed with exit code {e.returncode}: {e.stderr}")
                 last_exception = SSHCommandError(
-                    command=command, returncode=e.returncode, stdout=e.stdout, stderr=e.stderr
+                    command=command, returncode=e.returncode, stdout=e.stdout, stderr=e.stderr,
                 )
                 if check and attempt < max_attempts - 1:
                     continue
                 raise last_exception
 
             except Exception as e:
-                logger.exception(f"Unexpected error executing SSH command: {str(e)}")
+                logger.exception(f"Unexpected error executing SSH command: {e!s}")
                 self._connected = False
                 last_exception = e
                 if attempt < max_attempts - 1:
@@ -281,8 +278,7 @@ class SSHClient:
         raise RuntimeError("Command failed after all retry attempts")  # Fallback in case of logic error
 
     def copy_file_to_remote(self, local_path: str, remote_path: str, retry: bool = True) -> None:
-        """
-        Copy a file from local to remote host using scp.
+        """Copy a file from local to remote host using scp.
 
         Args:
             local_path: Path to local file
@@ -294,6 +290,7 @@ class SSHClient:
             SSHConnectionError: If unable to connect to the remote host
             SSHFileTransferError: If the file transfer fails
             subprocess.TimeoutExpired: If the command times out
+
         """
         # Retry logic
         max_attempts = self.retry_count if retry else 1
@@ -336,13 +333,12 @@ class SSHClient:
                     logger.debug(f"File copied successfully: {local_path} -> {remote_path}")
                     self._connected = True
                     return
-                else:
-                    # This shouldn't be reached due to check=True above
-                    raise SSHFileTransferError(
-                        source=local_path,
-                        destination=f"{self.host}:{remote_path}",
-                        message=f"SCP failed with exit code {result.returncode}: {result.stderr}",
-                    )
+                # This shouldn't be reached due to check=True above
+                raise SSHFileTransferError(
+                    source=local_path,
+                    destination=f"{self.host}:{remote_path}",
+                    message=f"SCP failed with exit code {result.returncode}: {result.stderr}",
+                )
 
             except subprocess.CalledProcessError as e:
                 logger.error(f"SCP command failed: {e.stderr}")
@@ -367,10 +363,10 @@ class SSHClient:
                 raise
 
             except Exception as e:
-                logger.error(f"Unexpected error during file copy: {str(e)}")
+                logger.error(f"Unexpected error during file copy: {e!s}")
                 self._connected = False
                 last_exception = SSHFileTransferError(
-                    source=local_path, destination=f"{self.host}:{remote_path}", message=f"Unexpected error: {str(e)}"
+                    source=local_path, destination=f"{self.host}:{remote_path}", message=f"Unexpected error: {e!s}",
                 )
                 if attempt < max_attempts - 1:
                     continue
@@ -381,8 +377,7 @@ class SSHClient:
         raise RuntimeError("File copy failed after all retry attempts")  # Fallback in case of logic error
 
     def copy_file_from_remote(self, remote_path: str, local_path: str, retry: bool = True) -> str:
-        """
-        Copy a file from remote host to local using scp.
+        """Copy a file from remote host to local using scp.
 
         Args:
             remote_path: Path on remote host
@@ -397,6 +392,7 @@ class SSHClient:
             SSHConnectionError: If unable to connect to the remote host
             SSHFileTransferError: If the file transfer fails
             subprocess.TimeoutExpired: If the command times out
+
         """
         # Retry logic
         max_attempts = self.retry_count if retry else 1
@@ -405,7 +401,7 @@ class SSHClient:
         for attempt in range(max_attempts):
             if attempt > 0:
                 logger.debug(
-                    f"Retrying file download (attempt {attempt+1}/{max_attempts}): " f"{remote_path} -> {local_path}"
+                    f"Retrying file download (attempt {attempt+1}/{max_attempts}): {remote_path} -> {local_path}",
                 )
                 time.sleep(self.retry_delay * attempt)
 
@@ -471,10 +467,10 @@ class SSHClient:
                 raise
 
             except Exception as e:
-                logger.error(f"Unexpected error during file download: {str(e)}")
+                logger.error(f"Unexpected error during file download: {e!s}")
                 self._connected = False
                 last_exception = SSHFileTransferError(
-                    source=f"{self.host}:{remote_path}", destination=local_path, message=f"Unexpected error: {str(e)}"
+                    source=f"{self.host}:{remote_path}", destination=local_path, message=f"Unexpected error: {e!s}",
                 )
                 if attempt < max_attempts - 1:
                     continue
@@ -485,14 +481,14 @@ class SSHClient:
         raise RuntimeError("File download failed after all retry attempts")  # Fallback in case of logic error
 
     def check_remote_file_exists(self, remote_path: str) -> bool:
-        """
-        Check if a file exists on the remote host.
+        """Check if a file exists on the remote host.
 
         Args:
             remote_path: Path to check
 
         Returns:
             True if file exists, False otherwise
+
         """
         try:
             # Use single quotes around the command to prevent shell expansion
@@ -512,12 +508,11 @@ class SSHClient:
 
             return False
         except Exception as e:
-            logger.warning(f"Failed to check if remote file exists ({remote_path}): {str(e)}")
+            logger.warning(f"Failed to check if remote file exists ({remote_path}): {e!s}")
             return False
 
     def get_remote_file_size(self, remote_path: str) -> int | None:
-        """
-        Get the size of a file on the remote host.
+        """Get the size of a file on the remote host.
 
         Args:
             remote_path: Path on remote host
@@ -529,10 +524,11 @@ class SSHClient:
             SSHConnectionError: If unable to connect to the remote host
             SSHCommandError: If the command fails
             subprocess.TimeoutExpired: If the command times out
+
         """
         try:
             stdout, _, returncode = self.execute_command(
-                f"stat -c %s {remote_path} 2>/dev/null || echo 'NOT_EXISTS'", check=False
+                f"stat -c %s {remote_path} 2>/dev/null || echo 'NOT_EXISTS'", check=False,
             )
 
             if returncode == 0 and "NOT_EXISTS" not in stdout:
@@ -547,12 +543,11 @@ class SSHClient:
             raise
         except Exception as e:
             # For any other exceptions, log and return None
-            logger.error(f"Error getting remote file size: {str(e)}")
+            logger.error(f"Error getting remote file size: {e!s}")
             return None
 
     def with_retry(self, operation: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        """
-        Execute an operation with retry logic.
+        """Execute an operation with retry logic.
 
         Args:
             operation: Function to execute
@@ -564,6 +559,7 @@ class SSHClient:
 
         Raises:
             Exception: Any exception raised by the operation after all retries
+
         """
         max_attempts = self.retry_count
         last_exception = None
@@ -581,7 +577,7 @@ class SSHClient:
             try:
                 return operation(*args, **kwargs)
             except Exception as e:
-                logger.exception(f"Operation failed: {str(e)}")
+                logger.exception(f"Operation failed: {e!s}")
                 last_exception = e
                 if attempt == max_attempts - 1:
                     raise
@@ -591,8 +587,7 @@ class SSHClient:
         raise RuntimeError("Operation failed after all retry attempts")  # Fallback in case of logic error
 
     def close(self) -> None:
-        """
-        Close the SSH connection.
+        """Close the SSH connection.
         """
         self._connected = False
         logger.debug(f"SSH connection to {self.host} closed")

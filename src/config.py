@@ -1,5 +1,4 @@
-"""
-Configuration module for the Jira to OpenProject migration.
+"""Configuration module for the Jira to OpenProject migration.
 Provides a centralized configuration interface using ConfigLoader.
 """
 
@@ -83,8 +82,7 @@ def get_path(path_type: DirType) -> str:
 
 
 def ensure_subdir(parent_dir_type: DirType, subdir_name: str | None = None) -> str:
-    """
-    Ensure a subdirectory exists under one of the var directories.
+    """Ensure a subdirectory exists under one of the var directories.
 
     Args:
         parent_dir_type: Type of parent directory or path to the parent directory
@@ -92,6 +90,7 @@ def ensure_subdir(parent_dir_type: DirType, subdir_name: str | None = None) -> s
 
     Returns:
         Path to the created subdirectory
+
     """
     parent_dir = get_path(parent_dir_type)
 
@@ -100,11 +99,10 @@ def ensure_subdir(parent_dir_type: DirType, subdir_name: str | None = None) -> s
         os.makedirs(subdir_path, exist_ok=True)
         logger.debug(f"Created subdirectory: {subdir_path}")
         return subdir_path
-    else:
-        # Just ensure the parent directory exists
-        os.makedirs(parent_dir, exist_ok=True)
-        logger.debug(f"Created directory: {parent_dir}")
-        return parent_dir
+    # Just ensure the parent directory exists
+    os.makedirs(parent_dir, exist_ok=True)
+    logger.debug(f"Created directory: {parent_dir}")
+    return parent_dir
 
 
 # Validate required configuration
@@ -143,11 +141,11 @@ def validate_config() -> bool:
 
 
 def update_from_cli_args(args: Any) -> None:
-    """
-    Update migration configuration from CLI arguments.
+    """Update migration configuration from CLI arguments.
 
     Args:
         args: An object containing CLI arguments (typically from argparse)
+
     """
     if hasattr(args, "dry_run") and args.dry_run:
         migration_config["dry_run"] = True

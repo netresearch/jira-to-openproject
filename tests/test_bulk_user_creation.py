@@ -7,22 +7,22 @@ from src.migrations.user_migration import UserMigration
 
 
 @pytest.fixture
-def mock_ssh_client():
+def mock_ssh_client() -> MagicMock:
     return Mock()
 
 
 @pytest.fixture
-def mock_docker_client():
+def mock_docker_client() -> MagicMock:
     return Mock()
 
 
 @pytest.fixture
-def mock_rails_client():
+def mock_rails_client() -> MagicMock:
     return Mock()
 
 
 @pytest.fixture
-def op_client(mock_ssh_client, mock_docker_client, mock_rails_client):
+def op_client(mock_ssh_client: MagicMock, mock_docker_client: MagicMock, mock_rails_client: MagicMock) -> OpenProjectClient:
     client = OpenProjectClient(
         container_name="test-container",
         ssh_host="test-host",
@@ -35,12 +35,12 @@ def op_client(mock_ssh_client, mock_docker_client, mock_rails_client):
 
 
 @pytest.fixture
-def jira_client():
+def jira_client() -> MagicMock:
     return Mock()
 
 
 @pytest.fixture
-def user_migration(jira_client, op_client):
+def user_migration(jira_client: MagicMock, op_client: OpenProjectClient) -> UserMigration:
     # Create a user migration instance with mocked clients
     migration = UserMigration(
         jira_client=jira_client,
@@ -49,7 +49,7 @@ def user_migration(jira_client, op_client):
     return migration
 
 
-def test_create_users_in_bulk(op_client, mock_rails_client):
+def test_create_users_in_bulk(op_client: OpenProjectClient, mock_rails_client: MagicMock) -> None:
     """Test creating multiple users in bulk."""
     # Mock the rails_client._send_command_to_tmux method (used by execute_query)
     mock_script_output = """
@@ -93,7 +93,7 @@ def test_create_users_in_bulk(op_client, mock_rails_client):
     assert "user3@example.com" in result
 
 
-def test_user_migration_create_missing_users(user_migration, op_client, jira_client):
+def test_user_migration_create_missing_users(user_migration: UserMigration, op_client: OpenProjectClient, jira_client: MagicMock) -> None:
     """Test creating missing users."""
     # Mock get_users to return empty list (no existing users)
     op_client.get_users = Mock(return_value=[])
@@ -148,7 +148,7 @@ def test_user_migration_create_missing_users(user_migration, op_client, jira_cli
         ],
         "failed_users": []
     }
-    """
+    """,
     )
 
     # Call the method
@@ -163,7 +163,7 @@ def test_user_migration_create_missing_users(user_migration, op_client, jira_cli
     assert result["created_count"] == 2
 
 
-def test_user_migration_create_missing_users_no_unmatched(user_migration, op_client, jira_client):
+def test_user_migration_create_missing_users_no_unmatched(user_migration: UserMigration, op_client: OpenProjectClient, jira_client: MagicMock) -> None:
     """Test handling empty user list (no unmatched users)."""
     # Create test data with all users matched
     user_mapping = {
@@ -205,7 +205,7 @@ def test_user_migration_create_missing_users_no_unmatched(user_migration, op_cli
     user_migration.create_users_in_bulk.assert_not_called()
 
 
-def test_user_migration_create_missing_users_with_existing_email(user_migration, op_client, jira_client):
+def test_user_migration_create_missing_users_with_existing_email(user_migration: UserMigration, op_client: OpenProjectClient, jira_client: MagicMock) -> None:
     """Test handling mixed case where some users exist but with different emails."""
     # Mock jira_client to return test users
     jira_users = [
@@ -217,7 +217,7 @@ def test_user_migration_create_missing_users_with_existing_email(user_migration,
 
     # Mock op_client to return some existing users
     op_users = [
-        {"id": 101, "login": "op_user1", "email": "user1@example.com", "firstName": "OP User", "lastName": "One"}
+        {"id": 101, "login": "op_user1", "email": "user1@example.com", "firstName": "OP User", "lastName": "One"},
     ]
     op_client.get_users = Mock(return_value=op_users)
 
@@ -254,7 +254,7 @@ def test_user_migration_create_missing_users_with_existing_email(user_migration,
                 "openproject_email": None,
                 "matched_by": "none",
             },
-        }
+        },
     )
     user_migration.user_mapping = user_migration.create_user_mapping()
 
@@ -269,7 +269,7 @@ def test_user_migration_create_missing_users_with_existing_email(user_migration,
         ],
         "failed_users": []
     }
-    """
+    """,
     )
 
     # Call the method
@@ -287,7 +287,7 @@ def test_user_migration_create_missing_users_with_existing_email(user_migration,
     assert users_to_create[1]["login"] == "user3" or users_to_create[1]["login"] == "user2"
 
 
-def test_bulk_creation_error_handling(op_client):
+def test_bulk_creation_error_handling(op_client: OpenProjectClient) -> None:
     """Test handling of errors when creating users in bulk."""
     # Mock rails_client._send_command_to_tmux to fail instead of _transfer_and_execute_script
     op_client.rails_client._send_command_to_tmux = Mock(side_effect=Exception("Failed to execute script"))

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Simple Rails Command
+"""Simple Rails Command
 
 This script runs a simple command in the Rails console via tmux
 and captures the output to verify that the command execution
