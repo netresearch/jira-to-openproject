@@ -5,9 +5,9 @@ Test suite for the custom field migration component.
 
 import unittest
 from unittest.mock import Mock, patch
+
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-
 from src.migrations.custom_field_migration import CustomFieldMigration
 
 
@@ -171,7 +171,7 @@ class TestCustomFieldMigration(unittest.TestCase):
         ]
 
         # Case 1: When file exists and force=False - should read from file
-        with patch('src.config.migration_config', {'force': False}):
+        with patch("src.config.migration_config", {"force": False}):
             # Mock path.exists to always return True for this test
             self.mock_path_exists.return_value = True
 
@@ -187,7 +187,7 @@ class TestCustomFieldMigration(unittest.TestCase):
             self.assertEqual(fields[1]["name"], "Existing List Field")
 
         # Case 2: When force=True - should call the API even if file exists
-        with patch('src.config.migration_config', {'force': True}):
+        with patch("src.config.migration_config", {"force": True}):
             # File exists but should be ignored due to force=True
             self.mock_path_exists.return_value = True
 
@@ -203,7 +203,7 @@ class TestCustomFieldMigration(unittest.TestCase):
             self.assertEqual(fields[1]["name"], "Existing List Field")
 
         # Case 3: When file doesn't exist - should call the API
-        with patch('src.config.migration_config', {'force': False}):
+        with patch("src.config.migration_config", {"force": False}):
             # No file exists
             self.mock_path_exists.return_value = False
 
@@ -226,27 +226,21 @@ class TestCustomFieldMigration(unittest.TestCase):
             "name": "Text Field",
             "schema": {"type": "string", "custom": "textfield"},
         }
-        self.assertEqual(
-            self.migration.map_jira_field_to_openproject_format(text_field), "text"
-        )
+        self.assertEqual(self.migration.map_jira_field_to_openproject_format(text_field), "text")
 
         # Test select field mapping
         select_field = {
             "name": "Select Field",
             "schema": {"type": "option", "custom": "select"},
         }
-        self.assertEqual(
-            self.migration.map_jira_field_to_openproject_format(select_field), "list"
-        )
+        self.assertEqual(self.migration.map_jira_field_to_openproject_format(select_field), "list")
 
         # Test date field mapping
         date_field = {
             "name": "Date Field",
             "schema": {"type": "date", "custom": "datepicker"},
         }
-        self.assertEqual(
-            self.migration.map_jira_field_to_openproject_format(date_field), "date"
-        )
+        self.assertEqual(self.migration.map_jira_field_to_openproject_format(date_field), "date")
 
     def test_migrate_custom_fields(self) -> None:
         """Test migrating custom fields using the JSON-based approach."""
@@ -304,7 +298,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                     "created_count": 1,
                     "existing_count": 0,
                     "error_count": 0,
-                }
+                },
             }
         )
 
@@ -350,14 +344,10 @@ class TestCustomFieldMigration(unittest.TestCase):
         self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
 
         # Mock the execute method to return an error
-        self.mock_rails_client.execute_query = Mock(
-            return_value={"status": "error", "error": "Test error message"}
-        )
+        self.mock_rails_client.execute_query = Mock(return_value={"status": "error", "error": "Test error message"})
 
         # Mock error return for execute method
-        self.mock_rails_client.execute = Mock(
-            return_value={"status": "error", "error": "Test error message"}
-        )
+        self.mock_rails_client.execute = Mock(return_value={"status": "error", "error": "Test error message"})
 
         # Mock analyze_custom_field_mapping to return successful analysis
         with patch.object(
@@ -397,17 +387,11 @@ class TestCustomFieldMigration(unittest.TestCase):
 
             with patch("tempfile.NamedTemporaryFile", return_value=temp_file_mock):
                 # Mock the file transfer and execute methods
-                self.mock_rails_client.transfer_file_to_container = Mock(
-                    return_value=True
-                )
-                self.mock_rails_client.execute_query = Mock(
-                    return_value={"status": "success"}
-                )
+                self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
+                self.mock_rails_client.execute_query = Mock(return_value={"status": "success"})
 
                 # Mock successful return for execute method
-                self.mock_rails_client.execute = Mock(
-                    return_value={"status": "success"}
-                )
+                self.mock_rails_client.execute = Mock(return_value={"status": "success"})
 
                 # Create a version of migrate_custom_fields_via_json that doesn't need full setup
                 with patch.object(self.migration, "mapping", test_mapping):
@@ -429,10 +413,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                             # If this is the custom fields data (first arg is a list)
                             if isinstance(args[0], list):
                                 # Verify it's the correct structure
-                                self.assertTrue(
-                                    len(args[0]) > 0,
-                                    "Expected at least one field in the data"
-                                )
+                                self.assertTrue(len(args[0]) > 0, "Expected at least one field in the data")
 
                         # Verify that transfer_file_to_container was called at least once
                         self.mock_rails_client.transfer_file_to_container.assert_called_once()

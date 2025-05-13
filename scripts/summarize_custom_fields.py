@@ -50,11 +50,7 @@ def summarize_custom_fields(json_file: str) -> dict[str, Any]:
     # Collect the most common field names for examples
     common_field_examples = {}
     for format_type in field_formats:
-        examples = [
-            field["name"]
-            for field in custom_fields
-            if field["field_format"] == format_type
-        ][:3]
+        examples = [field["name"] for field in custom_fields if field["field_format"] == format_type][:3]
         common_field_examples[format_type] = examples
 
     # Create the summary
@@ -85,9 +81,7 @@ def print_summary(summary: dict[str, Any]) -> None:
     print(f"Fields available in all projects: {summary['all_project_fields']}\n")
 
     print("Field Formats:")
-    for format_type, count in sorted(
-        summary["field_formats"].items(), key=lambda x: x[1], reverse=True
-    ):
+    for format_type, count in sorted(summary["field_formats"].items(), key=lambda x: x[1], reverse=True):
         percentage = count / summary["total_fields"] * 100
         print(f"  {format_type}: {count} ({percentage:.1f}%)")
         if format_type in summary["field_examples"]:
@@ -96,9 +90,7 @@ def print_summary(summary: dict[str, Any]) -> None:
 
     if summary["field_types"]:
         print("\nField Types:")
-        for field_type, count in sorted(
-            summary["field_types"].items(), key=lambda x: x[1], reverse=True
-        ):
+        for field_type, count in sorted(summary["field_types"].items(), key=lambda x: x[1], reverse=True):
             percentage = count / summary["total_fields"] * 100
             print(f"  {field_type}: {count} ({percentage:.1f}%)")
 

@@ -4,9 +4,8 @@ Tests for the link type migration component.
 
 import json
 import unittest
-from unittest.mock import mock_open, patch, MagicMock
-
 from typing import Any
+from unittest.mock import MagicMock, mock_open, patch
 
 from src.migrations.link_type_migration import LinkTypeMigration
 
@@ -231,9 +230,7 @@ class TestLinkTypeMigration(unittest.TestCase):
 
         # Mock ProgressTracker to avoid terminal output issues
         mock_progress_tracker_instance = mock_progress_tracker.return_value
-        mock_progress_tracker_instance.__enter__.return_value = (
-            mock_progress_tracker_instance
-        )
+        mock_progress_tracker_instance.__enter__.return_value = mock_progress_tracker_instance
 
         # Create instance
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
@@ -363,7 +360,7 @@ class TestLinkTypeMigration(unittest.TestCase):
                     "matched_by": "none",
                     "status": "unmapped",
                     "create_custom_field": True,
-                }
+                },
             )
         ]
 
@@ -389,8 +386,7 @@ class TestLinkTypeMigration(unittest.TestCase):
 
         # 1. Check that the CustomFieldMigration was initialized correctly
         mock_custom_field_migration_class.assert_called_once_with(
-            jira_client=mock_jira_instance,
-            op_client=mock_op_instance
+            jira_client=mock_jira_instance, op_client=mock_op_instance
         )
 
         # 2. Check that migrate_custom_fields_via_json was called with correctly formatted data
@@ -478,7 +474,7 @@ class TestLinkTypeMigration(unittest.TestCase):
                     "matched_by": "none",
                     "status": "unmapped",
                     "create_custom_field": True,
-                }
+                },
             }
             migration.link_type_mapping = mapping
             return mapping
@@ -487,23 +483,27 @@ class TestLinkTypeMigration(unittest.TestCase):
         def mock_create_custom_fields(unmapped_link_types):
             # Update the mapping to simulate successful custom field creation
             for jira_id, mapping in unmapped_link_types:
-                migration.link_type_mapping[jira_id].update({
-                    "openproject_id": "custom-123",
-                    "openproject_name": f"Link: {mapping['jira_name']}",
-                    "matched_by": "custom_field",
-                    "status": "mapped",
-                    "custom_field_id": 123,
-                })
+                migration.link_type_mapping[jira_id].update(
+                    {
+                        "openproject_id": "custom-123",
+                        "openproject_name": f"Link: {mapping['jira_name']}",
+                        "matched_by": "custom_field",
+                        "status": "mapped",
+                        "custom_field_id": 123,
+                    }
+                )
             return {
                 "success": True,
                 "created_count": len(unmapped_link_types),
                 "error_count": 0,
-                "message": f"Created {len(unmapped_link_types)} custom fields for link types (0 errors)"
+                "message": f"Created {len(unmapped_link_types)} custom fields for link types (0 errors)",
             }
 
         # Patch the instance methods
-        with patch.object(migration, 'create_link_type_mapping', side_effect=mock_create_mapping), \
-             patch.object(migration, 'create_custom_fields_for_link_types', side_effect=mock_create_custom_fields):
+        with (
+            patch.object(migration, "create_link_type_mapping", side_effect=mock_create_mapping),
+            patch.object(migration, "create_custom_fields_for_link_types", side_effect=mock_create_custom_fields),
+        ):
 
             # Call the run method
             result = migration.run()

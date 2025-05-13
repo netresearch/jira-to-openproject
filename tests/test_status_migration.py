@@ -8,6 +8,7 @@ import json
 import os
 import unittest
 from unittest.mock import MagicMock, patch
+
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
@@ -104,7 +105,7 @@ class TestStatusMigration(unittest.TestCase):
         statuses = self.status_migration.extract_jira_statuses()
 
         # Verify that _get_json was called with 'status'
-        self.jira_client.jira._get_json.assert_called_once_with('status')
+        self.jira_client.jira._get_json.assert_called_once_with("status")
 
         # Verify that the correct data was returned
         self.assertEqual(statuses, self.sample_jira_statuses)
@@ -135,9 +136,7 @@ class TestStatusMigration(unittest.TestCase):
         self.assertEqual(len(categories), 3)
 
         # Verify that the data was saved to a file
-        categories_file = os.path.join(
-            self.test_data_dir, "jira_status_categories.json"
-        )
+        categories_file = os.path.join(self.test_data_dir, "jira_status_categories.json")
         self.assertTrue(os.path.exists(categories_file))
 
     def test_get_openproject_statuses(self) -> None:
@@ -183,9 +182,7 @@ class TestStatusMigration(unittest.TestCase):
             self.assertIn(status["id"], mapping)
 
         # Check specific mappings based on our sample data - updated to match the actual keys returned
-        self.assertEqual(
-            mapping["2"]["openproject_id"], 2
-        )  # "In Progress" -> "In Progress"
+        self.assertEqual(mapping["2"]["openproject_id"], 2)  # "In Progress" -> "In Progress"
 
         # Verify that the mapping was saved to a file
         mapping_file = os.path.join(self.test_data_dir, "status_mapping.json")
@@ -236,9 +233,7 @@ class TestStatusMigration(unittest.TestCase):
 
         # Verify that the result contains the expected mapping
         self.assertIn("4", result["mapping"])
-        self.assertEqual(
-            result["mapping"]["4"]["openproject_id"], "dry_run_4"
-        )  # In dry run mode, it uses this format
+        self.assertEqual(result["mapping"]["4"]["openproject_id"], "dry_run_4")  # In dry run mode, it uses this format
         self.assertEqual(result["mapping"]["4"]["openproject_name"], "Pending")
 
     def test_analyze_status_mapping(self) -> None:

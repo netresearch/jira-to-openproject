@@ -14,19 +14,19 @@ import json
 import os
 from typing import Any, TypeVar
 
-from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
+from src.models import ComponentResult
 
 # Get logger from config
 logger = config.logger
 
 # Define a type variable for ProgressTracker
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class StatusMigration(BaseMigration):
@@ -80,9 +80,7 @@ class StatusMigration(BaseMigration):
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
         self.jira_statuses = self._load_from_json("jira_statuses.json", [])
-        self.jira_status_categories = self._load_from_json(
-            "jira_status_categories.json", []
-        )
+        self.jira_status_categories = self._load_from_json("jira_status_categories.json", [])
         self.op_statuses = self._load_from_json("op_statuses.json", [])
 
         logger.info(f"Loaded {len(self.jira_statuses)} Jira statuses")
@@ -99,9 +97,7 @@ class StatusMigration(BaseMigration):
         statuses_file = os.path.join(self.data_dir, "jira_statuses.json")
 
         if os.path.exists(statuses_file) and not config.migration_config.get("force", False):
-            logger.info(
-                "Jira statuses data already exists, skipping extraction (use --force to override)"
-            )
+            logger.info("Jira statuses data already exists, skipping extraction (use --force to override)")
             with open(statuses_file) as f:
                 self.jira_statuses = json.load(f)
             return self.jira_statuses
@@ -115,7 +111,7 @@ class StatusMigration(BaseMigration):
                 return []
 
             # Use the REST API endpoint for status retrieval
-            response = self.jira_client.jira._get_json('status')
+            response = self.jira_client.jira._get_json("status")
             statuses = response if response else []
 
             if not statuses:
@@ -142,9 +138,7 @@ class StatusMigration(BaseMigration):
         categories_file = os.path.join(self.data_dir, "jira_status_categories.json")
 
         if os.path.exists(categories_file) and not config.migration_config.get("force", False):
-            logger.info(
-                "Jira status categories data already exists, skipping extraction (use --force to override)"
-            )
+            logger.info("Jira status categories data already exists, skipping extraction (use --force to override)")
             with open(categories_file) as f:
                 self.jira_status_categories = json.load(f)
             return self.jira_status_categories
@@ -177,9 +171,7 @@ class StatusMigration(BaseMigration):
         statuses_file = os.path.join(self.data_dir, "op_statuses.json")
 
         if os.path.exists(statuses_file) and not config.migration_config.get("force", False):
-            logger.info(
-                "OpenProject statuses data already exists, skipping extraction (use --force to override)"
-            )
+            logger.info("OpenProject statuses data already exists, skipping extraction (use --force to override)")
             with open(statuses_file) as f:
                 self.op_statuses = json.load(f)
             return self.op_statuses
@@ -242,9 +234,7 @@ class StatusMigration(BaseMigration):
             logger.error(f"Failed to get statuses from OpenProject: {str(e)}")
             return []
 
-    def create_statuses_bulk_via_rails(
-        self, statuses_to_create: list[dict[str, Any]]
-    ) -> dict[str, dict[str, Any]]:
+    def create_statuses_bulk_via_rails(self, statuses_to_create: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         """
         Create multiple statuses in OpenProject using a single Rails console command.
 
@@ -351,10 +341,7 @@ class StatusMigration(BaseMigration):
         try:
             # Execute the script with the statuses data
             logger.debug("Executing bulk status creation via Rails with data")
-            result = self.op_client.execute_script_with_data(
-                script_content=ruby_script,
-                data=statuses_to_create
-            )
+            result = self.op_client.execute_script_with_data(script_content=ruby_script, data=statuses_to_create)
 
             if result.get("status") == "success" and "data" in result:
                 created_statuses = result["data"]
@@ -395,9 +382,7 @@ class StatusMigration(BaseMigration):
         mapping_file = os.path.join(self.data_dir, "status_mapping.json")
 
         if os.path.exists(mapping_file) and not config.migration_config.get("force", False):
-            logger.info(
-                "Status mapping already exists, loading from file (use --force to recreate)"
-            )
+            logger.info("Status mapping already exists, loading from file (use --force to recreate)")
             with open(mapping_file) as f:
                 self.status_mapping = json.load(f)
             return self.status_mapping
@@ -577,9 +562,7 @@ class StatusMigration(BaseMigration):
                 # Determine a suitable color (optional)
                 color = None
                 if "statusCategory" in jira_status:
-                    category_color = jira_status.get("statusCategory", {}).get(
-                        "colorName", ""
-                    )
+                    category_color = jira_status.get("statusCategory", {}).get("colorName", "")
                     if category_color:
                         # Map Jira category colors to hex codes
                         color_mapping = {
@@ -592,13 +575,15 @@ class StatusMigration(BaseMigration):
                         color = color_mapping.get(category_color.lower())
 
                 # Add to list for bulk creation
-                statuses_to_create.append({
-                    "jira_id": jira_id,
-                    "name": name,
-                    "is_closed": is_closed,
-                    "is_default": False,  # Default to False for imported statuses
-                    "color": color,
-                })
+                statuses_to_create.append(
+                    {
+                        "jira_id": jira_id,
+                        "name": name,
+                        "is_closed": is_closed,
+                        "is_default": False,  # Default to False for imported statuses
+                        "color": color,
+                    }
+                )
 
         # Create statuses in bulk if there are any to create
         if statuses_to_create:
@@ -622,8 +607,7 @@ class StatusMigration(BaseMigration):
                         created_count += 1
                 else:
                     logger.error(
-                        f"Failed to create status for Jira ID {jira_id}: "
-                        f"{result.get('error', 'Unknown error')}"
+                        f"Failed to create status for Jira ID {jira_id}: " f"{result.get('error', 'Unknown error')}"
                     )
                     error_count += 1
 
@@ -677,11 +661,7 @@ class StatusMigration(BaseMigration):
 
         # Count statuses
         total_statuses = len(self.status_mapping)
-        mapped_statuses = sum(
-            1
-            for s in self.status_mapping.values()
-            if s.get("openproject_id") is not None
-        )
+        mapped_statuses = sum(1 for s in self.status_mapping.values() if s.get("openproject_id") is not None)
         unmapped_statuses = total_statuses - mapped_statuses
 
         # List unmapped statuses
@@ -744,9 +724,7 @@ class StatusMigration(BaseMigration):
                 logger.info("[DRY RUN] Simulating status migration success")
 
                 # Create simulated mapping for all statuses
-                op_statuses_by_name = {
-                    s.get("name", "").lower(): s for s in self.op_statuses
-                }
+                op_statuses_by_name = {s.get("name", "").lower(): s for s in self.op_statuses}
                 for jira_status in self.jira_statuses:
                     jira_id: str = jira_status.get("id", "")
                     name: str = jira_status.get("name", "")
@@ -797,9 +775,7 @@ class StatusMigration(BaseMigration):
 
                 return ComponentResult(
                     success=True if "success" == migration_result.get("status", "success") else False,
-                    message=migration_result.get(
-                        "message", "Status migration completed"
-                    ),
+                    message=migration_result.get("message", "Status migration completed"),
                     success_count=migration_result.get("created_count", 0)
                     + migration_result.get("already_exists_count", 0),
                     failed_count=migration_result.get("error_count", 0),

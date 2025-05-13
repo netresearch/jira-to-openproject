@@ -15,10 +15,10 @@ import tempfile
 from pathlib import Path
 
 from src import config
-from src.clients.ssh_client import SSHClient
 from src.clients.docker_client import DockerClient
-from src.clients.rails_console_client import RailsConsoleClient
 from src.clients.openproject_client import OpenProjectClient
+from src.clients.rails_console_client import RailsConsoleClient
+from src.clients.ssh_client import SSHClient
 
 
 def main():
@@ -32,34 +32,29 @@ def main():
 
     # Initialize clients
     ssh_client = SSHClient(
-        host=op_config.get('server'),
-        user=op_config.get('user'),
-        key_file=op_config.get('key_file'),
+        host=op_config.get("server"),
+        user=op_config.get("user"),
+        key_file=op_config.get("key_file"),
         connect_timeout=10,
-        operation_timeout=30
+        operation_timeout=30,
     )
 
-    docker_client = DockerClient(
-        container_name=op_config.get('container'),
-        ssh_client=ssh_client,
-        command_timeout=30
-    )
+    docker_client = DockerClient(container_name=op_config.get("container"), ssh_client=ssh_client, command_timeout=30)
 
     rails_client = RailsConsoleClient(
-        tmux_session_name=op_config.get('tmux_session_name', 'rails_console'),
-        command_timeout=30
+        tmux_session_name=op_config.get("tmux_session_name", "rails_console"), command_timeout=30
     )
 
     op_client = OpenProjectClient(
-        container_name=op_config.get('container'),
-        ssh_host=op_config.get('server'),
-        ssh_user=op_config.get('user'),
-        ssh_key_file=op_config.get('key_file'),
-        tmux_session_name=op_config.get('tmux_session_name', 'rails_console'),
+        container_name=op_config.get("container"),
+        ssh_host=op_config.get("server"),
+        ssh_user=op_config.get("user"),
+        ssh_key_file=op_config.get("key_file"),
+        tmux_session_name=op_config.get("tmux_session_name", "rails_console"),
         command_timeout=30,
         ssh_client=ssh_client,
         docker_client=docker_client,
-        rails_client=rails_client
+        rails_client=rails_client,
     )
 
     # Create a test script

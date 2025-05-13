@@ -12,8 +12,8 @@ Part of the layered client architecture where:
 """
 
 import os
-import time
 import random
+import time
 
 from src import config
 from src.clients.ssh_client import SSHClient
@@ -358,8 +358,7 @@ class DockerClient:
             # Step 3: Set proper permissions as root to ensure Rails can read it
             logger.debug(f"Setting permissions on file in container: {container_path}")
             stdout, stderr, rc = self.execute_command(
-                f"chmod 644 {container_path}",
-                user="root"  # Execute as root user
+                f"chmod 644 {container_path}", user="root"  # Execute as root user
             )
 
             if rc != 0:

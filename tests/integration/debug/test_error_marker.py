@@ -4,6 +4,7 @@ Test script to verify Rails console error marker handling
 """
 
 import sys
+
 import pytest
 
 from src.clients.rails_console_client import RailsConsoleClient

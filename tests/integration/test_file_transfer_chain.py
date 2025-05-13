@@ -12,17 +12,17 @@ Usage:
     python -m tests.integration.test_file_transfer_chain
 """
 
-import time
 import random
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
-from src.clients.ssh_client import SSHClient
-from src.clients.docker_client import DockerClient
-from src.clients.rails_console_client import RailsConsoleClient
-from src.clients.openproject_client import OpenProjectClient
 from src import config
+from src.clients.docker_client import DockerClient
+from src.clients.openproject_client import OpenProjectClient
+from src.clients.rails_console_client import RailsConsoleClient
+from src.clients.ssh_client import SSHClient
 
 
 class FileTransferChainTest(unittest.TestCase):
@@ -60,46 +60,45 @@ class FileTransferChainTest(unittest.TestCase):
         # 1. SSH Client
         print("Initializing SSH client...")
         self.ssh_client = SSHClient(
-            host=self.op_config.get('server'),
-            user=self.op_config.get('user'),
-            key_file=self.op_config.get('key_file'),
+            host=self.op_config.get("server"),
+            user=self.op_config.get("user"),
+            key_file=self.op_config.get("key_file"),
             connect_timeout=10,
             operation_timeout=30,
             retry_count=2,
-            retry_delay=1.0
+            retry_delay=1.0,
         )
 
         # 2. Docker Client
         print("Initializing Docker client...")
         self.docker_client = DockerClient(
-            container_name=self.op_config.get('container'),
+            container_name=self.op_config.get("container"),
             ssh_client=self.ssh_client,
             command_timeout=30,
             retry_count=2,
-            retry_delay=1.0
+            retry_delay=1.0,
         )
 
         # 3. Rails Console Client
         print("Initializing Rails Console client...")
         self.rails_client = RailsConsoleClient(
-            tmux_session_name=self.op_config.get('tmux_session_name', 'rails_console'),
-            command_timeout=30
+            tmux_session_name=self.op_config.get("tmux_session_name", "rails_console"), command_timeout=30
         )
 
         # 4. OpenProject Client
         print("Initializing OpenProject client...")
         self.op_client = OpenProjectClient(
-            container_name=self.op_config.get('container'),
-            ssh_host=self.op_config.get('server'),
-            ssh_user=self.op_config.get('user'),
-            ssh_key_file=self.op_config.get('key_file'),
-            tmux_session_name=self.op_config.get('tmux_session_name', 'rails_console'),
+            container_name=self.op_config.get("container"),
+            ssh_host=self.op_config.get("server"),
+            ssh_user=self.op_config.get("user"),
+            ssh_key_file=self.op_config.get("key_file"),
+            tmux_session_name=self.op_config.get("tmux_session_name", "rails_console"),
             command_timeout=30,
             retry_count=2,
             retry_delay=1.0,
             ssh_client=self.ssh_client,
             docker_client=self.docker_client,
-            rails_client=self.rails_client
+            rails_client=self.rails_client,
         )
         print("All clients initialized.")
 
@@ -134,9 +133,9 @@ class FileTransferChainTest(unittest.TestCase):
         print("\n=== Cleanup ===")
 
         # Clean up local files
-        if hasattr(self, 'temp_dir') and self.temp_dir.exists():
+        if hasattr(self, "temp_dir") and self.temp_dir.exists():
             try:
-                for file in self.temp_dir.glob('*'):
+                for file in self.temp_dir.glob("*"):
                     file.unlink()
                 self.temp_dir.rmdir()
                 print(f"Removed local directory: {self.temp_dir}")
@@ -207,7 +206,7 @@ class FileTransferChainTest(unittest.TestCase):
         test_content = f"Test content generated at {time.ctime()}"
         local_file = self.temp_dir / f"test_file_{random.randint(1000, 9999)}.txt"
 
-        with open(local_file, 'w') as f:
+        with open(local_file, "w") as f:
             f.write(test_content)
 
         print(f"Created local file: {local_file} with content: {test_content}")
@@ -289,7 +288,7 @@ class FileTransferChainTest(unittest.TestCase):
 
         # Save script to local file
         local_script = self.temp_dir / f"test_script_{random.randint(1000, 9999)}.rb"
-        with open(local_script, 'w') as f:
+        with open(local_script, "w") as f:
             f.write(ruby_script)
 
         print(f"Created local Ruby script: {local_script}")
@@ -300,7 +299,7 @@ class FileTransferChainTest(unittest.TestCase):
 
         # Copy the script to a temp file with the desired filename
         temp_script = self.temp_dir / filename
-        with open(local_script, 'rb') as src, open(temp_script, 'wb') as dst:
+        with open(local_script, "rb") as src, open(temp_script, "wb") as dst:
             dst.write(src.read())
 
         try:
@@ -319,9 +318,7 @@ class FileTransferChainTest(unittest.TestCase):
 
             # Look for expected values in the output
             self.assertIn(
-                "message: \"Script executed successfully\"",
-                result,
-                "Script execution didn't return expected message"
+                'message: "Script executed successfully"', result, "Script execution didn't return expected message"
             )
             self.assertIn("test_value: 42", result, "Script execution didn't return expected test value")
 
@@ -364,7 +361,7 @@ class FileTransferChainTest(unittest.TestCase):
             self.assertIsNotNone(result, "Query returned None")
             # Check for expected text strings in the result directly
             self.assertIn('test: "success"', result, "Query result missing 'test' key")
-            self.assertIn('value: 42', result, "Query did not return expected numeric value")
+            self.assertIn("value: 42", result, "Query did not return expected numeric value")
 
         except Exception as e:
             self.fail(f"OpenProject client query execution failed: {str(e)}")
@@ -391,7 +388,7 @@ class FileTransferChainTest(unittest.TestCase):
 
         # 2. Save script to a local file
         local_script = self.temp_dir / f"chain_test_{random.randint(1000, 9999)}.rb"
-        with open(local_script, 'w') as f:
+        with open(local_script, "w") as f:
             f.write(ruby_script)
         print(f"Created local script: {local_script}")
 

@@ -20,10 +20,10 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 # Import after path is set
 from src import config
-from src.clients.ssh_client import SSHClient
 from src.clients.docker_client import DockerClient
-from src.clients.rails_console_client import RailsConsoleClient
 from src.clients.openproject_client import OpenProjectClient
+from src.clients.rails_console_client import RailsConsoleClient
+from src.clients.ssh_client import SSHClient
 
 
 def demo_each_client_independently():
@@ -43,12 +43,7 @@ def demo_each_client_independently():
 
     # 1. SSHClient (Foundation Layer)
     print("\n--- SSHClient Demo ---")
-    ssh_client = SSHClient(
-        host=ssh_host,
-        user=ssh_user,
-        key_file=ssh_key_file,
-        retry_count=3
-    )
+    ssh_client = SSHClient(host=ssh_host, user=ssh_user, key_file=ssh_key_file, retry_count=3)
 
     # Execute a simple command
     result = ssh_client.execute_command("echo 'Hello from SSH Client'")
@@ -61,10 +56,7 @@ def demo_each_client_independently():
     # 2. DockerClient (uses SSHClient)
     print("\n--- DockerClient Demo ---")
     # Create Docker client using the SSHClient we created above (dependency injection)
-    docker_client = DockerClient(
-        container_name=container_name,
-        ssh_client=ssh_client  # Inject the SSHClient
-    )
+    docker_client = DockerClient(container_name=container_name, ssh_client=ssh_client)  # Inject the SSHClient
 
     # Execute a command in the container
     result = docker_client.execute_command("echo 'Hello from Docker Client'")
@@ -76,10 +68,7 @@ def demo_each_client_independently():
 
     # 3. RailsConsoleClient (uses tmux)
     print("\n--- RailsConsoleClient Demo ---")
-    rails_client = RailsConsoleClient(
-        tmux_session_name=tmux_session,
-        command_timeout=30
-    )
+    rails_client = RailsConsoleClient(tmux_session_name=tmux_session, command_timeout=30)
 
     # Execute a simple Ruby command
     result = rails_client.execute("puts 'Hello from Rails Console'; 'SUCCESS'")
@@ -113,7 +102,8 @@ def demo_orchestrated_workflow():
     print(f"Project count (using count_records): {project_count}")
 
     # Execute a more complex query
-    result = client.execute_query("""
+    result = client.execute_query(
+        """
     # Get statistics about work packages
     stats = {
       total: WorkPackage.count,
@@ -121,7 +111,8 @@ def demo_orchestrated_workflow():
       closed: WorkPackage.where(status: Status.where(is_closed: true)).count
     }
     stats  # Return the statistics
-    """)
+    """
+    )
 
     if result.get("status") == "success":
         print(f"Work Package Statistics: {result.get('output')}")
@@ -148,32 +139,19 @@ def demo_file_transfer():
     container_name = config.openproject_config.get("container")
 
     # 1. Create the SSHClient (Foundation Layer)
-    ssh_client = SSHClient(
-        host=ssh_host,
-        user=ssh_user,
-        key_file=ssh_key_file
-    )
+    ssh_client = SSHClient(host=ssh_host, user=ssh_user, key_file=ssh_key_file)
 
     # 2. Create DockerClient with injected SSHClient
-    docker_client = DockerClient(
-        container_name=container_name,
-        ssh_client=ssh_client
-    )
+    docker_client = DockerClient(container_name=container_name, ssh_client=ssh_client)
 
     # 3. Transfer to remote host via SSHClient
     print("Transferring file to remote host...")
-    result = ssh_client.copy_file_to_remote(
-        "/tmp/test_transfer.txt",
-        "/tmp/test_transfer.txt"
-    )
+    result = ssh_client.copy_file_to_remote("/tmp/test_transfer.txt", "/tmp/test_transfer.txt")
     print(f"SSH transfer result: {result.get('status')}")
 
     # 4. Transfer from remote host to container via DockerClient
     print("Transferring file to container...")
-    result = docker_client.copy_file_to_container(
-        "/tmp/test_transfer.txt",
-        "/tmp/test_transfer.txt"
-    )
+    result = docker_client.copy_file_to_container("/tmp/test_transfer.txt", "/tmp/test_transfer.txt")
     print(f"Docker transfer result: {result.get('status')}")
 
     # 5. Verify file in container

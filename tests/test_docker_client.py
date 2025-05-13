@@ -8,7 +8,7 @@ This module contains test cases for validating Docker container interactions.
 import os
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 from src.clients.docker_client import DockerClient
 
@@ -22,19 +22,19 @@ class TestDockerClient(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
 
         # Create patchers
-        self.ssh_client_patcher = patch('src.clients.docker_client.SSHClient')
+        self.ssh_client_patcher = patch("src.clients.docker_client.SSHClient")
         self.mock_ssh_client_class = self.ssh_client_patcher.start()
         self.mock_ssh_client = MagicMock()
         self.mock_ssh_client_class.return_value = self.mock_ssh_client
 
-        self.logger_patcher = patch('src.clients.docker_client.logger')
+        self.logger_patcher = patch("src.clients.docker_client.logger")
         self.mock_logger = self.logger_patcher.start()
 
-        self.os_patcher = patch('src.clients.docker_client.os')
+        self.os_patcher = patch("src.clients.docker_client.os")
         self.mock_os = self.os_patcher.start()
 
         # File manager mock
-        self.file_manager_patcher = patch('src.clients.docker_client.FileManager')
+        self.file_manager_patcher = patch("src.clients.docker_client.FileManager")
         self.mock_file_manager_class = self.file_manager_patcher.start()
         self.mock_file_manager = MagicMock()
         self.mock_file_manager.generate_unique_id.return_value = "test_unique_id"
@@ -50,10 +50,7 @@ class TestDockerClient(unittest.TestCase):
         self.mock_os.path.getsize.return_value = 1024
 
         # Initialize DockerClient after all mocks are set up
-        self.docker_client = DockerClient(
-            container_name="test_container",
-            ssh_client=self.mock_ssh_client
-        )
+        self.docker_client = DockerClient(container_name="test_container", ssh_client=self.mock_ssh_client)
 
     def tearDown(self) -> None:
         """Clean up after each test."""
@@ -66,6 +63,7 @@ class TestDockerClient(unittest.TestCase):
         # Clean up temp directory
         if os.path.exists(self.temp_dir):
             import shutil
+
             shutil.rmtree(self.temp_dir)
 
     def test_initialization(self) -> None:
@@ -86,8 +84,7 @@ class TestDockerClient(unittest.TestCase):
         self.assertTrue(self.mock_logger.debug.called)
         # Check that the initialization message was logged
         self.assertIn(
-            call('DockerClient initialized for container test_container'),
-            self.mock_logger.debug.call_args_list
+            call("DockerClient initialized for container test_container"), self.mock_logger.debug.call_args_list
         )
 
     def test_check_container_exists_success(self) -> None:
@@ -119,7 +116,7 @@ class TestDockerClient(unittest.TestCase):
         # but success for all containers (running + stopped)
         self.mock_ssh_client.execute_command.side_effect = [
             ("", "", 0),  # No running container
-            ("test_container\n", "", 0)  # Container exists but not running
+            ("test_container\n", "", 0),  # Container exists but not running
         ]
 
         # Call the method
@@ -147,7 +144,7 @@ class TestDockerClient(unittest.TestCase):
         # Configure mock to return empty for both running and all containers
         self.mock_ssh_client.execute_command.side_effect = [
             ("", "", 0),  # No running container
-            ("", "", 0)   # No container at all
+            ("", "", 0),  # No container at all
         ]
 
         # Call the method
@@ -219,10 +216,7 @@ class TestDockerClient(unittest.TestCase):
 
         # Call the method with options
         stdout, stderr, returncode = self.docker_client.execute_command(
-            "ls -la",
-            user="root",
-            workdir="/app",
-            env={"DEBUG": "true"}
+            "ls -la", user="root", workdir="/app", env={"DEBUG": "true"}
         )
 
         # Verify result
@@ -250,7 +244,7 @@ class TestDockerClient(unittest.TestCase):
         # First call sets the docker cp return value, second call sets the file exists check return value
         self.mock_ssh_client.execute_command.side_effect = [
             ("", "", 0),  # docker cp succeeds
-            ("EXISTS", "", 0)  # file exists check succeeds
+            ("EXISTS", "", 0),  # file exists check succeeds
         ]
 
         # Call the method - should not raise an exception
@@ -270,7 +264,7 @@ class TestDockerClient(unittest.TestCase):
         # For this test, we need to modify Docker.copy_file_to_container to better handle our specific test case
 
         # Configure mock to make the check_file_exists_in_container check fail
-        with patch.object(self.docker_client, 'check_file_exists_in_container', return_value=False):
+        with patch.object(self.docker_client, "check_file_exists_in_container", return_value=False):
             # Configure ssh_client.execute_command to succeed with docker cp
             self.mock_ssh_client.execute_command.return_value = ("", "", 0)
 
@@ -295,7 +289,7 @@ class TestDockerClient(unittest.TestCase):
         self.mock_os.path.getsize.return_value = 1024
 
         # Execute
-        result = self.docker_client.copy_file_from_container('/container/path', '/local/path')
+        result = self.docker_client.copy_file_from_container("/container/path", "/local/path")
 
         # Assert
         self.assertEqual(result, "/local/path")  # Should return the path
@@ -305,10 +299,10 @@ class TestDockerClient(unittest.TestCase):
     def test_copy_file_from_container_not_found(self):
         """Test copying a file that doesn't exist in the container."""
         # Need to patch the method to directly use our implementation
-        with patch.object(self.docker_client, 'check_file_exists_in_container', return_value=False):
+        with patch.object(self.docker_client, "check_file_exists_in_container", return_value=False):
             # Call the method - should raise FileNotFoundError
             with self.assertRaises(FileNotFoundError):
-                self.docker_client.copy_file_from_container('/container/path', '/local/path')
+                self.docker_client.copy_file_from_container("/container/path", "/local/path")
 
     def test_check_file_exists_in_container(self) -> None:
         """Test checking if a file exists in the container."""

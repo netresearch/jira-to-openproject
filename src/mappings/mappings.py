@@ -49,13 +49,9 @@ class Mappings:
 
         # Check essential mappings
         if not self.project_mapping:
-            logger.warning(
-                f"Project mapping ({self.PROJECT_MAPPING_FILE}) is missing or empty!"
-            )
+            logger.warning(f"Project mapping ({self.PROJECT_MAPPING_FILE}) is missing or empty!")
         if not self.issue_type_mapping:
-            logger.warning(
-                f"Issue type mapping ({self.ISSUE_TYPE_MAPPING_FILE}) is missing or empty!"
-            )
+            logger.warning(f"Issue type mapping ({self.ISSUE_TYPE_MAPPING_FILE}) is missing or empty!")
         # Add checks for other critical mappings as needed
 
     def __setitem__(self, key: str, value: Any) -> None:
@@ -93,9 +89,7 @@ class Mappings:
         if mapping is None:
             logger.warning(f"Mapping file not found or invalid: {filename}")
             return {}
-        logger.notice(
-            f"Loaded mapping '{filename}' with {len(mapping)} entries."
-        )
+        logger.notice(f"Loaded mapping '{filename}' with {len(mapping)} entries.")
         return mapping
 
     def get_op_project_id(self, jira_project_key: str) -> int | None:
@@ -103,9 +97,7 @@ class Mappings:
         entry = self.project_mapping.get(jira_project_key)
         if entry and entry.get("openproject_id"):
             return entry["openproject_id"]
-        logger.debug(
-            f"No OpenProject ID found in mapping for Jira project key: {jira_project_key}"
-        )
+        logger.debug(f"No OpenProject ID found in mapping for Jira project key: {jira_project_key}")
         return None
 
     def get_op_user_id(self, jira_user_id: str) -> int | None:
@@ -115,9 +107,7 @@ class Mappings:
         if entry and entry.get("openproject_id"):
             return entry["openproject_id"]
         # Add fallback logic if key format varies
-        logger.debug(
-            f"No OpenProject ID found in mapping for Jira user ID: {jira_user_id}"
-        )
+        logger.debug(f"No OpenProject ID found in mapping for Jira user ID: {jira_user_id}")
         return None
 
     def get_op_type_id(self, jira_issue_type_name: str) -> int | None:
@@ -125,9 +115,7 @@ class Mappings:
         entry = self.issue_type_mapping.get(jira_issue_type_name)
         if entry and entry.get("openproject_id"):
             return entry["openproject_id"]
-        logger.debug(
-            f"No OpenProject ID found in mapping for Jira issue type name: {jira_issue_type_name}"
-        )
+        logger.debug(f"No OpenProject ID found in mapping for Jira issue type name: {jira_issue_type_name}")
         return None
 
     def get_op_status_id(self, jira_status_name: str) -> int | None:
@@ -135,9 +123,7 @@ class Mappings:
         entry = self.status_mapping.get(jira_status_name)
         if entry and entry.get("openproject_id"):
             return entry["openproject_id"]
-        logger.debug(
-            f"No OpenProject ID found in mapping for Jira status name: {jira_status_name}"
-        )
+        logger.debug(f"No OpenProject ID found in mapping for Jira status name: {jira_status_name}")
         return None
 
     def has_mapping(self, mapping_name: str) -> bool:

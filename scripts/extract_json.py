@@ -74,9 +74,7 @@ def extract_json(input_file: str, output_file: str) -> bool:
             # Print a summary of the first few fields
             print("\nCustom Fields:")
             for field in data[:5]:  # Show first 5 fields
-                print(
-                    f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
-                )
+                print(f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})")
             if len(data) > 5:
                 print(f"... and {len(data) - 5} more fields")
 

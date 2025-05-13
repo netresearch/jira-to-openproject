@@ -8,13 +8,13 @@ interface for file creation, tracking, and cleanup.
 
 from __future__ import annotations
 
-import os
+import datetime
 import json
+import os
 import random
+import shutil
 import string
 import time
-import datetime
-import shutil
 from typing import Any
 
 from src import config
@@ -151,7 +151,7 @@ class FileManager:
             base_dir: Base directory for file operations
         """
         # Only initialize once (singleton pattern)
-        if hasattr(self, '_initialized') and self._initialized:
+        if hasattr(self, "_initialized") and self._initialized:
             return
 
         # Set base directory
@@ -203,7 +203,7 @@ class FileManager:
         timestamp = datetime.datetime.now()
         microseconds = timestamp.microsecond
         timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
-        random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+        random_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
         return f"{timestamp_str}_{microseconds:06d}_{random_suffix}"
 
     def create_debug_session(self, session_id: str | None = None) -> str:
@@ -227,7 +227,7 @@ class FileManager:
 
         # Create a debug log file
         debug_log_path = os.path.join(session_dir, "debug_log.txt")
-        with open(debug_log_path, 'w') as debug_log:
+        with open(debug_log_path, "w") as debug_log:
             debug_log.write(f"=== Debug Session {datetime.datetime.now()} ===\n")
             debug_log.write(f"Session ID: {session_id}\n\n")
 
@@ -244,7 +244,7 @@ class FileManager:
         debug_log_path = os.path.join(session_dir, "debug_log.txt")
 
         try:
-            with open(debug_log_path, 'a') as debug_log:
+            with open(debug_log_path, "a") as debug_log:
                 debug_log.write(f"{message}\n")
         except Exception as e:
             logger.error(f"Error writing to debug log: {str(e)}")
@@ -281,7 +281,7 @@ class FileManager:
 
         # Write data to file
         try:
-            with open(file_path, 'w') as f:
+            with open(file_path, "w") as f:
                 if isinstance(data, dict | list):
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 else:
@@ -336,7 +336,7 @@ class FileManager:
 
         # Write content to file
         try:
-            with open(file_path, 'w') as f:
+            with open(file_path, "w") as f:
                 f.write(content)
 
             # Verify file was created
@@ -457,7 +457,7 @@ class FileManager:
             A unique identifier string for debug tracing
         """
         debug_id = self.generate_unique_id()
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         debug_dir = os.path.join(self.debug_dir, f"debug_{timestamp}_{debug_id}")
         os.makedirs(debug_dir, exist_ok=True)
         return debug_id

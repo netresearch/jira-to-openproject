@@ -10,12 +10,12 @@ import os
 import re
 from typing import Any
 
-from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
+from src.models import ComponentResult
 
 # Get logger from config
 logger = config.logger
@@ -70,12 +70,8 @@ class ProjectMigration(BaseMigration):
         # Load existing data if available
         self.jira_projects = self._load_from_json(JIRA_PROJECTS_FILE) or []
         self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or []
-        self.project_mapping = config.mappings.get_mapping(
-            Mappings.PROJECT_MAPPING_FILE
-        )
-        self.company_mapping = config.mappings.get_mapping(
-            Mappings.COMPANY_MAPPING_FILE
-        )
+        self.project_mapping = config.mappings.get_mapping(Mappings.PROJECT_MAPPING_FILE)
+        self.company_mapping = config.mappings.get_mapping(Mappings.COMPANY_MAPPING_FILE)
 
     def extract_jira_projects(self) -> list[dict[str, Any]]:
         """
@@ -111,9 +107,7 @@ class ProjectMigration(BaseMigration):
         if not config.migration_config.get("force", False):
             cached_projects = self._load_from_json(OP_PROJECTS_FILE, default=None)
             if cached_projects:
-                logger.info(
-                    f"Using cached OpenProject projects from {OP_PROJECTS_FILE}"
-                )
+                logger.info(f"Using cached OpenProject projects from {OP_PROJECTS_FILE}")
                 self.op_projects = cached_projects
                 return self.op_projects
 
@@ -136,9 +130,7 @@ class ProjectMigration(BaseMigration):
         """
         self.account_mapping = self._load_from_json(ACCOUNT_MAPPING_FILE, default={})
         if self.account_mapping:
-            logger.info(
-                f"Loaded account mapping with {len(self.account_mapping)} entries."
-            )
+            logger.info(f"Loaded account mapping with {len(self.account_mapping)} entries.")
             for account in self.account_mapping.values():
                 if account.get("custom_field_id"):
                     self.account_custom_field_id = account.get("custom_field_id")
@@ -147,9 +139,7 @@ class ProjectMigration(BaseMigration):
             logger.info(f"Account custom field ID: {self.account_custom_field_id}")
             return self.account_mapping
         else:
-            logger.warning(
-                "No account mapping found. Account information won't be migrated."
-            )
+            logger.warning("No account mapping found. Account information won't be migrated.")
             return {}
 
     def load_company_mapping(self) -> dict[str, Any]:
@@ -159,22 +149,14 @@ class ProjectMigration(BaseMigration):
         Returns:
             Dictionary mapping Tempo company IDs to OpenProject project IDs
         """
-        self.company_mapping = self._load_from_json(
-            Mappings.COMPANY_MAPPING_FILE, default={}
-        )
+        self.company_mapping = self._load_from_json(Mappings.COMPANY_MAPPING_FILE, default={})
         if self.company_mapping:
             company_count = len(self.company_mapping)
-            matched_count = sum(
-                1 for c in self.company_mapping.values() if c.get("openproject_id")
-            )
-            logger.info(
-                f"Loaded company mapping with {company_count} entries, {matched_count} matched to OpenProject."
-            )
+            matched_count = sum(1 for c in self.company_mapping.values() if c.get("openproject_id"))
+            logger.info(f"Loaded company mapping with {company_count} entries, {matched_count} matched to OpenProject.")
             return self.company_mapping
         else:
-            logger.warning(
-                "No company mapping found. Projects won't be organized hierarchically."
-            )
+            logger.warning("No company mapping found. Projects won't be organized hierarchically.")
             return {}
 
     def extract_project_account_mapping(self) -> dict[str, Any]:
@@ -188,13 +170,8 @@ class ProjectMigration(BaseMigration):
             Dictionary mapping project keys to account IDs.
         """
         # Load existing data unless forced to refresh
-        if (
-            self.project_account_mapping
-            and not config.migration_config.get("force", False)
-        ):
-            logger.info(
-                f"Using cached project-account mapping from {PROJECT_ACCOUNT_MAPPING_FILE}"
-            )
+        if self.project_account_mapping and not config.migration_config.get("force", False):
+            logger.info(f"Using cached project-account mapping from {PROJECT_ACCOUNT_MAPPING_FILE}")
             return self.project_account_mapping
 
         logger.info("Extracting project-account mapping from Tempo account data...")
@@ -234,12 +211,14 @@ class ProjectMigration(BaseMigration):
                     mapping[project_key] = []
 
                 # Add account info to this project
-                mapping[project_key].append({
-                    "id": str(acct_id),
-                    "key": acct_key,
-                    "name": acct_name,
-                    "default": link.get("defaultAccount", False)
-                })
+                mapping[project_key].append(
+                    {
+                        "id": str(acct_id),
+                        "key": acct_key,
+                        "name": acct_name,
+                        "default": link.get("defaultAccount", False),
+                    }
+                )
 
         # For each project, prioritize default accounts
         for proj, accts in mapping.items():
@@ -254,9 +233,7 @@ class ProjectMigration(BaseMigration):
 
         return mapping
 
-    def find_parent_company_for_project(
-        self, jira_project: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    def find_parent_company_for_project(self, jira_project: dict[str, Any]) -> dict[str, Any] | None:
         """
         Find the appropriate parent company for a Jira project based on its default Tempo account.
         """
@@ -270,22 +247,16 @@ class ProjectMigration(BaseMigration):
 
         # 2) Use only the project's default Tempo account (first entry)
         acct_entry = raw_accts[0] if isinstance(raw_accts, list) else raw_accts
-        acct_id = (
-            acct_entry if isinstance(acct_entry, int | str) else acct_entry.get("id")
-        )
+        acct_id = acct_entry if isinstance(acct_entry, int | str) else acct_entry.get("id")
         if not acct_id:
-            logger.warning(
-                f"Project {jira_key}: default Tempo account entry invalid: {acct_entry}"
-            )
+            logger.warning(f"Project {jira_key}: default Tempo account entry invalid: {acct_entry}")
             return None
         acct_id_str = str(acct_id)
 
         # 3) Map account to company_id
         acct_map = self.account_mapping.get(acct_id_str)
         if not acct_map:
-            logger.warning(
-                f"Project {jira_key}: Tempo account {acct_id_str} not found in account mapping"
-            )
+            logger.warning(f"Project {jira_key}: Tempo account {acct_id_str} not found in account mapping")
             return None
         company_id = acct_map.get("company_id")
         if not company_id:
@@ -297,9 +268,7 @@ class ProjectMigration(BaseMigration):
         # 4) Map company_id to OpenProject project
         company = self.company_mapping.get(str(company_id))
         if not company or not company.get("openproject_id"):
-            logger.warning(
-                f"Project {jira_key}: Tempo company {company_id} not migrated to OpenProject"
-            )
+            logger.warning(f"Project {jira_key}: Tempo company {company_id} not migrated to OpenProject")
             return None
 
         return company
@@ -353,9 +322,7 @@ class ProjectMigration(BaseMigration):
                     break
 
             if existing_project:
-                logger.info(
-                    f"Project '{jira_name}' already exists in OpenProject with ID {existing_project.get('id')}"
-                )
+                logger.info(f"Project '{jira_name}' already exists in OpenProject with ID {existing_project.get('id')}")
                 continue
 
             # Find parent company
@@ -373,9 +340,7 @@ class ProjectMigration(BaseMigration):
                     account_id = accounts[0].get("id")
 
                 if account_id and str(account_id) in self.account_mapping:
-                    account_name = self.account_mapping[str(account_id)].get(
-                        "tempo_name"
-                    )
+                    account_name = self.account_mapping[str(account_id)].get("tempo_name")
 
             # Add to projects data
             project_data = {
@@ -405,12 +370,8 @@ class ProjectMigration(BaseMigration):
 
         # Transfer file to the container
         container_temp_path = "/tmp/projects_data.json"
-        if not self.op_client.rails_client.transfer_file_to_container(
-            temp_file_path, container_temp_path
-        ):
-            logger.error(
-                "Failed to transfer projects data file to container. Aborting."
-            )
+        if not self.op_client.rails_client.transfer_file_to_container(temp_file_path, container_temp_path):
+            logger.error("Failed to transfer projects data file to container. Aborting.")
             return ComponentResult(
                 success=False,
                 message="Failed to transfer projects data file to container. Aborting.",
@@ -418,13 +379,9 @@ class ProjectMigration(BaseMigration):
 
         # Check for dry run
         if config.migration_config.get("dry_run", False):
-            logger.info(
-                "DRY RUN: Skipping Rails script execution. Would have created these projects:"
-            )
+            logger.info("DRY RUN: Skipping Rails script execution. Would have created these projects:")
             for project in projects_data:
-                logger.info(
-                    f"  - {project['name']} (identifier: {project['identifier']})"
-                )
+                logger.info(f"  - {project['name']} (identifier: {project['identifier']})")
 
             # Create a dummy mapping for dry run
             mapping = {}
@@ -593,9 +550,7 @@ class ProjectMigration(BaseMigration):
         result = self.op_client.rails_client.execute_query(header_script + main_script)
 
         if result.get("status") != "success":
-            logger.error(
-                f"Rails error during bulk project creation: {result.get('error', 'Unknown error')}"
-            )
+            logger.error(f"Rails error during bulk project creation: {result.get('error', 'Unknown error')}")
             logger.error("Bulk project migration failed. Aborting.")
             return ComponentResult(
                 success=False,
@@ -616,9 +571,7 @@ class ProjectMigration(BaseMigration):
             result_file_container = "/tmp/projects_result.json"
             result_file_local = os.path.join(self.data_dir, "projects_result.json")
 
-            if self.op_client.rails_client.transfer_file_from_container(
-                result_file_container, result_file_local
-            ):
+            if self.op_client.rails_client.transfer_file_from_container(result_file_container, result_file_local):
                 try:
                     with open(result_file_local) as f:
                         result_data = json.load(f)
@@ -633,16 +586,10 @@ class ProjectMigration(BaseMigration):
         for project in created_projects:
             jira_key = project.get("jira_key")
             if jira_key:
-                jira_project = next(
-                    (p for p in self.jira_projects if p.get("key") == jira_key), {}
-                )
+                jira_project = next((p for p in self.jira_projects if p.get("key") == jira_key), {})
                 mapping[jira_key] = {
                     "jira_key": jira_key,
-                    "jira_name": (
-                        jira_project.get("name")
-                        if jira_project
-                        else project.get("name")
-                    ),
+                    "jira_name": (jira_project.get("name") if jira_project else project.get("name")),
                     "openproject_id": project.get("openproject_id"),
                     "openproject_identifier": project.get("identifier"),
                     "openproject_name": project.get("name"),
@@ -653,14 +600,10 @@ class ProjectMigration(BaseMigration):
         for error in errors:
             jira_key = error.get("jira_key")
             if jira_key:
-                jira_project = next(
-                    (p for p in self.jira_projects if p.get("key") == jira_key), {}
-                )
+                jira_project = next((p for p in self.jira_projects if p.get("key") == jira_key), {})
                 mapping[jira_key] = {
                     "jira_key": jira_key,
-                    "jira_name": (
-                        jira_project.get("name") if jira_project else error.get("name")
-                    ),
+                    "jira_name": (jira_project.get("name") if jira_project else error.get("name")),
                     "openproject_id": None,
                     "openproject_identifier": None,
                     "openproject_name": None,
@@ -673,9 +616,7 @@ class ProjectMigration(BaseMigration):
         self.project_mapping = mapping
         self._save_to_json(mapping, Mappings.PROJECT_MAPPING_FILE)
 
-        logger.info(
-            f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors"
-        )
+        logger.info(f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors")
         return ComponentResult(
             success=True,
             message=f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors",
@@ -689,48 +630,27 @@ class ProjectMigration(BaseMigration):
             Dictionary with analysis results
         """
         if not self.project_mapping:
-            if os.path.exists(
-                os.path.join(self.data_dir, Mappings.PROJECT_MAPPING_FILE)
-            ):
-                with open(
-                    os.path.join(self.data_dir, Mappings.PROJECT_MAPPING_FILE)
-                ) as f:
+            if os.path.exists(os.path.join(self.data_dir, Mappings.PROJECT_MAPPING_FILE)):
+                with open(os.path.join(self.data_dir, Mappings.PROJECT_MAPPING_FILE)) as f:
                     self.project_mapping = json.load(f)
             else:
-                logger.error(
-                    "No project mapping found. Run bulk_migrate_projects() first."
-                )
+                logger.error("No project mapping found. Run bulk_migrate_projects() first.")
                 return {}
 
         analysis = {
             "total_projects": len(self.project_mapping),
-            "migrated_projects": sum(
-                1
-                for p in self.project_mapping.values()
-                if p.get("openproject_id") is not None
-            ),
-            "new_projects": sum(
-                1 for p in self.project_mapping.values() if p.get("created_new", False)
-            ),
+            "migrated_projects": sum(1 for p in self.project_mapping.values() if p.get("openproject_id") is not None),
+            "new_projects": sum(1 for p in self.project_mapping.values() if p.get("created_new", False)),
             "existing_projects": sum(
                 1
                 for p in self.project_mapping.values()
-                if p.get("openproject_id") is not None
-                and not p.get("created_new", False)
+                if p.get("openproject_id") is not None and not p.get("created_new", False)
             ),
             "projects_with_accounts": sum(
-                1
-                for p in self.project_mapping.values()
-                if p.get("account_name") is not None
+                1 for p in self.project_mapping.values() if p.get("account_name") is not None
             ),
-            "projects_with_parent": sum(
-                1
-                for p in self.project_mapping.values()
-                if p.get("parent_id") is not None
-            ),
-            "failed_projects": sum(
-                1 for p in self.project_mapping.values() if p.get("failed", False)
-            ),
+            "projects_with_parent": sum(1 for p in self.project_mapping.values() if p.get("parent_id") is not None),
+            "failed_projects": sum(1 for p in self.project_mapping.values() if p.get("failed", False)),
             "failed_details": [
                 {"jira_key": p.get("jira_key"), "jira_name": p.get("jira_name")}
                 for p in self.project_mapping.values()
@@ -740,12 +660,8 @@ class ProjectMigration(BaseMigration):
 
         total = int(analysis["total_projects"])
         if total > 0:
-            analysis["migration_percentage"] = (
-                int(analysis["migrated_projects"]) / total
-            ) * 100
-            analysis["hierarchical_percentage"] = (
-                int(analysis["projects_with_parent"]) / total
-            ) * 100
+            analysis["migration_percentage"] = (int(analysis["migrated_projects"]) / total) * 100
+            analysis["hierarchical_percentage"] = (int(analysis["projects_with_parent"]) / total) * 100
         else:
             analysis["migration_percentage"] = 0
             analysis["hierarchical_percentage"] = 0
@@ -754,9 +670,7 @@ class ProjectMigration(BaseMigration):
 
         logger.info("Project mapping analysis complete")
         logger.info(f"Total projects: {analysis['total_projects']}")
-        logger.info(
-            f"Migrated projects: {analysis['migrated_projects']} ({analysis['migration_percentage']:.1f}%)"
-        )
+        logger.info(f"Migrated projects: {analysis['migrated_projects']} ({analysis['migration_percentage']:.1f}%)")
         logger.info(f"- Newly created: {analysis['new_projects']}")
         logger.info(f"- Already existing: {analysis['existing_projects']}")
         logger.info(f"- With account information: {analysis['projects_with_accounts']}")

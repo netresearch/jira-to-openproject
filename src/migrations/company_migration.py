@@ -64,9 +64,7 @@ class CompanyMigration(BaseMigration):
         self._created_companies = 0  # Initialize counter for created companies
 
         # Logging
-        self.logger.debug(
-            f"CompanyMigration initialized with data dir: {self.data_dir}"
-        )
+        self.logger.debug(f"CompanyMigration initialized with data dir: {self.data_dir}")
 
         # Load existing data if available
         self.tempo_companies = self._load_from_json(Mappings.TEMPO_COMPANIES_FILE) or {}
@@ -95,9 +93,7 @@ class CompanyMigration(BaseMigration):
                 self.tempo_companies = {}
                 for company in loaded_data:
                     if not isinstance(company, dict):
-                        self.logger.warning(
-                            f"Skipping non-dictionary company: {company}"
-                        )
+                        self.logger.warning(f"Skipping non-dictionary company: {company}")
                         continue
 
                     # Get ID from either 'id' or 'tempo_id' field
@@ -112,9 +108,7 @@ class CompanyMigration(BaseMigration):
                     if company_id:
                         self.tempo_companies[company_id] = company
                     else:
-                        self.logger.warning(
-                            f"Skipping company without id or tempo_id: {company}"
-                        )
+                        self.logger.warning(f"Skipping company without id or tempo_id: {company}")
 
             self.logger.info(f"Loaded {len(self.tempo_companies)} companies from cache")
             return self.tempo_companies
@@ -138,18 +132,14 @@ class CompanyMigration(BaseMigration):
                 "id": company_id,
                 "key": company.get("key", "").strip(),
                 "name": company.get("name", "").strip(),
-                "lead": (
-                    company.get("lead", {}).get("key") if company.get("lead") else None
-                ),
+                "lead": (company.get("lead", {}).get("key") if company.get("lead") else None),
                 "status": company.get("status", "ACTIVE"),
                 "_raw": company,
             }
 
         # Save to file
         self._save_to_json(self.tempo_companies, Mappings.TEMPO_COMPANIES_FILE)
-        self.logger.info(
-            f"Saved {len(self.tempo_companies)} companies to {self.tempo_companies_file}"
-        )
+        self.logger.info(f"Saved {len(self.tempo_companies)} companies to {self.tempo_companies_file}")
 
         return self.tempo_companies
 
@@ -202,28 +192,20 @@ class CompanyMigration(BaseMigration):
             self.extract_openproject_projects()
 
         top_level_projects = [
-            project
-            for project in self.op_projects
-            if project.get("_links", {}).get("parent", {}).get("href") is None
+            project for project in self.op_projects if project.get("_links", {}).get("parent", {}).get("href") is None
         ]
 
-        op_projects_by_name = {
-            project.get("name", "").lower(): project for project in top_level_projects
-        }
+        op_projects_by_name = {project.get("name", "").lower(): project for project in top_level_projects}
 
         mapping = {}
         # Handle both dictionary and list types for tempo_companies
         tempo_companies_list = (
-            self.tempo_companies.values()
-            if isinstance(self.tempo_companies, dict)
-            else self.tempo_companies
+            self.tempo_companies.values() if isinstance(self.tempo_companies, dict) else self.tempo_companies
         )
 
         for tempo_company in tempo_companies_list:
             if not isinstance(tempo_company, dict):
-                self.logger.warning(
-                    f"Skipping non-dictionary tempo_company: {tempo_company}"
-                )
+                self.logger.warning(f"Skipping non-dictionary tempo_company: {tempo_company}")
                 continue
 
             # Get ID from either 'id' or 'tempo_id' field
@@ -269,17 +251,11 @@ class CompanyMigration(BaseMigration):
         self._save_to_json(mapping, Mappings.COMPANY_MAPPING_FILE)
 
         total_companies = len(mapping)
-        matched_companies = sum(
-            1 for company in mapping.values() if company["matched_by"] != "none"
-        )
-        match_percentage = (
-            (matched_companies / total_companies) * 100 if total_companies > 0 else 0
-        )
+        matched_companies = sum(1 for company in mapping.values() if company["matched_by"] != "none")
+        match_percentage = (matched_companies / total_companies) * 100 if total_companies > 0 else 0
 
         self.logger.info(f"Company mapping created for {total_companies} companies")
-        self.logger.info(
-            f"Successfully matched {matched_companies} companies ({match_percentage:.1f}%)"
-        )
+        self.logger.info(f"Successfully matched {matched_companies} companies ({match_percentage:.1f}%)")
 
         return mapping
 
@@ -305,30 +281,16 @@ class CompanyMigration(BaseMigration):
 
         analysis = {
             "total_companies": len(self.company_mapping),
-            "matched_companies": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] != "none"
-            ),
-            "matched_by_name": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] == "name"
-            ),
+            "matched_companies": sum(1 for company in self.company_mapping.values() if company["matched_by"] != "none"),
+            "matched_by_name": sum(1 for company in self.company_mapping.values() if company["matched_by"] == "name"),
             "matched_by_creation": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] == "created"
+                1 for company in self.company_mapping.values() if company["matched_by"] == "created"
             ),
             "matched_by_existing": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] == "existing"
+                1 for company in self.company_mapping.values() if company["matched_by"] == "existing"
             ),
             "unmatched_companies": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] == "none"
+                1 for company in self.company_mapping.values() if company["matched_by"] == "none"
             ),
             "actually_created": self._created_companies,
             "unmatched_details": [
@@ -352,14 +314,10 @@ class CompanyMigration(BaseMigration):
 
         self.logger.info("Company mapping analysis complete")
         self.logger.info(f"Total companies: {analysis['total_companies']}")
-        self.logger.info(
-            f"Matched companies: {analysis['matched_companies']} ({analysis['match_percentage']:.1f}%)"
-        )
+        self.logger.info(f"Matched companies: {analysis['matched_companies']} ({analysis['match_percentage']:.1f}%)")
         self.logger.info(f"- Matched by name: {analysis['matched_by_name']}")
         self.logger.info(f"- Created in OpenProject: {analysis['actually_created']}")
-        self.logger.info(
-            f"- Already existing in OpenProject: {analysis['matched_by_existing']}"
-        )
+        self.logger.info(f"- Already existing in OpenProject: {analysis['matched_by_existing']}")
         self.logger.info(f"Unmatched companies: {analysis['unmatched_companies']}")
 
         return analysis
@@ -389,10 +347,7 @@ class CompanyMigration(BaseMigration):
         companies_to_migrate = [
             company
             for company in self.tempo_companies.values()
-            if self.company_mapping.get(
-                company.get("id", company.get("tempo_id", "")), {}
-            ).get("matched_by")
-            == "none"
+            if self.company_mapping.get(company.get("id", company.get("tempo_id", "")), {}).get("matched_by") == "none"
         ]
 
         if not companies_to_migrate:
@@ -466,16 +421,12 @@ class CompanyMigration(BaseMigration):
             )
 
         if not companies_data:
-            self.logger.info(
-                "No companies need to be created, all matched or already exist"
-            )
+            self.logger.info("No companies need to be created, all matched or already exist")
             self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
             return self.company_mapping
 
         if config.migration_config.get("dry_run"):
-            self.logger.info(
-                f"DRY RUN: Would create {len(companies_data)} company projects"
-            )
+            self.logger.info(f"DRY RUN: Would create {len(companies_data)} company projects")
             for company_data in companies_data:
                 tempo_id = company_data["tempo_id"]
                 self.company_mapping[tempo_id] = {
@@ -505,15 +456,11 @@ class CompanyMigration(BaseMigration):
             result_file_local = os.path.join(self.data_dir, "company_creation_result.json")
 
             # Copy the file to the container
-            if not self.op_client.rails_client.transfer_file_to_container(
-                temp_file_path, container_temp_path
-            ):
+            if not self.op_client.rails_client.transfer_file_to_container(temp_file_path, container_temp_path):
                 raise MigrationError("Failed to transfer companies data to container")
 
             # Prepare and execute the Ruby script
-            self.logger.info(
-                f"Executing Rails script to create {len(companies_data)} companies"
-            )
+            self.logger.info(f"Executing Rails script to create {len(companies_data)} companies")
 
             # Ruby script to create companies
             ruby_script = """
@@ -682,9 +629,7 @@ class CompanyMigration(BaseMigration):
                                     "tempo_key": company.get("tempo_key"),
                                     "tempo_name": company.get("tempo_name"),
                                     "openproject_id": company.get("openproject_id"),
-                                    "openproject_identifier": company.get(
-                                        "openproject_identifier"
-                                    ),
+                                    "openproject_identifier": company.get("openproject_identifier"),
                                     "openproject_name": company.get("openproject_name"),
                                     "matched_by": "created",
                                 }
@@ -727,15 +672,9 @@ class CompanyMigration(BaseMigration):
                                                 "tempo_id": tempo_id,
                                                 "tempo_key": company.get("tempo_key"),
                                                 "tempo_name": company.get("tempo_name"),
-                                                "openproject_id": company.get(
-                                                    "openproject_id"
-                                                ),
-                                                "openproject_identifier": company.get(
-                                                    "openproject_identifier"
-                                                ),
-                                                "openproject_name": company.get(
-                                                    "openproject_name"
-                                                ),
+                                                "openproject_id": company.get("openproject_id"),
+                                                "openproject_identifier": company.get("openproject_identifier"),
+                                                "openproject_name": company.get("openproject_name"),
                                                 "matched_by": "created",
                                             }
                                             self._created_companies += 1
@@ -749,9 +688,7 @@ class CompanyMigration(BaseMigration):
                                                 "tempo_key": error.get("tempo_key"),
                                                 "tempo_name": error.get("tempo_name"),
                                                 "openproject_id": None,
-                                                "openproject_identifier": error.get(
-                                                    "identifier"
-                                                ),
+                                                "openproject_identifier": error.get("identifier"),
                                                 "openproject_name": None,
                                                 "matched_by": "error",
                                                 "error": ", ".join(error.get("errors", [])),
@@ -761,24 +698,16 @@ class CompanyMigration(BaseMigration):
                             self.logger.error(f"Error processing result file: {str(e)}")
                     else:
                         # Last resort - try to parse the console output
-                        self.logger.warning(
-                            "Could not get result file - parsing console output"
-                        )
+                        self.logger.warning("Could not get result file - parsing console output")
                         if isinstance(output, str):
-                            created_matches = re.findall(
-                                r"Created project #(\d+): (.+?)$", output, re.MULTILINE
-                            )
+                            created_matches = re.findall(r"Created project #(\d+): (.+?)$", output, re.MULTILINE)
                             created_count = len(created_matches)
-                            self.logger.info(
-                                f"Found {created_count} created projects in console output"
-                            )
+                            self.logger.info(f"Found {created_count} created projects in console output")
 
                             # We can't reliably match these back to tempo IDs, so just log success
                             self._created_companies += created_count
 
-            self.logger.info(
-                f"Created {created_count} company projects (errors: {len(errors)})"
-            )
+            self.logger.info(f"Created {created_count} company projects (errors: {len(errors)})")
 
             # Refresh cached projects from OpenProject
             self.op_client.get_projects(force_refresh=True)
@@ -807,9 +736,7 @@ class CompanyMigration(BaseMigration):
 
         # Check for valid mappings
         if not hasattr(self, "company_mapping") or not self.company_mapping:
-            self.logger.warning(
-                "No company mapping available, run create_company_mapping first"
-            )
+            self.logger.warning("No company mapping available, run create_company_mapping first")
             results["warnings"].append("No company mapping available")
             return results
 
@@ -879,17 +806,13 @@ class CompanyMigration(BaseMigration):
         result_file_container = "/tmp/company_metadata_result.json"
         result_file_local = os.path.join(self.data_dir, "company_metadata_result.json")
 
-        if not self.op_client.rails_client.transfer_file_to_container(
-            temp_file_path, container_temp_path
-        ):
+        if not self.op_client.rails_client.transfer_file_to_container(temp_file_path, container_temp_path):
             self.logger.error("Failed to transfer company metadata to container")
             results["failed"] = len(companies_to_update)
             return results
 
         # Prepare Ruby script to update metadata
-        self.logger.info(
-            f"Updating metadata for {len(companies_to_update)} companies..."
-        )
+        self.logger.info(f"Updating metadata for {len(companies_to_update)} companies...")
 
         # Ruby script to execute
         ruby_script = """
@@ -1115,13 +1038,9 @@ class CompanyMigration(BaseMigration):
 
         # Process the result
         if result.get("status") != "success":
-            self.logger.error(
-                f"Error executing Ruby script: {result.get('error', 'Unknown error')}"
-            )
+            self.logger.error(f"Error executing Ruby script: {result.get('error', 'Unknown error')}")
             results["failed"] = len(companies_to_update)
-            results["errors"].append(
-                result.get("error", "Failed to execute Ruby script")
-            )
+            results["errors"].append(result.get("error", "Failed to execute Ruby script"))
             return results
 
         # Get the result data
@@ -1137,9 +1056,7 @@ class CompanyMigration(BaseMigration):
             errors = output.get("errors", [])
         else:
             # Try to get result file from container
-            if self.op_client.rails_client.transfer_file_from_container(
-                result_file_container, result_file_local
-            ):
+            if self.op_client.rails_client.transfer_file_from_container(result_file_container, result_file_local):
                 try:
                     with open(result_file_local) as f:
                         result_data = json.load(f)
@@ -1157,8 +1074,7 @@ class CompanyMigration(BaseMigration):
         results["failed"] = len(errors)
         if errors:
             results["errors"] = [
-                f"{e.get('tempo_id', 'Unknown')}: {e.get('error', 'Unknown error')}"
-                for e in errors[:10]
+                f"{e.get('tempo_id', 'Unknown')}: {e.get('error', 'Unknown error')}" for e in errors[:10]
             ]
             if len(errors) > 10:
                 results["errors"].append(f"...and {len(errors) - 10} more errors")
@@ -1167,9 +1083,7 @@ class CompanyMigration(BaseMigration):
         if results["updated"] > 0:
             self.logger.success(f"Updated metadata for {results['updated']} companies")
         if results["failed"] > 0:
-            self.logger.warning(
-                f"Failed to update metadata for {results['failed']} companies"
-            )
+            self.logger.warning(f"Failed to update metadata for {results['failed']} companies")
 
         return results
 
@@ -1194,9 +1108,7 @@ class CompanyMigration(BaseMigration):
             if not config.migration_config.get("dry_run", False):
                 self.migrate_companies_bulk()
             else:
-                self.logger.warning(
-                    "Dry run mode - not creating companies", extra={"markup": True}
-                )
+                self.logger.warning("Dry run mode - not creating companies", extra={"markup": True})
 
             # Analyze results
             analysis = self.analyze_company_mapping()

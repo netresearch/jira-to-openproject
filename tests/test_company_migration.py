@@ -159,9 +159,7 @@ class TestCompanyMigration(unittest.TestCase):
         """Test extracting tempo companies when the cached data is in list format."""
         # Save the list format data to the cache file
         data_handler.save(
-            data=self.sample_tempo_companies_list,
-            filename="tempo_companies.json",
-            directory=self.test_data_dir
+            data=self.sample_tempo_companies_list, filename="tempo_companies.json", directory=self.test_data_dir
         )
 
         # Reset the client
@@ -195,11 +193,7 @@ class TestCompanyMigration(unittest.TestCase):
         ]
 
         # Save to cache file
-        data_handler.save(
-            data=mixed_companies,
-            filename="tempo_companies.json",
-            directory=self.test_data_dir
-        )
+        data_handler.save(data=mixed_companies, filename="tempo_companies.json", directory=self.test_data_dir)
 
         # Load companies
         companies = self.company_migration.extract_tempo_companies()
@@ -252,14 +246,10 @@ class TestCompanyMigration(unittest.TestCase):
             self.assertIn(company_id, mapping)
 
         # Check specific mappings based on our sample data
-        self.assertEqual(
-            mapping["1"]["openproject_id"], 1
-        )  # "ACME Corporation" -> "ACME Corporation"
+        self.assertEqual(mapping["1"]["openproject_id"], 1)  # "ACME Corporation" -> "ACME Corporation"
         self.assertEqual(mapping["1"]["matched_by"], "name")
 
-        self.assertIsNone(
-            mapping["2"]["openproject_id"]
-        )  # "Globex Corporation" -> None (not found)
+        self.assertIsNone(mapping["2"]["openproject_id"])  # "Globex Corporation" -> None (not found)
         self.assertEqual(mapping["2"]["matched_by"], "none")
 
         # Verify that the mapping was saved to a file

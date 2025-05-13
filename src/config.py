@@ -82,9 +82,7 @@ def get_path(path_type: DirType) -> str:
     return var_dirs[path_type]
 
 
-def ensure_subdir(
-    parent_dir_type: DirType, subdir_name: str | None = None
-) -> str:
+def ensure_subdir(parent_dir_type: DirType, subdir_name: str | None = None) -> str:
     """
     Ensure a subdirectory exists under one of the var directories.
 
@@ -127,9 +125,7 @@ def validate_config() -> bool:
                 config_section = openproject_config
                 prefix = "J2O_OPENPROJECT_"
                 # Special handling for OpenProject authentication
-                if not (
-                    config_section.get("api_token") or config_section.get("api_key")
-                ):
+                if not (config_section.get("api_token") or config_section.get("api_key")):
                     missing_vars.append(f"{prefix}API_TOKEN or {prefix}API_KEY")
                 continue
             case _:
@@ -140,9 +136,7 @@ def validate_config() -> bool:
                 missing_vars.append(f"{prefix}{key.upper()}")
 
     if missing_vars:
-        logger.error(
-            f"Missing required environment variables: {', '.join(missing_vars)}"
-        )
+        logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
         return False
 
     return True
@@ -155,16 +149,16 @@ def update_from_cli_args(args: Any) -> None:
     Args:
         args: An object containing CLI arguments (typically from argparse)
     """
-    if hasattr(args, 'dry_run') and args.dry_run:
-        migration_config['dry_run'] = True
+    if hasattr(args, "dry_run") and args.dry_run:
+        migration_config["dry_run"] = True
         logger.debug("Setting dry_run=True from CLI arguments")
 
-    if hasattr(args, 'no_backup') and args.no_backup:
-        migration_config['no_backup'] = True
+    if hasattr(args, "no_backup") and args.no_backup:
+        migration_config["no_backup"] = True
         logger.debug("Setting no_backup=True from CLI arguments")
 
-    if hasattr(args, 'force') and args.force:
-        migration_config['force'] = True
+    if hasattr(args, "force") and args.force:
+        migration_config["force"] = True
         logger.debug("Setting force=True from CLI arguments")
 
     # Add any other CLI arguments that should affect configuration here

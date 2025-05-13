@@ -147,34 +147,30 @@ def main() -> None:
     processor = DataProcessor()
 
     # Register handler functions with modern type annotations
-    processor.register_handler("user", lambda data: {
-        "id": data.get("id"),
-        "name": data.get("name"),
-        "processed_at": datetime.now().isoformat()
-    })
+    processor.register_handler(
+        "user",
+        lambda data: {"id": data.get("id"), "name": data.get("name"), "processed_at": datetime.now().isoformat()},
+    )
 
-    processor.register_handler("order", lambda data: {
-        "order_id": data.get("id"),
-        "total": data.get("amount", 0) * 1.1,  # Add tax
-        "processed_at": datetime.now().isoformat()
-    })
+    processor.register_handler(
+        "order",
+        lambda data: {
+            "order_id": data.get("id"),
+            "total": data.get("amount", 0) * 1.1,  # Add tax
+            "processed_at": datetime.now().isoformat(),
+        },
+    )
 
     # Example data
     data_sources = [
         {
             "name": "users",
-            "items": [
-                {"type": "user", "id": 1, "name": "Alice"},
-                {"type": "user", "id": 2, "name": "Bob"}
-            ]
+            "items": [{"type": "user", "id": 1, "name": "Alice"}, {"type": "user", "id": 2, "name": "Bob"}],
         },
         {
             "name": "orders",
-            "items": [
-                {"type": "order", "id": 101, "amount": 100},
-                {"type": "order", "id": 102, "amount": 200}
-            ]
-        }
+            "items": [{"type": "order", "id": 101, "amount": 100}, {"type": "order", "id": 102, "amount": 200}],
+        },
     ]
 
     # Process data using modern type annotations
@@ -182,8 +178,7 @@ def main() -> None:
 
     # Filter results
     filtered_results = processor.filter_results(
-        results,
-        lambda x: isinstance(x, dict) and x.get("id") == 1 if "id" in x else False
+        results, lambda x: isinstance(x, dict) and x.get("id") == 1 if "id" in x else False
     )
 
     print(f"All results: {results}")

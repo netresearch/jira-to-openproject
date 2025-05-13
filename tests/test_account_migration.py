@@ -86,9 +86,7 @@ class TestAccountMigration(unittest.TestCase):
         self.custom_field_activation_response = {"status": "success", "output": True}
 
         # Initialize AccountMigration
-        self.account_migration = AccountMigration(
-            MagicMock(), MagicMock()
-        )
+        self.account_migration = AccountMigration(MagicMock(), MagicMock())
 
     @patch("src.migrations.account_migration.JiraClient")
     @patch("src.migrations.account_migration.OpenProjectClient")
@@ -116,9 +114,7 @@ class TestAccountMigration(unittest.TestCase):
         mock_exists.return_value = False  # Force new extraction
 
         # Initialize migration
-        migration = AccountMigration(
-            mock_jira_instance, mock_op_instance
-        )
+        migration = AccountMigration(mock_jira_instance, mock_op_instance)
 
         # Call extract_tempo_accounts
         result = migration.extract_tempo_accounts()
@@ -155,9 +151,7 @@ class TestAccountMigration(unittest.TestCase):
         mock_exists.return_value = True
 
         # Initialize migration
-        migration = AccountMigration(
-            mock_jira_instance, mock_op_instance
-        )
+        migration = AccountMigration(mock_jira_instance, mock_op_instance)
 
         # Call extract_openproject_projects
         result = migration.extract_openproject_projects()
@@ -200,16 +194,12 @@ class TestAccountMigration(unittest.TestCase):
 
         # Mock the JSON file loading for jira_project_mapping
         project_mapping_mock = mock_open(
-            read_data=json.dumps(
-                {"PROJ1": {"openproject_id": "3"}, "PROJ2": {"openproject_id": None}}
-            )
+            read_data=json.dumps({"PROJ1": {"openproject_id": "3"}, "PROJ2": {"openproject_id": None}})
         )
         # This patch will be used when loading jira_project_mapping.json
         with patch("builtins.open", project_mapping_mock):
             # Initialize migration
-            migration = AccountMigration(
-                mock_jira_instance, mock_op_instance
-            )
+            migration = AccountMigration(mock_jira_instance, mock_op_instance)
 
             # Mock _load_from_json to return the project mapping
             migration._load_from_json = MagicMock()

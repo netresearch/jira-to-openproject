@@ -1,5 +1,6 @@
+from unittest.mock import MagicMock, Mock
+
 import pytest
-from unittest.mock import Mock, MagicMock
 
 from src.clients.openproject_client import OpenProjectClient
 from src.migrations.user_migration import UserMigration
@@ -75,7 +76,7 @@ def test_create_users_in_bulk(op_client, mock_rails_client):
     users_data = [
         {"login": "user1", "firstname": "User", "lastname": "One", "email": "user1@example.com"},
         {"login": "user2", "firstname": "User", "lastname": "Two", "email": "user2@example.com"},
-        {"login": "user3", "firstname": "User", "lastname": "Three", "email": "user3@example.com"}
+        {"login": "user3", "firstname": "User", "lastname": "Three", "email": "user3@example.com"},
     ]
 
     # Call the method
@@ -99,18 +100,8 @@ def test_user_migration_create_missing_users(user_migration, op_client, jira_cli
 
     # Mock jira_client to return test users
     jira_users = [
-        {
-            "key": "user1",
-            "name": "user1",
-            "emailAddress": "user1@example.com",
-            "displayName": "User One"
-        },
-        {
-            "key": "user2",
-            "name": "user2",
-            "emailAddress": "user2@example.com",
-            "displayName": "User Two"
-        }
+        {"key": "user1", "name": "user1", "emailAddress": "user1@example.com", "displayName": "User One"},
+        {"key": "user2", "name": "user2", "emailAddress": "user2@example.com", "displayName": "User Two"},
     ]
     jira_client.get_users = Mock(return_value=jira_users)
 
@@ -124,7 +115,7 @@ def test_user_migration_create_missing_users(user_migration, op_client, jira_cli
             "openproject_id": None,
             "openproject_login": None,
             "openproject_email": None,
-            "matched_by": "none"
+            "matched_by": "none",
         },
         "user2": {
             "jira_key": "user2",
@@ -134,8 +125,8 @@ def test_user_migration_create_missing_users(user_migration, op_client, jira_cli
             "openproject_id": None,
             "openproject_login": None,
             "openproject_email": None,
-            "matched_by": "none"
-        }
+            "matched_by": "none",
+        },
     }
     user_migration.create_user_mapping = Mock(return_value=user_mapping)
     user_migration.user_mapping = user_mapping
@@ -146,7 +137,8 @@ def test_user_migration_create_missing_users(user_migration, op_client, jira_cli
     user_migration._save_to_json = Mock()
 
     # Mock create_users_in_bulk to return a string response instead of dict
-    op_client.create_users_in_bulk = Mock(return_value="""
+    op_client.create_users_in_bulk = Mock(
+        return_value="""
     {
         "created_count": 2,
         "failed_count": 0,
@@ -156,7 +148,8 @@ def test_user_migration_create_missing_users(user_migration, op_client, jira_cli
         ],
         "failed_users": []
     }
-    """)
+    """
+    )
 
     # Call the method
     result = user_migration.create_missing_users(batch_size=2)
@@ -180,18 +173,8 @@ def test_user_migration_create_missing_users_no_unmatched(user_migration, op_cli
 
     # Mock jira_client.get_users to return a valid list for completion
     jira_users = [
-        {
-            "key": "user1",
-            "name": "user1",
-            "emailAddress": "user1@example.com",
-            "displayName": "User One"
-        },
-        {
-            "key": "user2",
-            "name": "user2",
-            "emailAddress": "user2@example.com",
-            "displayName": "User Two"
-        }
+        {"key": "user1", "name": "user1", "emailAddress": "user1@example.com", "displayName": "User One"},
+        {"key": "user2", "name": "user2", "emailAddress": "user2@example.com", "displayName": "User Two"},
     ]
     jira_client.get_users = MagicMock(return_value=jira_users)
 
@@ -226,76 +209,58 @@ def test_user_migration_create_missing_users_with_existing_email(user_migration,
     """Test handling mixed case where some users exist but with different emails."""
     # Mock jira_client to return test users
     jira_users = [
-        {
-            "key": "user1",
-            "name": "user1",
-            "emailAddress": "user1@example.com",
-            "displayName": "User One"
-        },
-        {
-            "key": "user2",
-            "name": "user2",
-            "emailAddress": "user2@example.com",
-            "displayName": "User Two"
-        },
-        {
-            "key": "user3",
-            "name": "user3",
-            "emailAddress": "user3@example.com",
-            "displayName": "User Three"
-        }
+        {"key": "user1", "name": "user1", "emailAddress": "user1@example.com", "displayName": "User One"},
+        {"key": "user2", "name": "user2", "emailAddress": "user2@example.com", "displayName": "User Two"},
+        {"key": "user3", "name": "user3", "emailAddress": "user3@example.com", "displayName": "User Three"},
     ]
     jira_client.get_users = Mock(return_value=jira_users)
 
     # Mock op_client to return some existing users
     op_users = [
-        {
-            "id": 101,
-            "login": "op_user1",
-            "email": "user1@example.com",
-            "firstName": "OP User",
-            "lastName": "One"
-        }
+        {"id": 101, "login": "op_user1", "email": "user1@example.com", "firstName": "OP User", "lastName": "One"}
     ]
     op_client.get_users = Mock(return_value=op_users)
 
     # Mock create_user_mapping to return one matched user and two unmatched
-    user_migration.create_user_mapping = Mock(return_value={
-        "user1": {
-            "jira_key": "user1",
-            "jira_name": "user1",
-            "jira_email": "user1@example.com",
-            "jira_display_name": "User One",
-            "openproject_id": 101,
-            "openproject_login": "op_user1",
-            "openproject_email": "user1@example.com",
-            "matched_by": "email"
-        },
-        "user2": {
-            "jira_key": "user2",
-            "jira_name": "user2",
-            "jira_email": "user2@example.com",
-            "jira_display_name": "User Two",
-            "openproject_id": None,
-            "openproject_login": None,
-            "openproject_email": None,
-            "matched_by": "none"
-        },
-        "user3": {
-            "jira_key": "user3",
-            "jira_name": "user3",
-            "jira_email": "user3@example.com",
-            "jira_display_name": "User Three",
-            "openproject_id": None,
-            "openproject_login": None,
-            "openproject_email": None,
-            "matched_by": "none"
+    user_migration.create_user_mapping = Mock(
+        return_value={
+            "user1": {
+                "jira_key": "user1",
+                "jira_name": "user1",
+                "jira_email": "user1@example.com",
+                "jira_display_name": "User One",
+                "openproject_id": 101,
+                "openproject_login": "op_user1",
+                "openproject_email": "user1@example.com",
+                "matched_by": "email",
+            },
+            "user2": {
+                "jira_key": "user2",
+                "jira_name": "user2",
+                "jira_email": "user2@example.com",
+                "jira_display_name": "User Two",
+                "openproject_id": None,
+                "openproject_login": None,
+                "openproject_email": None,
+                "matched_by": "none",
+            },
+            "user3": {
+                "jira_key": "user3",
+                "jira_name": "user3",
+                "jira_email": "user3@example.com",
+                "jira_display_name": "User Three",
+                "openproject_id": None,
+                "openproject_login": None,
+                "openproject_email": None,
+                "matched_by": "none",
+            },
         }
-    })
+    )
     user_migration.user_mapping = user_migration.create_user_mapping()
 
     # Mock create_users_in_bulk to return a string response instead of dict
-    op_client.create_users_in_bulk = Mock(return_value="""
+    op_client.create_users_in_bulk = Mock(
+        return_value="""
     {
         "created_count": 2,
         "created_users": [
@@ -304,7 +269,8 @@ def test_user_migration_create_missing_users_with_existing_email(user_migration,
         ],
         "failed_users": []
     }
-    """)
+    """
+    )
 
     # Call the method
     result = user_migration.create_missing_users()
@@ -327,9 +293,7 @@ def test_bulk_creation_error_handling(op_client):
     op_client.rails_client._send_command_to_tmux = Mock(side_effect=Exception("Failed to execute script"))
 
     # Test users
-    users = [
-        {"login": "user1", "firstname": "User", "lastname": "One", "email": "user1@example.com"}
-    ]
+    users = [{"login": "user1", "firstname": "User", "lastname": "One", "email": "user1@example.com"}]
 
     # Call method with error expected
     with pytest.raises(Exception) as e:

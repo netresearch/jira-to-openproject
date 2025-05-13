@@ -230,9 +230,7 @@ def get_complete_custom_fields(
     # Print a summary
     print("\nCustom Fields:")
     for field in custom_fields[:5]:  # Show first 5 fields
-        print(
-            f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
-        )
+        print(f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})")
     if len(custom_fields) > 5:
         print(f"... and {len(custom_fields) - 5} more fields")
 
@@ -249,9 +247,7 @@ def main() -> int:
         output_file = "var/data/openproject_custom_fields_complete.json"
 
     # Get the custom fields
-    fields: list[dict[str, Any]] = get_complete_custom_fields(
-        session_name="rails_console", output_file=output_file
-    )
+    fields: list[dict[str, Any]] = get_complete_custom_fields(session_name="rails_console", output_file=output_file)
 
     return 0 if fields else 1
 

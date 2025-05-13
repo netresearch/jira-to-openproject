@@ -6,6 +6,7 @@ Handles the migration of workflow states and their transitions from Jira to Open
 import json
 import os
 from typing import Any
+
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
@@ -95,9 +96,7 @@ class WorkflowMigration:
 
             return workflows
         except Exception as e:
-            logger.error(
-                f"Failed to get workflows from Jira: {str(e)}", extra={"markup": True}
-            )
+            logger.error(f"Failed to get workflows from Jira: {str(e)}", extra={"markup": True})
             return []
 
     def extract_jira_statuses(self) -> list[dict[str, Any]]:
@@ -115,18 +114,14 @@ class WorkflowMigration:
             response.raise_for_status()
             statuses = response.json()
 
-            logger.info(
-                f"Extracted {len(statuses)} statuses from Jira", extra={"markup": True}
-            )
+            logger.info(f"Extracted {len(statuses)} statuses from Jira", extra={"markup": True})
 
             self.jira_statuses = statuses
             self._save_to_json(statuses, "jira_statuses.json")
 
             return statuses
         except Exception as e:
-            logger.error(
-                f"Failed to get statuses from Jira: {str(e)}", extra={"markup": True}
-            )
+            logger.error(f"Failed to get statuses from Jira: {str(e)}", extra={"markup": True})
             return []
 
     def extract_openproject_statuses(self) -> list[dict[str, Any]]:
@@ -175,15 +170,11 @@ class WorkflowMigration:
         if not self.op_statuses:
             self.extract_openproject_statuses()
 
-        op_statuses_by_name = {
-            status.get("name", "").lower(): status for status in self.op_statuses
-        }
+        op_statuses_by_name = {status.get("name", "").lower(): status for status in self.op_statuses}
 
         mapping = {}
 
-        with ProgressTracker(
-            "Mapping statuses", len(self.jira_statuses), "Recent Status Mappings"
-        ) as tracker:
+        with ProgressTracker("Mapping statuses", len(self.jira_statuses), "Recent Status Mappings") as tracker:
             for jira_status in self.jira_statuses:
                 jira_id = jira_status.get("id")
                 jira_name = jira_status.get("name")
@@ -202,15 +193,11 @@ class WorkflowMigration:
                         "is_closed": op_status.get("isClosed", False),
                         "matched_by": "name",
                     }
-                    tracker.add_log_item(
-                        f"Matched by name: {jira_name} → {op_status.get('name')}"
-                    )
+                    tracker.add_log_item(f"Matched by name: {jira_name} → {op_status.get('name')}")
                 else:
                     match_found = False
                     for op_name, op_status in op_statuses_by_name.items():
-                        if op_name.replace(" ", "").lower() == jira_name_lower.replace(
-                            " ", ""
-                        ):
+                        if op_name.replace(" ", "").lower() == jira_name_lower.replace(" ", ""):
                             mapping[jira_id] = {
                                 "jira_id": jira_id,
                                 "jira_name": jira_name,
@@ -219,9 +206,7 @@ class WorkflowMigration:
                                 "is_closed": op_status.get("isClosed", False),
                                 "matched_by": "normalized_name",
                             }
-                            tracker.add_log_item(
-                                f"Matched by normalized name: {jira_name} → {op_status.get('name')}"
-                            )
+                            tracker.add_log_item(f"Matched by normalized name: {jira_name} → {op_status.get('name')}")
                             match_found = True
                             break
 
@@ -242,12 +227,8 @@ class WorkflowMigration:
         self._save_to_json(mapping, "status_mapping.json")
 
         total_statuses = len(mapping)
-        matched_statuses = sum(
-            1 for status in mapping.values() if status["matched_by"] != "none"
-        )
-        match_percentage = (
-            (matched_statuses / total_statuses) * 100 if total_statuses > 0 else 0
-        )
+        matched_statuses = sum(1 for status in mapping.values() if status["matched_by"] != "none")
+        match_percentage = (matched_statuses / total_statuses) * 100 if total_statuses > 0 else 0
 
         logger.info(
             f"Status mapping created for {total_statuses} statuses",
@@ -260,9 +241,7 @@ class WorkflowMigration:
 
         return mapping
 
-    def create_status_in_openproject(
-        self, jira_status: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    def create_status_in_openproject(self, jira_status: dict[str, Any]) -> dict[str, Any] | None:
         """
         Create a status in OpenProject based on a Jira status.
 
@@ -286,14 +265,10 @@ class WorkflowMigration:
         )
 
         try:
-            result = self.op_client.create_status(
-                name=name, color=color, is_closed=is_closed
-            )
+            result = self.op_client.create_status(name=name, color=color, is_closed=is_closed)
 
             if result.get("success", False):
-                logger.info(
-                    f"Successfully created status: {name}", extra={"markup": True}
-                )
+                logger.info(f"Successfully created status: {name}", extra={"markup": True})
                 return result.get("data")
             else:
                 logger.error(
@@ -302,9 +277,7 @@ class WorkflowMigration:
                 )
                 return None
         except Exception as e:
-            logger.error(
-                f"Error creating status {name}: {str(e)}", extra={"markup": True}
-            )
+            logger.error(f"Error creating status {name}: {str(e)}", extra={"markup": True})
             return None
 
     def migrate_statuses(self) -> dict[str, Any]:
@@ -326,9 +299,7 @@ class WorkflowMigration:
             self.create_status_mapping()
 
         statuses_to_create = [
-            (jira_id, mapping)
-            for jira_id, mapping in self.status_mapping.items()
-            if mapping["matched_by"] == "none"
+            (jira_id, mapping) for jira_id, mapping in self.status_mapping.items() if mapping["matched_by"] == "none"
         ]
 
         logger.info(
@@ -336,13 +307,9 @@ class WorkflowMigration:
             extra={"markup": True},
         )
 
-        with ProgressTracker(
-            "Migrating statuses", len(statuses_to_create), "Recent Statuses"
-        ) as tracker:
+        with ProgressTracker("Migrating statuses", len(statuses_to_create), "Recent Statuses") as tracker:
             for i, (jira_id, mapping) in enumerate(statuses_to_create):
-                jira_status = next(
-                    (s for s in self.jira_statuses if s.get("id") == jira_id), None
-                )
+                jira_status = next((s for s in self.jira_statuses if s.get("id") == jira_id), None)
 
                 if not jira_status:
                     logger.warning(
@@ -363,9 +330,7 @@ class WorkflowMigration:
                     mapping["openproject_name"] = op_status.get("name")
                     mapping["is_closed"] = op_status.get("isClosed", False)
                     mapping["matched_by"] = "created"
-                    tracker.add_log_item(
-                        f"Created: {status_name} (ID: {op_status.get('id')})"
-                    )
+                    tracker.add_log_item(f"Created: {status_name} (ID: {op_status.get('id')})")
                 else:
                     tracker.add_log_item(f"Failed: {status_name}")
 
@@ -374,16 +339,8 @@ class WorkflowMigration:
         self._save_to_json(self.status_mapping, "status_mapping.json")
 
         total_statuses = len(self.status_mapping)
-        matched_statuses = sum(
-            1
-            for status in self.status_mapping.values()
-            if status["matched_by"] != "none"
-        )
-        created_statuses = sum(
-            1
-            for status in self.status_mapping.values()
-            if status["matched_by"] == "created"
-        )
+        matched_statuses = sum(1 for status in self.status_mapping.values() if status["matched_by"] != "none")
+        created_statuses = sum(1 for status in self.status_mapping.values() if status["matched_by"] == "created")
 
         logger.info(
             f"Status migration complete for {total_statuses} statuses",
@@ -408,9 +365,7 @@ class WorkflowMigration:
         Returns:
             Result of the workflow configuration
         """
-        logger.info(
-            "Creating workflow configuration in OpenProject...", extra={"markup": True}
-        )
+        logger.info("Creating workflow configuration in OpenProject...", extra={"markup": True})
 
         result = {
             "success": True,

@@ -98,9 +98,7 @@ class ConfigLoader:
                         self.config["migration"]["log_level"] = env_value.upper()
                         config_logger.debug(f"Applied log level: {env_value.upper()}")
                     else:
-                        config_logger.warning(
-                            f"Invalid log level: {env_value}. Using INFO instead."
-                        )
+                        config_logger.warning(f"Invalid log level: {env_value}. Using INFO instead.")
                         self.config["migration"]["log_level"] = "INFO"
 
                 case ["J2O", "JIRA", *rest] if rest:
@@ -114,12 +112,8 @@ class ConfigLoader:
 
                         # Extract the specific scriptrunner config key
                         sr_key = key[len("scriptrunner_") :]
-                        self.config["jira"]["scriptrunner"][sr_key] = (
-                            self._convert_value(env_value)
-                        )
-                        config_logger.debug(
-                            f"Applied Jira ScriptRunner config: {sr_key}={env_value}"
-                        )
+                        self.config["jira"]["scriptrunner"][sr_key] = self._convert_value(env_value)
+                        config_logger.debug(f"Applied Jira ScriptRunner config: {sr_key}={env_value}")
                     else:
                         # Regular Jira config
                         self.config["jira"][key] = self._convert_value(env_value)
@@ -128,15 +122,11 @@ class ConfigLoader:
                 case ["J2O", "OPENPROJECT", *rest] if rest:
                     key = "_".join(rest).lower()
                     self.config["openproject"][key] = self._convert_value(env_value)
-                    config_logger.debug(
-                        f"Applied OpenProject config: {key}={env_value}"
-                    )
+                    config_logger.debug(f"Applied OpenProject config: {key}={env_value}")
 
                     # Special handling for tmux_session_name
                     if key == "tmux_session_name":
-                        config_logger.debug(
-                            f"Configured OpenProject tmux session name: {env_value}"
-                        )
+                        config_logger.debug(f"Configured OpenProject tmux session name: {env_value}")
 
                 case ["J2O", "BATCH", "SIZE"]:
                     self.config["migration"]["batch_size"] = int(env_value)

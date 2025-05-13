@@ -72,9 +72,9 @@ class TestFileRegistry(unittest.TestCase):
         self.assertIn(data_file, data_files)
         self.assertNotIn(temp_file, data_files)
 
-    @patch('os.path.exists')
-    @patch('os.remove')
-    @patch('os.path.getmtime')
+    @patch("os.path.exists")
+    @patch("os.remove")
+    @patch("os.path.getmtime")
     def test_cleanup(self, mock_getmtime, mock_remove, mock_exists) -> None:
         """Test cleaning up registered files."""
         # Setup mocks
@@ -111,7 +111,7 @@ class TestFileManager(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
 
         # Create a patcher for the config.logger
-        self.logger_patcher = patch('src.utils.file_manager.logger')
+        self.logger_patcher = patch("src.utils.file_manager.logger")
         self.mock_logger = self.logger_patcher.start()
 
         # Initialize FileManager with the temp directory
@@ -127,6 +127,7 @@ class TestFileManager(unittest.TestCase):
 
         # Clean up the temporary directory
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_singleton_pattern(self) -> None:
@@ -155,7 +156,7 @@ class TestFileManager(unittest.TestCase):
         self.assertNotEqual(id1, id2)
 
         # Verify the format (should have date and time components)
-        self.assertRegex(id1, r'\d{8}_\d{6}_\d{6}_[a-z0-9]{4}')
+        self.assertRegex(id1, r"\d{8}_\d{6}_\d{6}_[a-z0-9]{4}")
 
     def test_create_debug_session(self) -> None:
         """Test creating debug sessions."""
@@ -230,7 +231,7 @@ class TestFileManager(unittest.TestCase):
         test_content = "Test file content"
         test_file = os.path.join(self.file_manager.temp_dir, "test_file.txt")
 
-        with open(test_file, 'w') as f:
+        with open(test_file, "w") as f:
             f.write(test_content)
 
         # Read the file
@@ -245,7 +246,7 @@ class TestFileManager(unittest.TestCase):
         test_data = {"key": "value", "number": 42}
         test_file = os.path.join(self.file_manager.temp_dir, "test_file.json")
 
-        with open(test_file, 'w') as f:
+        with open(test_file, "w") as f:
             json.dump(test_data, f)
 
         # Read the JSON file
@@ -260,7 +261,7 @@ class TestFileManager(unittest.TestCase):
         test_content = "Test file content"
         source_file = os.path.join(self.file_manager.temp_dir, "source.txt")
 
-        with open(source_file, 'w') as f:
+        with open(source_file, "w") as f:
             f.write(test_content)
 
         # Destination file
@@ -282,7 +283,7 @@ class TestFileManager(unittest.TestCase):
         # Verify it's registered
         self.assertIn(dest_file, self.file_manager.registry.get_files("temp"))
 
-    @patch.object(FileRegistry, 'cleanup')
+    @patch.object(FileRegistry, "cleanup")
     def test_cleanup_old_files(self, mock_cleanup) -> None:
         """Test cleaning up old files."""
         # Set up mock
@@ -294,12 +295,12 @@ class TestFileManager(unittest.TestCase):
         # Verify cleanup was called with the right parameters
         mock_cleanup.assert_called_once()
         # First positional argument should be None, second should be seconds (7 days)
-        self.assertEqual(mock_cleanup.call_args[1]['older_than'], 7 * 24 * 60 * 60)
+        self.assertEqual(mock_cleanup.call_args[1]["older_than"], 7 * 24 * 60 * 60)
 
         # Verify logger was called
         self.mock_logger.info.assert_called_once()
 
-    @patch.object(FileRegistry, 'cleanup')
+    @patch.object(FileRegistry, "cleanup")
     def test_cleanup_all(self, mock_cleanup) -> None:
         """Test cleaning up all files."""
         # Set up mock

@@ -2,12 +2,11 @@
 Tests for the user migration component.
 """
 
-import unittest
-from unittest.mock import MagicMock, mock_open, patch
-import tempfile
-import shutil
-from unittest.mock import Mock
 import json
+import shutil
+import tempfile
+import unittest
+from unittest.mock import MagicMock, Mock, mock_open, patch
 
 from src.migrations.user_migration import UserMigration
 
@@ -223,18 +222,8 @@ class TestUserMigration(unittest.TestCase):
 
         # Configure jira_client to return test users
         jira_users = [
-            {
-                "key": "test1",
-                "name": "test_user1",
-                "emailAddress": "test1@example.com",
-                "displayName": "Test User 1"
-            },
-            {
-                "key": "test2",
-                "name": "test_user2",
-                "emailAddress": "test2@example.com",
-                "displayName": "Test User 2"
-            }
+            {"key": "test1", "name": "test_user1", "emailAddress": "test1@example.com", "displayName": "Test User 1"},
+            {"key": "test2", "name": "test_user2", "emailAddress": "test2@example.com", "displayName": "Test User 2"},
         ]
 
         # Mock the progress tracker context manager
@@ -245,14 +234,12 @@ class TestUserMigration(unittest.TestCase):
         data_dir = tempfile.mkdtemp()
 
         # Use patch.object to avoid calling the real methods during initialization
-        with patch.object(UserMigration, '_save_to_json'), \
-             patch.object(UserMigration, '_load_from_json', return_value=None):
+        with (
+            patch.object(UserMigration, "_save_to_json"),
+            patch.object(UserMigration, "_load_from_json", return_value=None),
+        ):
 
-            migration = UserMigration(
-                jira_client=mock_jira_instance,
-                op_client=mock_op_instance,
-                data_dir=data_dir
-            )
+            migration = UserMigration(jira_client=mock_jira_instance, op_client=mock_op_instance, data_dir=data_dir)
 
             # Add mocks to avoid file operations that cause serialization errors
             migration._save_to_json = MagicMock()
@@ -269,7 +256,7 @@ class TestUserMigration(unittest.TestCase):
                     "openproject_id": None,
                     "openproject_login": None,
                     "openproject_email": None,
-                    "matched_by": "none"
+                    "matched_by": "none",
                 },
                 "test2": {
                     "jira_key": "test2",
@@ -279,22 +266,24 @@ class TestUserMigration(unittest.TestCase):
                     "openproject_id": None,
                     "openproject_login": None,
                     "openproject_email": None,
-                    "matched_by": "none"
-                }
+                    "matched_by": "none",
+                },
             }
             migration.create_user_mapping = MagicMock(return_value=user_mapping)
             migration.user_mapping = user_mapping
 
             # Configure op_client to succeed when creating users
-            mock_op_instance.create_users_in_bulk.return_value = json.dumps({
-                "created_count": 2,
-                "failed_count": 0,
-                "created_users": [
-                    {"id": 101, "login": "test_user1", "email": "test1@example.com"},
-                    {"id": 102, "login": "test_user2", "email": "test2@example.com"}
-                ],
-                "failed_users": []
-            })
+            mock_op_instance.create_users_in_bulk.return_value = json.dumps(
+                {
+                    "created_count": 2,
+                    "failed_count": 0,
+                    "created_users": [
+                        {"id": 101, "login": "test_user1", "email": "test1@example.com"},
+                        {"id": 102, "login": "test_user2", "email": "test2@example.com"},
+                    ],
+                    "failed_users": [],
+                }
+            )
 
             # Test create_missing_users method
             result = migration.create_missing_users()

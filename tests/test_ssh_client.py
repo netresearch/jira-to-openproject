@@ -6,10 +6,10 @@ This module contains test cases for validating SSH operations.
 """
 
 import os
+import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
-import subprocess
+from unittest.mock import MagicMock, patch
 
 from src.clients.ssh_client import SSHClient, SSHCommandError, SSHFileTransferError
 
@@ -23,13 +23,13 @@ class TestSSHClient(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
 
         # Create patchers
-        self.subprocess_patcher = patch('src.clients.ssh_client.subprocess')
+        self.subprocess_patcher = patch("src.clients.ssh_client.subprocess")
         self.mock_subprocess = self.subprocess_patcher.start()
 
-        self.logger_patcher = patch('src.clients.ssh_client.logger')
+        self.logger_patcher = patch("src.clients.ssh_client.logger")
         self.mock_logger = self.logger_patcher.start()
 
-        self.os_patcher = patch('src.clients.ssh_client.os')
+        self.os_patcher = patch("src.clients.ssh_client.os")
         self.mock_os = self.os_patcher.start()
 
         # Configure mock subprocess.run
@@ -45,7 +45,7 @@ class TestSSHClient(unittest.TestCase):
         self.mock_os.path.getsize.return_value = 1024
 
         # File manager mock
-        self.file_manager_patcher = patch('src.clients.ssh_client.FileManager')
+        self.file_manager_patcher = patch("src.clients.ssh_client.FileManager")
         self.mock_file_manager_class = self.file_manager_patcher.start()
         self.mock_file_manager = MagicMock()
         self.mock_file_manager.registry = MagicMock()
@@ -57,7 +57,7 @@ class TestSSHClient(unittest.TestCase):
         self.mock_subprocess.SubprocessError = subprocess.SubprocessError
 
         # Initialize SSHClient after all mocks are set up
-        with patch.object(SSHClient, 'connect', return_value=True):
+        with patch.object(SSHClient, "connect", return_value=True):
             self.ssh_client = SSHClient(host="testhost", user="testuser")
 
     def tearDown(self) -> None:
@@ -71,6 +71,7 @@ class TestSSHClient(unittest.TestCase):
         # Clean up temp directory
         if os.path.exists(self.temp_dir):
             import shutil
+
             shutil.rmtree(self.temp_dir)
 
     def test_initialization(self) -> None:
@@ -89,33 +90,19 @@ class TestSSHClient(unittest.TestCase):
         """Test generating the base SSH command."""
         # Test with default settings
         cmd = self.ssh_client.get_ssh_base_command()
-        expected_cmd = [
-            "ssh",
-            "-o", "ConnectTimeout=10",
-            "testuser@testhost"
-        ]
+        expected_cmd = ["ssh", "-o", "ConnectTimeout=10", "testuser@testhost"]
         self.assertEqual(cmd, expected_cmd)
 
         # Test with key file
         self.ssh_client.key_file = "/path/to/key.pem"
         cmd = self.ssh_client.get_ssh_base_command()
-        expected_cmd = [
-            "ssh",
-            "-o", "ConnectTimeout=10",
-            "-i", "/path/to/key.pem",
-            "testuser@testhost"
-        ]
+        expected_cmd = ["ssh", "-o", "ConnectTimeout=10", "-i", "/path/to/key.pem", "testuser@testhost"]
         self.assertEqual(cmd, expected_cmd)
 
         # Test without user
         self.ssh_client.user = None
         cmd = self.ssh_client.get_ssh_base_command()
-        expected_cmd = [
-            "ssh",
-            "-o", "ConnectTimeout=10",
-            "-i", "/path/to/key.pem",
-            "testhost"
-        ]
+        expected_cmd = ["ssh", "-o", "ConnectTimeout=10", "-i", "/path/to/key.pem", "testhost"]
         self.assertEqual(cmd, expected_cmd)
 
     def test_test_connection_success(self) -> None:
@@ -224,12 +211,11 @@ class TestSSHClient(unittest.TestCase):
         self.assertEqual(returncode, 1)
 
         # But with check=True (default), it should raise SSHCommandError
-        with patch.object(self.ssh_client, 'execute_command', side_effect=SSHCommandError(
-            command="invalid_command",
-            returncode=1,
-            stdout="",
-            stderr="Command failed"
-        )):
+        with patch.object(
+            self.ssh_client,
+            "execute_command",
+            side_effect=SSHCommandError(command="invalid_command", returncode=1, stdout="", stderr="Command failed"),
+        ):
             with self.assertRaises(SSHCommandError):
                 self.ssh_client.execute_command("invalid_command")
 
@@ -276,8 +262,9 @@ class TestSSHClient(unittest.TestCase):
         self.mock_os.path.exists.return_value = False
 
         # Directly simulate the FileNotFoundError
-        with patch.object(self.ssh_client, 'copy_file_to_remote',
-                          side_effect=FileNotFoundError("Local file does not exist")):
+        with patch.object(
+            self.ssh_client, "copy_file_to_remote", side_effect=FileNotFoundError("Local file does not exist")
+        ):
             # Call the method - should raise FileNotFoundError
             with self.assertRaises(FileNotFoundError):
                 self.ssh_client.copy_file_to_remote("/local/file.txt", "/remote/file.txt")
@@ -292,12 +279,13 @@ class TestSSHClient(unittest.TestCase):
         self.mock_os.path.exists.return_value = True
 
         # Directly simulate the SSHFileTransferError
-        with patch.object(self.ssh_client, 'copy_file_to_remote',
-                          side_effect=SSHFileTransferError(
-                              source="/local/file.txt",
-                              destination="testuser@testhost:/remote/file.txt",
-                              message="Permission denied"
-                          )):
+        with patch.object(
+            self.ssh_client,
+            "copy_file_to_remote",
+            side_effect=SSHFileTransferError(
+                source="/local/file.txt", destination="testuser@testhost:/remote/file.txt", message="Permission denied"
+            ),
+        ):
             # Call the method - should raise SSHFileTransferError
             with self.assertRaises(SSHFileTransferError):
                 self.ssh_client.copy_file_to_remote("/local/file.txt", "/remote/file.txt")
@@ -328,15 +316,16 @@ class TestSSHClient(unittest.TestCase):
         self.assertIn("/local/file.txt", cmd_args)
 
         # Verify file registration
-        self.mock_file_manager.registry.register.assert_called_once_with(
-            "/local/file.txt", "temp"
-        )
+        self.mock_file_manager.registry.register.assert_called_once_with("/local/file.txt", "temp")
 
     def test_copy_file_from_remote_missing_file(self) -> None:
         """Test file copy when downloaded file is missing."""
         # Directly simulate the FileNotFoundError
-        with patch.object(self.ssh_client, 'copy_file_from_remote',
-                          side_effect=FileNotFoundError("File download succeeded but file not found")):
+        with patch.object(
+            self.ssh_client,
+            "copy_file_from_remote",
+            side_effect=FileNotFoundError("File download succeeded but file not found"),
+        ):
             # Call the method - should raise FileNotFoundError
             with self.assertRaises(FileNotFoundError):
                 self.ssh_client.copy_file_from_remote("/remote/file.txt", "/local/file.txt")
@@ -348,12 +337,15 @@ class TestSSHClient(unittest.TestCase):
         self.mock_logger.error.reset_mock()
 
         # Directly simulate the SSHFileTransferError
-        with patch.object(self.ssh_client, 'copy_file_from_remote',
-                          side_effect=SSHFileTransferError(
-                              source="testuser@testhost:/remote/file.txt",
-                              destination="/local/file.txt",
-                              message="No such file or directory"
-                          )):
+        with patch.object(
+            self.ssh_client,
+            "copy_file_from_remote",
+            side_effect=SSHFileTransferError(
+                source="testuser@testhost:/remote/file.txt",
+                destination="/local/file.txt",
+                message="No such file or directory",
+            ),
+        ):
             # Call the method - should raise SSHFileTransferError
             with self.assertRaises(SSHFileTransferError):
                 self.ssh_client.copy_file_from_remote("/remote/file.txt", "/local/file.txt")
@@ -364,7 +356,7 @@ class TestSSHClient(unittest.TestCase):
         self.mock_subprocess.run.reset_mock()
 
         # Set up execute_command to return success
-        with patch.object(self.ssh_client, 'execute_command') as mock_execute:
+        with patch.object(self.ssh_client, "execute_command") as mock_execute:
             mock_execute.return_value = ("EXISTS", "", 0)
 
             # Call the method
@@ -379,7 +371,7 @@ class TestSSHClient(unittest.TestCase):
     def test_check_remote_file_exists_false(self) -> None:
         """Test checking if remote file exists - file doesn't exist."""
         # We need to mock both check_remote_file_exists directly and its use of execute_command
-        with patch.object(self.ssh_client, 'check_remote_file_exists', return_value=False):
+        with patch.object(self.ssh_client, "check_remote_file_exists", return_value=False):
             # Call the method
             result = self.ssh_client.check_remote_file_exists("/remote/file.txt")
 
@@ -392,7 +384,7 @@ class TestSSHClient(unittest.TestCase):
         self.mock_subprocess.run.reset_mock()
 
         # Set up execute_command to return a file size
-        with patch.object(self.ssh_client, 'execute_command') as mock_execute:
+        with patch.object(self.ssh_client, "execute_command") as mock_execute:
             mock_execute.return_value = ("1234", "", 0)
 
             # Call the method
@@ -407,7 +399,7 @@ class TestSSHClient(unittest.TestCase):
     def test_get_remote_file_size_file_not_found(self) -> None:
         """Test getting remote file size - file not found."""
         # Set up execute_command to return NOT_EXISTS
-        with patch.object(self.ssh_client, 'execute_command') as mock_execute:
+        with patch.object(self.ssh_client, "execute_command") as mock_execute:
             mock_execute.return_value = ("NOT_EXISTS", "", 0)
 
             # Call the method
@@ -422,7 +414,7 @@ class TestSSHClient(unittest.TestCase):
     def test_get_remote_file_size_invalid_output(self) -> None:
         """Test getting remote file size - invalid output."""
         # Set up execute_command to return invalid output
-        with patch.object(self.ssh_client, 'execute_command') as mock_execute:
+        with patch.object(self.ssh_client, "execute_command") as mock_execute:
             mock_execute.return_value = ("invalid", "", 0)
 
             # Call the method

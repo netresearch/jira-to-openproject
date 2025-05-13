@@ -85,9 +85,7 @@ class UserMigration(BaseMigration):
         if not self.jira_users:
             raise MigrationError("Failed to extract users from Jira")
 
-        self.logger.info(
-            f"Extracted {len(self.jira_users)} users from Jira", extra={"markup": True}
-        )
+        self.logger.info(f"Extracted {len(self.jira_users)} users from Jira", extra={"markup": True})
 
         self._save_to_json(self.jira_users, "jira_users.json")
 
@@ -138,20 +136,12 @@ class UserMigration(BaseMigration):
         if not self.op_users:
             self.extract_openproject_users()
 
-        op_users_by_username = {
-            user.get("login", "").lower(): user for user in self.op_users
-        }
-        op_users_by_email = {
-            user.get("email", "").lower(): user
-            for user in self.op_users
-            if user.get("email")
-        }
+        op_users_by_username = {user.get("login", "").lower(): user for user in self.op_users}
+        op_users_by_email = {user.get("email", "").lower(): user for user in self.op_users if user.get("email")}
 
         mapping = {}
 
-        with ProgressTracker(
-            "Mapping users", len(self.jira_users), "Recent User Mappings"
-        ) as tracker:
+        with ProgressTracker("Mapping users", len(self.jira_users), "Recent User Mappings") as tracker:
             for jira_user in self.jira_users:
                 jira_key = jira_user.get("key")
                 jira_name = jira_user.get("name", "").lower()
@@ -172,9 +162,7 @@ class UserMigration(BaseMigration):
                         "openproject_email": op_user.get("email"),
                         "matched_by": "username",
                     }
-                    tracker.add_log_item(
-                        f"Matched by username: {jira_display_name} → {op_user.get('login')}"
-                    )
+                    tracker.add_log_item(f"Matched by username: {jira_display_name} → {op_user.get('login')}")
                     tracker.increment()
                     continue
 
@@ -190,9 +178,7 @@ class UserMigration(BaseMigration):
                         "openproject_email": op_user.get("email"),
                         "matched_by": "email",
                     }
-                    tracker.add_log_item(
-                        f"Matched by email: {jira_display_name} → {op_user.get('login')}"
-                    )
+                    tracker.add_log_item(f"Matched by email: {jira_display_name} → {op_user.get('login')}")
                     tracker.increment()
                     continue
 
@@ -233,11 +219,7 @@ class UserMigration(BaseMigration):
         if not self.user_mapping:
             self.create_user_mapping()
 
-        missing_users = [
-            user
-            for user in self.user_mapping.values()
-            if user["matched_by"] == "none"
-        ]
+        missing_users = [user for user in self.user_mapping.values() if user["matched_by"] == "none"]
 
         if not missing_users:
             self.logger.info("No missing users to create", extra={"markup": True})
@@ -252,9 +234,7 @@ class UserMigration(BaseMigration):
         failed = 0
         created_users = []
 
-        with ProgressTracker(
-            "Creating users", len(missing_users), "Recent User Creations"
-        ) as tracker:
+        with ProgressTracker("Creating users", len(missing_users), "Recent User Creations") as tracker:
             for i in range(0, len(missing_users), batch_size):
                 batch = missing_users[i : i + batch_size]
 
@@ -266,14 +246,16 @@ class UserMigration(BaseMigration):
                     first_name = names[0] if len(names) > 0 else "User"
                     last_name = names[1] if len(names) > 1 else user["jira_name"]
 
-                    users_to_create.append({
-                        "login": user["jira_name"],
-                        "firstname": first_name,
-                        "lastname": last_name,
-                        "mail": user["jira_email"],
-                        "admin": False,
-                        "status": "active"
-                    })
+                    users_to_create.append(
+                        {
+                            "login": user["jira_name"],
+                            "firstname": first_name,
+                            "lastname": last_name,
+                            "mail": user["jira_email"],
+                            "admin": False,
+                            "status": "active",
+                        }
+                    )
 
                 batch_users = [user["jira_name"] for user in batch]
                 tracker.update_description(f"Creating users: {', '.join(batch_users)}")
@@ -294,43 +276,35 @@ class UserMigration(BaseMigration):
                         except json.JSONDecodeError:
                             # Fall back to regex extraction if there are Ruby hash markers
                             # Extract data between curly braces
-                            match = re.search(r'\{.*\}', result_str, re.DOTALL)
+                            match = re.search(r"\{.*\}", result_str, re.DOTALL)
                             if match:
                                 # Convert Ruby hash string to JSON format
                                 json_str = match.group(0)
-                                json_str = re.sub(r':(\w+)\s*=>', r'"\1":', json_str)
+                                json_str = re.sub(r":(\w+)\s*=>", r'"\1":', json_str)
                                 json_str = json_str.replace("=>", ":")
                                 try:
                                     result = json.loads(json_str)
                                 except:
                                     # If everything fails, rely on string counts for basic success metrics
                                     self.logger.warning("Could not parse JSON, using basic string parsing")
-                                    batch_created = result_str.count('"status": "success"') or result_str.count('"status" => "success"')
+                                    batch_created = result_str.count('"status": "success"') or result_str.count(
+                                        '"status" => "success"'
+                                    )
                                     batch_failed = len(batch) - batch_created
-                                    result = {
-                                        "created_count": batch_created,
-                                        "created_users": [],
-                                        "failed_users": []
-                                    }
+                                    result = {"created_count": batch_created, "created_users": [], "failed_users": []}
                             else:
                                 # No JSON-like structure found
                                 batch_created = 0
                                 batch_failed = len(batch)
-                                result = {
-                                    "created_count": 0,
-                                    "created_users": [],
-                                    "failed_users": []
-                                }
+                                result = {"created_count": 0, "created_users": [], "failed_users": []}
                     except ImportError:
                         # If somehow json module is not available
                         self.logger.warning("JSON module not available, using basic string parsing")
-                        batch_created = result_str.count('"status": "success"') or result_str.count('"status" => "success"')
+                        batch_created = result_str.count('"status": "success"') or result_str.count(
+                            '"status" => "success"'
+                        )
                         batch_failed = len(batch) - batch_created
-                        result = {
-                            "created_count": batch_created,
-                            "created_users": [],
-                            "failed_users": []
-                        }
+                        result = {"created_count": batch_created, "created_users": [], "failed_users": []}
 
                     # Extract result stats
                     batch_created = result.get("created_count", 0)
@@ -362,7 +336,7 @@ class UserMigration(BaseMigration):
             "failed": failed,
             "total": len(missing_users),
             "created_count": created,  # Add for test compatibility
-            "created_users": created_users
+            "created_users": created_users,
         }
 
     def analyze_user_mapping(self) -> dict:
@@ -379,35 +353,21 @@ class UserMigration(BaseMigration):
             self.create_user_mapping()
 
         total_users = len(self.user_mapping)
-        matched_by_username = len(
-            [u for u in self.user_mapping.values() if u["matched_by"] == "username"]
-        )
-        matched_by_email = len(
-            [u for u in self.user_mapping.values() if u["matched_by"] == "email"]
-        )
-        not_matched = len(
-            [u for u in self.user_mapping.values() if u["matched_by"] == "none"]
-        )
+        matched_by_username = len([u for u in self.user_mapping.values() if u["matched_by"] == "username"])
+        matched_by_email = len([u for u in self.user_mapping.values() if u["matched_by"] == "email"])
+        not_matched = len([u for u in self.user_mapping.values() if u["matched_by"] == "none"])
 
         analysis = {
             "total_users": total_users,
             "matched_by_username": matched_by_username,
             "matched_by_email": matched_by_email,
             "not_matched": not_matched,
-            "username_match_percentage": (
-                (matched_by_username / total_users) * 100 if total_users > 0 else 0
-            ),
-            "email_match_percentage": (
-                (matched_by_email / total_users) * 100 if total_users > 0 else 0
-            ),
+            "username_match_percentage": ((matched_by_username / total_users) * 100 if total_users > 0 else 0),
+            "email_match_percentage": ((matched_by_email / total_users) * 100 if total_users > 0 else 0),
             "total_match_percentage": (
-                ((matched_by_username + matched_by_email) / total_users) * 100
-                if total_users > 0
-                else 0
+                ((matched_by_username + matched_by_email) / total_users) * 100 if total_users > 0 else 0
             ),
-            "not_matched_percentage": (
-                (not_matched / total_users) * 100 if total_users > 0 else 0
-            ),
+            "not_matched_percentage": ((not_matched / total_users) * 100 if total_users > 0 else 0),
         }
 
         # Display the analysis

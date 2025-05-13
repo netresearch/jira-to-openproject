@@ -76,10 +76,7 @@ class TestBaseMigration(unittest.TestCase):
         mock_op = MagicMock(spec=OpenProjectClient)
 
         # Create BaseMigration with all mock clients
-        migration = BaseMigration(
-            jira_client=mock_jira,
-            op_client=mock_op
-        )
+        migration = BaseMigration(jira_client=mock_jira, op_client=mock_op)
 
         # Verify both clients were used and not recreated
         self.assertEqual(migration.jira_client, mock_jira)
