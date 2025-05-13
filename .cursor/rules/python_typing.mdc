@@ -1,7 +1,7 @@
 ---
 description:
 globs:
-alwaysApply: false
+alwaysApply: true
 ---
 - **Use Pipe Operator for Union Types**
   - Use the `|` operator for Union types (Python 3.10+) instead of `Union[]`

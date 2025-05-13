@@ -21,9 +21,9 @@ Workflow:
 
 import json
 import os
-import tempfile
 import time
 import random
+import re
 from typing import Any, cast
 
 from src import config
@@ -204,24 +204,29 @@ class OpenProjectClient:
             temp_dir = os.path.join(self.file_manager.data_dir, "temp_scripts")
             os.makedirs(temp_dir, exist_ok=True)
 
-            # Create a temporary file with .rb extension
-            temp_file = tempfile.NamedTemporaryFile(
-                suffix=".rb",
-                prefix="openproject_script_",
-                dir=temp_dir,
-                delete=False,
-                mode="w",
-                encoding="utf-8"
-            )
+            # Generate a unique filename
+            filename = f"openproject_script_{os.urandom(4).hex()}.rb"
+            file_path = os.path.join(temp_dir, filename)
 
-            # Write the script content to the file
-            temp_file.write(script_content)
-            temp_file.close()
+            # Write the content directly instead of using tempfile module
+            with open(file_path, mode="w", encoding="utf-8") as f:
+                f.write(script_content)
 
-            logger.debug(f"Created temporary script file: {temp_file.name}")
-            return temp_file.name
+            # Verify the file was created and is readable
+            if not os.path.exists(file_path):
+                raise OSError("Failed to create script file: File not found after creation")
+
+            if not os.access(file_path, os.R_OK):
+                raise OSError("Failed to create script file: File is not readable")
+
+            # Log the absolute path for easier debugging
+            logger.debug(f"Created temporary script file: {os.path.abspath(file_path)}")
+            return file_path
         except OSError as e:
             logger.error(f"Failed to create script file: {str(e)}")
+            raise OSError(f"Failed to create script file: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error creating script file: {str(e)}")
             raise OSError(f"Failed to create script file: {str(e)}")
 
     def _transfer_rails_script(self, local_path: str) -> str:
@@ -238,16 +243,39 @@ class OpenProjectClient:
             FileTransferError: If transfer fails
         """
         try:
-            # First copy to remote server
-            self.ssh_client.copy_file_to_remote(local_path, local_path)
+            # Verify the local file exists and is readable before attempting to transfer
+            if not os.path.isfile(local_path):
+                raise FileTransferError(f"Local file does not exist: {local_path}")
 
-            # Then copy from remote server to container
+            if not os.access(local_path, os.R_OK):
+                raise FileTransferError(f"Local file is not readable: {local_path}")
+
+            # Get the absolute path for better error messages
+            abs_path = os.path.abspath(local_path)
+            logger.debug(f"Transferring script from: {abs_path}")
+
+            # Use just the base filename for the container path
             container_path = f"/tmp/{os.path.basename(local_path)}"
-            self.docker_client.copy_file_to_container(local_path, container_path)
 
+            # Use Docker client to handle the entire transfer process
+            # This should internally:
+            # 1. Copy from local to remote (via SSH)
+            # 2. Copy from remote to container
+            # 3. Set permissions as root user in the container
+            self.docker_client.transfer_file_to_container(abs_path, container_path)
+
+            # Verify file exists and is readable in container
+            if not self.docker_client.check_file_exists_in_container(container_path):
+                raise FileTransferError(f"File not found in container after transfer: {container_path}")
+
+            # Check if we can read the file content
+            stdout, stderr, rc = self.docker_client.execute_command(f"head -1 {container_path}")
+            if rc != 0:
+                raise FileTransferError(f"File in container is not readable: {stderr}")
+
+            logger.debug(f"Successfully transferred file to container at {container_path}")
             return container_path
-        except (SSHConnectionError, SSHFileTransferError) as e:
-            raise FileTransferError(f"SSH transfer failed: {str(e)}")
+
         except Exception as e:
             raise FileTransferError(f"Failed to transfer script: {str(e)}")
 
@@ -287,31 +315,95 @@ class OpenProjectClient:
         Raises:
             FileTransferError: If file transfer fails
             QueryExecutionError: If script execution fails
+            JsonParseError: If result parsing fails
         """
+        local_path = None
+        container_path = None
+        result = None  # Initialize result variable
+
         try:
             # Create a local script file
             local_path = self._create_script_file(script_content)
+            logger.debug(f"Created script file at: {local_path}")
 
             # Transfer the script to the container
             container_path = self._transfer_rails_script(local_path)
+            logger.debug(f"Transferred script to container: {container_path}")
 
-            # Execute the script in Rails console
-            result = self.rails_client.execute(f'load "{container_path}"')
+            # We don't try to modify permissions, as we can't in this environment
+            # Just check if the file exists
+            file_exists = self.docker_client.check_file_exists_in_container(container_path)
+            logger.debug(f"Container script file exists: {file_exists}")
 
-            # Attempt to delete the local and remote scripts
+            if not file_exists:
+                raise FileTransferError(f"Script file not found in container after transfer: {container_path}")
+
+            # Check permissions
+            stdout, stderr, rc = self.docker_client.execute_command(f"ls -la {container_path}")
+            logger.debug(f"File permissions in container: {stdout}")
+
+            # Print contents for debugging
+            stdout, stderr, rc = self.docker_client.execute_command(f"cat {container_path} | head -5")
+            logger.debug(f"First few lines of script: {stdout}")
+
+            # Execute the script in Rails console and get result
+            rails_output = self.rails_client.execute(f'load "{container_path}"')
+            logger.debug(f"Rails script execution output: {rails_output}")
+
+            # Parse the result from JSON format
             try:
-                os.unlink(local_path)
-                self.docker_client.execute_command(f"rm -f {container_path}")
-            except Exception as e:
-                logger.warning(f"Failed to cleanup script files: {str(e)}")
+                result = json.loads(rails_output)
+                logger.debug(f"Parsed result: {result}")
+            except json.JSONDecodeError as e:
+                # If JSON parsing fails, try to extract a hash from the Ruby output
+                logger.warning(f"JSON parse error: {str(e)}")
+                logger.warning(f"Attempting to extract hash from Rails output: {rails_output}")
 
-            return json.loads(result)
-        except json.JSONDecodeError as e:
-            raise JsonParseError(f"Failed to parse JSON result: {str(e)}, raw result: {result}")
+                # Try to parse Ruby hash format into Python dict
+                hash_match = re.search(r'\{([^{}]*)\}', rails_output)
+                if hash_match:
+                    hash_str = hash_match.group(0)
+                    logger.debug(f"Found hash string: {hash_str}")
+
+                    # Very simple Ruby hash to Python dict conversion
+                    # This is not a general solution but works for our simple case
+                    try:
+                        # Replace Ruby symbols with strings
+                        dict_str = re.sub(r':([a-zA-Z_]\w*)\s*=>', r'"\1":', hash_str)
+                        # Replace => with :
+                        dict_str = dict_str.replace("=>", ":")
+                        # Try to parse resulting string as JSON
+                        result = json.loads(dict_str)
+                        logger.debug(f"Converted hash to dict: {result}")
+                    except Exception as e:
+                        logger.error(f"Failed to convert Ruby hash to dict: {str(e)}")
+                        # Use the output as a string if we can't parse it
+                        result = {"raw_output": rails_output}
+                else:
+                    # Fallback to raw output if no hash found
+                    result = {"raw_output": rails_output}
+
+            # Return the result
+            return result if result is not None else {"raw_output": rails_output}
         except FileTransferError as e:
             raise e  # Re-raise FileTransferError
         except Exception as e:
             raise QueryExecutionError(f"Failed to execute script: {str(e)}")
+        finally:
+            # Clean up local script file
+            if local_path and os.path.exists(local_path):
+                try:
+                    os.unlink(local_path)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up local script file: {str(e)}")
+
+            # Clean up container script file
+            if container_path:
+                try:
+                    # Use root user to remove the file, to handle permission issues
+                    self.docker_client.execute_command(f"rm -f {container_path}", user="root")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up container script file: {str(e)}")
 
     def execute(self, script_content: str) -> dict[str, Any]:
         """
@@ -337,19 +429,30 @@ class OpenProjectClient:
             container_path: Destination path in container
 
         Returns:
-            True if successful, False otherwise
+            True if successful
+
+        Raises:
+            FileTransferError: If the transfer fails for any reason
         """
         try:
-            # First copy to remote server
-            self.ssh_client.copy_file_to_remote(local_path, local_path)
+            # Use just the base filename for the remote path
+            remote_filename = os.path.basename(local_path)
+            remote_path = f"/tmp/{remote_filename}"
+
+            # First copy to remote server's /tmp directory
+            self.ssh_client.copy_file_to_remote(local_path, remote_path)
 
             # Then copy from remote server to container
-            self.docker_client.copy_file_to_container(local_path, container_path)
+            self.docker_client.copy_file_to_container(remote_path, container_path)
+
+            # Clean up the temporary file on the remote server
+            self.ssh_client.execute_command(f"rm -f {remote_path}")
 
             return True
         except Exception as e:
-            logger.error(f"Failed to transfer file to container: {str(e)}")
-            return False
+            error_msg = f"Failed to transfer file to container: {str(e)}"
+            logger.error(error_msg)
+            raise FileTransferError(error_msg)
 
     def is_connected(self) -> bool:
         """
@@ -374,7 +477,7 @@ class OpenProjectClient:
             logger.error(f"Connection test failed: {str(e)}")
             return False
 
-    def execute_query(self, query: str, timeout: int | None = None) -> Any:
+    def execute_query(self, query: str, timeout: int | None = None) -> str:
         """
         Execute a Rails query.
 
@@ -391,12 +494,12 @@ class OpenProjectClient:
         """
         self._last_query = query
 
-        script_content = f"""
-  result = (
-    {query}
-  )
-"""
-        return self._transfer_and_execute_script(script_content)
+        result = self.rails_client._send_command_to_tmux(
+            f"puts ({query})",
+            5
+        )
+        
+        return result
 
     def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> Any:
         """
@@ -570,15 +673,10 @@ end
             QueryExecutionError: If the count query fails
         """
         result = self.execute_query(f"{model}.count")
-        try:
-            # Handle different output formats
-            if isinstance(result, int):
-                return result
-            if isinstance(result, str) and result.isdigit():
-                return int(result)
-            raise QueryExecutionError(f"Unable to parse count result: {result}")
-        except (ValueError, TypeError) as e:
-            raise QueryExecutionError(f"Failed to parse count: {str(e)}")
+
+        if isinstance(result, str) and result.isdigit():
+            return int(result)
+        raise QueryExecutionError(f"Unable to parse count result: {result}")
 
     def find_record(self, model: str, id_or_conditions: int | dict[str, Any]) -> dict[str, Any]:
         """

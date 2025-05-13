@@ -336,7 +336,7 @@ class TestIssueTypeMigration(unittest.TestCase):
             # Set test data
             migration.jira_issue_types = self.jira_issue_types
             migration.op_work_package_types = self.op_work_package_types
-            migration.issue_type_mapping = cast(Dict[str, Dict[str, Any]], self.expected_mapping)
+            migration.issue_type_mapping = cast(dict[str, dict[str, Any]], self.expected_mapping)
 
             # Call method
             result = migration.migrate_issue_types()
@@ -374,7 +374,7 @@ class TestIssueTypeMigration(unittest.TestCase):
         migration = IssueTypeMigration(
             jira_client=mock_jira_instance, op_client=mock_op_instance
         )
-        migration.issue_type_mapping = cast(Dict[str, Dict[str, Any]], self.expected_mapping)
+        migration.issue_type_mapping = cast(dict[str, dict[str, Any]], self.expected_mapping)
 
         # Call method
         result = migration.analyze_issue_type_mapping()

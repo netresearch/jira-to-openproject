@@ -169,3 +169,34 @@ class Mappings:
             return getattr(self, mapping_attr)
         logger.warning(f"Mapping '{mapping_name}' not found")
         return {}
+
+    def set_mapping(self, mapping_name: str, mapping_data: dict[str, Any]) -> bool:
+        """Set or update a specific mapping and save it to file.
+
+        Args:
+            mapping_name: Name of the mapping (e.g., 'projects', 'users', etc.)
+            mapping_data: The mapping dictionary to save
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # First update the instance variable
+        mapping_attr = f"{mapping_name}_mapping"
+        filename = f"{mapping_name}_mapping.json"
+
+        # Use the constant filename if available
+        if hasattr(self, f"{mapping_name.upper()}_MAPPING_FILE"):
+            filename = getattr(self, f"{mapping_name.upper()}_MAPPING_FILE")
+
+        # Update the attribute
+        setattr(self, mapping_attr, mapping_data)
+
+        # Save to file
+        file_path = os.path.join(self.data_dir, filename)
+        try:
+            data_handler.save_dict(mapping_data, file_path)
+            logger.info(f"Saved mapping '{mapping_name}' with {len(mapping_data)} entries")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving mapping '{mapping_name}': {str(e)}")
+            return False

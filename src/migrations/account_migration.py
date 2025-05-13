@@ -9,11 +9,10 @@ import json
 import os
 from typing import Any
 
-from src.models import ComponentResult
+from src.models import ComponentResult, MigrationError
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.display import ProgressTracker
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
 
@@ -50,10 +49,10 @@ class AccountMigration(BaseMigration):
             op_client: Initialized OpenProject client instance.
         """
         super().__init__(jira_client, op_client)
-        self.tempo_accounts: list[dict[str, Any]] = []
-        self.op_projects: list[dict[str, Any]] = []
-        self.account_mapping: dict[str, Any] = {}
-        self.company_mapping: dict[str, Any] = {}
+        self.tempo_accounts: list = []
+        self.op_projects: list = []
+        self.account_mapping: dict = {}
+        self.company_mapping: dict = {}
         self._created_accounts: int = 0
 
         self.account_custom_field_id: int | None = None
@@ -100,7 +99,7 @@ class AccountMigration(BaseMigration):
         else:
             self.logger.info("No valid custom field ID found, will create a new one")
 
-    def extract_tempo_accounts(self, force: bool = False) -> list[dict[str, Any]]:
+    def extract_tempo_accounts(self, force: bool = False) -> list:
         """
         Extracts Tempo accounts using the JiraClient.
 
@@ -109,6 +108,9 @@ class AccountMigration(BaseMigration):
 
         Returns:
             List of Tempo account dictionaries.
+
+        Raises:
+            MigrationError: If accounts cannot be extracted from Tempo
         """
         if (
             self.tempo_accounts
@@ -132,57 +134,48 @@ class AccountMigration(BaseMigration):
                 self._save_to_json(accounts, Mappings.TEMPO_ACCOUNTS_FILE)
                 return accounts
             else:
-                self.logger.error("Failed to retrieve Tempo accounts using JiraClient.")
-                return []
+                error_msg = "Failed to retrieve Tempo accounts using JiraClient"
+                self.logger.error(error_msg)
+                raise MigrationError(error_msg)
 
         except Exception as e:
-            self.logger.error(
-                f"Failed to extract Tempo accounts: {str(e)}", exc_info=True
-            )
-            return []
+            error_msg = f"Failed to extract Tempo accounts: {str(e)}"
+            self.logger.error(error_msg)
+            raise MigrationError(error_msg) from e
 
-    def extract_openproject_projects(self, force: bool = False) -> list[dict[str, Any]]:
+    def extract_openproject_projects(self) -> list:
         """
-        Extract projects from OpenProject.
-
-        Args:
-            force: If True, forces re-extraction even if cached data exists.
+        Get a list of all projects in OpenProject.
 
         Returns:
-            List of OpenProject project dictionaries
+            List of OpenProject projects
+
+        Raises:
+            MigrationError: If unable to get projects from OpenProject
         """
-        self.logger.info(
-            "Extracting projects from OpenProject...", extra={"markup": True}
-        )
+        self.logger.info("Extracting projects from OpenProject...")
 
-        try:
-            self.op_projects = self.op_client.get_projects()
-        except Exception as e:
-            self.logger.warning(
-                f"Failed to get projects from OpenProject: {str(e)}",
-                extra={"markup": True},
-            )
-            self.logger.warning(
-                "Using an empty list of projects for OpenProject",
-                extra={"markup": True},
-            )
-            self.op_projects = []
+        # Get projects from OpenProject - no fallbacks or mocks
+        self.op_projects = self.op_client.get_projects()
 
-        self.logger.info(
-            f"Extracted {len(self.op_projects)} projects from OpenProject",
-            extra={"markup": True},
-        )
+        if not self.op_projects:
+            raise MigrationError("Failed to get projects from OpenProject - no projects found")
 
-        self._save_to_json(self.op_projects, Mappings.OP_PROJECTS_FILE)
+        # Save projects for future reference
+        self._save_to_json(self.op_projects, "openproject_projects.json")
 
+        self.logger.info(f"Extracted {len(self.op_projects)} projects from OpenProject")
         return self.op_projects
 
-    def create_account_mapping(self) -> dict[str, Any]:
+    def create_account_mapping(self) -> dict:
         """
         Create a mapping between Tempo accounts and OpenProject sub-projects.
 
         Returns:
             Dictionary mapping Tempo account IDs to OpenProject project IDs
+
+        Raises:
+            MigrationError: If required data is missing
         """
         self.logger.info("Creating account mapping...", extra={"markup": True})
 
@@ -325,260 +318,102 @@ class AccountMigration(BaseMigration):
 
         return mapping
 
-    def create_account_custom_field(self) -> int | None:
+    def create_account_custom_field(self) -> int:
         """
-        Create a custom field in OpenProject to store Tempo account information.
+        Create a custom field in OpenProject for Tempo accounts.
 
         Returns:
-            ID of the created custom field or None if creation failed
+            ID of the custom field
+
+        Raises:
+            MigrationError: If custom field creation fails
         """
-        self.logger.info(
-            "Ensuring 'Tempo Account' custom field exists in OpenProject..."
-        )
+        self.logger.info("Ensuring 'Tempo Account' custom field exists in OpenProject...")
 
-        # Double check that account_custom_field_id is not a string "nil" or other invalid value
-        if (
-            isinstance(self.account_custom_field_id, str)
-            and self.account_custom_field_id == "nil"
-        ):
-            self.account_custom_field_id = None
-            self.logger.info(
-                "Pre-loaded custom field ID was 'nil', will create a new one"
-            )
+        # First, check if field already exists
+        existing_id = self.get_existing_custom_field_id()
 
-        if self.account_custom_field_id is not None:
-            try:
-                # Ensure it's a valid integer
-                self.account_custom_field_id = int(self.account_custom_field_id)
-                self.logger.info(
-                    f"Using pre-loaded custom field ID: {self.account_custom_field_id}"
-                )
-                return self.account_custom_field_id
-            except (ValueError, TypeError):
-                self.logger.warning(
-                    f"Invalid pre-loaded custom field ID: {self.account_custom_field_id}, will create a new one"
-                )
-                self.account_custom_field_id = None
+        if existing_id:
+            self.logger.info(f"Found existing Tempo Account custom field with ID {existing_id}")
+            self.account_custom_field_id = existing_id
+            return existing_id
 
-        if config.migration_config.get("dry_run", False):
-            self.logger.info(
-                "DRY RUN: Would check/create custom field for Tempo accounts"
-            )
-            self.account_custom_field_id = 9999  # Dummy ID for dry run
-            return self.account_custom_field_id
+        # Create the custom field using direct API
+        self.logger.info("Creating Tempo Account custom field...")
+
+        field_options = {
+            "name": "Tempo Account",
+            "field_format": "string",
+            "is_required": False,
+            "searchable": True,
+            "is_filter": True,
+            "custom_field_type": "WorkPackageCustomField"
+        }
+
+        # Create the field
+        result = self.op_client.create_record("CustomField", field_options)
+
+        if not result or "id" not in result:
+            raise MigrationError("Failed to create custom field: Invalid response from OpenProject")
+
+        self.account_custom_field_id = result["id"]
+        self.logger.info(f"Created Tempo Account custom field with ID {self.account_custom_field_id}")
+
+        # Associate with all work package types
+        if not self.associate_field_with_work_package_types(self.account_custom_field_id):
+            raise MigrationError("Failed to associate custom field with work package types")
+
+        return self.account_custom_field_id
+
+    def run(self) -> ComponentResult:
+        """
+        Run the account migration process.
+
+        Returns:
+            ComponentResult with migration results
+        """
+        self.logger.info("Starting account migration", extra={"markup": True})
 
         try:
-            self.logger.info(
-                "Checking if 'Tempo Account' custom field exists via Rails..."
-            )
-            existing_id = self.op_client.get_custom_field_id_by_name(
-                "Tempo Account"
-            )
+            self._load_data()
 
-            # Handle nil value properly (convert to None)
-            if existing_id is None:
-                self.logger.info(
-                    "No existing 'Tempo Account' custom field found, will create one"
-                )
-            else:
-                try:
-                    # Convert to integer if it's a string representation of a number
-                    existing_id = int(existing_id)
-                    self.logger.info(
-                        f"Custom field 'Tempo Account' already exists with ID: {existing_id}"
-                    )
-                    self.account_custom_field_id = existing_id
-                    self._save_custom_field_id(existing_id)
-                    return existing_id
-                except (ValueError, TypeError):
-                    self.logger.warning(
-                        f"Invalid custom field ID returned: {existing_id}, will create a new one"
-                    )
-                    existing_id = None
-
-            self.logger.info(
-                "Creating 'Tempo Account' custom field via Rails client..."
-            )
-            if not self.tempo_accounts:
-                self.extract_tempo_accounts()
-            possible_values = [
-                acc.get("name") for acc in self.tempo_accounts if acc.get("name")
-            ]
-
-            create_command = f"""
-            cf = CustomField.new(
-              name: 'Tempo Account',
-              field_format: 'list',
-              is_required: false,
-              searchable: true,
-              editable: true,
-              type: 'WorkPackageCustomField',
-              possible_values: {json.dumps(possible_values)}
-            )
-            cf.save!
-            cf.id
-            """
-
-            result = self.op_client.execute_query(create_command)
-
-            if result["status"] == "success" and result["output"] is not None:
-                new_id = result["output"]
-                # Check for nil value
-                if new_id == "nil" or new_id is None:
-                    self.logger.error(
-                        "Failed to create custom field - got nil ID",
-                        extra={"markup": True},
-                    )
-                    return None
-
-                try:
-                    # Convert to integer if it's a string
-                    new_id = int(new_id)
-                    self.logger.success(
-                        f"Successfully created 'Tempo Account' custom field with ID: {new_id}",
-                        extra={"markup": True},
-                    )
-                    self.account_custom_field_id = new_id
-                except (ValueError, TypeError):
-                    self.logger.error(
-                        f"Invalid custom field ID returned: {new_id}",
-                        extra={"markup": True},
-                    )
-                    return None
-
-                self.logger.info(
-                    "Making custom field available for all work package types...",
-                    extra={"markup": True},
-                )
-                activate_command = f"""
-                cf = CustomField.find({new_id})
-                cf.is_for_all = true
-                cf.save!
-                Type.all.each do |type|
-                  type.custom_fields << cf unless type.custom_fields.include?(cf)
-                  type.save!
-                end
-                true
-                """
-
-                activate_result = self.op_client.execute_query(activate_command)
-                if activate_result["status"] == "success":
-                    self.logger.success(
-                        "Custom field activated for all work package types",
-                        extra={"markup": True},
-                    )
-                else:
-                    self.logger.warning(
-                        f"Failed to activate custom field for all types: {activate_result.get('error')}",
-                        extra={"markup": True},
-                    )
-
-                return new_id
-            else:
-                error = result.get("error", "Unknown error")
-                self.logger.error(
-                    f"Failed to create 'Tempo Account' custom field: {error}",
-                    extra={"markup": True},
-                )
-                return None
-        except Exception as e:
-            self.logger.error(
-                f"Error creating custom field: {str(e)}", extra={"markup": True}
-            )
-            return None
-
-    def migrate_accounts(self) -> dict[str, Any]:
-        """
-        Migrate Tempo accounts to OpenProject as custom field values.
-
-        Returns:
-            Updated mapping between Tempo accounts and OpenProject custom field values
-        """
-        self.logger.info("Starting account migration...", extra={"markup": True})
-
-        if not self.tempo_accounts:
+            # Extract data
             self.extract_tempo_accounts()
+            self.extract_openproject_projects()
 
-        # Custom field ID should already be created/found by the time this method is called
-        if not self.account_custom_field_id:
-            self.logger.info(
-                "No custom field ID available, attempting to create one...",
-                extra={"markup": True},
-            )
-            self.account_custom_field_id = self.create_account_custom_field()
-            if not self.account_custom_field_id:
-                self.logger.error(
-                    "Failed to create custom field - cannot continue migration",
-                    extra={"markup": True},
-                )
-                return {
-                    "status": "failed",
-                    "error": "No custom field ID available and creation failed",
-                    "matched_count": 0,
-                    "created_count": 0,
-                    "failed_count": (
-                        len(self.tempo_accounts) if self.tempo_accounts else 0
-                    ),
-                }
-
-        if not self.account_mapping:
+            # Create mapping
             self.create_account_mapping()
 
-        accounts_to_process = list(self.account_mapping.values())
-        total_accounts = len(accounts_to_process)
-        matched_accounts = 0
+            # Ensure the custom field exists
+            custom_field_id = self.create_account_custom_field()
+            if not custom_field_id:
+                raise MigrationError("Failed to create or retrieve account custom field")
 
-        with ProgressTracker(
-            "Migrating accounts", total_accounts, "Recent Accounts"
-        ) as tracker:
-            for i, account in enumerate(accounts_to_process):
-                tempo_name = account["tempo_name"]
-                tracker.update_description(f"Processing account: {tempo_name}")
+            # Analyze results
+            analysis = self.analyze_account_mapping()
 
-                if (
-                    isinstance(self.account_custom_field_id, str)
-                    and self.account_custom_field_id.strip().isdigit()
-                ):
-                    self.account_custom_field_id = int(
-                        self.account_custom_field_id.strip()
-                    )
+            # Update mappings in global configuration
+            config.mappings.set_mapping("accounts", self.account_mapping)
 
-                account["custom_field_id"] = self.account_custom_field_id
-
-                if account["openproject_id"] is not None:
-                    matched_accounts += 1
-                    tracker.add_log_item(
-                        f"Matched: {tempo_name} to project ID {account['openproject_id']}"
-                    )
-                else:
-                    tracker.add_log_item(f"Unmatched: {tempo_name}")
-
-                tracker.increment()
-
-        self._save_to_json(self.account_mapping, Mappings.ACCOUNT_MAPPING_FILE)
-
-        self.logger.info(
-            f"Account migration complete: {total_accounts} accounts added to custom field",
-            extra={"markup": True},
-        )
-        self.logger.info(
-            f"Found matches for {matched_accounts} accounts ({matched_accounts / total_accounts * 100:.1f}% of total)",
-            extra={"markup": True},
-        )
-        self.logger.info(
-            f"{total_accounts - matched_accounts} accounts were added to the custom field"
-            f" but not linked to any existing project",
-            extra={"markup": True},
-        )
-
-        if config.migration_config.get("dry_run", False):
-            self.logger.info(
-                "DRY RUN: No custom fields were actually created or updated in OpenProject",
+            return ComponentResult(
+                success=True,
+                data=analysis,
+                success_count=analysis["matched_accounts"],
+                failed_count=analysis["unmatched_accounts"],
+                total_count=analysis["total_accounts"],
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Error during account migration: {str(e)}",
                 extra={"markup": True},
             )
-
-        # Return the account mapping instead of status summary
-        return self.account_mapping
+            return ComponentResult(
+                success=False,
+                errors=[f"Error during account migration: {str(e)}"],
+                success_count=0,
+                failed_count=len(self.tempo_accounts) if self.tempo_accounts else 0,
+                total_count=len(self.tempo_accounts) if self.tempo_accounts else 0,
+            )
 
     def analyze_account_mapping(self) -> dict[str, Any]:
         """
@@ -728,99 +563,141 @@ class AccountMigration(BaseMigration):
         self._save_to_json(analysis, "account_mapping_analysis.json")
         self.account_custom_field_id = cf_id
 
-    def run(self) -> ComponentResult:
+    def migrate_accounts(self) -> dict:
         """
-        Run the account migration process.
+        Migrate accounts from Tempo to OpenProject.
 
         Returns:
-            Dictionary with migration results
+            Dictionary of mapped accounts
         """
         self.logger.info("Starting account migration", extra={"markup": True})
 
-        self.mappings = config.mappings
+        # Extract accounts if needed
+        if not self.tempo_accounts:
+            self.extract_tempo_accounts()
 
+        # Create/get custom field for accounts
+        if self.account_custom_field_id is None:
+            self.create_account_custom_field()
+
+        # Create mapping
+        if not self.account_mapping:
+            self.create_account_mapping()
+
+        # Add custom field ID to all accounts in the mapping
+        for account_id in self.account_mapping:
+            self.account_mapping[account_id]["custom_field_id"] = self.account_custom_field_id
+
+        # Save the updated mapping
+        self._save_to_json(self.account_mapping, ACCOUNT_MAPPING_FILE)
+
+        # Return the mapping
+        return self.account_mapping
+
+    def get_existing_custom_field_id(self) -> int | None:
+        """
+        Check if 'Tempo Account' custom field already exists.
+
+        Returns:
+            ID of the existing custom field or None
+        """
         try:
-            # Load existing data
-            self._load_data()
+            self.logger.info("Checking if 'Tempo Account' custom field exists...")
+            existing_id = self.op_client.get_custom_field_id_by_name("Tempo Account")
 
-            # Extract data
-            tempo_accounts = self.extract_tempo_accounts()
-            op_projects = self.extract_openproject_projects()
+            if existing_id is None:
+                self.logger.info("No existing 'Tempo Account' custom field found")
+                return None
 
-            # Create mapping
-            mapping = self.create_account_mapping()
-
-            # Create/find custom field if not in dry run mode
-            result = None
-
-            if not config.migration_config.get("dry_run", False):
-                # Migrate accounts (will create custom field if needed)
-                account_mapping = self.migrate_accounts()
-
-                # Check if there was an error (error response has 'status' field)
-                if (
-                    isinstance(account_mapping, dict)
-                    and "status" in account_mapping
-                    and account_mapping["status"] == "failed"
-                ):
-                    # Pass through the error status
-                    result = account_mapping
-                else:
-                    # Process the successful mapping return
-                    matched_accounts = sum(
-                        1
-                        for account in account_mapping.values()
-                        if account.get("openproject_id") is not None
-                    )
-                    total_accounts = len(account_mapping)
-
-                    result = {
-                        "status": "success",
-                        "matched_count": matched_accounts,
-                        "created_count": total_accounts - matched_accounts,
-                        "failed_count": 0,
-                    }
-            else:
-                self.logger.warning(
-                    "Dry run mode - not creating Tempo account custom field or accounts",
-                    extra={"markup": True},
-                )
-                result = {
-                    "status": "success",
-                    "matched_count": sum(
-                        1
-                        for account in mapping.values()
-                        if account["matched_by"] != "none"
-                    ),
-                    "created_count": 0,
-                    "skipped_count": 0,
-                    "failed_count": 0,
-                }
-
-            # Analyze results
-            analysis = self.analyze_account_mapping()
-
-            return ComponentResult(
-                success=True if "success" == result.get("status", "success") else False,
-                success_count=result.get("matched_count", 0)
-                + result.get("created_count", 0),
-                failed_count=result.get("failed_count", 0),
-                total_count=len(tempo_accounts),
-                tempo_accounts_count=len(tempo_accounts),
-                op_projects_count=len(op_projects),
-                mapped_accounts_count=len(mapping),
-                custom_field_id=self.account_custom_field_id,
-                analysis=analysis,
-            )
+            self.logger.info(f"Found existing 'Tempo Account' custom field with ID: {existing_id}")
+            return existing_id
         except Exception as e:
-            self.logger.error(
-                f"Error during account migration: {str(e)}",
-                extra={"markup": True, "traceback": True},
+            self.logger.warning(f"Error checking for existing custom field: {str(e)}")
+            return None
+
+    def create_custom_field_via_rails(self) -> int | None:
+        """
+        Create a custom field via Rails console commands.
+
+        Returns:
+            ID of the created custom field or None if creation failed
+        """
+        try:
+            if not self.tempo_accounts:
+                self.extract_tempo_accounts()
+
+            # Get possible values from Tempo accounts
+            possible_values = [
+                acc.get("name") for acc in self.tempo_accounts if acc.get("name")
+            ]
+
+            # Create custom field command
+            create_command = f"""
+            cf = CustomField.new(
+              name: 'Tempo Account',
+              field_format: 'list',
+              is_required: false,
+              searchable: true,
+              editable: true,
+              type: 'WorkPackageCustomField',
+              possible_values: {json.dumps(possible_values)}
             )
-            return ComponentResult(
-                success=False,
-                error=str(e),
-                success_count=0,
-                failed_count=len(self.tempo_accounts) if self.tempo_accounts else 0,
-                total_count=len(self.tempo_accounts) if self.tempo_accounts else 0,
-            )
+            cf.save!
+            cf.id
+            """
+
+            result = self.op_client.execute_query(create_command)
+
+            if result and "output" in result and result["output"] is not None:
+                new_id = int(result["output"])
+                self.logger.info(f"Successfully created custom field with ID: {new_id}")
+
+                # Make custom field available for all work package types
+                self.associate_field_with_work_package_types(new_id)
+
+                return new_id
+
+            self.logger.warning("Failed to create custom field via Rails")
+            return None
+
+        except Exception as e:
+            self.logger.warning(f"Error creating custom field via Rails: {str(e)}")
+            return None
+
+    def associate_field_with_work_package_types(self, field_id: int) -> bool:
+        """
+        Make custom field available for all work package types.
+
+        Args:
+            field_id: ID of the custom field to associate
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            self.logger.info("Making custom field available for all work package types...")
+
+            # Command to associate with all types
+            activate_command = f"""
+            cf = CustomField.find({field_id})
+            cf.is_for_all = true
+            cf.save!
+            Type.all.each do |type|
+              type.custom_fields << cf unless type.custom_fields.include?(cf)
+              type.save!
+            end
+            true
+            """
+
+            result = self.op_client.execute_query(activate_command)
+
+            if result and "status" in result and result["status"] == "success":
+                self.logger.info("Custom field activated for all work package types")
+                return True
+
+            self.logger.warning("Failed to activate custom field for all types")
+            return False
+
+        except Exception as e:
+            self.logger.warning(f"Error associating custom field with types: {str(e)}")
+            return False

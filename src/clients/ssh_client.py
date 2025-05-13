@@ -534,28 +534,30 @@ class SSHClient:
         Check if a file exists on the remote host.
 
         Args:
-            remote_path: Path on remote host
+            remote_path: Path to check
 
         Returns:
             True if file exists, False otherwise
-
-        Raises:
-            SSHConnectionError: If unable to connect to the remote host
-            SSHCommandError: If the command fails
-            subprocess.TimeoutExpired: If the command times out
         """
         try:
-            stdout, _, returncode = self.execute_command(
-                f"test -e {remote_path} && echo 'EXISTS' || echo 'NOT_EXISTS'",
-                check=False
-            )
-            return returncode == 0 and "EXISTS" in stdout
-        except (SSHConnectionError, subprocess.TimeoutExpired):
-            # Re-raise these exceptions directly
-            raise
+            # Use single quotes around the command to prevent shell expansion
+            # and escape any existing single quotes in the path
+            escaped_path = remote_path.replace("'", "'\\''")
+            command = f"test -e '{escaped_path}' && echo 'EXISTS' || echo 'NOT_EXISTS'"
+
+            stdout, stderr, returncode = self.execute_command(command)
+
+            # Check if the command returned the EXISTS marker
+            if returncode == 0 and "EXISTS" in stdout:
+                return True
+
+            # Log the error for debugging
+            if returncode != 0:
+                logger.debug(f"Error checking if remote file exists: {stderr}")
+
+            return False
         except Exception as e:
-            # For any other exceptions, log and return False
-            logger.error(f"Error checking if remote file exists: {str(e)}")
+            logger.warning(f"Failed to check if remote file exists ({remote_path}): {str(e)}")
             return False
 
     def get_remote_file_size(self, remote_path: str) -> int | None:

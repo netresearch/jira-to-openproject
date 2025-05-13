@@ -4,15 +4,14 @@ User migration module for Jira to OpenProject migration.
 Handles the migration of users and their accounts from Jira to OpenProject.
 """
 
-import json
 import os
 from pathlib import Path
-from typing import Any
 
 from src import config
 from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration
-from src.models import ComponentResult
+from src.models import ComponentResult, MigrationError
+
 # Get logger from config
 logger = config.logger
 
@@ -69,20 +68,22 @@ class UserMigration(BaseMigration):
         self.op_users = self._load_from_json("op_users.json") or []
         self.user_mapping = self._load_from_json("user_mapping.json") or {}
 
-    def extract_jira_users(self) -> list[dict[str, Any]]:
+    def extract_jira_users(self) -> list:
         """
         Extract users from Jira.
 
         Returns:
             List of Jira users
+
+        Raises:
+            MigrationError: If users cannot be extracted from Jira
         """
         self.logger.info("Extracting users from Jira...", extra={"markup": True})
 
         self.jira_users = self.jira_client.get_users()
 
         if not self.jira_users:
-            self.logger.error("Failed to extract users from Jira", extra={"markup": True})
-            return []
+            raise MigrationError("Failed to extract users from Jira")
 
         self.logger.info(
             f"Extracted {len(self.jira_users)} users from Jira", extra={"markup": True}
@@ -92,17 +93,23 @@ class UserMigration(BaseMigration):
 
         return self.jira_users
 
-    def extract_openproject_users(self) -> list[dict[str, Any]]:
+    def extract_openproject_users(self) -> list:
         """
         Extract users from OpenProject.
 
         Returns:
             List of OpenProject users
+
+        Raises:
+            MigrationError: If users cannot be extracted from OpenProject
         """
         self.logger.info("Extracting users from OpenProject...", extra={"markup": True})
 
-        # Use the standard get_users method which now has the robust implementation
+        # Get users from OpenProject - no fallbacks or mocks
         self.op_users = self.op_client.get_users()
+
+        if not self.op_users:
+            raise MigrationError("Failed to extract users from OpenProject")
 
         self.logger.info(
             f"Extracted {len(self.op_users)} users from OpenProject",
@@ -113,12 +120,15 @@ class UserMigration(BaseMigration):
 
         return self.op_users
 
-    def create_user_mapping(self) -> dict[str, Any]:
+    def create_user_mapping(self) -> dict:
         """
         Create a mapping between Jira and OpenProject users.
 
         Returns:
             Dictionary mapping Jira user keys to OpenProject user IDs
+
+        Raises:
+            MigrationError: If required user data is missing
         """
         self.logger.info("Creating user mapping...", extra={"markup": True})
 
@@ -199,278 +209,286 @@ class UserMigration(BaseMigration):
                 tracker.add_log_item(f"No match found: {jira_display_name}")
                 tracker.increment()
 
-        self.user_mapping = mapping
+        # Save the mapping
         self._save_to_json(mapping, "user_mapping.json")
-
-        total_users = len(mapping)
-        matched_users = sum(
-            1 for user in mapping.values() if user["matched_by"] != "none"
-        )
-        match_percentage = (matched_users / total_users) * 100 if total_users > 0 else 0
-
-        self.logger.info(
-            f"User mapping created for {total_users} users", extra={"markup": True}
-        )
-        self.logger.info(
-            f"Successfully matched {matched_users} users ({match_percentage:.1f}%)",
-            extra={"markup": True},
-        )
+        self.user_mapping = mapping
 
         return mapping
 
-    def create_missing_users(self, batch_size: int = 10) -> dict[str, Any]:
+    def create_missing_users(self, batch_size: int = 10) -> dict:
         """
-        Create users in OpenProject that exist in Jira but not in OpenProject.
-
-        This method:
-        1. Gets all users from both systems
-        2. Finds users that exist in Jira but not in OpenProject
-        3. Creates those users in OpenProject
+        Create missing users in OpenProject using the LDAP synchronization.
 
         Args:
-            batch_size: Number of users to create in a single batch operation
+            batch_size: Number of users to create in each batch
 
         Returns:
-            Dictionary with stats about created users
+            Dictionary with results of user creation
+
+        Raises:
+            MigrationError: If user mapping is missing or if users cannot be created
         """
-        # Get Jira users using Jira client API
-        jira_users = self.jira_client.get_users()
-        jira_users_dict = {}
-        for jira_user in jira_users:
-            key = jira_user.get("key")
-            if key:
-                jira_users_dict[key] = jira_user
+        self.logger.info("Creating missing users in OpenProject...", extra={"markup": True})
 
-        if not jira_users_dict:
-            logger.warning("No Jira users found to create in OpenProject")
-            return {
-                "created_count": 0,
-                "total_users": 0
-            }
+        if not self.user_mapping:
+            self.create_user_mapping()
 
-        # Get mapping and existing users
-        mapping_dict = self.user_mapping  # Access directly as a dictionary
-        existing_emails = set()
+        missing_users = [
+            user
+            for user in self.user_mapping.values()
+            if user["matched_by"] == "none"
+        ]
 
-        # Get existing OpenProject users to avoid conflicts
-        op_users = self.op_client.get_users()
-        for user in op_users:
-            if user.get("email"):
-                existing_emails.add(user.get("email").lower())
+        if not missing_users:
+            self.logger.info("No missing users to create", extra={"markup": True})
+            return {"created": 0, "failed": 0, "total": 0}
 
-        # Prepare users to create in bulk
-        users_to_create = []
-        for user_key, jira_user in jira_users_dict.items():
-            # Skip if user is already mapped
-            if user_key in mapping_dict and mapping_dict[user_key] is not None:
-                continue
+        self.logger.info(
+            f"Found {len(missing_users)} users missing in OpenProject",
+            extra={"markup": True},
+        )
 
-            # Get user details
-            email = jira_user.get("emailAddress")
-            if not email:
-                logger.warning(f"Missing email for Jira user {user_key}, cannot create OpenProject user")
-                continue
+        created = 0
+        failed = 0
+        created_users = []
 
-            # Skip if user already exists in OpenProject
-            if email.lower() in existing_emails:
-                logger.debug(f"User with email {email} already exists in OpenProject, skipping")
-                continue
+        with ProgressTracker(
+            "Creating users", len(missing_users), "Recent User Creations"
+        ) as tracker:
+            for i in range(0, len(missing_users), batch_size):
+                batch = missing_users[i : i + batch_size]
 
-            # Parse name
-            display_name = jira_user.get("displayName", "")
-            name_parts = display_name.split(" ", 1)
-            firstname = name_parts[0] if len(name_parts) > 0 else "Unknown"
-            lastname = name_parts[1] if len(name_parts) > 1 else "User"
+                # Prepare data for user creation
+                users_to_create = []
+                for user in batch:
+                    # Split display name into first and last name
+                    names = user["jira_display_name"].split(" ", 1)
+                    first_name = names[0] if len(names) > 0 else "User"
+                    last_name = names[1] if len(names) > 1 else user["jira_name"]
 
-            # Create user attributes
-            user_attrs = {
-                "login": email.split("@")[0],
-                "firstname": firstname,
-                "lastname": lastname,
-                "email": email,
-                "admin": False,
-                "status": "active"
-            }
+                    users_to_create.append({
+                        "login": user["jira_name"],
+                        "firstname": first_name,
+                        "lastname": last_name,
+                        "mail": user["jira_email"],
+                        "admin": False,
+                        "status": "active"
+                    })
 
-            # Add to bulk creation list
-            users_to_create.append(user_attrs)
+                batch_users = [user["jira_name"] for user in batch]
+                tracker.update_description(f"Creating users: {', '.join(batch_users)}")
 
-        # No users to create
-        if not users_to_create:
-            logger.info("No new users to create in OpenProject")
-            return {
-                "created_count": 0,
-                "total_users": len(jira_users_dict)
-            }
+                try:
+                    # Create users in bulk - response is now a string instead of a dict
+                    result_str = self.op_client.create_users_in_bulk(users_to_create)
 
-        # Create users in bulk
-        logger.info(f"Creating {len(users_to_create)} users in OpenProject in bulk")
-        result = self.op_client.create_users_in_bulk(users_to_create)
+                    # Parse the JSON string to extract the needed information
+                    # If string parsing fails, use a reasonable default
+                    try:
+                        import json
+                        import re
 
-        created_count = result.get("created_count", 0)
-        logger.success(f"Successfully created {created_count} users in OpenProject")
+                        # First try standard JSON parsing
+                        try:
+                            result = json.loads(result_str)
+                        except json.JSONDecodeError:
+                            # Fall back to regex extraction if there are Ruby hash markers
+                            # Extract data between curly braces
+                            match = re.search(r'\{.*\}', result_str, re.DOTALL)
+                            if match:
+                                # Convert Ruby hash string to JSON format
+                                json_str = match.group(0)
+                                json_str = re.sub(r':(\w+)\s*=>', r'"\1":', json_str)
+                                json_str = json_str.replace("=>", ":")
+                                try:
+                                    result = json.loads(json_str)
+                                except:
+                                    # If everything fails, rely on string counts for basic success metrics
+                                    self.logger.warning("Could not parse JSON, using basic string parsing")
+                                    batch_created = result_str.count('"status": "success"') or result_str.count('"status" => "success"')
+                                    batch_failed = len(batch) - batch_created
+                                    result = {
+                                        "created_count": batch_created,
+                                        "created_users": [],
+                                        "failed_users": []
+                                    }
+                            else:
+                                # No JSON-like structure found
+                                batch_created = 0
+                                batch_failed = len(batch)
+                                result = {
+                                    "created_count": 0,
+                                    "created_users": [],
+                                    "failed_users": []
+                                }
+                    except ImportError:
+                        # If somehow json module is not available
+                        self.logger.warning("JSON module not available, using basic string parsing")
+                        batch_created = result_str.count('"status": "success"') or result_str.count('"status" => "success"')
+                        batch_failed = len(batch) - batch_created
+                        result = {
+                            "created_count": batch_created,
+                            "created_users": [],
+                            "failed_users": []
+                        }
 
-        # Update mapping with newly created users
-        created_users = result.get("created_users", [])
-        for user in created_users:
-            email = user.get("email")
-            if not email:
-                continue
+                    # Extract result stats
+                    batch_created = result.get("created_count", 0)
+                    if isinstance(batch_created, str) and batch_created.isdigit():
+                        batch_created = int(batch_created)
+                    batch_failed = len(batch) - batch_created
+                    batch_created_users = result.get("created_users", [])
 
-            # Find matching Jira user
-            for user_key, jira_user in jira_users_dict.items():
-                if jira_user.get("emailAddress") == email:
-                    op_id = user.get("id")
-                    if op_id:
-                        self.user_mapping[user_key] = str(op_id)
-                        break
+                    created += batch_created
+                    failed += batch_failed
+                    created_users.extend(batch_created_users)
 
-        # Save the updated mapping
-        self._save_to_json(self.user_mapping, "user_mapping.json")
+                    tracker.add_log_item(f"Created {batch_created}/{len(batch)} users in batch")
+                except Exception as e:
+                    error_msg = f"Exception during bulk user creation: {str(e)}"
+                    self.logger.error(error_msg, extra={"markup": True})
+                    failed += len(batch)
+                    tracker.add_log_item(f"Exception during creation: {', '.join(batch_users)}")
+                    raise MigrationError(error_msg) from e
 
-        # Return simple dictionary with created_count to avoid issues with user_mapping format
+                tracker.increment(len(batch))
+
+        # Update user mapping after creating new users
+        self.extract_openproject_users()
+        self.create_user_mapping()
+
         return {
-            "created_count": created_count,
-            "total_users": len(self.user_mapping),
+            "created": created,
+            "failed": failed,
+            "total": len(missing_users),
+            "created_count": created,  # Add for test compatibility
+            "created_users": created_users
         }
 
-    def analyze_user_mapping(self) -> dict[str, Any]:
+    def analyze_user_mapping(self) -> dict:
         """
-        Analyze the user mapping to identify potential issues.
+        Analyze the user mapping for statistics and potential issues.
 
         Returns:
             Dictionary with analysis results
+
+        Raises:
+            MigrationError: If user mapping is missing
         """
         if not self.user_mapping:
-            mapping_path = os.path.join(self.data_dir, "user_mapping.json")
-            if os.path.exists(mapping_path):
-                with open(mapping_path) as f:
-                    self.user_mapping = json.load(f)
-            else:
-                self.logger.error(
-                    "No user mapping found. Run create_user_mapping() first."
-                )
-                return {}
+            self.create_user_mapping()
+
+        total_users = len(self.user_mapping)
+        matched_by_username = len(
+            [u for u in self.user_mapping.values() if u["matched_by"] == "username"]
+        )
+        matched_by_email = len(
+            [u for u in self.user_mapping.values() if u["matched_by"] == "email"]
+        )
+        not_matched = len(
+            [u for u in self.user_mapping.values() if u["matched_by"] == "none"]
+        )
 
         analysis = {
-            "total_users": len(self.user_mapping),
-            "matched_users": sum(
-                1 for user in self.user_mapping.values() if user["matched_by"] != "none"
+            "total_users": total_users,
+            "matched_by_username": matched_by_username,
+            "matched_by_email": matched_by_email,
+            "not_matched": not_matched,
+            "username_match_percentage": (
+                (matched_by_username / total_users) * 100 if total_users > 0 else 0
             ),
-            "matched_by_username": sum(
-                1
-                for user in self.user_mapping.values()
-                if user["matched_by"] == "username"
+            "email_match_percentage": (
+                (matched_by_email / total_users) * 100 if total_users > 0 else 0
             ),
-            "matched_by_email": sum(
-                1
-                for user in self.user_mapping.values()
-                if user["matched_by"] == "email"
+            "total_match_percentage": (
+                ((matched_by_username + matched_by_email) / total_users) * 100
+                if total_users > 0
+                else 0
             ),
-            "matched_by_existing_email": sum(
-                1
-                for user in self.user_mapping.values()
-                if user["matched_by"] == "email_existing"
+            "not_matched_percentage": (
+                (not_matched / total_users) * 100 if total_users > 0 else 0
             ),
-            "matched_by_creation": sum(
-                1
-                for user in self.user_mapping.values()
-                if user["matched_by"] == "created"
-            ),
-            "unmatched_users": sum(
-                1 for user in self.user_mapping.values() if user["matched_by"] == "none"
-            ),
-            "unmatched_details": [
-                {
-                    "jira_key": user["jira_key"],
-                    "jira_name": user["jira_name"],
-                    "jira_email": user["jira_email"],
-                    "jira_display_name": user["jira_display_name"],
-                }
-                for user in self.user_mapping.values()
-                if user["matched_by"] == "none"
-            ],
         }
 
-        total = analysis["total_users"]
-        if total > 0:
-            analysis["match_percentage"] = (analysis["matched_users"] / total) * 100
-        else:
-            analysis["match_percentage"] = 0
-
-        self._save_to_json(analysis, "user_mapping_analysis.json")
-
-        self.logger.info("User mapping analysis complete")
-        self.logger.info(f"Total users: {analysis['total_users']}")
+        # Display the analysis
+        self.logger.info("User mapping analysis:", extra={"markup": True})
+        self.logger.info(f"Total users: {total_users}", extra={"markup": True})
         self.logger.info(
-            f"Matched users: {analysis['matched_users']} ({analysis['match_percentage']:.1f}%)"
+            f"Matched by username: {matched_by_username} ({analysis['username_match_percentage']:.2f}%)",
+            extra={"markup": True},
         )
-        self.logger.info(f"- Matched by username: {analysis['matched_by_username']}")
-        self.logger.info(f"- Matched by email: {analysis['matched_by_email']}")
         self.logger.info(
-            f"- Matched by email (existing): {analysis['matched_by_existing_email']}"
+            f"Matched by email: {matched_by_email} ({analysis['email_match_percentage']:.2f}%)",
+            extra={"markup": True},
         )
-        self.logger.info(f"- Created in OpenProject: {analysis['matched_by_creation']}")
-        self.logger.info(f"Unmatched users: {analysis['unmatched_users']}")
+        self.logger.info(
+            f"Total matched: {matched_by_username + matched_by_email} ({analysis['total_match_percentage']:.2f}%)",
+            extra={"markup": True},
+        )
+        self.logger.info(
+            f"Not matched: {not_matched} ({analysis['not_matched_percentage']:.2f}%)",
+            extra={"markup": True},
+        )
 
         return analysis
 
     def run(self) -> ComponentResult:
         """
-        Run the user migration process.
+        Run the user migration.
 
         Returns:
-            Dictionary with migration results
+            ComponentResult with migration results
         """
-        self.logger.info("Starting user migration", extra={"markup": True})
+        self.logger.info("Starting user migration...", extra={"markup": True})
 
         try:
-            # Extract data
-            jira_users = self.extract_jira_users()
-            op_users = self.extract_openproject_users()
+            # Extract users from both systems
+            self.extract_jira_users()
+            self.extract_openproject_users()
 
             # Create mapping
             self.create_user_mapping()
 
-            # Create missing users if not in dry run mode
-            self.create_missing_users()
-
-            # Analyze results
+            # Analyze the mapping
             analysis = self.analyze_user_mapping()
+
+            # Create missing users if configured
+            create_missing = config.get_value("migration", "create_missing_users", False)
+            creation_results = {}
+            if create_missing:
+                creation_results = self.create_missing_users()
+                self.logger.info(
+                    f"Created {creation_results['created']} users, {creation_results['failed']} failed",
+                    extra={"markup": True},
+                )
+            else:
+                self.logger.info(
+                    "Skipping creation of missing users (disabled in config)",
+                    extra={"markup": True},
+                )
+
+            # Update mappings with new data
+            config.mappings.set_mapping("users", self.user_mapping)
 
             return ComponentResult(
                 success=True,
-                success_count=analysis["matched_users"],
-                failed_count=analysis["unmatched_users"],
+                data={
+                    "jira_users": len(self.jira_users),
+                    "op_users": len(self.op_users),
+                    "mapped_users": len(self.user_mapping),
+                    "analysis": analysis,
+                    "creation_results": creation_results,
+                },
+                success_count=analysis["matched_by_username"] + analysis["matched_by_email"],
+                failed_count=analysis["not_matched"],
                 total_count=analysis["total_users"],
-                jira_users_count=len(jira_users),
-                op_users_count=len(op_users),
-                analysis=analysis,
             )
         except Exception as e:
-            self.logger.error(
-                f"Error during user migration: {str(e)}",
-                extra={"markup": True, "traceback": True},
-            )
-            self.logger.exception(e)
+            self.logger.error(f"Error in user migration: {str(e)}", extra={"markup": True})
             return ComponentResult(
                 success=False,
-                error=str(e),
+                errors=[f"Error in user migration: {str(e)}"],
                 success_count=0,
-                failed_count=len(self.jira_users) if self.jira_users else 0,
-                total_count=len(self.jira_users) if self.jira_users else 0,
+                failed_count=0,
+                total_count=0,
             )
-
-    def get_jira_users(self) -> dict[str, Any]:
-        """
-        Get Jira users from the migration data.
-
-        Returns:
-            Dictionary of Jira users indexed by key
-        """
-        users = {}
-        for jira_user in self.jira_users:
-            key = jira_user.get("key")
-            if key:
-                users[key] = jira_user
-        return users
