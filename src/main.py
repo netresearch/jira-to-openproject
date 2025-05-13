@@ -28,9 +28,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # Create the parser for the "migrate" command
-    migrate_parser = subparsers.add_parser(
-        "migrate", help="Run the migration process from Jira to OpenProject"
-    )
+    migrate_parser = subparsers.add_parser("migrate", help="Run the migration process from Jira to OpenProject")
 
     # Add migration arguments
     migrate_parser.add_argument(
@@ -58,9 +56,7 @@ def main() -> None:
         metavar="BACKUP_DIR",
         help="Restore from a backup directory instead of running migration",
     )
-    migrate_parser.add_argument(
-        "--tmux", action="store_true", help="Run in a tmux session for persistence"
-    )
+    migrate_parser.add_argument("--tmux", action="store_true", help="Run in a tmux session for persistence")
 
     # Parse arguments
     args = parser.parse_args()

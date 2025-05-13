@@ -8,15 +8,15 @@ and resource handling.
 """
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.clients.jira_client import (
+    JiraApiError,
+    JiraAuthenticationError,
+    JiraCaptchaError,
     JiraClient,
     JiraConnectionError,
-    JiraAuthenticationError,
-    JiraApiError,
     JiraResourceNotFoundError,
-    JiraCaptchaError
 )
 
 
@@ -26,7 +26,7 @@ class TestJiraClient(unittest.TestCase):
     def setUp(self) -> None:
         """Set up the test environment."""
         # Patch the config module
-        self.config_patcher = patch('src.clients.jira_client.config')
+        self.config_patcher = patch("src.clients.jira_client.config")
         self.mock_config = self.config_patcher.start()
 
         # Mock the config values
@@ -35,24 +35,18 @@ class TestJiraClient(unittest.TestCase):
             "username": "test_user",
             "api_token": "test_token",
             "verify_ssl": True,
-            "scriptrunner": {
-                "enabled": False,
-                "custom_field_options_endpoint": ""
-            }
+            "scriptrunner": {"enabled": False, "custom_field_options_endpoint": ""},
         }
         self.mock_config.logger = MagicMock()
 
         # Patch the JIRA class
-        self.jira_patcher = patch('src.clients.jira_client.JIRA')
+        self.jira_patcher = patch("src.clients.jira_client.JIRA")
         self.mock_jira_class = self.jira_patcher.start()
         self.mock_jira = MagicMock()
         self.mock_jira_class.return_value = self.mock_jira
 
         # Mock the server_info method
-        self.mock_jira.server_info.return_value = {
-            "baseUrl": "https://test-jira.example.com",
-            "version": "8.5.0"
-        }
+        self.mock_jira.server_info.return_value = {"baseUrl": "https://test-jira.example.com", "version": "8.5.0"}
 
         # Set up the session for request patching
         self.mock_jira._session = MagicMock()
@@ -79,11 +73,7 @@ class TestJiraClient(unittest.TestCase):
     def test_initialization_missing_url(self) -> None:
         """Test initialization with missing URL."""
         # Set up config with missing URL
-        self.mock_config.jira_config = {
-            "url": "",
-            "username": "test_user",
-            "api_token": "test_token"
-        }
+        self.mock_config.jira_config = {"url": "", "username": "test_user", "api_token": "test_token"}
 
         # Initialization should raise ValueError
         with self.assertRaises(ValueError) as context:
@@ -97,7 +87,7 @@ class TestJiraClient(unittest.TestCase):
         self.mock_config.jira_config = {
             "url": "https://test-jira.example.com",
             "username": "test_user",
-            "api_token": ""
+            "api_token": "",
         }
 
         # Initialization should raise ValueError
@@ -110,13 +100,13 @@ class TestJiraClient(unittest.TestCase):
         """Test connection failure during initialization."""
         # Reset mocks
         self.jira_patcher.stop()
-        self.jira_patcher = patch('src.clients.jira_client.JIRA')
+        self.jira_patcher = patch("src.clients.jira_client.JIRA")
         self.mock_jira_class = self.jira_patcher.start()
 
         # Mock JIRA to raise exceptions for both auth methods
         self.mock_jira_class.side_effect = [
             Exception("Token auth failed"),  # First call fails with token auth
-            Exception("Basic auth failed")   # Second call fails with basic auth
+            Exception("Basic auth failed"),  # Second call fails with basic auth
         ]
 
         # Attempt to initialize client should raise JiraAuthenticationError
@@ -263,9 +253,7 @@ class TestJiraClient(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.status_code = 400
         mock_response.reason = "Bad Request"
-        mock_response.json.return_value = {
-            "errorMessages": ["Invalid input", "Field is required"]
-        }
+        mock_response.json.return_value = {"errorMessages": ["Invalid input", "Field is required"]}
 
         # Test _handle_response method directly
         with self.assertRaises(JiraApiError) as context:
@@ -280,9 +268,7 @@ class TestJiraClient(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.status_code = 404
         mock_response.reason = "Not Found"
-        mock_response.json.return_value = {
-            "errorMessages": ["Resource does not exist"]
-        }
+        mock_response.json.return_value = {"errorMessages": ["Resource does not exist"]}
 
         # Test _handle_response method directly
         with self.assertRaises(JiraResourceNotFoundError) as context:
@@ -296,9 +282,7 @@ class TestJiraClient(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.status_code = 401
         mock_response.reason = "Unauthorized"
-        mock_response.json.return_value = {
-            "errorMessages": ["Authentication failed"]
-        }
+        mock_response.json.return_value = {"errorMessages": ["Authentication failed"]}
 
         # Test _handle_response method directly
         with self.assertRaises(JiraAuthenticationError) as context:

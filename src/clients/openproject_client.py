@@ -21,24 +21,15 @@ Workflow:
 
 import json
 import os
-import time
 import random
 import re
+import time
 from typing import Any, cast
 
 from src import config
-from src.clients.rails_console_client import (
-    RailsConsoleClient,
-    CommandExecutionError,
-    RubyError
-)
 from src.clients.docker_client import DockerClient
-from src.clients.ssh_client import (
-    SSHClient,
-    SSHConnectionError,
-    SSHCommandError,
-    SSHFileTransferError
-)
+from src.clients.rails_console_client import CommandExecutionError, RailsConsoleClient, RubyError
+from src.clients.ssh_client import SSHClient, SSHCommandError, SSHConnectionError, SSHFileTransferError
 from src.utils.file_manager import FileManager
 
 logger = config.logger
@@ -46,31 +37,37 @@ logger = config.logger
 
 class OpenProjectError(Exception):
     """Base exception for all OpenProject client errors."""
+
     pass
 
 
 class ConnectionError(OpenProjectError):
     """Error when connection to OpenProject fails."""
+
     pass
 
 
 class FileTransferError(OpenProjectError):
     """Error when transferring files to/from OpenProject container."""
+
     pass
 
 
 class QueryExecutionError(OpenProjectError):
     """Error when executing a query in OpenProject."""
+
     pass
 
 
 class RecordNotFoundError(OpenProjectError):
     """Error when a record is not found in OpenProject."""
+
     pass
 
 
 class JsonParseError(OpenProjectError):
     """Error when parsing JSON output from OpenProject."""
+
     pass
 
 
@@ -158,9 +155,7 @@ class OpenProjectClient:
             retry_count=self.retry_count,
             retry_delay=self.retry_delay,
         )
-        logger.debug(
-            f"{'Using provided' if ssh_client else 'Initialized'} SSHClient for host {self.ssh_host}"
-        )
+        logger.debug(f"{'Using provided' if ssh_client else 'Initialized'} SSHClient for host {self.ssh_host}")
 
         # 2. Next, create or use the Docker client
         self.docker_client = docker_client or DockerClient(
@@ -360,7 +355,7 @@ class OpenProjectClient:
                 logger.warning(f"Attempting to extract hash from Rails output: {rails_output}")
 
                 # Try to parse Ruby hash format into Python dict
-                hash_match = re.search(r'\{([^{}]*)\}', rails_output)
+                hash_match = re.search(r"\{([^{}]*)\}", rails_output)
                 if hash_match:
                     hash_str = hash_match.group(0)
                     logger.debug(f"Found hash string: {hash_str}")
@@ -369,7 +364,7 @@ class OpenProjectClient:
                     # This is not a general solution but works for our simple case
                     try:
                         # Replace Ruby symbols with strings
-                        dict_str = re.sub(r':([a-zA-Z_]\w*)\s*=>', r'"\1":', hash_str)
+                        dict_str = re.sub(r":([a-zA-Z_]\w*)\s*=>", r'"\1":', hash_str)
                         # Replace => with :
                         dict_str = dict_str.replace("=>", ":")
                         # Try to parse resulting string as JSON
@@ -494,11 +489,8 @@ class OpenProjectClient:
         """
         self._last_query = query
 
-        result = self.rails_client._send_command_to_tmux(
-            f"puts ({query})",
-            5
-        )
-        
+        result = self.rails_client._send_command_to_tmux(f"puts ({query})", 5)
+
         return result
 
     def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> Any:
@@ -960,11 +952,11 @@ end
         # Check cache first (5 minutes validity)
         current_time = time.time()
         cache_valid = (
-            hasattr(self, '_users_cache') and
-            hasattr(self, '_users_cache_time') and
-            self._users_cache is not None and
-            self._users_cache_time is not None and
-            current_time - self._users_cache_time < 300
+            hasattr(self, "_users_cache")
+            and hasattr(self, "_users_cache_time")
+            and self._users_cache is not None
+            and self._users_cache_time is not None
+            and current_time - self._users_cache_time < 300
         )
 
         if cache_valid:
@@ -983,7 +975,7 @@ end
             self._users_by_email_cache = {}
             for user in self._users_cache:
                 if isinstance(user, dict):
-                    email = user.get('email', '').lower()
+                    email = user.get("email", "").lower()
                     if email:
                         self._users_by_email_cache[email] = user
 
@@ -1013,7 +1005,7 @@ end
         email_lower = email.lower()
 
         # Check cache first
-        if hasattr(self, '_users_by_email_cache') and email_lower in self._users_by_email_cache:
+        if hasattr(self, "_users_by_email_cache") and email_lower in self._users_by_email_cache:
             return self._users_by_email_cache[email_lower]
 
         # Try to load all users to populate cache

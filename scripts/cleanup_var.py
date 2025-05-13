@@ -20,9 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger("cleanup_var")
 
 
-def clean_var_directory(
-    dir_name: DirType | None = None, confirm: bool = True
-) -> bool:
+def clean_var_directory(dir_name: DirType | None = None, confirm: bool = True) -> bool:
     """
     Clean up files in the specified var directory or all var directories.
 
@@ -72,9 +70,7 @@ def clean_var_directory(
 
 def main() -> bool:
     """Main function to handle directory cleanup."""
-    parser = argparse.ArgumentParser(
-        description="Clean up var directories or remove old directories."
-    )
+    parser = argparse.ArgumentParser(description="Clean up var directories or remove old directories.")
 
     # Add arguments
     parser.add_argument(
@@ -82,9 +78,7 @@ def main() -> bool:
         choices=list(k for k in var_dirs.keys() if k != "root") + ["all"],
         help="Clean specified var directory or 'all' for all directories",
     )
-    parser.add_argument(
-        "--no-confirm", action="store_true", help="Skip confirmation prompts"
-    )
+    parser.add_argument("--no-confirm", action="store_true", help="Skip confirmation prompts")
 
     args = parser.parse_args()
 

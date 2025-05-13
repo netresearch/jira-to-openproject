@@ -4,9 +4,8 @@ Tests for the project migration component.
 
 import json
 import unittest
-from unittest.mock import MagicMock, mock_open, patch
-
 from typing import Any
+from unittest.mock import MagicMock, mock_open, patch
 
 from src import config
 from src.migrations.project_migration import ProjectMigration
@@ -107,7 +106,12 @@ class TestProjectMigration(unittest.TestCase):
     @patch("src.migrations.project_migration.config.migration_config")
     @patch("os.path.exists")
     def test_extract_jira_projects(
-        self, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_exists: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test extracting projects from Jira."""
         # Create instance with mocked clients
@@ -124,7 +128,7 @@ class TestProjectMigration(unittest.TestCase):
         migration = ProjectMigration(jira_client, mock_op_client.return_value)
 
         # We'll directly patch the _save_to_json method to avoid serialization issues
-        with patch.object(migration, '_save_to_json'):
+        with patch.object(migration, "_save_to_json"):
             # Call the method
             result = migration.extract_jira_projects()
 
@@ -144,7 +148,12 @@ class TestProjectMigration(unittest.TestCase):
     @patch("src.migrations.project_migration.config.migration_config")
     @patch("os.path.exists")
     def test_extract_openproject_projects(
-        self, mock_exists: MagicMock, mock_migration_config: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_exists: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test extracting projects from OpenProject."""
         # Setup mocks
@@ -175,7 +184,12 @@ class TestProjectMigration(unittest.TestCase):
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_analyze_project_mapping(
-        self, mock_file: MagicMock, mock_exists: MagicMock, mock_get_path: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self,
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test the analyze_project_mapping method."""
         # Setup mocks
@@ -186,9 +200,7 @@ class TestProjectMigration(unittest.TestCase):
         mock_exists.return_value = True
 
         # Mock file reads
-        mock_file.return_value.__enter__.return_value.read.return_value = json.dumps(
-            self.expected_mapping
-        )
+        mock_file.return_value.__enter__.return_value.read.return_value = json.dumps(self.expected_mapping)
 
         # Create instance
         migration = ProjectMigration(mock_jira_instance, mock_op_instance)
@@ -202,20 +214,14 @@ class TestProjectMigration(unittest.TestCase):
         self.assertEqual(result["migrated_projects"], 3)
         self.assertEqual(result["new_projects"], 2)  # PROJ2 and PROJ3 are new
         self.assertEqual(result["existing_projects"], 1)  # PROJ1 already existed
-        self.assertEqual(
-            result["projects_with_accounts"], 2
-        )  # PROJ1 and PROJ2 have accounts
+        self.assertEqual(result["projects_with_accounts"], 2)  # PROJ1 and PROJ2 have accounts
 
     def test_find_parent_company_for_project(self) -> None:
         """Test that we resolve parent company via default Tempo account"""
         migration = ProjectMigration(MagicMock(), MagicMock())
         # Stub mappings
-        migration.project_account_mapping = {
-            "ACMEWEB": [{"id": "42", "key": "ACC-42", "name": "Q1 Review"}]
-        }
-        migration.account_mapping = {
-            "42": {"tempo_id": "42", "company_id": "7", "tempo_name": "Account42"}
-        }
+        migration.project_account_mapping = {"ACMEWEB": [{"id": "42", "key": "ACC-42", "name": "Q1 Review"}]}
+        migration.account_mapping = {"42": {"tempo_id": "42", "company_id": "7", "tempo_name": "Account42"}}
         migration.company_mapping = {
             "7": {
                 "tempo_id": "7",
@@ -238,12 +244,7 @@ class TestProjectMigration(unittest.TestCase):
             parent = migration.find_parent_company_for_project({"key": "UNKNOWN"})
         self.assertIsNone(parent)
         # Should log a debug about missing account mapping
-        self.assertTrue(
-            any(
-                "No account mapping found for project UNKNOWN" in msg
-                for msg in cm.output
-            )
-        )
+        self.assertTrue(any("No account mapping found for project UNKNOWN" in msg for msg in cm.output))
 
 
 # Define testing steps for project migration validation

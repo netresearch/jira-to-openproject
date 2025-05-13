@@ -4,9 +4,11 @@ Test script to verify Rails console connection.
 """
 
 import sys
+
 import pytest
-from src.clients.rails_console_client import RailsConsoleClient
+
 from src.clients.openproject_client import OpenProjectClient
+from src.clients.rails_console_client import RailsConsoleClient
 
 
 def test_simple_tmux_command() -> None:

@@ -43,6 +43,7 @@ class BaseMigration:
         # Initialize config.mappings if not already set
         if config.mappings is None:
             from src.mappings.mappings import Mappings
+
             config.mappings = Mappings(data_dir=self.data_dir)
 
     def _load_from_json(self, filename: str, default: Any = None) -> Any:
@@ -93,9 +94,7 @@ class BaseMigration:
         Returns:
             Dictionary with migration results
         """
-        self.logger.warning(
-            f"The run method has not been implemented for {self.__class__.__name__}"
-        )
+        self.logger.warning(f"The run method has not been implemented for {self.__class__.__name__}")
         return ComponentResult(
             success=False,
             errors=[f"The run method has not been implemented for {self.__class__.__name__}"],

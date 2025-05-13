@@ -3,8 +3,8 @@ Tests for the work package migration component.
 """
 
 import unittest
-from unittest.mock import MagicMock, patch
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 from src import config
 from src.migrations.work_package_migration import WorkPackageMigration
@@ -38,9 +38,7 @@ class TestWorkPackageMigration(unittest.TestCase):
                         }
                     ]
                 },
-                "attachment": [
-                    {"id": "10001", "filename": "test.txt", "content": "test content"}
-                ],
+                "attachment": [{"id": "10001", "filename": "test.txt", "content": "test content"}],
             },
             {
                 "id": "10002",
@@ -64,9 +62,7 @@ class TestWorkPackageMigration(unittest.TestCase):
             {
                 "id": 1,
                 "subject": "Sample Bug",
-                "description": {
-                    "raw": "This is a sample bug\n\n*Imported from Jira issue: PROJ-1*"
-                },
+                "description": {"raw": "This is a sample bug\n\n*Imported from Jira issue: PROJ-1*"},
                 "_links": {
                     "type": {"href": "/api/v3/types/1", "title": "Bug"},
                     "status": {"href": "/api/v3/statuses/1", "title": "Open"},
@@ -133,9 +129,7 @@ class TestWorkPackageMigration(unittest.TestCase):
         )
 
         # Assertions
-        self.assertEqual(
-            mock_load_dict.call_count, 5
-        )  # Should be called 5 times for different mappings
+        self.assertEqual(mock_load_dict.call_count, 5)  # Should be called 5 times for different mappings
         self.assertIsInstance(migration.jira_client, MagicMock)
         self.assertIsInstance(migration.op_client, MagicMock)
 
@@ -144,11 +138,7 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_load_mappings(
-        self,
-        mock_exists: MagicMock,
-        mock_load_dict: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock
+        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
     ) -> None:
         """Test the _load_mappings method."""
         # Setup mocks
@@ -183,10 +173,7 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.migrations.work_package_migration.OpenProjectClient")
     @patch("src.utils.data_handler.load_dict")
     def test_prepare_work_package(
-        self,
-        mock_load_dict: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock
+        self, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
     ) -> None:
         """Test the prepare_work_package method."""
         # Setup mocks
@@ -195,9 +182,7 @@ class TestWorkPackageMigration(unittest.TestCase):
 
         # Mock the issue type mapping and work package types
         mock_load_dict.return_value = {}
-        mock_op_instance.get_work_package_types.return_value = [
-            {"id": 1, "name": "Task"}
-        ]
+        mock_op_instance.get_work_package_types.return_value = [{"id": 1, "name": "Task"}]
 
         # Create instance
         migration = WorkPackageMigration(
@@ -253,11 +238,7 @@ class TestWorkPackageMigration(unittest.TestCase):
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_analyze_work_package_mapping(
-        self,
-        mock_exists: MagicMock,
-        mock_load_dict: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock
+        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
     ) -> None:
         """Test the analyze_work_package_mapping method."""
         # Setup mocks

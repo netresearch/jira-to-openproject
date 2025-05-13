@@ -7,8 +7,8 @@ Uses exception-based error handling for all operations.
 """
 
 import os
-import time
 import subprocess
+import time
 
 from src import config
 from src.utils.file_manager import FileManager
@@ -18,26 +18,31 @@ logger = config.logger
 
 class RailsConsoleError(Exception):
     """Base exception for all Rails Console errors."""
+
     pass
 
 
 class TmuxSessionError(RailsConsoleError):
     """Error when interacting with tmux session."""
+
     pass
 
 
 class ConsoleNotReadyError(RailsConsoleError):
     """Error when Rails console is not in a ready state."""
+
     pass
 
 
 class CommandExecutionError(RailsConsoleError):
     """Error when executing a Ruby command in the Rails console."""
+
     pass
 
 
 class RubyError(CommandExecutionError):
     """Error when Ruby reports a specific error."""
+
     pass
 
 
@@ -184,12 +189,7 @@ class RailsConsoleClient:
             time.sleep(0.2)
 
             # Send Ctrl+C to abort any pending operation
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "C-c"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            subprocess.run(["tmux", "send-keys", "-t", target, "C-c"], capture_output=True, text=True, check=True)
             time.sleep(0.2)
 
             logger.debug("Console state stabilized")
@@ -207,7 +207,7 @@ class RailsConsoleClient:
         Returns:
             Escaped command
         """
-        return command.replace("\\", "\\\\").replace('`', '\\`').replace('$', '\\$')
+        return command.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
 
     def execute(self, command: str, timeout: int | None = None) -> str:
         """
@@ -232,17 +232,16 @@ class RailsConsoleClient:
 
         self.file_manager.add_to_debug_log(
             debug_session_dir,
-            f"COMMAND EXECUTION START: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"Command: {command}\n"
+            f"COMMAND EXECUTION START: {time.strftime('%Y-%m-%d %H:%M:%S')}\n" f"Command: {command}\n",
         )
 
-        start_marker_cmd = f"puts \"--EXEC_START--\" \"{marker_id}\""
+        start_marker_cmd = f'puts "--EXEC_START--" "{marker_id}"'
         start_marker_out = f"--EXEC_START--{marker_id}"
 
-        end_marker_cmd = f"puts \"--EXEC_END--\" \"{marker_id}\""
+        end_marker_cmd = f'puts "--EXEC_END--" "{marker_id}"'
         end_marker_out = f"--EXEC_END--{marker_id}"
 
-        error_marker_cmd = f"puts \"--EXEC_ERROR--\" \"{marker_id}\""
+        error_marker_cmd = f'puts "--EXEC_ERROR--" "{marker_id}"'
         error_marker_out = f"--EXEC_ERROR--{marker_id}"
 
         template = """
@@ -266,28 +265,21 @@ class RailsConsoleClient:
         end
         """
 
-        wrapped_command = template % (
-            start_marker_cmd,
-            command,
-            end_marker_cmd,
-            error_marker_cmd,
-            end_marker_cmd
-        )
+        wrapped_command = template % (start_marker_cmd, command, end_marker_cmd, error_marker_cmd, end_marker_cmd)
 
         command_path = os.path.join(debug_session_dir, "ruby_command.rb")
-        with open(command_path, 'w') as f:
+        with open(command_path, "w") as f:
             f.write(wrapped_command)
 
         tmux_output = self._send_command_to_tmux(wrapped_command, timeout)
 
         tmux_output_path = os.path.join(debug_session_dir, "tmux_output.txt")
-        with open(tmux_output_path, 'w') as f:
+        with open(tmux_output_path, "w") as f:
             f.write(tmux_output)
 
         self.file_manager.add_to_debug_log(
             debug_session_dir,
-            f"TMUX OUTPUT RECEIVED: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"Size: {len(tmux_output)} bytes\n"
+            f"TMUX OUTPUT RECEIVED: {time.strftime('%Y-%m-%d %H:%M:%S')}\n" f"Size: {len(tmux_output)} bytes\n",
         )
 
         start_idx = tmux_output.find(start_marker_out)
@@ -365,7 +357,7 @@ class RailsConsoleClient:
             "NoMethodError:",
             "ArgumentError:",
             "TypeError:",
-            "RuntimeError:"
+            "RuntimeError:",
         ]
 
         for pattern in error_patterns:
@@ -389,13 +381,9 @@ class RailsConsoleClient:
         """
         ready_patterns = ["irb(main):", ">", ">>", "irb>", "pry>"]
         awaiting_patterns = ["*"]
-        string_patterns = ["\"", "'"]
+        string_patterns = ['"', "'"]
 
-        result = {
-            "ready": False,
-            "state": "unknown",
-            "prompt": None
-        }
+        result = {"ready": False, "state": "unknown", "prompt": None}
 
         lines = [line.strip() for line in output.strip().split("\n")]
         non_empty_lines = [line for line in lines if line]
@@ -451,7 +439,7 @@ class RailsConsoleClient:
                     ["tmux", "capture-pane", "-p", "-S", "-200", "-t", target],
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
                 )
                 current_output = capture.stdout
 
@@ -497,7 +485,7 @@ class RailsConsoleClient:
                     ["tmux", "capture-pane", "-p", "-S", "-10", "-t", target],
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
                 )
                 current_output = capture.stdout
 
@@ -509,10 +497,7 @@ class RailsConsoleClient:
                 if console_state["state"] in ["awaiting_input", "multiline_string"]:
                     logger.debug(f"Console in {console_state['state']} state, sending Ctrl+C to reset")
                     subprocess.run(
-                        ["tmux", "send-keys", "-t", target, "C-c"],
-                        capture_output=True,
-                        text=True,
-                        check=True
+                        ["tmux", "send-keys", "-t", target, "C-c"], capture_output=True, text=True, check=True
                     )
                     time.sleep(0.3)
                     attempts += 1
@@ -522,9 +507,7 @@ class RailsConsoleClient:
                         self._stabilize_console()
                         attempts = 0
 
-                logger.debug(
-                    f"Waiting {poll_interval}s for ready state, current: {console_state['state']}"
-                )
+                logger.debug(f"Waiting {poll_interval}s for ready state, current: {console_state['state']}")
                 time.sleep(poll_interval)
                 poll_interval *= 2
             except subprocess.SubprocessError as e:
@@ -571,7 +554,7 @@ class RailsConsoleClient:
                 ["tmux", "send-keys", "-t", target, f"puts '{start_marker}'", "Enter"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
 
             logger.debug(f"Sending command (length: {len(escaped_command)} bytes)")
@@ -579,7 +562,7 @@ class RailsConsoleClient:
                 ["tmux", "send-keys", "-t", target, escaped_command, "Enter"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
             self._wait_for_console_ready(target, timeout)
 
@@ -588,7 +571,7 @@ class RailsConsoleClient:
                 ["tmux", "send-keys", "-t", target, f"puts '{end_marker}'", "Enter"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
 
             found_end, last_output = self._wait_for_console_output(target, end_marker, timeout)
@@ -597,9 +580,13 @@ class RailsConsoleClient:
                 raise CommandExecutionError("End marker not found in tmux output")
 
             # drop all return lines from last_output
-            last_output = "\n".join([line.strip() for line in last_output.split("\n") if not line.strip().startswith("=> ")])
+            last_output = "\n".join(
+                [line.strip() for line in last_output.split("\n") if not line.strip().startswith("=> ")]
+            )
             # drop all lines irb(main):30486>
-            last_output = "\n".join([line.strip() for line in last_output.split("\n") if not line.strip().startswith("irb(main):")])
+            last_output = "\n".join(
+                [line.strip() for line in last_output.split("\n") if not line.strip().startswith("irb(main):")]
+            )
             # extract lines between markers
             start_idx = last_output.find(start_marker) + len(start_marker)
             end_idx = last_output.find(end_marker)

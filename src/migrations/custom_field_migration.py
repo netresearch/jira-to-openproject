@@ -9,14 +9,14 @@ import pathlib
 import time
 from typing import Any
 
-from src.models import ComponentResult, MigrationError
+from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 
 # Import RailsConsolePexpect to handle direct Rails console execution
 from src.display import ProgressTracker, console
 from src.migrations.base_migration import BaseMigration
-from src import config
+from src.models import ComponentResult, MigrationError
 
 # Create rich console instance
 console = console
@@ -64,13 +64,9 @@ class CustomFieldMigration(BaseMigration):
         self.analysis = {} if analysis_data is None else analysis_data
 
         self.logger.info(f"Loaded {len(self.jira_custom_fields)} Jira custom fields")
-        self.logger.info(
-            f"Loaded {len(self.op_custom_fields)} OpenProject custom fields"
-        )
+        self.logger.info(f"Loaded {len(self.op_custom_fields)} OpenProject custom fields")
         self.logger.info(f"Loaded {len(self.mapping)} custom field mappings")
-        self.logger.info(
-            f"Loaded analysis with {len(self.analysis)} keys: {list(self.analysis.keys())}"
-        )
+        self.logger.info(f"Loaded analysis with {len(self.analysis)} keys: {list(self.analysis.keys())}")
 
     def extract_jira_custom_fields(self) -> list:
         """
@@ -85,9 +81,7 @@ class CustomFieldMigration(BaseMigration):
         custom_fields_file = os.path.join(self.data_dir, "jira_custom_fields.json")
 
         if os.path.exists(custom_fields_file) and not config.migration_config.get("force", False):
-            self.logger.info(
-                "Jira custom fields data already exists, skipping extraction (use --force to override)"
-            )
+            self.logger.info("Jira custom fields data already exists, skipping extraction (use --force to override)")
             with open(custom_fields_file) as f:
                 self.jira_custom_fields = json.load(f)
             return self.jira_custom_fields
@@ -97,13 +91,9 @@ class CustomFieldMigration(BaseMigration):
         try:
             self.jira_custom_fields = self.jira_client.jira.fields()
 
-            self.jira_custom_fields = [
-                field for field in self.jira_custom_fields if field.get("custom", False)
-            ]
+            self.jira_custom_fields = [field for field in self.jira_custom_fields if field.get("custom", False)]
 
-            self.logger.info(
-                f"Extracted {len(self.jira_custom_fields)} custom fields from Jira"
-            )
+            self.logger.info(f"Extracted {len(self.jira_custom_fields)} custom fields from Jira")
 
             self.logger.info("Retrieving options for select list custom fields...")
 
@@ -124,9 +114,7 @@ class CustomFieldMigration(BaseMigration):
 
                 if is_select_list:
                     try:
-                        self.logger.debug(
-                            f"Retrieving options for field: {field.get('name')}"
-                        )
+                        self.logger.debug(f"Retrieving options for field: {field.get('name')}")
                         meta_data = self.jira_client.get_field_metadata(field_id)
 
                         allowed_values = []
@@ -144,9 +132,7 @@ class CustomFieldMigration(BaseMigration):
                             )
                             enhanced_field["allowed_values"] = allowed_values
                     except Exception as e:
-                        self.logger.warning(
-                            f"Could not retrieve options for field '{field.get('name')}': {str(e)}"
-                        )
+                        self.logger.warning(f"Could not retrieve options for field '{field.get('name')}': {str(e)}")
 
                 enhanced_fields.append(enhanced_field)
 
@@ -179,24 +165,16 @@ class CustomFieldMigration(BaseMigration):
 
         # Check if the data already exists
         if output_file.exists() and not config.migration_config.get("force", False):
-            self.logger.info(
-                f"Using existing OpenProject custom field data from {output_file}"
-            )
+            self.logger.info(f"Using existing OpenProject custom field data from {output_file}")
             try:
                 with open(output_file, encoding="utf-8") as f:
                     return json.load(f)
             except json.JSONDecodeError:
-                self.logger.warning(
-                    f"Existing file {output_file} is invalid. Re-extracting data."
-                )
+                self.logger.warning(f"Existing file {output_file} is invalid. Re-extracting data.")
             except Exception as e:
-                self.logger.error(
-                    f"Error reading existing data: {str(e)}. Re-extracting data."
-                )
+                self.logger.error(f"Error reading existing data: {str(e)}. Re-extracting data.")
 
-        self.logger.info(
-            "Retrieving custom fields from OpenProject via Rails console..."
-        )
+        self.logger.info("Retrieving custom fields from OpenProject via Rails console...")
 
         try:
             # Use the op_client's get_custom_fields method which uses Rails console
@@ -264,31 +242,19 @@ class CustomFieldMigration(BaseMigration):
         }
 
         if jira_custom_type:
-            if (
-                "multiselect" in jira_custom_type.lower()
-                or "checkbox" in jira_custom_type.lower()
-            ):
+            if "multiselect" in jira_custom_type.lower() or "checkbox" in jira_custom_type.lower():
                 return "list"
-            elif (
-                "select" in jira_custom_type.lower()
-                or "radio" in jira_custom_type.lower()
-            ):
+            elif "select" in jira_custom_type.lower() or "radio" in jira_custom_type.lower():
                 return "list"
             elif "date" in jira_custom_type.lower():
                 return "date"
-            elif (
-                "number" in jira_custom_type.lower()
-                or "float" in jira_custom_type.lower()
-            ):
+            elif "number" in jira_custom_type.lower() or "float" in jira_custom_type.lower():
                 return "float"
             elif "integer" in jira_custom_type.lower():
                 return "int"
             elif "user" in jira_custom_type.lower():
                 return "user"
-            elif (
-                "text" in jira_custom_type.lower()
-                or "string" in jira_custom_type.lower()
-            ):
+            elif "text" in jira_custom_type.lower() or "string" in jira_custom_type.lower():
                 return "text"
             elif "url" in jira_custom_type.lower():
                 return "text"
@@ -323,9 +289,7 @@ class CustomFieldMigration(BaseMigration):
 
         mapping = {}
 
-        op_fields_by_name = {
-            field.get("name", "").lower(): field for field in self.op_custom_fields
-        }
+        op_fields_by_name = {field.get("name", "").lower(): field for field in self.op_custom_fields}
 
         def process_field(jira_field: dict[str, Any], context: dict[str, Any]) -> str | None:
             jira_id = jira_field.get("id")
@@ -396,12 +360,8 @@ class CustomFieldMigration(BaseMigration):
         self.logger.info(f"Saved custom field mapping to {mapping_file}")
 
         total_fields = len(mapping)
-        matched_fields = sum(
-            1 for field in mapping.values() if field["matched_by"] == "name"
-        )
-        created_fields = sum(
-            1 for field in mapping.values() if field["matched_by"] == "created"
-        )
+        matched_fields = sum(1 for field in mapping.values() if field["matched_by"] == "name")
+        created_fields = sum(1 for field in mapping.values() if field["matched_by"] == "created")
 
         self.logger.info(f"Custom field mapping created for {total_fields} fields")
         self.logger.info(f"- Matched by name: {matched_fields}")
@@ -421,9 +381,7 @@ class CustomFieldMigration(BaseMigration):
             dict: Result of the operation
         """
         field_type = field_data.get("openproject_type", "string")
-        field_name = field_data.get(
-            "openproject_name", field_data.get("jira_name", "Unnamed Field")
-        )
+        field_name = field_data.get("openproject_name", field_data.get("jira_name", "Unnamed Field"))
 
         field_name = field_name.replace('"', '\\"')
 
@@ -435,9 +393,7 @@ class CustomFieldMigration(BaseMigration):
                 and isinstance(field_data["possible_values"], list)
             ):
                 values = field_data["possible_values"]
-                escaped_values = [
-                    v.replace('"', '\\"') if isinstance(v, str) else v for v in values
-                ]
+                escaped_values = [v.replace('"', '\\"') if isinstance(v, str) else v for v in values]
                 values_str = ", ".join([f'"{v}"' for v in escaped_values])
                 possible_values_ruby = f"[{values_str}]"
             else:
@@ -506,16 +462,10 @@ class CustomFieldMigration(BaseMigration):
             elif "validation_errors" in result:
                 error_info = f"Field validation failed: {result['validation_errors']}"
 
-            self.logger.error(
-                f"Error creating custom field '{field_name}': {error_info}"
-            )
+            self.logger.error(f"Error creating custom field '{field_name}': {error_info}")
 
-            if isinstance(result.get("errors"), list) and any(
-                "Possible values" in err for err in result["errors"]
-            ):
-                self.logger.error(
-                    f"Field '{field_name}' requires possible values for list type fields"
-                )
+            if isinstance(result.get("errors"), list) and any("Possible values" in err for err in result["errors"]):
+                self.logger.error(f"Field '{field_name}' requires possible values for list type fields")
         elif result["status"] == "success":
             self.logger.info(f"Created custom field '{field_name}' successfully")
 
@@ -532,9 +482,7 @@ class CustomFieldMigration(BaseMigration):
         Returns:
             Boolean indicating success or failure
         """
-        self.logger.info(
-            f"Migrating {len(fields_to_migrate)} custom fields using batch migration"
-        )
+        self.logger.info(f"Migrating {len(fields_to_migrate)} custom fields using batch migration")
 
         # Convert the fields to the format expected by the Ruby script
         custom_fields_data = []
@@ -578,12 +526,8 @@ class CustomFieldMigration(BaseMigration):
 
         # Generate unique filename
         timestamp = int(time.time())
-        temp_file_path = os.path.join(
-            self.data_dir, f"custom_fields_batch_{timestamp}.json"
-        )
-        self.logger.info(
-            f"Writing {len(custom_fields_data)} custom fields to {temp_file_path}"
-        )
+        temp_file_path = os.path.join(self.data_dir, f"custom_fields_batch_{timestamp}.json")
+        self.logger.info(f"Writing {len(custom_fields_data)} custom fields to {temp_file_path}")
 
         try:
             # Write the data to the JSON file
@@ -597,9 +541,7 @@ class CustomFieldMigration(BaseMigration):
         container_temp_path = f"/tmp/custom_fields_batch_{timestamp}.json"
 
         # Copy the file to the container
-        if not rails_client.transfer_file_to_container(
-            temp_file_path, container_temp_path
-        ):
+        if not rails_client.transfer_file_to_container(temp_file_path, container_temp_path):
             self.logger.error("Failed to transfer custom fields file to container")
             return False
 
@@ -781,9 +723,7 @@ class CustomFieldMigration(BaseMigration):
         result = rails_client.execute(complete_script)
 
         if result.get("status") != "success":
-            self.logger.error(
-                f"Error executing Ruby script: {result.get('error', 'Unknown error')}"
-            )
+            self.logger.error(f"Error executing Ruby script: {result.get('error', 'Unknown error')}")
             return False
 
         # Initialize variables
@@ -808,9 +748,7 @@ class CustomFieldMigration(BaseMigration):
             self.logger.info(f"Retrieved results with {len(results)} entries")
         else:
             # If direct output doesn't work, try to get the result file
-            if rails_client.transfer_file_from_container(
-                result_file_container, result_file_local
-            ):
+            if rails_client.transfer_file_from_container(result_file_container, result_file_local):
                 try:
                     with open(result_file_local) as f:
                         result_data = json.load(f)
@@ -825,13 +763,9 @@ class CustomFieldMigration(BaseMigration):
                             existing_count = result_data.get("existing_count", 0)
                             error_count = result_data.get("error_count", 0)
 
-                            self.logger.info(
-                                f"Retrieved results with {len(results)} entries"
-                            )
+                            self.logger.info(f"Retrieved results with {len(results)} entries")
                         else:
-                            self.logger.error(
-                                f"Error in result data: {result_data.get('message', 'Unknown error')}"
-                            )
+                            self.logger.error(f"Error in result data: {result_data.get('message', 'Unknown error')}")
                             return False
                 except Exception as e:
                     self.logger.error(f"Error processing result file: {str(e)}")
@@ -856,9 +790,7 @@ class CustomFieldMigration(BaseMigration):
                     self.mapping[jira_id]["matched_by"] = "name"
                     self.mapping[jira_id]["openproject_id"] = result_entry.get("id")
             elif status == "error":
-                self.logger.error(
-                    f"Error creating field '{name}': {result_entry.get('message')}"
-                )
+                self.logger.error(f"Error creating field '{name}': {result_entry.get('message')}")
 
         # Save the updated mapping
         self._save_to_json(self.mapping, "custom_field_mapping.json")
@@ -893,27 +825,19 @@ class CustomFieldMigration(BaseMigration):
         analysis = self.analyze_custom_field_mapping()
 
         if not analysis:
-            self.logger.error(
-                "Analysis of custom field mapping failed. Cannot migrate."
-            )
+            self.logger.error("Analysis of custom field mapping failed. Cannot migrate.")
             return False
 
-        self.logger.info(
-            f"Starting custom field migration with {len(self.mapping)} fields in mapping"
-        )
+        self.logger.info(f"Starting custom field migration with {len(self.mapping)} fields in mapping")
 
         self.extract_openproject_custom_fields()
         self.create_custom_field_mapping()
 
         # Check if we have fields that need to be created
-        fields_to_create = [
-            f for f in self.mapping.values() if f["matched_by"] == "create"
-        ]
+        fields_to_create = [f for f in self.mapping.values() if f["matched_by"] == "create"]
 
         if not fields_to_create:
-            self.logger.info(
-                "No custom fields need to be created. All mapped or ignored."
-            )
+            self.logger.info("No custom fields need to be created. All mapped or ignored.")
             return True
 
         self.logger.info(f"Found {len(fields_to_create)} custom fields to create")
@@ -929,10 +853,7 @@ class CustomFieldMigration(BaseMigration):
             Dictionary with analysis results
         """
         # Check if analysis was recently performed to avoid duplicate logging
-        if (
-            hasattr(self, "_last_analysis_time")
-            and time.time() - self._last_analysis_time < 5
-        ):
+        if hasattr(self, "_last_analysis_time") and time.time() - self._last_analysis_time < 5:
             self.logger.debug("Skipping duplicate analysis - was just performed")
             # Make sure the analysis has a status field
             if hasattr(self, "analysis") and self.analysis:
@@ -950,22 +871,14 @@ class CustomFieldMigration(BaseMigration):
                 with open(mapping_path) as f:
                     self.mapping = json.load(f)
             else:
-                self.logger.error(
-                    "No custom field mapping found. Run create_custom_field_mapping() first."
-                )
+                self.logger.error("No custom field mapping found. Run create_custom_field_mapping() first.")
                 return {"status": "error", "message": "No custom field mapping found"}
 
         # Analyze the mapping
         total_fields = len(self.mapping)
-        matched_fields = sum(
-            1 for field in self.mapping.values() if field["matched_by"] == "name"
-        )
-        created_fields = sum(
-            1 for field in self.mapping.values() if field["matched_by"] == "created"
-        )
-        to_create_fields = sum(
-            1 for field in self.mapping.values() if field["matched_by"] == "create"
-        )
+        matched_fields = sum(1 for field in self.mapping.values() if field["matched_by"] == "name")
+        created_fields = sum(1 for field in self.mapping.values() if field["matched_by"] == "created")
+        to_create_fields = sum(1 for field in self.mapping.values() if field["matched_by"] == "create")
 
         analysis = {
             "status": "success",
@@ -990,9 +903,7 @@ class CustomFieldMigration(BaseMigration):
         if total_fields > 0:
             analysis["match_percentage"] = (matched_fields / total_fields) * 100
             analysis["created_percentage"] = (created_fields / total_fields) * 100
-            analysis["needs_creation_percentage"] = (
-                to_create_fields / total_fields
-            ) * 100
+            analysis["needs_creation_percentage"] = (to_create_fields / total_fields) * 100
         else:
             analysis["match_percentage"] = 0
             analysis["created_percentage"] = 0
@@ -1005,15 +916,9 @@ class CustomFieldMigration(BaseMigration):
         # Print analysis summary
         self.logger.info("Custom Field Mapping Analysis:")
         self.logger.info(f"Total Jira custom fields processed: {total_fields}")
-        self.logger.info(
-            f"- Matched by name: {matched_fields} ({analysis['match_percentage']:.1f}%)"
-        )
-        self.logger.info(
-            f"- Created directly via Rails: {created_fields} ({analysis['created_percentage']:.1f}%)"
-        )
-        self.logger.info(
-            f"- Still need creation: {to_create_fields} ({analysis['needs_creation_percentage']:.1f}%)"
-        )
+        self.logger.info(f"- Matched by name: {matched_fields} ({analysis['match_percentage']:.1f}%)")
+        self.logger.info(f"- Created directly via Rails: {created_fields} ({analysis['created_percentage']:.1f}%)")
+        self.logger.info(f"- Still need creation: {to_create_fields} ({analysis['needs_creation_percentage']:.1f}%)")
 
         if to_create_fields > 0:
             self.logger.warning(
@@ -1052,9 +957,7 @@ class CustomFieldMigration(BaseMigration):
 
             # Migrate custom fields
             if not config.migration_config.get("dry_run", False) and self.rails_console:
-                self.logger.info(
-                    "Migrating custom fields via Rails console", extra={"markup": True}
-                )
+                self.logger.info("Migrating custom fields via Rails console", extra={"markup": True})
                 success = self.migrate_custom_fields()
             elif not config.migration_config.get("dry_run", False):
                 self.logger.info(
@@ -1063,9 +966,7 @@ class CustomFieldMigration(BaseMigration):
                 )
                 success = self.migrate_custom_fields()
             else:
-                self.logger.warning(
-                    "Dry run mode - not creating custom fields", extra={"markup": True}
-                )
+                self.logger.warning("Dry run mode - not creating custom fields", extra={"markup": True})
                 success = True
 
             # Analyze results
@@ -1076,8 +977,7 @@ class CustomFieldMigration(BaseMigration):
                 jira_fields_count=len(jira_fields),
                 op_fields_count=len(op_fields),
                 mapped_fields_count=len(mapping),
-                success_count=analysis.get("matched_by_name", 0)
-                + analysis.get("created_directly", 0),
+                success_count=analysis.get("matched_by_name", 0) + analysis.get("created_directly", 0),
                 failed_count=analysis.get("needs_manual_creation_or_script", 0),
                 total_count=len(jira_fields),
                 analysis=analysis,
@@ -1091,11 +991,6 @@ class CustomFieldMigration(BaseMigration):
                 success=False,
                 error=str(e),
                 success_count=0,
-                failed_count=(
-                    len(self.jira_custom_fields) if self.jira_custom_fields else 0
-                ),
-                total_count=(
-                    len(self.jira_custom_fields) if self.jira_custom_fields else 0
-                ),
+                failed_count=(len(self.jira_custom_fields) if self.jira_custom_fields else 0),
+                total_count=(len(self.jira_custom_fields) if self.jira_custom_fields else 0),
             )
-

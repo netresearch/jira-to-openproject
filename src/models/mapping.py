@@ -5,7 +5,7 @@ Defines the mapping strategies between Jira and OpenProject data models.
 
 # Add the logger import
 from src import config
-from src.types import JiraData, OpenProjectData, TypeMapping, StatusMapping
+from src.types import JiraData, OpenProjectData, StatusMapping, TypeMapping
 
 # Get logger from config
 logger = config.logger
@@ -50,9 +50,7 @@ class JiraToOPMapping:
             "position": 1,  # Default position
             "is_default": False,
             "is_in_roadmap": True,
-            "jira_id": jira_issue_type[
-                "id"
-            ],  # Store the original Jira ID for reference
+            "jira_id": jira_issue_type["id"],  # Store the original Jira ID for reference
         }
 
     @staticmethod
@@ -114,9 +112,7 @@ class JiraToOPMapping:
             "is_public": True,
             "status": "active",
             "jira_id": jira_project["id"],  # Store the original Jira ID for reference
-            "jira_key": jira_project[
-                "key"
-            ],  # Store the original Jira key for reference
+            "jira_key": jira_project["key"],  # Store the original Jira key for reference
         }
 
     @staticmethod
@@ -195,9 +191,7 @@ class JiraToOPMapping:
             "lastname": lastname,
             "mail": email,
             "status": "active" if jira_user.get("active", True) else "locked",
-            "jira_name": jira_user[
-                "name"
-            ],  # Store the original Jira username for reference
+            "jira_name": jira_user["name"],  # Store the original Jira username for reference
         }
 
     @staticmethod

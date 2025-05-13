@@ -1,6 +1,5 @@
-from typing import Any, Literal, TypedDict
 from dataclasses import dataclass, field
-
+from typing import Any, Literal, TypedDict
 
 type JiraData = dict[str, Any]
 type OpenProjectData = dict[str, Any]
@@ -78,9 +77,7 @@ type ComponentName = Literal[
 
 
 # PEP 695 Type Aliases
-type DirType = Literal[
-    "root", "data", "logs", "output", "backups", "temp", "exports", "results"
-]
+type DirType = Literal["root", "data", "logs", "output", "backups", "temp", "exports", "results"]
 
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
@@ -91,4 +88,3 @@ class ConfigSection:
 
     name: str
     settings: dict[str, Any] = field(default_factory=dict)
-

@@ -63,9 +63,7 @@ rich_handler = RichHandler(
 )
 
 
-def configure_logging(
-    level: str = "INFO", log_file: str | None = None
-) -> ExtendedLogger:
+def configure_logging(level: str = "INFO", log_file: str | None = None) -> ExtendedLogger:
     """
     Configure logging with rich formatting.
 
@@ -102,9 +100,7 @@ def configure_logging(
             os.makedirs(log_dir, exist_ok=True)
 
         # Create a file handler with a more detailed format for the log file
-        file_format = logging.Formatter(
-            "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s"
-        )
+        file_format = logging.Formatter("%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s")
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(file_format)
         file_handler.setLevel(numeric_level)
@@ -189,12 +185,7 @@ class ProgressTracker(Generic[T]):
 
     def __enter__(self) -> "ProgressTracker[T]":
         """Start the live display when entering context."""
-        self.live = Live(
-            console=console,
-            refresh_per_second=2,
-            auto_refresh=True,
-            vertical_overflow="ellipsis"
-        )
+        self.live = Live(console=console, refresh_per_second=2, auto_refresh=True, vertical_overflow="ellipsis")
         self.live.__enter__()
         return self
 
@@ -227,9 +218,7 @@ class ProgressTracker(Generic[T]):
         """
         self.processed_count += advance
         if description:
-            self.progress.update(
-                self.task_id, completed=self.processed_count, description=description
-            )
+            self.progress.update(self.task_id, completed=self.processed_count, description=description)
         else:
             self.progress.update(self.task_id, completed=self.processed_count)
         self._update_display()

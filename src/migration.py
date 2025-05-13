@@ -15,31 +15,32 @@ from datetime import datetime
 from typing import TypedDict
 
 from src import config
+from src.clients.docker_client import DockerClient
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.mappings.mappings import Mappings
-from src.migrations.base_migration import BaseMigration
-from src.models import ComponentResult, MigrationResult
-from src.migrations.user_migration import UserMigration
-from src.migrations.custom_field_migration import CustomFieldMigration
-from src.migrations.company_migration import CompanyMigration
-from src.migrations.project_migration import ProjectMigration
-from src.migrations.link_type_migration import LinkTypeMigration
-from src.migrations.issue_type_migration import IssueTypeMigration
-from src.migrations.status_migration import StatusMigration
-from src.migrations.work_package_migration import WorkPackageMigration
-from src.migrations.account_migration import AccountMigration
-from src.types import ComponentName, BackupDir
-from src.utils import data_handler
-from src.clients.ssh_client import SSHClient
-from src.clients.docker_client import DockerClient
 from src.clients.rails_console_client import RailsConsoleClient
+from src.clients.ssh_client import SSHClient
+from src.mappings.mappings import Mappings
+from src.migrations.account_migration import AccountMigration
+from src.migrations.base_migration import BaseMigration
+from src.migrations.company_migration import CompanyMigration
+from src.migrations.custom_field_migration import CustomFieldMigration
+from src.migrations.issue_type_migration import IssueTypeMigration
+from src.migrations.link_type_migration import LinkTypeMigration
+from src.migrations.project_migration import ProjectMigration
+from src.migrations.status_migration import StatusMigration
+from src.migrations.user_migration import UserMigration
+from src.migrations.work_package_migration import WorkPackageMigration
+from src.models import ComponentResult, MigrationResult
+from src.types import BackupDir, ComponentName
+from src.utils import data_handler
 
 
 class AvailableComponents(TypedDict):
     """
     Available components for the migration.
     """
+
     dict[ComponentName, BaseMigration]
 
 
@@ -205,19 +206,13 @@ def run_migration(
         # Create a backup if not disabled
         backup_path = None
         if not config.migration_config.get("no_backup", False) and not config.migration_config.get("dry_run", False):
-            config.logger.info(
-                "Creating backup before migration...", extra={"markup": True}
-            )
+            config.logger.info("Creating backup before migration...", extra={"markup": True})
             backup_path = create_backup()
             if backup_path:
                 results.overall["backup_path"] = backup_path
-                config.logger.success(
-                    f"Backup created at: {backup_path}", extra={"markup": True}
-                )
+                config.logger.success(f"Backup created at: {backup_path}", extra={"markup": True})
             else:
-                config.logger.warning(
-                    "No backup created (no data to back up)", extra={"markup": True}
-                )
+                config.logger.warning("No backup created (no data to back up)", extra={"markup": True})
 
         # Initialize clients
         config.logger.info("Initializing API clients...", extra={"markup": True})
@@ -228,19 +223,21 @@ def run_migration(
         # Create clients in the correct hierarchical order
         # 1. First, create the SSH client which is the foundation
         ssh_client = SSHClient(
-            host=str(config.openproject_config.get(
-                "server", "localhost"  # Use 'server' instead of falling back to URL
-            )),
+            host=str(
+                config.openproject_config.get("server", "localhost")  # Use 'server' instead of falling back to URL
+            ),
             user=config.openproject_config.get("user", None),
             key_file=config.openproject_config.get("key_file", None),
         )
 
         # 2. Next, create the Docker client using the SSH client
         docker_client = DockerClient(
-            container_name=str(config.openproject_config.get(
-                "container_name", config.openproject_config.get("container", "openproject")
-            )),
-            ssh_client=ssh_client
+            container_name=str(
+                config.openproject_config.get(
+                    "container_name", config.openproject_config.get("container", "openproject")
+                )
+            ),
+            ssh_client=ssh_client,
         )
 
         # 3. Create the Rails console client
@@ -250,54 +247,24 @@ def run_migration(
 
         # 4. Finally, create the Jira client and OpenProject client (which uses the other clients)
         jira_client = JiraClient()
-        op_client = OpenProjectClient(
-            ssh_client=ssh_client,
-            docker_client=docker_client,
-            rails_client=rails_client
-        )
+        op_client = OpenProjectClient(ssh_client=ssh_client, docker_client=docker_client, rails_client=rails_client)
 
         config.logger.success("All clients initialized successfully", extra={"markup": True})
 
         # Initialize mappings
-        config.mappings = Mappings(
-            data_dir=config.get_path("data")
-        )
+        config.mappings = Mappings(data_dir=config.get_path("data"))
 
         # Define all available migration components
         available_components = AvailableComponents(
-            users=UserMigration(
-                jira_client=jira_client,
-                op_client=op_client
-            ),
-            custom_fields=CustomFieldMigration(
-                jira_client=jira_client,
-                op_client=op_client
-            ),
-            companies=CompanyMigration(
-                jira_client=jira_client,
-                op_client=op_client
-            ),
-            projects=ProjectMigration(
-                jira_client=jira_client,
-                op_client=op_client
-            ),
-            link_types=LinkTypeMigration(
-                jira_client=jira_client,
-                op_client=op_client
-            ),
-            issue_types=IssueTypeMigration(
-                jira_client=jira_client,
-                op_client=op_client
-            ),
-            status_types=StatusMigration(
-                jira_client=jira_client,
-                op_client=op_client
-            ),
+            users=UserMigration(jira_client=jira_client, op_client=op_client),
+            custom_fields=CustomFieldMigration(jira_client=jira_client, op_client=op_client),
+            companies=CompanyMigration(jira_client=jira_client, op_client=op_client),
+            projects=ProjectMigration(jira_client=jira_client, op_client=op_client),
+            link_types=LinkTypeMigration(jira_client=jira_client, op_client=op_client),
+            issue_types=IssueTypeMigration(jira_client=jira_client, op_client=op_client),
+            status_types=StatusMigration(jira_client=jira_client, op_client=op_client),
             work_packages=None,  # Initialized later if needed
-            accounts=AccountMigration(
-                jira_client=jira_client,
-                op_client=op_client
-            )
+            accounts=AccountMigration(jira_client=jira_client, op_client=op_client),
         )
 
         # If components parameter is not provided, use default component order
@@ -332,9 +299,7 @@ def run_migration(
         # Initialize work package migration if it's in the components list
         if "work_packages" in components:
             available_components["work_packages"] = WorkPackageMigration(
-                jira_client=jira_client,
-                op_client=op_client,
-                data_dir=config.get_path("data")
+                jira_client=jira_client, op_client=op_client, data_dir=config.get_path("data")
             )
 
         # Run each component in order
@@ -404,10 +369,7 @@ def run_migration(
                     interrupted_result = ComponentResult(
                         success=False,
                         message="Component was interrupted by user",
-                        details={
-                            "status": "interrupted",
-                            "time": time.time() - component_start_time
-                        }
+                        details={"status": "interrupted", "time": time.time() - component_start_time},
                     )
                     results.components[component_name] = interrupted_result
                     results.overall["status"] = "interrupted"
@@ -427,8 +389,8 @@ def run_migration(
                         details={
                             "status": "failed",
                             "time": time.time() - component_start_time,
-                            "error": str(e)  # Keep error in details for compatibility
-                        }
+                            "error": str(e),  # Keep error in details for compatibility
+                        },
                     )
                     results.components[component_name] = error_result
                     results.overall["status"] = "failed"
@@ -436,15 +398,15 @@ def run_migration(
                 # Pause for user confirmation between components
                 if component_name != components[-1]:  # Skip after the last component
                     try:
-                        result: str = '\033[1;90mUNKNOWN RESULT\033[0m'
+                        result: str = "\033[1;90mUNKNOWN RESULT\033[0m"
                         current_result = results.components.get(component_name)
                         if current_result:
-                            if hasattr(current_result, 'success'):
+                            if hasattr(current_result, "success"):
                                 if current_result.success:
                                     result = "\033[1;32mSUCCEEDED\033[0m"
                                 else:
                                     result = "\033[1;31mFAILED\033[0m"
-                            if hasattr(current_result, 'errors') and current_result.errors:
+                            if hasattr(current_result, "errors") and current_result.errors:
                                 result = f"\033[1;31mFAILED\033[0m with errors: {current_result.errors}"
 
                         print("\n" + "-" * 50)
@@ -457,26 +419,20 @@ def run_migration(
                         next_component = components[components.index(component_name) + 1]
 
                         user_input = input(f"\nContinue to next component: {next_component}? [Y/n]: ").strip().lower()
-                        if user_input and user_input not in ('y', 'yes'):
-                            config.logger.warning(
-                                "Migration paused by user", extra={"markup": True}
-                            )
+                        if user_input and user_input not in ("y", "yes"):
+                            config.logger.warning("Migration paused by user", extra={"markup": True})
                             results.overall["status"] = "interrupted"
                             results.overall["message"] = "Migration was paused by user"
                             break
                     except KeyboardInterrupt:
-                        config.logger.warning(
-                            "Migration interrupted by user", extra={"markup": True}
-                        )
+                        config.logger.warning("Migration interrupted by user", extra={"markup": True})
                         results.overall["status"] = "interrupted"
                         results.overall["message"] = "Migration was interrupted by user"
                         break
 
                 # Break out if the component failed and it's critical
                 component_result_data = results.components
-                current_component_result = component_result_data.get(
-                    component_name, ComponentResult()
-                )
+                current_component_result = component_result_data.get(component_name, ComponentResult())
                 current_component_status = current_component_result.details.get("status")
                 if current_component_status == "failed":
                     if component_name in ["users", "projects"]:
@@ -488,9 +444,7 @@ def run_migration(
 
         except KeyboardInterrupt:
             # Handle user interruption at the top level
-            config.logger.warning(
-                "Migration interrupted by user", extra={"markup": True}
-            )
+            config.logger.warning("Migration interrupted by user", extra={"markup": True})
             results.overall["status"] = "interrupted"
             results.overall["message"] = "Migration was interrupted by user"
 
@@ -522,9 +476,7 @@ def run_migration(
             filename=results_file,
         )
 
-        config.logger.info(
-            f"Migration results saved to {results_file}", extra={"markup": True}
-        )
+        config.logger.info(f"Migration results saved to {results_file}", extra={"markup": True})
 
         return results
 
@@ -611,21 +563,15 @@ def setup_tmux_session() -> bool:
         )
 
         if result.returncode == 0:
-            config.logger.warning(
-                f"tmux session '{session_name}' already exists", extra={"markup": True}
-            )
-            config.logger.info(
-                "To attach to this session, run:", extra={"markup": True}
-            )
+            config.logger.warning(f"tmux session '{session_name}' already exists", extra={"markup": True})
+            config.logger.info("To attach to this session, run:", extra={"markup": True})
             config.logger.info(f"tmux attach -t {session_name}", extra={"markup": True})
             return True
 
         # Create a new session
         subprocess.run(["tmux", "new-session", "-d", "-s", session_name], check=True)
 
-        config.logger.success(
-            f"Created tmux session '{session_name}'", extra={"markup": True}
-        )
+        config.logger.success(f"Created tmux session '{session_name}'", extra={"markup": True})
         config.logger.info("To attach to this session, run:", extra={"markup": True})
         config.logger.info(f"tmux attach -t {session_name}", extra={"markup": True})
 
@@ -643,18 +589,12 @@ def setup_tmux_session() -> bool:
                 "Please manually run the following commands in the tmux session:",
                 extra={"markup": True},
             )
-            config.logger.info(
-                f"docker exec -it {container} bash", extra={"markup": True}
-            )
-            config.logger.info(
-                "cd /app && bundle exec rails console", extra={"markup": True}
-            )
+            config.logger.info(f"docker exec -it {container} bash", extra={"markup": True})
+            config.logger.info("cd /app && bundle exec rails console", extra={"markup": True})
         else:
             server = config.openproject_config.get("server")
             if server:
-                config.logger.info(
-                    f"Detected remote server '{server}'", extra={"markup": True}
-                )
+                config.logger.info(f"Detected remote server '{server}'", extra={"markup": True})
                 config.logger.info(
                     "Please manually run the following commands in the tmux session:",
                     extra={"markup": True},
@@ -681,19 +621,11 @@ def setup_tmux_session() -> bool:
 
         return True
     except (subprocess.SubprocessError, FileNotFoundError):
-        config.logger.error(
-            "tmux is not installed or not available in PATH", extra={"markup": True}
-        )
+        config.logger.error("tmux is not installed or not available in PATH", extra={"markup": True})
         config.logger.info("Please install tmux first:", extra={"markup": True})
-        config.logger.info(
-            "  On Ubuntu/Debian: sudo apt-get install tmux", extra={"markup": True}
-        )
-        config.logger.info(
-            "  On CentOS/RHEL: sudo yum install tmux", extra={"markup": True}
-        )
-        config.logger.info(
-            "  On macOS with Homebrew: brew install tmux", extra={"markup": True}
-        )
+        config.logger.info("  On Ubuntu/Debian: sudo apt-get install tmux", extra={"markup": True})
+        config.logger.info("  On CentOS/RHEL: sudo yum install tmux", extra={"markup": True})
+        config.logger.info("  On macOS with Homebrew: brew install tmux", extra={"markup": True})
         return False
 
 
@@ -725,18 +657,20 @@ def main() -> None:
             config.logger.info(f"Available OpenProject config keys: {list(config.openproject_config.keys())}")
 
             ssh_client = SSHClient(
-                host=str(config.openproject_config.get(
-                    "server", "localhost"  # Use 'server' instead of falling back to URL
-                )),
+                host=str(
+                    config.openproject_config.get("server", "localhost")  # Use 'server' instead of falling back to URL
+                ),
                 user=config.openproject_config.get("user", None),
                 key_file=config.openproject_config.get("key_file", None),
             )
 
             docker_client = DockerClient(
-                container_name=str(config.openproject_config.get(
-                    "container_name", config.openproject_config.get("container", "openproject")
-                )),
-                ssh_client=ssh_client
+                container_name=str(
+                    config.openproject_config.get(
+                        "container_name", config.openproject_config.get("container", "openproject")
+                    )
+                ),
+                ssh_client=ssh_client,
             )
 
             rails_client = RailsConsoleClient(
@@ -744,11 +678,7 @@ def main() -> None:
             )
 
             jira_client = JiraClient()
-            op_client = OpenProjectClient(
-                ssh_client=ssh_client,
-                docker_client=docker_client,
-                rails_client=rails_client
-            )
+            op_client = OpenProjectClient(ssh_client=ssh_client, docker_client=docker_client, rails_client=rails_client)
 
             # List options to choose which mapping to update
             print("\nSelect mapping to update:")
@@ -759,34 +689,20 @@ def main() -> None:
                 try:
                     choice = input("Enter choice (1-2): ")
                     if choice == "1":
-                        custom_field_migration = CustomFieldMigration(
-                            jira_client=jira_client,
-                            op_client=op_client
-                        )
+                        custom_field_migration = CustomFieldMigration(jira_client=jira_client, op_client=op_client)
                         cf_mapping_update_result = custom_field_migration.update_mapping_file()
                         if cf_mapping_update_result:
-                            config.logger.success(
-                                "Custom field mapping updated successfully."
-                            )
+                            config.logger.success("Custom field mapping updated successfully.")
                         else:
-                            config.logger.warning(
-                                "No updates were made to custom field mapping."
-                            )
+                            config.logger.warning("No updates were made to custom field mapping.")
                         break
                     elif choice == "2":
-                        issue_type_migration = IssueTypeMigration(
-                            jira_client=jira_client,
-                            op_client=op_client
-                        )
+                        issue_type_migration = IssueTypeMigration(jira_client=jira_client, op_client=op_client)
                         issue_type_mapping_update_result = issue_type_migration.update_mapping_file()
                         if issue_type_mapping_update_result:
-                            config.logger.success(
-                                "Issue type mapping updated successfully."
-                            )
+                            config.logger.success("Issue type mapping updated successfully.")
                         else:
-                            config.logger.warning(
-                                "No updates were made to issue type mapping."
-                            )
+                            config.logger.warning("No updates were made to issue type mapping.")
                         break
                     else:
                         config.logger.error("Invalid choice. Please enter 1 or 2.")
@@ -808,47 +724,33 @@ def main() -> None:
         if migration_result:
             # Fix: Access MigrationResult properties correctly (it's an object, not a dict)
             overall_status = (
-                migration_result.overall.get("status", "unknown")
-                if hasattr(migration_result, "overall") else "unknown"
+                migration_result.overall.get("status", "unknown") if hasattr(migration_result, "overall") else "unknown"
             )
 
             # Show summary header based on status
             if overall_status == "success":
-                config.logger.success(
-                    "Migration completed successfully", extra={"markup": True}
-                )
+                config.logger.success("Migration completed successfully", extra={"markup": True})
             elif overall_status == "interrupted":
                 config.logger.warning(
                     "Migration was interrupted before completion",
                     extra={"markup": True},
                 )
             else:
-                config.logger.error(
-                    "Migration completed with errors", extra={"markup": True}
-                )
+                config.logger.error("Migration completed with errors", extra={"markup": True})
 
             # Print component results
             config.logger.info("Component results:", extra={"markup": True})
             # Fix: Access components property correctly
-            component_items = (
-                migration_result.components.items()
-                if hasattr(migration_result, "components") else {}
-            )
+            component_items = migration_result.components.items() if hasattr(migration_result, "components") else {}
             for component, comp_result in component_items:
                 # Access status from details
                 status = comp_result.details.get("status", "unknown") if comp_result.details else "unknown"
                 if status == "success":
-                    config.logger.success(
-                        f"✓ {component}: {status}", extra={"markup": True}
-                    )
+                    config.logger.success(f"✓ {component}: {status}", extra={"markup": True})
                 elif status == "interrupted":
-                    config.logger.warning(
-                        f"⚠ {component}: {status}", extra={"markup": True}
-                    )
+                    config.logger.warning(f"⚠ {component}: {status}", extra={"markup": True})
                 else:
-                    config.logger.error(
-                        f"✗ {component}: {status}", extra={"markup": True}
-                    )
+                    config.logger.error(f"✗ {component}: {status}", extra={"markup": True})
 
     except KeyboardInterrupt:
         print("\nMigration manually interrupted. Exiting...")

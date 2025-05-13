@@ -6,17 +6,17 @@ Handles the migration of issue types from Jira to OpenProject work package types
 
 import json
 import os
+import re
 import subprocess
 import time
-import re
 from typing import Any
 
-from src.models import ComponentResult
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import console
 from src.migrations.base_migration import BaseMigration
+from src.models import ComponentResult
 
 # Get logger from config
 logger = config.logger
@@ -79,17 +79,11 @@ class IssueTypeMigration(BaseMigration):
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
         self.jira_issue_types = self._load_from_json("jira_issue_types.json", [])
-        self.op_work_package_types = self._load_from_json(
-            "op_work_package_types.json", []
-        )
+        self.op_work_package_types = self._load_from_json("op_work_package_types.json", [])
         self.issue_type_mapping = self._load_from_json("issue_type_mapping.json", {})
-        self.issue_type_id_mapping = self._load_from_json(
-            "issue_type_id_mapping.json", {}
-        )
+        self.issue_type_id_mapping = self._load_from_json("issue_type_id_mapping.json", {})
         logger.info(f"Loaded {len(self.jira_issue_types)=} Jira issue types")
-        logger.info(
-            f"Loaded {len(self.op_work_package_types)=} OpenProject work package types"
-        )
+        logger.info(f"Loaded {len(self.op_work_package_types)=} OpenProject work package types")
         logger.info(f"Loaded {len(self.issue_type_mapping)=} issue type mappings")
         logger.info(f"Loaded {len(self.issue_type_id_mapping)=} issue type ID mappings")
 
@@ -103,9 +97,7 @@ class IssueTypeMigration(BaseMigration):
         issue_types_file = os.path.join(self.data_dir, "jira_issue_types.json")
 
         if os.path.exists(issue_types_file) and not config.migration_config.get("force", False):
-            logger.info(
-                "Jira issue types data already exists, skipping extraction (use --force to override)"
-            )
+            logger.info("Jira issue types data already exists, skipping extraction (use --force to override)")
             with open(issue_types_file) as f:
                 self.jira_issue_types = json.load(f)
             return self.jira_issue_types
@@ -125,18 +117,14 @@ class IssueTypeMigration(BaseMigration):
             logger.error(f"Failed to get issue types from Jira: {str(e)}")
             return []
 
-    def extract_openproject_work_package_types(
-        self
-    ) -> list[dict[str, Any]]:
+    def extract_openproject_work_package_types(self) -> list[dict[str, Any]]:
         """
         Extract work package types from OpenProject.
 
         Returns:
             List of OpenProject work package type dictionaries
         """
-        work_package_types_file = os.path.join(
-            self.data_dir, "openproject_work_package_types.json"
-        )
+        work_package_types_file = os.path.join(self.data_dir, "openproject_work_package_types.json")
 
         if os.path.exists(work_package_types_file) and not config.migration_config.get("force", False):
             logger.info(
@@ -151,19 +139,13 @@ class IssueTypeMigration(BaseMigration):
         try:
             self.op_work_package_types = self.op_client.get_work_package_types()
         except Exception as e:
-            logger.warning(
-                f"Failed to get work package types from OpenProject: {str(e)}"
-            )
+            logger.warning(f"Failed to get work package types from OpenProject: {str(e)}")
             logger.warning("Using an empty list of work package types for OpenProject")
             self.op_work_package_types = []
 
-        logger.info(
-            f"Extracted {len(self.op_work_package_types)} work package types from OpenProject"
-        )
+        logger.info(f"Extracted {len(self.op_work_package_types)} work package types from OpenProject")
 
-        self._save_to_json(
-            self.op_work_package_types, "openproject_work_package_types.json"
-        )
+        self._save_to_json(self.op_work_package_types, "openproject_work_package_types.json")
 
         return self.op_work_package_types
 
@@ -176,9 +158,7 @@ class IssueTypeMigration(BaseMigration):
         """
         mapping_file = os.path.join(self.data_dir, "issue_type_mapping_template.json")
         if os.path.exists(mapping_file) and not config.migration_config.get("force", False):
-            logger.info(
-                "Issue type mapping already exists, loading from file (use --force to recreate)"
-            )
+            logger.info("Issue type mapping already exists, loading from file (use --force to recreate)")
             with open(mapping_file) as f:
                 self.issue_type_mapping = json.load(f)
             return self.issue_type_mapping
@@ -191,10 +171,7 @@ class IssueTypeMigration(BaseMigration):
         if not self.op_work_package_types:
             self.extract_openproject_work_package_types()
 
-        op_types_by_name = {
-            type_data.get("name", "").lower(): type_data
-            for type_data in self.op_work_package_types
-        }
+        op_types_by_name = {type_data.get("name", "").lower(): type_data for type_data in self.op_work_package_types}
 
         mapping = {}
         for jira_type in self.jira_issue_types:
@@ -267,23 +244,13 @@ class IssueTypeMigration(BaseMigration):
         self._save_to_json(mapping, "issue_type_mapping_template.json")
 
         total_types = len(mapping)
-        matched_types = sum(
-            1
-            for type_data in mapping.values()
-            if type_data["openproject_id"] is not None
-        )
-        to_create_types = sum(
-            1 for type_data in mapping.values() if type_data["openproject_id"] is None
-        )
+        matched_types = sum(1 for type_data in mapping.values() if type_data["openproject_id"] is not None)
+        to_create_types = sum(1 for type_data in mapping.values() if type_data["openproject_id"] is None)
         match_percentage = (matched_types / total_types) * 100 if total_types > 0 else 0
 
         logger.info(f"Issue type mapping created for {total_types} types")
-        logger.info(
-            f"Successfully matched {matched_types} types ({match_percentage:.1f}%)"
-        )
-        logger.info(
-            f"Need to create {to_create_types} new work package types in OpenProject"
-        )
+        logger.info(f"Successfully matched {matched_types} types ({match_percentage:.1f}%)")
+        logger.info(f"Need to create {to_create_types} new work package types in OpenProject")
 
         return mapping
 
@@ -318,9 +285,7 @@ class IssueTypeMigration(BaseMigration):
 
         # Process all sub-types and map them to normal types
         for jira_type_name, type_data in list(normalized_mapping.items()):
-            if not (
-                jira_type_name.startswith("Sub:") or jira_type_name.startswith("Sub-")
-            ):
+            if not (jira_type_name.startswith("Sub:") or jira_type_name.startswith("Sub-")):
                 continue
 
             # Get the base type name by removing the "Sub:" or "Sub-" prefix
@@ -360,39 +325,23 @@ class IssueTypeMigration(BaseMigration):
                     }
                 )
                 normalizations_applied += 1
-                logger.info(
-                    f"Could not find matching normal type for '{jira_type_name}', mapping to 'Task'"
-                )
+                logger.info(f"Could not find matching normal type for '{jira_type_name}', mapping to 'Task'")
 
         # Save the normalized mapping
         self.issue_type_mapping = normalized_mapping
         self._save_to_json(normalized_mapping, "issue_type_mapping_normalized.json")
 
-        logger.info(
-            f"Issue type normalization complete: {normalizations_applied} types normalized"
-        )
+        logger.info(f"Issue type normalization complete: {normalizations_applied} types normalized")
 
         # Update stats after normalization
         total_types = len(normalized_mapping)
-        matched_types = sum(
-            1
-            for type_data in normalized_mapping.values()
-            if type_data["openproject_id"] is not None
-        )
-        to_create_types = sum(
-            1
-            for type_data in normalized_mapping.values()
-            if type_data["openproject_id"] is None
-        )
+        matched_types = sum(1 for type_data in normalized_mapping.values() if type_data["openproject_id"] is not None)
+        to_create_types = sum(1 for type_data in normalized_mapping.values() if type_data["openproject_id"] is None)
         match_percentage = (matched_types / total_types) * 100 if total_types > 0 else 0
 
         logger.info(f"After normalization: {total_types} types total")
-        logger.info(
-            f"Successfully matched {matched_types} types ({match_percentage:.1f}%)"
-        )
-        logger.info(
-            f"Need to create {to_create_types} new work package types in OpenProject"
-        )
+        logger.info(f"Successfully matched {matched_types} types ({match_percentage:.1f}%)")
+        logger.info(f"Need to create {to_create_types} new work package types in OpenProject")
 
         return normalized_mapping
 
@@ -431,9 +380,7 @@ class IssueTypeMigration(BaseMigration):
         """
 
         try:
-            logger.info(
-                f"Executing Rails command to write work package types to {temp_file_path}..."
-            )
+            logger.info(f"Executing Rails command to write work package types to {temp_file_path}...")
             write_result = self.rails_console.execute_query(command)
 
             if (
@@ -441,22 +388,14 @@ class IssueTypeMigration(BaseMigration):
                 and write_result.get("output")
                 and "RAILS_EXEC_ERROR:" in write_result["output"]
             ):
-                logger.error(
-                    f"Rails command reported an error during execution: {write_result['output']}"
-                )
+                logger.error(f"Rails command reported an error during execution: {write_result['output']}")
                 return []
             elif write_result.get("status") != "success":
-                error_msg = write_result.get(
-                    "error", "Unknown error executing Rails command for file write"
-                )
-                logger.error(
-                    f"Failed to execute Rails command to write JSON file: {error_msg}"
-                )
+                error_msg = write_result.get("error", "Unknown error executing Rails command for file write")
+                logger.error(f"Failed to execute Rails command to write JSON file: {error_msg}")
                 return []
 
-            logger.info(
-                f"Rails command executed successfully. Checking existence of {temp_file_path}..."
-            )
+            logger.info(f"Rails command executed successfully. Checking existence of {temp_file_path}...")
 
             time.sleep(0.5)
 
@@ -476,9 +415,7 @@ class IssueTypeMigration(BaseMigration):
             ls_command = ssh_base_cmd + docker_base_cmd + ["ls", temp_file_path]
             logger.debug(f"Executing command: {' '.join(ls_command)}")
             try:
-                ls_result = subprocess.run(
-                    ls_command, capture_output=True, text=True, check=False
-                )
+                ls_result = subprocess.run(ls_command, capture_output=True, text=True, check=False)
                 if ls_result.returncode != 0:
                     error_details = ls_result.stderr.strip()
                     logger.error(
@@ -494,14 +431,10 @@ class IssueTypeMigration(BaseMigration):
             logger.info(f"Reading {temp_file_path} using ssh + docker exec...")
             cat_command = ssh_base_cmd + docker_base_cmd + ["cat", temp_file_path]
             logger.debug(f"Executing command: {' '.join(cat_command)}")
-            read_result = subprocess.run(
-                cat_command, capture_output=True, text=True, check=False
-            )
+            read_result = subprocess.run(cat_command, capture_output=True, text=True, check=False)
 
             if read_result.returncode != 0:
-                logger.error(
-                    f"Failed to read {temp_file_path} via docker exec: {read_result.stderr}"
-                )
+                logger.error(f"Failed to read {temp_file_path} via docker exec: {read_result.stderr}")
                 return []
 
             json_content = read_result.stdout.strip()
@@ -509,14 +442,10 @@ class IssueTypeMigration(BaseMigration):
 
             try:
                 types: list[dict[str, Any]] = json.loads(json_content)
-                logger.info(
-                    f"Successfully parsed {len(types)} work package types from file"
-                )
+                logger.info(f"Successfully parsed {len(types)} work package types from file")
                 return types
             except json.JSONDecodeError as e:
-                logger.error(
-                    f"Could not parse work package types JSON read from file: {e}"
-                )
+                logger.error(f"Could not parse work package types JSON read from file: {e}")
                 logger.debug(f"Invalid JSON content: {json_content}")
                 return []
 
@@ -524,36 +453,18 @@ class IssueTypeMigration(BaseMigration):
             logger.exception(f"Error running docker exec command: {str(e)}")
             return []
         except Exception as e:
-            logger.exception(
-                f"Unexpected error during work package type retrieval: {str(e)}"
-            )
+            logger.exception(f"Unexpected error during work package type retrieval: {str(e)}")
             return []
         finally:
             try:
                 if "container_name" in locals() and container_name:
-                    logger.debug(
-                        f"Attempting final removal of remote temporary file {temp_file_path}..."
-                    )
-                    ssh_base_cmd = (
-                        ["ssh", op_server, "--"]
-                        if "op_server" in locals() and op_server
-                        else []
-                    )
-                    docker_base_cmd = (
-                        ["docker", "exec", container_name] if container_name else []
-                    )
+                    logger.debug(f"Attempting final removal of remote temporary file {temp_file_path}...")
+                    ssh_base_cmd = ["ssh", op_server, "--"] if "op_server" in locals() and op_server else []
+                    docker_base_cmd = ["docker", "exec", container_name] if container_name else []
                     if ssh_base_cmd and docker_base_cmd:
-                        rm_command = (
-                            ssh_base_cmd
-                            + docker_base_cmd
-                            + ["rm", "-f", temp_file_path]
-                        )
-                        logger.debug(
-                            f"Executing final rm command: {' '.join(rm_command)}"
-                        )
-                        subprocess.run(
-                            rm_command, check=False, capture_output=True, timeout=10
-                        )
+                        rm_command = ssh_base_cmd + docker_base_cmd + ["rm", "-f", temp_file_path]
+                        logger.debug(f"Executing final rm command: {' '.join(rm_command)}")
+                        subprocess.run(rm_command, check=False, capture_output=True, timeout=10)
                     else:
                         logger.warning(
                             f"Skipping final removal of temporary file {temp_file_path} "
@@ -571,16 +482,10 @@ class IssueTypeMigration(BaseMigration):
                     error_message = str(final_e)
                 except Exception as str_err:
                     error_type = "Unknown"
-                    error_message = (
-                        f"Failed to convert finally exception to string: {str_err}"
-                    )
-                logger.warning(
-                    f"Failed during final removal of {temp_file_path} (Type: {error_type}): {error_message}"
-                )
+                    error_message = f"Failed to convert finally exception to string: {str_err}"
+                logger.warning(f"Failed during final removal of {temp_file_path} (Type: {error_type}): {error_message}")
 
-    def create_work_package_type_via_rails(
-        self, type_data: dict[str, Any]
-    ) -> dict[str, Any]:
+    def create_work_package_type_via_rails(self, type_data: dict[str, Any]) -> dict[str, Any]:
         """
         Create a work package type in OpenProject via Rails console.
 
@@ -607,12 +512,12 @@ class IssueTypeMigration(BaseMigration):
                 "error": f"Failed to check for existing type: {check_result.get('error', 'Unknown error')}",
             }
 
-        exists_command = 'existing_type.present?'
+        exists_command = "existing_type.present?"
         exists_result = self.rails_console.execute_query(exists_command)
 
         if exists_result["status"] == "success" and "true" in exists_result["output"]:
             logger.info(f"Work package type '{type_name}' already exists, retrieving ID")
-            id_command = 'existing_type.id'
+            id_command = "existing_type.id"
             id_result = self.rails_console.execute_query(id_command)
 
             if id_result["status"] == "success" and id_result["output"].strip().isdigit():
@@ -721,11 +626,7 @@ class IssueTypeMigration(BaseMigration):
                 if op_type_name.lower() in existing_names:
                     # Try to update mapping with existing ID
                     existing_id = next(
-                        (
-                            t["id"]
-                            for t in existing_types
-                            if t.get("name", "").lower() == op_type_name.lower()
-                        ),
+                        (t["id"] for t in existing_types if t.get("name", "").lower() == op_type_name.lower()),
                         None,
                     )
                     if existing_id:
@@ -736,13 +637,15 @@ class IssueTypeMigration(BaseMigration):
 
                 # Only add unique type names to prevent duplicates
                 if not any(t.get("name") == op_type_name for t in types_to_create):
-                    types_to_create.append({
-                        "name": op_type_name,
-                        "color": type_data.get("color", "#1A67A3"),
-                        "is_milestone": type_data.get("is_milestone", False),
-                        "is_default": op_type_name.lower() == "task",
-                        "jira_type_name": type_name,  # Store original Jira type name for mapping
-                    })
+                    types_to_create.append(
+                        {
+                            "name": op_type_name,
+                            "color": type_data.get("color", "#1A67A3"),
+                            "is_milestone": type_data.get("is_milestone", False),
+                            "is_default": op_type_name.lower() == "task",
+                            "jira_type_name": type_name,  # Store original Jira type name for mapping
+                        }
+                    )
 
         if not types_to_create:
             logger.info("No new work package types to create")
@@ -995,6 +898,7 @@ class IssueTypeMigration(BaseMigration):
         except Exception as e:
             logger.error(f"Error processing creation results: {str(e)}")
             import traceback
+
             logger.debug(traceback.format_exc())
             return False
 
@@ -1026,9 +930,7 @@ class IssueTypeMigration(BaseMigration):
                     op_types_to_create[op_type_name] = mapping
 
         total_types_needing_creation = sum(
-            1
-            for mapping in self.issue_type_mapping.values()
-            if mapping["openproject_id"] is None
+            1 for mapping in self.issue_type_mapping.values() if mapping["openproject_id"] is None
         )
 
         if op_types_to_create:
@@ -1036,8 +938,7 @@ class IssueTypeMigration(BaseMigration):
                 f"Need to create {len(op_types_to_create)} unique work package types in OpenProject via Rails console"
             )
             logger.info(
-                f"(This will map to {total_types_needing_creation} total Jira issue types "
-                f"after deduplication)"
+                f"(This will map to {total_types_needing_creation} total Jira issue types " f"after deduplication)"
             )
         else:
             logger.info("No new work package types need to be created in OpenProject")
@@ -1067,14 +968,10 @@ class IssueTypeMigration(BaseMigration):
         analysis: dict[str, Any] = {
             "total_jira_types": len(self.issue_type_mapping),
             "matched_op_types": sum(
-                1
-                for mapping in self.issue_type_mapping.values()
-                if mapping.get("openproject_id") is not None
+                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is not None
             ),
             "types_to_create": sum(
-                1
-                for mapping in self.issue_type_mapping.values()
-                if mapping.get("openproject_id") is None
+                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is None
             ),
             "mapping_details": self.issue_type_mapping,
             "unmatched_details": [
@@ -1170,10 +1067,7 @@ class IssueTypeMigration(BaseMigration):
             op_name = type_data.get("openproject_name", "")
 
             # Skip if already mapped
-            if (
-                type_data.get("openproject_id")
-                and type_data.get("matched_by") != "default_mapping_to_create"
-            ):
+            if type_data.get("openproject_id") and type_data.get("matched_by") != "default_mapping_to_create":
                 already_mapped_count += 1
                 continue
 
@@ -1186,15 +1080,11 @@ class IssueTypeMigration(BaseMigration):
                 logger.info(f"Found work package type '{op_name}' with ID {op_id}")
                 self.issue_type_mapping[jira_type_name]["openproject_id"] = op_id
                 self.issue_type_mapping[jira_type_name]["matched_by"] = (
-                    "created"
-                    if type_data.get("matched_by") == "default_mapping_to_create"
-                    else "exact_match"
+                    "created" if type_data.get("matched_by") == "default_mapping_to_create" else "exact_match"
                 )
                 updated_count += 1
             else:
-                logger.warning(
-                    f"Work package type '{op_name}' not found in OpenProject"
-                )
+                logger.warning(f"Work package type '{op_name}' not found in OpenProject")
                 missing_count += 1
 
         # Save the updated mapping
@@ -1205,15 +1095,11 @@ class IssueTypeMigration(BaseMigration):
             logger.info("No mapping updates needed")
 
         # Print summary
-        logger.info(
-            f"Summary: Updated {updated_count}, Already mapped {already_mapped_count}, Missing {missing_count}"
-        )
+        logger.info(f"Summary: Updated {updated_count}, Already mapped {already_mapped_count}, Missing {missing_count}")
 
         # Return success only if we have more matches than misses
         if missing_count > updated_count and missing_count > 0:
-            logger.warning(
-                f"Migration partially failed: {missing_count} types were not found in OpenProject"
-            )
+            logger.warning(f"Migration partially failed: {missing_count} types were not found in OpenProject")
             return False
 
         return updated_count > 0 or already_mapped_count > 0
@@ -1241,16 +1127,11 @@ class IssueTypeMigration(BaseMigration):
             results = ComponentResult(
                 success=True,
                 total_types=len(self.issue_type_mapping),
-                matched_types=sum(
-                    1
-                    for t in self.issue_type_mapping.values()
-                    if t.get("openproject_id") is not None
-                ),
+                matched_types=sum(1 for t in self.issue_type_mapping.values() if t.get("openproject_id") is not None),
                 normalized_types=sum(
                     1
                     for t in self.issue_type_mapping.values()
-                    if t.get("matched_by", "").startswith("normalized_to_")
-                    or t.get("matched_by") == "fallback_to_task"
+                    if t.get("matched_by", "").startswith("normalized_to_") or t.get("matched_by") == "fallback_to_task"
                 ),
                 created_types=0,
                 dry_run=True,
@@ -1261,9 +1142,7 @@ class IssueTypeMigration(BaseMigration):
 
             # Attempt to create work package types via Rails console
             types_to_create = sum(
-                1
-                for mapping in self.issue_type_mapping.values()
-                if mapping.get("openproject_id") is None
+                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is None
             )
 
             rails_migration_success = False
@@ -1280,15 +1159,12 @@ class IssueTypeMigration(BaseMigration):
 
             # Check if we're in a good state despite potential errors
             final_types_to_create = sum(
-                1
-                for mapping in self.issue_type_mapping.values()
-                if mapping.get("openproject_id") is None
+                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is None
             )
 
             # Success if mappings updated and most types were created
             migration_success = mapping_updated and (
-                final_types_to_create == 0 or
-                final_types_to_create < types_to_create * 0.2
+                final_types_to_create == 0 or final_types_to_create < types_to_create * 0.2
             )
 
             if mapping_updated:
@@ -1299,18 +1175,14 @@ class IssueTypeMigration(BaseMigration):
 
             # Get final counts after all operations
             created_types = sum(
-                1
-                for mapping in self.issue_type_mapping.values()
-                if mapping.get("matched_by") == "created"
+                1 for mapping in self.issue_type_mapping.values() if mapping.get("matched_by") == "created"
             )
 
             results = ComponentResult(
                 success=migration_success,
                 total_types=len(self.issue_type_mapping),
                 matched_types=sum(
-                    1
-                    for mapping in self.issue_type_mapping.values()
-                    if mapping.get("openproject_id") is not None
+                    1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is not None
                 ),
                 normalized_types=sum(
                     1
@@ -1320,14 +1192,13 @@ class IssueTypeMigration(BaseMigration):
                 ),
                 created_types=created_types,
                 existing_types=sum(
-                    1
-                    for mapping in self.issue_type_mapping.values()
-                    if mapping.get("matched_by") == "exact_match"
+                    1 for mapping in self.issue_type_mapping.values() if mapping.get("matched_by") == "exact_match"
                 ),
                 failed_types=final_types_to_create,
                 message=(
                     f"Created {created_types} types, {final_types_to_create} failed"
-                    if final_types_to_create > 0 else ""
+                    if final_types_to_create > 0
+                    else ""
                 ),
             )
 
