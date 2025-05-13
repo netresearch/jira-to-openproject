@@ -1,5 +1,4 @@
-"""
-Status migration module for Jira to OpenProject migration.
+"""Status migration module for Jira to OpenProject migration.
 Handles the migration of Jira statuses to OpenProject statuses.
 
 Implementation is now complete, including:
@@ -30,8 +29,7 @@ T = TypeVar("T")
 
 
 class StatusMigration(BaseMigration):
-    """
-    Handles the migration of statuses from Jira to OpenProject.
+    """Handles the migration of statuses from Jira to OpenProject.
 
     This class is responsible for:
     1. Extracting statuses from Jira
@@ -47,8 +45,7 @@ class StatusMigration(BaseMigration):
         data_dir: str | None = None,
         tracker: ProgressTracker[T] | None = None,
     ):
-        """
-        Initialize the status migration tools.
+        """Initialize the status migration tools.
 
         Args:
             jira_client: Initialized Jira client
@@ -56,6 +53,7 @@ class StatusMigration(BaseMigration):
             mappings: Initialized Mappings instance
             data_dir: Path to the data directory
             tracker: Optional progress tracker instance
+
         """
         super().__init__(jira_client, op_client)
 
@@ -88,11 +86,11 @@ class StatusMigration(BaseMigration):
         logger.info(f"Loaded {len(self.op_statuses)} OpenProject statuses")
 
     def extract_jira_statuses(self) -> list[dict[str, Any]]:
-        """
-        Extract all statuses from Jira using the Jira statuses API endpoint.
+        """Extract all statuses from Jira using the Jira statuses API endpoint.
 
         Returns:
             List of Jira status dictionaries
+
         """
         statuses_file = os.path.join(self.data_dir, "jira_statuses.json")
 
@@ -125,15 +123,15 @@ class StatusMigration(BaseMigration):
 
             return statuses
         except Exception as e:
-            logger.error(f"Failed to extract statuses from Jira: {str(e)}")
+            logger.error(f"Failed to extract statuses from Jira: {e!s}")
             return []
 
     def extract_status_categories(self) -> list[dict[str, Any]]:
-        """
-        Extract status categories from Jira.
+        """Extract status categories from Jira.
 
         Returns:
             List of Jira status category dictionaries
+
         """
         categories_file = os.path.join(self.data_dir, "jira_status_categories.json")
 
@@ -158,15 +156,15 @@ class StatusMigration(BaseMigration):
 
             return categories
         except Exception as e:
-            logger.error(f"Failed to extract status categories from Jira: {str(e)}")
+            logger.error(f"Failed to extract status categories from Jira: {e!s}")
             return []
 
     def get_openproject_statuses(self) -> list[dict[str, Any]]:
-        """
-        Get all statuses from OpenProject.
+        """Get all statuses from OpenProject.
 
         Returns:
             List of OpenProject status dictionaries
+
         """
         statuses_file = os.path.join(self.data_dir, "op_statuses.json")
 
@@ -231,12 +229,11 @@ class StatusMigration(BaseMigration):
 
             return result_statuses
         except Exception as e:
-            logger.error(f"Failed to get statuses from OpenProject: {str(e)}")
+            logger.error(f"Failed to get statuses from OpenProject: {e!s}")
             return []
 
     def create_statuses_bulk_via_rails(self, statuses_to_create: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-        """
-        Create multiple statuses in OpenProject using a single Rails console command.
+        """Create multiple statuses in OpenProject using a single Rails console command.
 
         Args:
             statuses_to_create: List of status dictionaries with keys:
@@ -248,6 +245,7 @@ class StatusMigration(BaseMigration):
 
         Returns:
             Dictionary mapping Jira status IDs to created OpenProject status info
+
         """
         if not statuses_to_create:
             logger.warning("No statuses provided for bulk creation")
@@ -361,23 +359,22 @@ class StatusMigration(BaseMigration):
                             typed_statuses[str_jira_id] = {"error": "Invalid status format"}
 
                 return typed_statuses
-            else:
-                error_msg = result.get("message", "Unknown error")
-                logger.error(f"Failed to create statuses: {error_msg}")
-                if "output" in result:
-                    logger.debug(f"Rails output: {result['output'][:500]}...")
-                return {}
+            error_msg = result.get("message", "Unknown error")
+            logger.error(f"Failed to create statuses: {error_msg}")
+            if "output" in result:
+                logger.debug(f"Rails output: {result['output'][:500]}...")
+            return {}
 
         except Exception as e:
-            logger.error(f"Exception during Rails bulk execution: {str(e)}")
+            logger.error(f"Exception during Rails bulk execution: {e!s}")
             return {}
 
     def create_status_mapping(self) -> dict[str, Any]:
-        """
-        Create a mapping between Jira statuses and OpenProject statuses.
+        """Create a mapping between Jira statuses and OpenProject statuses.
 
         Returns:
             Dictionary mapping Jira status names to OpenProject status IDs
+
         """
         mapping_file = os.path.join(self.data_dir, "status_mapping.json")
 
@@ -437,11 +434,11 @@ class StatusMigration(BaseMigration):
         return mapping
 
     def migrate_statuses(self) -> dict[str, Any]:
-        """
-        Migrate statuses from Jira to OpenProject.
+        """Migrate statuses from Jira to OpenProject.
 
         Returns:
             Dictionary with migration summary and status mapping
+
         """
         logger.info("Starting status migration...")
 
@@ -504,7 +501,7 @@ class StatusMigration(BaseMigration):
             # Save status mapping
             self._save_to_json(status_mapping, "status_mapping.json")
             logger.info(
-                f"[DRY RUN] Found {already_exists_count} existing statuses, would create {created_count} new statuses"
+                f"[DRY RUN] Found {already_exists_count} existing statuses, would create {created_count} new statuses",
             )
 
             # Update the mappings instance
@@ -542,7 +539,7 @@ class StatusMigration(BaseMigration):
                     op_status_id = op_status.get("id")
                     logger.debug(
                         f"Using existing OpenProject status '{op_status.get('name')}' "
-                        f"(ID: {op_status_id}) for Jira status '{name}'"
+                        f"(ID: {op_status_id}) for Jira status '{name}'",
                     )
                     status_mapping[jira_id] = {
                         "openproject_id": op_status_id,
@@ -582,7 +579,7 @@ class StatusMigration(BaseMigration):
                         "is_closed": is_closed,
                         "is_default": False,  # Default to False for imported statuses
                         "color": color,
-                    }
+                    },
                 )
 
         # Create statuses in bulk if there are any to create
@@ -607,7 +604,7 @@ class StatusMigration(BaseMigration):
                         created_count += 1
                 else:
                     logger.error(
-                        f"Failed to create status for Jira ID {jira_id}: " f"{result.get('error', 'Unknown error')}"
+                        f"Failed to create status for Jira ID {jira_id}: {result.get('error', 'Unknown error')}",
                     )
                     error_count += 1
 
@@ -628,7 +625,7 @@ class StatusMigration(BaseMigration):
         logger.info("Status migration completed")
         logger.info(f"Total Jira statuses processed: {len(self.jira_statuses)}")
         logger.info(
-            f"OpenProject statuses: {already_exists_count} existing, {created_count} created, {error_count} errors"
+            f"OpenProject statuses: {already_exists_count} existing, {created_count} created, {error_count} errors",
         )
 
         return {
@@ -641,11 +638,11 @@ class StatusMigration(BaseMigration):
         }
 
     def analyze_status_mapping(self) -> dict[str, Any]:
-        """
-        Analyze the status mapping to identify potential issues.
+        """Analyze the status mapping to identify potential issues.
 
         Returns:
             Dictionary with analysis results
+
         """
         logger.info("Analyzing status mapping...")
 
@@ -681,11 +678,11 @@ class StatusMigration(BaseMigration):
         }
 
     def run(self) -> ComponentResult:
-        """
-        Run the status migration process.
+        """Run the status migration process.
 
         Returns:
             ComponentResult with migration results
+
         """
         logger.info("Running status migration...")
 
@@ -769,25 +766,24 @@ class StatusMigration(BaseMigration):
                         "error_count": 0,
                     },
                 )
-            else:
-                # Real migration
-                migration_result = self.migrate_statuses()
+            # Real migration
+            migration_result = self.migrate_statuses()
 
-                return ComponentResult(
-                    success=True if "success" == migration_result.get("status", "success") else False,
-                    message=migration_result.get("message", "Status migration completed"),
-                    success_count=migration_result.get("created_count", 0)
-                    + migration_result.get("already_exists_count", 0),
-                    failed_count=migration_result.get("error_count", 0),
-                    total_count=migration_result.get("total_processed", 0),
-                    details=migration_result,
-                )
+            return ComponentResult(
+                success=True if migration_result.get("status", "success") == "success" else False,
+                message=migration_result.get("message", "Status migration completed"),
+                success_count=migration_result.get("created_count", 0)
+                + migration_result.get("already_exists_count", 0),
+                failed_count=migration_result.get("error_count", 0),
+                total_count=migration_result.get("total_processed", 0),
+                details=migration_result,
+            )
 
         except Exception as e:
-            logger.error(f"Error during status migration: {str(e)}")
+            logger.error(f"Error during status migration: {e!s}")
             return ComponentResult(
                 success=False,
-                errors=[f"Error during status migration: {str(e)}"],
+                errors=[f"Error during status migration: {e!s}"],
                 success_count=0,
                 failed_count=0,
                 total_count=0,

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Client Architecture Demo
+"""Client Architecture Demo
 
 This script demonstrates the layered client architecture with proper dependency injection:
 1. SSHClient (Foundation Layer)
@@ -27,8 +26,7 @@ from src.clients.ssh_client import SSHClient
 
 
 def demo_each_client_independently():
-    """
-    Demonstrate each client layer independently, showing how they can be used directly.
+    """Demonstrate each client layer independently, showing how they can be used directly.
     """
     print("=" * 80)
     print("DEMONSTRATING INDIVIDUAL CLIENT LAYERS")
@@ -76,8 +74,7 @@ def demo_each_client_independently():
 
 
 def demo_orchestrated_workflow():
-    """
-    Demonstrate the complete orchestrated workflow using OpenProjectClient.
+    """Demonstrate the complete orchestrated workflow using OpenProjectClient.
     """
     print("\n" + "=" * 80)
     print("DEMONSTRATING ORCHESTRATED WORKFLOW WITH OpenProjectClient")
@@ -111,7 +108,7 @@ def demo_orchestrated_workflow():
       closed: WorkPackage.where(status: Status.where(is_closed: true)).count
     }
     stats  # Return the statistics
-    """
+    """,
     )
 
     if result.get("status") == "success":
@@ -121,8 +118,7 @@ def demo_orchestrated_workflow():
 
 
 def demo_file_transfer():
-    """
-    Demonstrate file transfer workflow.
+    """Demonstrate file transfer workflow.
     """
     print("\n" + "=" * 80)
     print("DEMONSTRATING FILE TRANSFER")
@@ -186,7 +182,7 @@ def main():
         print("\n✅ Demo completed successfully!")
 
     except Exception as e:
-        print(f"\n❌ Demo failed: {str(e)}")
+        print(f"\n❌ Demo failed: {e!s}")
         traceback.print_exc()
 
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Create Custom Fields JSON
+"""Create Custom Fields JSON
 
 This script parses a custom fields list captured from the Rails console
 and creates a JSON file with the custom field data.
@@ -13,14 +12,14 @@ from typing import Any
 
 
 def parse_custom_fields_list(input_file: str) -> list[dict[str, Any]]:
-    """
-    Parse the custom fields list.
+    """Parse the custom fields list.
 
     Args:
         input_file: Path to the custom fields list file
 
     Returns:
         List of custom field dictionaries
+
     """
     custom_fields = []
 

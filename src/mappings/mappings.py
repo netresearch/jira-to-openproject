@@ -8,8 +8,7 @@ from src.utils import data_handler
 
 
 class Mappings:
-    """
-    Handles loading and accessing various mapping files generated during migration.
+    """Handles loading and accessing various mapping files generated during migration.
     Also provides methods that utilize these mappings, like preparing work packages.
     """
 
@@ -55,12 +54,12 @@ class Mappings:
         # Add checks for other critical mappings as needed
 
     def __setitem__(self, key: str, value: Any) -> None:
-        """
-        Support dictionary-style item assignment for compatibility with migration modules.
+        """Support dictionary-style item assignment for compatibility with migration modules.
 
         Args:
             key: The mapping key to set (e.g., 'issue_type_id_mapping')
             value: The value to set for this mapping
+
         """
         if hasattr(self, key):
             setattr(self, key, value)
@@ -69,14 +68,14 @@ class Mappings:
             setattr(self, key, value)
 
     def __getitem__(self, key: str) -> Any:
-        """
-        Support dictionary-style item access for compatibility with migration modules.
+        """Support dictionary-style item access for compatibility with migration modules.
 
         Args:
             key: The mapping key to get (e.g., 'issue_type_id_mapping')
 
         Returns:
             The mapping value or raises KeyError if not found
+
         """
         if hasattr(self, key):
             return getattr(self, key)
@@ -134,6 +133,7 @@ class Mappings:
 
         Returns:
             True if the mapping exists and has entries, False otherwise
+
         """
         mapping_attr = f"{mapping_name}_mapping"
         if hasattr(self, mapping_attr):
@@ -149,6 +149,7 @@ class Mappings:
 
         Returns:
             The mapping dictionary or an empty dict if not found
+
         """
         mapping_attr = f"{mapping_name}_mapping"
         if hasattr(self, mapping_attr):
@@ -165,6 +166,7 @@ class Mappings:
 
         Returns:
             True if successful, False otherwise
+
         """
         # First update the instance variable
         mapping_attr = f"{mapping_name}_mapping"
@@ -184,5 +186,5 @@ class Mappings:
             logger.info(f"Saved mapping '{mapping_name}' with {len(mapping_data)} entries")
             return True
         except Exception as e:
-            logger.error(f"Error saving mapping '{mapping_name}': {str(e)}")
+            logger.error(f"Error saving mapping '{mapping_name}': {e!s}")
             return False

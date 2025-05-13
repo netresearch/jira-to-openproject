@@ -1,5 +1,4 @@
-"""
-Test script for project hierarchy implementation.
+"""Test script for project hierarchy implementation.
 This verifies the proper organization of projects under their parent Tempo companies.
 """
 
@@ -16,11 +15,11 @@ logger = config.logger
 
 
 def analyze_project_hierarchy() -> dict[str, Any]:
-    """
-    Analyze the project hierarchy to verify proper parent-child relationships.
+    """Analyze the project hierarchy to verify proper parent-child relationships.
 
     Returns:
         Dictionary with analysis results
+
     """
     logger.info("Analyzing project hierarchy...")
 
@@ -69,7 +68,7 @@ def analyze_project_hierarchy() -> dict[str, Any]:
                     "name": project_name,
                     "parent_id": parent_id,
                     "parent_name": parent_name,
-                }
+                },
             )
         else:
             projects_without_parent.append({"id": project_id, "name": project_name})
@@ -94,7 +93,7 @@ def analyze_project_hierarchy() -> dict[str, Any]:
                     "name": project["name"],
                     "expected_parent_id": expected.get("parent_id"),
                     "expected_parent_name": expected.get("parent_name"),
-                }
+                },
             )
 
     # Prepare analysis results
@@ -130,7 +129,7 @@ def run_hierarchy_test() -> Any:
         logger.success("✅ Project hierarchy test passed! All expected parent-child relationships are in place.")
     else:
         logger.error(
-            f"❌ Project hierarchy test failed! {analysis['missing_parent_relations']} projects are missing their parent relationship."
+            f"❌ Project hierarchy test failed! {analysis['missing_parent_relations']} projects are missing their parent relationship.",
         )
         logger.info("Review project_hierarchy_analysis.json for details on missing relationships.")
 

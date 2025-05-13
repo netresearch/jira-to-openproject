@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Master migration script for Jira to OpenProject migration.
+"""Master migration script for Jira to OpenProject migration.
 This script orchestrates the complete migration process.
 """
 
@@ -37,19 +36,18 @@ from src.utils import data_handler
 
 
 class AvailableComponents(TypedDict):
-    """
-    Available components for the migration.
+    """Available components for the migration.
     """
 
     dict[ComponentName, BaseMigration]
 
 
 def print_component_header(component_name: str) -> None:
-    """
-    Print a formatted header for a migration component.
+    """Print a formatted header for a migration component.
 
     Args:
         component_name: Name of the component to display
+
     """
     print("\n" + "=" * 50)
     print(f"  RUNNING COMPONENT: {component_name}")
@@ -57,8 +55,7 @@ def print_component_header(component_name: str) -> None:
 
 
 def create_backup(backup_dir: BackupDir = None) -> BackupDir:
-    """
-    Create a backup of the data directory before running the migration.
+    """Create a backup of the data directory before running the migration.
 
     Args:
         backup_dir: Directory to store the backup.
@@ -66,6 +63,7 @@ def create_backup(backup_dir: BackupDir = None) -> BackupDir:
 
     Returns:
         Path to the created backup directory
+
     """
     # Use the centralized config for var directories
     data_dir = config.get_path("data")
@@ -106,14 +104,14 @@ def create_backup(backup_dir: BackupDir = None) -> BackupDir:
 
 
 def restore_backup(backup_dir: str) -> bool:
-    """
-    Restore data from a backup directory.
+    """Restore data from a backup directory.
 
     Args:
         backup_dir: Directory containing the backup
 
     Returns:
         True if restoration was successful, False otherwise
+
     """
     # Use the centralized config for var directories
     data_dir = config.get_path("data")
@@ -137,7 +135,7 @@ def restore_backup(backup_dir: str) -> bool:
             files_count = len(metadata.get("files_backed_up", []))
             config.logger.info(f"Contains {files_count=} files")
         except Exception as e:
-            config.logger.warning(f"Could not read backup metadata: {str(e)=}")
+            config.logger.warning(f"Could not read backup metadata: {e=!s}")
 
     # Copy all files from backup to data directory
     restored_count = 0
@@ -158,14 +156,14 @@ def restore_backup(backup_dir: str) -> bool:
 def run_migration(
     components: list[ComponentName] | None = None,
 ) -> MigrationResult:
-    """
-    Run the migration process.
+    """Run the migration process.
 
     Args:
         components: List of specific components to run (if None, run all)
 
     Returns:
         Dictionary with migration results
+
     """
     try:
         # Check if we need a migration mode header
@@ -224,7 +222,7 @@ def run_migration(
         # 1. First, create the SSH client which is the foundation
         ssh_client = SSHClient(
             host=str(
-                config.openproject_config.get("server", "localhost")  # Use 'server' instead of falling back to URL
+                config.openproject_config.get("server", "openproject.local"),
             ),
             user=config.openproject_config.get("user", None),
             key_file=config.openproject_config.get("key_file", None),
@@ -234,15 +232,15 @@ def run_migration(
         docker_client = DockerClient(
             container_name=str(
                 config.openproject_config.get(
-                    "container_name", config.openproject_config.get("container", "openproject")
-                )
+                    "container_name", config.openproject_config.get("container", "openproject"),
+                ),
             ),
             ssh_client=ssh_client,
         )
 
         # 3. Create the Rails console client
         rails_client = RailsConsoleClient(
-            tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console")
+            tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console"),
         )
 
         # 4. Finally, create the Jira client and OpenProject client (which uses the other clients)
@@ -299,7 +297,7 @@ def run_migration(
         # Initialize work package migration if it's in the components list
         if "work_packages" in components:
             available_components["work_packages"] = WorkPackageMigration(
-                jira_client=jira_client, op_client=op_client, data_dir=config.get_path("data")
+                jira_client=jira_client, op_client=op_client, data_dir=config.get_path("data"),
             )
 
         # Run each component in order
@@ -378,13 +376,13 @@ def run_migration(
                 except Exception as e:
                     # Handle unexpected errors during component execution
                     config.logger.exception(
-                        f"Error during '{component_name}' migration: {str(e)}",
+                        f"Error during '{component_name}' migration: {e!s}",
                         extra={"markup": True, "traceback": True},
                     )
                     # Create a basic result reflecting the error
                     error_result = ComponentResult(
                         success=False,
-                        message=f"Error during component execution: {str(e)}",
+                        message=f"Error during component execution: {e!s}",
                         errors=[str(e)],
                         details={
                             "status": "failed",
@@ -484,7 +482,7 @@ def run_migration(
         # Handle unexpected errors at the top level
         config.logger.exception(e)
         config.logger.error(
-            f"Unexpected error during migration: {str(e)}",
+            f"Unexpected error during migration: {e!s}",
             extra={"markup": True, "traceback": True},
         )
 
@@ -493,7 +491,7 @@ def run_migration(
             overall={
                 "status": "failed",
                 "error": str(e),
-                "message": f"Unexpected error during migration: {str(e)}",
+                "message": f"Unexpected error during migration: {e!s}",
                 "timestamp": datetime.now().isoformat(),
             },
         )
@@ -631,7 +629,6 @@ def setup_tmux_session() -> bool:
 
 def main() -> None:
     """Run the migration tool."""
-
     # Parse command-line arguments
     args = parse_args()
 
@@ -658,7 +655,7 @@ def main() -> None:
 
             ssh_client = SSHClient(
                 host=str(
-                    config.openproject_config.get("server", "localhost")  # Use 'server' instead of falling back to URL
+                    config.openproject_config.get("server", "openproject.local"),
                 ),
                 user=config.openproject_config.get("user", None),
                 key_file=config.openproject_config.get("key_file", None),
@@ -667,14 +664,14 @@ def main() -> None:
             docker_client = DockerClient(
                 container_name=str(
                     config.openproject_config.get(
-                        "container_name", config.openproject_config.get("container", "openproject")
-                    )
+                        "container_name", config.openproject_config.get("container", "openproject"),
+                    ),
                 ),
                 ssh_client=ssh_client,
             )
 
             rails_client = RailsConsoleClient(
-                tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console")
+                tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console"),
             )
 
             jira_client = JiraClient()
@@ -696,7 +693,7 @@ def main() -> None:
                         else:
                             config.logger.warning("No updates were made to custom field mapping.")
                         break
-                    elif choice == "2":
+                    if choice == "2":
                         issue_type_migration = IssueTypeMigration(jira_client=jira_client, op_client=op_client)
                         issue_type_mapping_update_result = issue_type_migration.update_mapping_file()
                         if issue_type_mapping_update_result:
@@ -704,8 +701,7 @@ def main() -> None:
                         else:
                             config.logger.warning("No updates were made to issue type mapping.")
                         break
-                    else:
-                        config.logger.error("Invalid choice. Please enter 1 or 2.")
+                    config.logger.error("Invalid choice. Please enter 1 or 2.")
                 except KeyboardInterrupt:
                     config.logger.warning("Operation cancelled by user.")
                     return

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test module for DockerClient.
+"""Test module for DockerClient.
 
 This module contains test cases for validating Docker container interactions.
 """
@@ -84,7 +83,7 @@ class TestDockerClient(unittest.TestCase):
         self.assertTrue(self.mock_logger.debug.called)
         # Check that the initialization message was logged
         self.assertIn(
-            call("DockerClient initialized for container test_container"), self.mock_logger.debug.call_args_list
+            call("DockerClient initialized for container test_container"), self.mock_logger.debug.call_args_list,
         )
 
     def test_check_container_exists_success(self) -> None:
@@ -216,7 +215,7 @@ class TestDockerClient(unittest.TestCase):
 
         # Call the method with options
         stdout, stderr, returncode = self.docker_client.execute_command(
-            "ls -la", user="root", workdir="/app", env={"DEBUG": "true"}
+            "ls -la", user="root", workdir="/app", env={"DEBUG": "true"},
         )
 
         # Verify result
@@ -275,7 +274,7 @@ class TestDockerClient(unittest.TestCase):
             # Verify the error message
             self.assertIn("File not found in container after copy", str(context.exception))
 
-    def test_copy_file_from_container_success(self):
+    def test_copy_file_from_container_success(self) -> None:
         """Test copying a file from the container."""
         # Setup
         self.mock_ssh_client.execute_command.side_effect = [
@@ -296,7 +295,7 @@ class TestDockerClient(unittest.TestCase):
         self.mock_ssh_client.execute_command.assert_called()  # Docker exec and cp commands
         self.mock_ssh_client.copy_file_from_remote.assert_called_once()  # SCP from remote to local
 
-    def test_copy_file_from_container_not_found(self):
+    def test_copy_file_from_container_not_found(self) -> None:
         """Test copying a file that doesn't exist in the container."""
         # Need to patch the method to directly use our implementation
         with patch.object(self.docker_client, "check_file_exists_in_container", return_value=False):

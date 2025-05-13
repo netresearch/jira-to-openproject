@@ -4,6 +4,7 @@ repomix-output.txt
 # Environment variables - only ignore local overrides
 # .env  - we keep this in version control with default values
 .env.local
+.env.*.local
 
 # Python virtual environment
 venv/

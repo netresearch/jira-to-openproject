@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Script to clean up var directories or remove old directories after migration.
+"""Script to clean up var directories or remove old directories after migration.
 """
 
 import argparse
@@ -21,13 +20,13 @@ logger = logging.getLogger("cleanup_var")
 
 
 def clean_var_directory(dir_name: DirType | None = None, confirm: bool = True) -> bool:
-    """
-    Clean up files in the specified var directory or all var directories.
+    """Clean up files in the specified var directory or all var directories.
 
     Args:
         dir_name: Name of the directory to clean (data, logs, backups, output, temp)
                  If None, clean all directories
         confirm: Whether to ask for confirmation before deletion
+
     """
     # Determine which directories to clean
     dirs_to_clean: dict[str, str] = {}
@@ -96,7 +95,7 @@ def main() -> bool:
         logger.info("Cleanup completed successfully!")
 
     except Exception as e:
-        logger.error(f"Error during cleanup: {str(e)}")
+        logger.error(f"Error during cleanup: {e!s}")
         return False
 
     return True

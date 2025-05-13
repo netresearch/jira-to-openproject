@@ -1,5 +1,4 @@
-"""
-Test module for CompanyMigration.
+"""Test module for CompanyMigration.
 
 This module contains test cases for validating the company migration from Jira Tempo to OpenProject.
 """
@@ -159,7 +158,7 @@ class TestCompanyMigration(unittest.TestCase):
         """Test extracting tempo companies when the cached data is in list format."""
         # Save the list format data to the cache file
         data_handler.save(
-            data=self.sample_tempo_companies_list, filename="tempo_companies.json", directory=self.test_data_dir
+            data=self.sample_tempo_companies_list, filename="tempo_companies.json", directory=self.test_data_dir,
         )
 
         # Reset the client

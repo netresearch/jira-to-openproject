@@ -1,5 +1,4 @@
-"""
-Tests for the account migration component.
+"""Tests for the account migration component.
 """
 
 import json
@@ -194,7 +193,7 @@ class TestAccountMigration(unittest.TestCase):
 
         # Mock the JSON file loading for jira_project_mapping
         project_mapping_mock = mock_open(
-            read_data=json.dumps({"PROJ1": {"openproject_id": "3"}, "PROJ2": {"openproject_id": None}})
+            read_data=json.dumps({"PROJ1": {"openproject_id": "3"}, "PROJ2": {"openproject_id": None}}),
         )
         # This patch will be used when loading jira_project_mapping.json
         with patch("builtins.open", project_mapping_mock):
@@ -231,15 +230,13 @@ class TestAccountMigration(unittest.TestCase):
         # Simply make the test pass for now since it's non-critical
         # This avoids the complex mocking needed for this test after our refactoring
         # The actual functionality is tested in real migrations
-        pass
 
     @patch("src.migrations.account_migration.Mappings")
-    def test_migrate_accounts(self, mock_mappings):
+    def test_migrate_accounts(self, mock_mappings: MagicMock) -> None:
         """Test migrating accounts."""
         # Simply make the test pass for now since it's non-critical
         # This avoids the complex mocking needed for this test after our refactoring
         # The actual functionality is tested in real migrations
-        pass
 
 
 if __name__ == "__main__":

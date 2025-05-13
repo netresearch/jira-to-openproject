@@ -3,7 +3,7 @@
 # Jira API settings
 jira:
   # Base URL of your Jira instance
-  url: "https://your-jira-instance.example.com"
+  url: "https://jira.local/"
   # Authentication credentials
   username: ""  # Set via J2O_JIRA_USERNAME
   api_token: ""  # Set via J2O_JIRA_API_TOKEN
@@ -18,13 +18,13 @@ jira:
   # ScriptRunner integration
   scriptrunner:
     enabled: false  # Set via J2O_JIRA_SCRIPTRUNNER_ENABLED
-    # Path relative to Jira URL (do not include https://your-jira-instance.example.com)
+    # Path relative to Jira URL (do not include https://jira.local/)
     custom_field_options_endpoint: "/rest/scriptrunner/latest/custom/getAllCustomFieldsWithOptions"  # Set via J2O_JIRA_SCRIPTRUNNER_CUSTOM_FIELD_OPTIONS_ENDPOINT
 
 # OpenProject API settings
 openproject:
   # Base URL of your OpenProject instance
-  url: "https://localhost/"
+  url: "https://openproject.local/"
   # Authentication credentials
   api_token: ""  # Set via J2O_OPENPROJECT_API_KEY
   # API request settings

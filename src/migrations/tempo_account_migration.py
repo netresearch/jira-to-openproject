@@ -1,5 +1,4 @@
-"""
-Tempo account migration module for Jira to OpenProject migration.
+"""Tempo account migration module for Jira to OpenProject migration.
 Handles the migration of Tempo Timesheet accounts from Jira to OpenProject.
 """
 
@@ -26,8 +25,7 @@ jira_api_token = config.jira_config.get("api_token")
 
 
 class TempoAccountMigration:
-    """
-    Handles the migration of Tempo Timesheet accounts from Jira to OpenProject.
+    """Handles the migration of Tempo Timesheet accounts from Jira to OpenProject.
 
     This class is responsible for:
     1. Extracting Tempo account information from Jira
@@ -37,8 +35,7 @@ class TempoAccountMigration:
     """
 
     def __init__(self) -> None:
-        """
-        Initialize the Tempo account migration tools.
+        """Initialize the Tempo account migration tools.
         """
         self.jira_client = JiraClient()
         self.op_client = OpenProjectClient()
@@ -61,11 +58,11 @@ class TempoAccountMigration:
         }
 
     def extract_tempo_accounts(self) -> list[dict[str, Any]]:
-        """
-        Extract Tempo account information from Jira.
+        """Extract Tempo account information from Jira.
 
         Returns:
             List of Tempo account dictionaries
+
         """
         logger.info("Extracting Tempo accounts from Jira...", extra={"markup": True})
 
@@ -88,25 +85,24 @@ class TempoAccountMigration:
                 self._save_to_json(accounts, "tempo_accounts.json")
 
                 return accounts
-            else:
-                logger.error(
-                    f"Failed to get Tempo accounts. Status code: {response.status_code}, Response: {response.text}",
-                    extra={"markup": True},
-                )
+            logger.error(
+                f"Failed to get Tempo accounts. Status code: {response.status_code}, Response: {response.text}",
+                extra={"markup": True},
+            )
 
-                return []
+            return []
 
         except Exception as e:
-            logger.error(f"Failed to extract Tempo accounts: {str(e)}", extra={"markup": True})
+            logger.error(f"Failed to extract Tempo accounts: {e!s}", extra={"markup": True})
 
             return []
 
     def extract_openproject_companies(self) -> list[dict[str, Any]]:
-        """
-        Extract company information from OpenProject.
+        """Extract company information from OpenProject.
 
         Returns:
             List of company dictionaries
+
         """
         logger.info("Extracting companies from OpenProject...", extra={"markup": True})
 
@@ -115,7 +111,7 @@ class TempoAccountMigration:
             self.op_companies = self.op_client.get_companies()
         except Exception as e:
             logger.warning(
-                f"Failed to get companies from OpenProject: {str(e)}",
+                f"Failed to get companies from OpenProject: {e!s}",
                 extra={"markup": True},
             )
             logger.warning(
@@ -136,13 +132,13 @@ class TempoAccountMigration:
         return self.op_companies
 
     def create_account_mapping(self) -> dict[str, Any]:
-        """
-        Create a mapping between Tempo accounts and OpenProject companies.
+        """Create a mapping between Tempo accounts and OpenProject companies.
 
         This method creates a mapping based on account names.
 
         Returns:
             Dictionary mapping Tempo account IDs to OpenProject company IDs
+
         """
         logger.info(
             "Creating Tempo account to OpenProject company mapping...",
@@ -167,7 +163,7 @@ class TempoAccountMigration:
             tempo_name_lower = tempo_name.lower()
 
             # Try to find a corresponding OpenProject company by name
-            op_company = op_companies_by_name.get(tempo_name_lower, None)
+            op_company = op_companies_by_name.get(tempo_name_lower)
 
             if op_company:
                 mapping[tempo_id] = {
@@ -210,14 +206,14 @@ class TempoAccountMigration:
         return mapping
 
     def create_company_in_openproject(self, tempo_account: dict[str, Any]) -> dict[str, Any] | None:
-        """
-        Create a company in OpenProject based on a Tempo account.
+        """Create a company in OpenProject based on a Tempo account.
 
         Args:
             tempo_account: The Tempo account data
 
         Returns:
             The created OpenProject company or None if creation failed
+
         """
         name = tempo_account.get("name")
         key = tempo_account.get("key", "")
@@ -256,7 +252,7 @@ class TempoAccountMigration:
         # Create the company in OpenProject
         try:
             company, was_created = self.op_client.create_company(
-                name=name, identifier=identifier, description=description
+                name=name, identifier=identifier, description=description,
             )
 
             if company:
@@ -268,19 +264,18 @@ class TempoAccountMigration:
                         extra={"markup": True},
                     )
                 return company
-            else:
-                logger.error(f"Failed to create company: {name}", extra={"markup": True})
-                return None
+            logger.error(f"Failed to create company: {name}", extra={"markup": True})
+            return None
         except Exception as e:
-            logger.error(f"Error creating company {name}: {str(e)}", extra={"markup": True})
+            logger.error(f"Error creating company {name}: {e!s}", extra={"markup": True})
             return None
 
     def migrate_accounts(self) -> dict[str, Any]:
-        """
-        Migrate Tempo accounts to OpenProject projects.
+        """Migrate Tempo accounts to OpenProject projects.
 
         Returns:
             Updated mapping between Tempo accounts and OpenProject projects
+
         """
         logger.info("Starting Tempo account migration...", extra={"markup": True})
 
@@ -360,11 +355,11 @@ class TempoAccountMigration:
         return self.account_mapping
 
     def analyze_account_mapping(self) -> dict[str, Any]:
-        """
-        Analyze the account mapping to identify potential issues.
+        """Analyze the account mapping to identify potential issues.
 
         Returns:
             Dictionary with analysis results
+
         """
         if not self.account_mapping:
             mapping_path = os.path.join(self.data_dir, "tempo_account_mapping.json")
@@ -430,12 +425,12 @@ class TempoAccountMigration:
         return analysis
 
     def _save_to_json(self, data: Any, filename: str) -> None:
-        """
-        Save data to a JSON file.
+        """Save data to a JSON file.
 
         Args:
             data: Data to save
             filename: Name of the file to save to
+
         """
         filepath = os.path.join(self.data_dir, filename)
         with open(filepath, "w") as f:
@@ -444,8 +439,7 @@ class TempoAccountMigration:
 
 
 def run_tempo_account_migration() -> None:
-    """
-    Run the Tempo account migration as a standalone script.
+    """Run the Tempo account migration as a standalone script.
     """
     logger.info("Starting Tempo account migration", extra={"markup": True})
     migration = TempoAccountMigration()

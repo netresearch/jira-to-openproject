@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test module for FileManager.
+"""Test module for FileManager.
 
 This module contains test cases for FileManager to validate file operations and tracking.
 """

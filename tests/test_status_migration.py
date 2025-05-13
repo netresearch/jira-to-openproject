@@ -1,5 +1,4 @@
-"""
-Test module for StatusMigration.
+"""Test module for StatusMigration.
 
 This module contains test cases for validating the status migration from Jira to OpenProject.
 """
@@ -193,7 +192,7 @@ class TestStatusMigration(unittest.TestCase):
         # Set up test data - an unmapped Jira status that needs to be created in OpenProject
         self.status_migration.jira_statuses = self.sample_jira_statuses.copy()
         self.status_migration.jira_statuses.append(
-            {"id": "4", "name": "Pending", "statusCategory": {"key": "indeterminate"}}
+            {"id": "4", "name": "Pending", "statusCategory": {"key": "indeterminate"}},
         )
         self.status_migration.op_statuses = self.sample_op_statuses
 

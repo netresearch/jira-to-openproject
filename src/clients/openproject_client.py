@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-OpenProjectClient
+"""OpenProjectClient
 
 Main client interface for OpenProject operations.
 Coordinates SSHClient, DockerClient, and RailsConsoleClient in a layered architecture:
@@ -28,8 +27,17 @@ from typing import Any, cast
 
 from src import config
 from src.clients.docker_client import DockerClient
-from src.clients.rails_console_client import CommandExecutionError, RailsConsoleClient, RubyError
-from src.clients.ssh_client import SSHClient, SSHCommandError, SSHConnectionError, SSHFileTransferError
+from src.clients.rails_console_client import (
+    CommandExecutionError,
+    RailsConsoleClient,
+    RubyError,
+)
+from src.clients.ssh_client import (
+    SSHClient,
+    SSHCommandError,
+    SSHConnectionError,
+    SSHFileTransferError,
+)
 from src.utils.file_manager import FileManager
 
 logger = config.logger
@@ -38,42 +46,35 @@ logger = config.logger
 class OpenProjectError(Exception):
     """Base exception for all OpenProject client errors."""
 
-    pass
 
 
 class ConnectionError(OpenProjectError):
     """Error when connection to OpenProject fails."""
 
-    pass
 
 
 class FileTransferError(OpenProjectError):
     """Error when transferring files to/from OpenProject container."""
 
-    pass
 
 
 class QueryExecutionError(OpenProjectError):
     """Error when executing a query in OpenProject."""
 
-    pass
 
 
 class RecordNotFoundError(OpenProjectError):
     """Error when a record is not found in OpenProject."""
 
-    pass
 
 
 class JsonParseError(OpenProjectError):
     """Error when parsing JSON output from OpenProject."""
 
-    pass
 
 
 class OpenProjectClient:
-    """
-    Client for OpenProject operations.
+    """Client for OpenProject operations.
     This is the top-level coordinator that orchestrates the client architecture:
     - SSHClient handles all SSH interactions
     - DockerClient (using SSHClient) handles container interactions
@@ -96,8 +97,7 @@ class OpenProjectClient:
         docker_client: DockerClient | None = None,
         rails_client: RailsConsoleClient | None = None,
     ) -> None:
-        """
-        Initialize the OpenProject client with dependency injection.
+        """Initialize the OpenProject client with dependency injection.
 
         Args:
             container_name: Docker container name (default: from config)
@@ -114,6 +114,7 @@ class OpenProjectClient:
 
         Raises:
             ValueError: If required configuration values are missing
+
         """
         # Rails console query state
         self._last_query = ""
@@ -150,7 +151,7 @@ class OpenProjectClient:
         self.ssh_client = ssh_client or SSHClient(
             host=str(self.ssh_host),
             user=self.ssh_user,
-            key_file=cast(str | None, self.ssh_key_file),
+            key_file=cast("str | None", self.ssh_key_file),
             operation_timeout=self.command_timeout,
             retry_count=self.retry_count,
             retry_delay=self.retry_delay,
@@ -166,7 +167,7 @@ class OpenProjectClient:
             retry_delay=self.retry_delay,
         )
         logger.debug(
-            f"{'Using provided' if docker_client else 'Initialized'} DockerClient for container {self.container_name}"
+            f"{'Using provided' if docker_client else 'Initialized'} DockerClient for container {self.container_name}",
         )
 
         # 3. Finally, create or use the Rails console client for executing commands
@@ -176,14 +177,13 @@ class OpenProjectClient:
         )
         logger.debug(
             f"{'Using provided' if rails_client else 'Initialized'} "
-            f"RailsConsoleClient with tmux session {self.tmux_session_name}"
+            f"RailsConsoleClient with tmux session {self.tmux_session_name}",
         )
 
         logger.success(f"OpenProjectClient initialized for host {self.ssh_host}, container {self.container_name}")
 
     def _create_script_file(self, script_content: str) -> str:
-        """
-        Create a temporary Ruby script file with the given content.
+        """Create a temporary Ruby script file with the given content.
 
         Args:
             script_content: Ruby code to write to the file
@@ -193,6 +193,7 @@ class OpenProjectClient:
 
         Raises:
             OSError: If unable to create or write to the script file
+
         """
         try:
             # Create a temporary directory if needed
@@ -218,15 +219,14 @@ class OpenProjectClient:
             logger.debug(f"Created temporary script file: {os.path.abspath(file_path)}")
             return file_path
         except OSError as e:
-            logger.error(f"Failed to create script file: {str(e)}")
-            raise OSError(f"Failed to create script file: {str(e)}")
+            logger.error(f"Failed to create script file: {e!s}")
+            raise OSError(f"Failed to create script file: {e!s}")
         except Exception as e:
-            logger.error(f"Unexpected error creating script file: {str(e)}")
-            raise OSError(f"Failed to create script file: {str(e)}")
+            logger.error(f"Unexpected error creating script file: {e!s}")
+            raise OSError(f"Failed to create script file: {e!s}")
 
     def _transfer_rails_script(self, local_path: str) -> str:
-        """
-        Transfer a script to the Rails environment.
+        """Transfer a script to the Rails environment.
 
         Args:
             local_path: Path to the script file
@@ -236,6 +236,7 @@ class OpenProjectClient:
 
         Raises:
             FileTransferError: If transfer fails
+
         """
         try:
             # Verify the local file exists and is readable before attempting to transfer
@@ -272,15 +273,15 @@ class OpenProjectClient:
             return container_path
 
         except Exception as e:
-            raise FileTransferError(f"Failed to transfer script: {str(e)}")
+            raise FileTransferError(f"Failed to transfer script: {e!s}")
 
     def _cleanup_script_files(self, local_path: str, remote_path: str) -> None:
-        """
-        Clean up script files after execution.
+        """Clean up script files after execution.
 
         Args:
             local_path: Path to the local script file
             remote_path: Path to the remote script file
+
         """
         # Clean up local file
         try:
@@ -288,18 +289,17 @@ class OpenProjectClient:
                 os.unlink(local_path)
                 logger.debug(f"Cleaned up local script file: {local_path}")
         except Exception as e:
-            logger.warning(f"Non-critical error cleaning up local file: {str(e)}")
+            logger.warning(f"Non-critical error cleaning up local file: {e!s}")
 
         # Clean up remote file
         try:
             self.ssh_client.execute_command(f"rm -f {remote_path}")
             logger.debug(f"Cleaned up remote script file: {remote_path}")
         except Exception as e:
-            logger.warning(f"Non-critical error cleaning up remote file: {str(e)}")
+            logger.warning(f"Non-critical error cleaning up remote file: {e!s}")
 
     def _transfer_and_execute_script(self, script_content: str) -> dict[str, Any]:
-        """
-        Create, transfer and execute a script.
+        """Create, transfer and execute a script.
 
         Args:
             script_content: Script content to execute
@@ -311,6 +311,7 @@ class OpenProjectClient:
             FileTransferError: If file transfer fails
             QueryExecutionError: If script execution fails
             JsonParseError: If result parsing fails
+
         """
         local_path = None
         container_path = None
@@ -351,7 +352,7 @@ class OpenProjectClient:
                 logger.debug(f"Parsed result: {result}")
             except json.JSONDecodeError as e:
                 # If JSON parsing fails, try to extract a hash from the Ruby output
-                logger.warning(f"JSON parse error: {str(e)}")
+                logger.warning(f"JSON parse error: {e!s}")
                 logger.warning(f"Attempting to extract hash from Rails output: {rails_output}")
 
                 # Try to parse Ruby hash format into Python dict
@@ -371,7 +372,7 @@ class OpenProjectClient:
                         result = json.loads(dict_str)
                         logger.debug(f"Converted hash to dict: {result}")
                     except Exception as e:
-                        logger.error(f"Failed to convert Ruby hash to dict: {str(e)}")
+                        logger.error(f"Failed to convert Ruby hash to dict: {e!s}")
                         # Use the output as a string if we can't parse it
                         result = {"raw_output": rails_output}
                 else:
@@ -383,14 +384,14 @@ class OpenProjectClient:
         except FileTransferError as e:
             raise e  # Re-raise FileTransferError
         except Exception as e:
-            raise QueryExecutionError(f"Failed to execute script: {str(e)}")
+            raise QueryExecutionError(f"Failed to execute script: {e!s}")
         finally:
             # Clean up local script file
             if local_path and os.path.exists(local_path):
                 try:
                     os.unlink(local_path)
                 except Exception as e:
-                    logger.warning(f"Failed to clean up local script file: {str(e)}")
+                    logger.warning(f"Failed to clean up local script file: {e!s}")
 
             # Clean up container script file
             if container_path:
@@ -398,11 +399,10 @@ class OpenProjectClient:
                     # Use root user to remove the file, to handle permission issues
                     self.docker_client.execute_command(f"rm -f {container_path}", user="root")
                 except Exception as e:
-                    logger.warning(f"Failed to clean up container script file: {str(e)}")
+                    logger.warning(f"Failed to clean up container script file: {e!s}")
 
     def execute(self, script_content: str) -> dict[str, Any]:
-        """
-        Execute a Ruby script directly.
+        """Execute a Ruby script directly.
 
         Args:
             script_content: Ruby script content to execute
@@ -412,12 +412,12 @@ class OpenProjectClient:
 
         Raises:
             QueryExecutionError: If script execution fails
+
         """
         return self.execute_query(script_content)
 
     def transfer_file_to_container(self, local_path: str, container_path: str) -> bool:
-        """
-        Transfer a file from local to the OpenProject container.
+        """Transfer a file from local to the OpenProject container.
 
         Args:
             local_path: Path to local file
@@ -428,6 +428,7 @@ class OpenProjectClient:
 
         Raises:
             FileTransferError: If the transfer fails for any reason
+
         """
         try:
             # Use just the base filename for the remote path
@@ -445,16 +446,16 @@ class OpenProjectClient:
 
             return True
         except Exception as e:
-            error_msg = f"Failed to transfer file to container: {str(e)}"
+            error_msg = f"Failed to transfer file to container: {e!s}"
             logger.error(error_msg)
             raise FileTransferError(error_msg)
 
     def is_connected(self) -> bool:
-        """
-        Test if connected to OpenProject.
+        """Test if connected to OpenProject.
 
         Returns:
             True if connected, False otherwise
+
         """
         try:
             # Generate a unique ID to verify connection
@@ -469,12 +470,11 @@ class OpenProjectClient:
             # Check if the unique ID is in the response
             return f"OPENPROJECT_CONNECTION_TEST_{unique_id}" in result
         except Exception as e:
-            logger.error(f"Connection test failed: {str(e)}")
+            logger.error(f"Connection test failed: {e!s}")
             return False
 
     def execute_query(self, query: str, timeout: int | None = None) -> str:
-        """
-        Execute a Rails query.
+        """Execute a Rails query.
 
         Args:
             query: Rails query to execute
@@ -486,6 +486,7 @@ class OpenProjectClient:
         Raises:
             QueryExecutionError: If execution fails
             JsonParseError: If result parsing fails
+
         """
         self._last_query = query
 
@@ -494,8 +495,7 @@ class OpenProjectClient:
         return result
 
     def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> Any:
-        """
-        Execute a Rails query and save the result to a JSON file, then transfer it back.
+        """Execute a Rails query and save the result to a JSON file, then transfer it back.
 
         Args:
             query: Rails query to execute
@@ -508,6 +508,7 @@ class OpenProjectClient:
             QueryExecutionError: If execution fails
             FileTransferError: If file transfer fails
             JsonParseError: If result parsing fails
+
         """
         # Generate filenames
         uid = self.file_manager.generate_unique_id()
@@ -603,24 +604,23 @@ end
                 logger.debug(f"Successfully parsed JSON data from {local_file}")
                 return data
             except json.JSONDecodeError as e:
-                raise JsonParseError(f"Failed to parse JSON result file: {str(e)}")
+                raise JsonParseError(f"Failed to parse JSON result file: {e!s}")
             finally:
                 # Clean up local file
                 if os.path.exists(local_file):
                     os.remove(local_file)
 
         except (RubyError, CommandExecutionError) as e:
-            raise QueryExecutionError(f"Error executing query: {str(e)}")
+            raise QueryExecutionError(f"Error executing query: {e!s}")
         except (SSHCommandError, SSHConnectionError) as e:
-            raise ConnectionError(f"SSH error during file operation: {str(e)}")
+            raise ConnectionError(f"SSH error during file operation: {e!s}")
         except FileTransferError as e:
             raise e  # Just re-raise FileTransferError
         except Exception as e:
-            raise QueryExecutionError(f"Unexpected error during query execution: {str(e)}")
+            raise QueryExecutionError(f"Unexpected error during query execution: {e!s}")
 
     def execute_json_query(self, query: str, timeout: int | None = None) -> Any:
-        """
-        Execute a Rails query and return parsed JSON result.
+        """Execute a Rails query and return parsed JSON result.
 
         This method is optimized for retrieving data from Rails as JSON,
         automatically handling the conversion and parsing.
@@ -635,6 +635,7 @@ end
         Raises:
             QueryExecutionError: If execution fails
             JsonParseError: If result cannot be parsed as JSON
+
         """
         # Modify query to ensure it produces JSON output
         if not (".to_json" in query or ".as_json" in query):
@@ -652,8 +653,7 @@ end
         return self.execute_query_to_json_file(json_query, timeout)
 
     def count_records(self, model: str) -> int:
-        """
-        Count records for a given Rails model.
+        """Count records for a given Rails model.
 
         Args:
             model: Model name (e.g., "User", "Project")
@@ -663,6 +663,7 @@ end
 
         Raises:
             QueryExecutionError: If the count query fails
+
         """
         result = self.execute_query(f"{model}.count")
 
@@ -671,8 +672,7 @@ end
         raise QueryExecutionError(f"Unable to parse count result: {result}")
 
     def find_record(self, model: str, id_or_conditions: int | dict[str, Any]) -> dict[str, Any]:
-        """
-        Find a record by ID or conditions.
+        """Find a record by ID or conditions.
 
         Args:
             model: Model name (e.g., "User", "Project")
@@ -684,6 +684,7 @@ end
         Raises:
             RecordNotFoundError: If no record is found
             QueryExecutionError: If query fails
+
         """
         try:
             if isinstance(id_or_conditions, int):
@@ -701,11 +702,10 @@ end
             return result
 
         except (QueryExecutionError, JsonParseError) as e:
-            raise QueryExecutionError(f"Error finding record for {model}: {str(e)}")
+            raise QueryExecutionError(f"Error finding record for {model}: {e!s}")
 
     def create_record(self, model: str, attributes: dict[str, Any]) -> dict[str, Any]:
-        """
-        Create a record with given attributes.
+        """Create a record with given attributes.
 
         Args:
             model: Model name (e.g., "User", "Project")
@@ -716,6 +716,7 @@ end
 
         Raises:
             QueryExecutionError: If record creation fails
+
         """
         # Convert Python dict to Ruby hash format
         ruby_hash = json.dumps(attributes).replace('"', "'")
@@ -734,13 +735,12 @@ end
             record = self.execute_query(command)
             return record
         except RubyError as e:
-            raise QueryExecutionError(f"Failed to create {model}: {str(e)}")
+            raise QueryExecutionError(f"Failed to create {model}: {e!s}")
         except Exception as e:
-            raise QueryExecutionError(f"Error creating {model}: {str(e)}")
+            raise QueryExecutionError(f"Error creating {model}: {e!s}")
 
     def update_record(self, model: str, id: int, attributes: dict[str, Any]) -> dict[str, Any]:
-        """
-        Update a record with given attributes.
+        """Update a record with given attributes.
 
         Args:
             model: Model name (e.g., "User", "Project")
@@ -753,6 +753,7 @@ end
         Raises:
             RecordNotFoundError: If record doesn't exist
             QueryExecutionError: If update fails
+
         """
         # Convert Python dict to Ruby hash format
         ruby_hash = json.dumps(attributes).replace('"', "'")
@@ -775,13 +776,12 @@ end
         except RubyError as e:
             if "Record not found" in str(e):
                 raise RecordNotFoundError(f"{model} with ID {id} not found")
-            raise QueryExecutionError(f"Failed to update {model}: {str(e)}")
+            raise QueryExecutionError(f"Failed to update {model}: {e!s}")
         except Exception as e:
-            raise QueryExecutionError(f"Error updating {model}: {str(e)}")
+            raise QueryExecutionError(f"Error updating {model}: {e!s}")
 
     def delete_record(self, model: str, id: int) -> None:
-        """
-        Delete a record.
+        """Delete a record.
 
         Args:
             model: Model name (e.g., "User", "Project")
@@ -790,6 +790,7 @@ end
         Raises:
             RecordNotFoundError: If record doesn't exist
             QueryExecutionError: If deletion fails
+
         """
         command = f"""
         record = {model}.find_by(id: {id})
@@ -807,9 +808,9 @@ end
         except RubyError as e:
             if "Record not found" in str(e):
                 raise RecordNotFoundError(f"{model} with ID {id} not found")
-            raise QueryExecutionError(f"Failed to delete {model}: {str(e)}")
+            raise QueryExecutionError(f"Failed to delete {model}: {e!s}")
         except Exception as e:
-            raise QueryExecutionError(f"Error deleting {model}: {str(e)}")
+            raise QueryExecutionError(f"Error deleting {model}: {e!s}")
 
     def find_all_records(
         self,
@@ -818,8 +819,7 @@ end
         limit: int | None = None,
         includes: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """
-        Find all records matching conditions.
+        """Find all records matching conditions.
 
         Args:
             model: Model name (e.g., "User", "Project")
@@ -832,6 +832,7 @@ end
 
         Raises:
             QueryExecutionError: If query fails
+
         """
         # Start building the query
         query = f"{model}"
@@ -861,11 +862,10 @@ end
                 return []
             return result
         except Exception as e:
-            raise QueryExecutionError(f"Error finding records for {model}: {str(e)}")
+            raise QueryExecutionError(f"Error finding records for {model}: {e!s}")
 
     def execute_transaction(self, commands: list[str]) -> Any:
-        """
-        Execute multiple commands in a transaction.
+        """Execute multiple commands in a transaction.
 
         Args:
             commands: List of Ruby/Rails commands
@@ -875,6 +875,7 @@ end
 
         Raises:
             QueryExecutionError: If transaction fails
+
         """
         # Build transaction block
         transaction_commands = "\n".join(commands)
@@ -887,11 +888,10 @@ end
         try:
             return self.execute_query(transaction_block)
         except Exception as e:
-            raise QueryExecutionError(f"Transaction failed: {str(e)}")
+            raise QueryExecutionError(f"Transaction failed: {e!s}")
 
     def transfer_file_from_container(self, container_path: str, local_path: str) -> str:
-        """
-        Copy a file from the container to the local system.
+        """Copy a file from the container to the local system.
 
         Args:
             container_path: Path to the file in the container
@@ -903,6 +903,7 @@ end
         Raises:
             FileTransferError: If transfer fails
             FileNotFoundError: If container file doesn't exist
+
         """
         try:
             # Verify the container file exists
@@ -931,15 +932,14 @@ end
             return local_file
 
         except (SSHFileTransferError, SSHCommandError) as e:
-            raise FileTransferError(f"SSH error transferring file: {str(e)}")
+            raise FileTransferError(f"SSH error transferring file: {e!s}")
         except FileNotFoundError as e:
             raise e  # Re-raise FileNotFoundError
         except Exception as e:
-            raise FileTransferError(f"Error transferring file from container: {str(e)}")
+            raise FileTransferError(f"Error transferring file from container: {e!s}")
 
     def get_users(self) -> list[dict[str, Any]]:
-        """
-        Get all users from OpenProject.
+        """Get all users from OpenProject.
 
         Uses caching to avoid repeated Rails console queries.
 
@@ -948,6 +948,7 @@ end
 
         Raises:
             QueryExecutionError: If unable to retrieve users
+
         """
         # Check cache first (5 minutes validity)
         current_time = time.time()
@@ -983,11 +984,10 @@ end
             return self._users_cache
 
         except Exception as e:
-            raise QueryExecutionError(f"Failed to retrieve users: {str(e)}")
+            raise QueryExecutionError(f"Failed to retrieve users: {e!s}")
 
     def get_user_by_email(self, email: str) -> dict[str, Any]:
-        """
-        Get a user by email address.
+        """Get a user by email address.
 
         Uses cached user data if available.
 
@@ -1000,6 +1000,7 @@ end
         Raises:
             RecordNotFoundError: If user with given email is not found
             QueryExecutionError: If query fails
+
         """
         # Normalize email to lowercase
         email_lower = email.lower()
@@ -1030,11 +1031,10 @@ end
         except RecordNotFoundError as e:
             raise e  # Re-raise RecordNotFoundError
         except Exception as e:
-            raise QueryExecutionError(f"Error finding user by email: {str(e)}")
+            raise QueryExecutionError(f"Error finding user by email: {e!s}")
 
     def get_custom_field_by_name(self, name: str) -> dict[str, Any]:
-        """
-        Find a custom field by name.
+        """Find a custom field by name.
 
         Args:
             name: The name of the custom field to find
@@ -1044,12 +1044,12 @@ end
 
         Raises:
             RecordNotFoundError: If custom field with given name is not found
+
         """
         return self.find_record("CustomField", {"name": name})
 
     def get_custom_field_id_by_name(self, name: str) -> int:
-        """
-        Find a custom field ID by name.
+        """Find a custom field ID by name.
 
         Args:
             name: The name of the custom field to find
@@ -1060,6 +1060,7 @@ end
         Raises:
             RecordNotFoundError: If custom field with given name is not found
             QueryExecutionError: If query fails
+
         """
         try:
             result = self.execute_query(f"CustomField.where(name: '{name}').first&.id")
@@ -1084,56 +1085,55 @@ end
         except RecordNotFoundError as e:
             raise e  # Re-raise RecordNotFoundError
         except Exception as e:
-            raise QueryExecutionError(f"Error getting custom field ID: {str(e)}")
+            raise QueryExecutionError(f"Error getting custom field ID: {e!s}")
 
     def get_statuses(self) -> list[dict[str, Any]]:
-        """
-        Get all statuses from OpenProject.
+        """Get all statuses from OpenProject.
 
         Returns:
             List of status objects
 
         Raises:
             QueryExecutionError: If query fails
+
         """
         try:
             return self.execute_json_query("Status.all") or []
         except Exception as e:
-            raise QueryExecutionError(f"Failed to get statuses: {str(e)}")
+            raise QueryExecutionError(f"Failed to get statuses: {e!s}")
 
     def get_work_package_types(self) -> list[dict[str, Any]]:
-        """
-        Get all work package types from OpenProject.
+        """Get all work package types from OpenProject.
 
         Returns:
             List of work package type objects
 
         Raises:
             QueryExecutionError: If query fails
+
         """
         try:
             return self.execute_json_query("Type.all") or []
         except Exception as e:
-            raise QueryExecutionError(f"Failed to get work package types: {str(e)}")
+            raise QueryExecutionError(f"Failed to get work package types: {e!s}")
 
     def get_projects(self) -> list[dict[str, Any]]:
-        """
-        Get all projects from OpenProject.
+        """Get all projects from OpenProject.
 
         Returns:
             List of project objects
 
         Raises:
             QueryExecutionError: If query fails
+
         """
         try:
             return self.execute_json_query("Project.all") or []
         except Exception as e:
-            raise QueryExecutionError(f"Failed to get projects: {str(e)}")
+            raise QueryExecutionError(f"Failed to get projects: {e!s}")
 
     def get_project_by_identifier(self, identifier: str) -> dict[str, Any]:
-        """
-        Get a project by identifier.
+        """Get a project by identifier.
 
         Args:
             identifier: Project identifier or slug
@@ -1144,6 +1144,7 @@ end
         Raises:
             RecordNotFoundError: If project with given identifier is not found
             QueryExecutionError: If query fails
+
         """
         try:
             project = self.execute_json_query(f"Project.find_by(identifier: '{identifier}')")
@@ -1153,43 +1154,42 @@ end
         except RecordNotFoundError as e:
             raise e  # Re-raise RecordNotFoundError
         except Exception as e:
-            raise QueryExecutionError(f"Failed to get project: {str(e)}")
+            raise QueryExecutionError(f"Failed to get project: {e!s}")
 
     def delete_all_work_packages(self) -> int:
-        """
-        Delete all work packages in bulk.
+        """Delete all work packages in bulk.
 
         Returns:
             Number of deleted work packages
 
         Raises:
             QueryExecutionError: If bulk deletion fails
+
         """
         try:
             count = self.execute_query("WorkPackage.delete_all")
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete all work packages: {str(e)}")
+            raise QueryExecutionError(f"Failed to delete all work packages: {e!s}")
 
     def delete_all_projects(self) -> int:
-        """
-        Delete all projects in bulk.
+        """Delete all projects in bulk.
 
         Returns:
             Number of deleted projects
 
         Raises:
             QueryExecutionError: If bulk deletion fails
+
         """
         try:
             count = self.execute_query("Project.delete_all")
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete all projects: {str(e)}")
+            raise QueryExecutionError(f"Failed to delete all projects: {e!s}")
 
     def delete_all_custom_fields(self) -> int:
-        """
-        Delete all custom fields in bulk.
+        """Delete all custom fields in bulk.
         Uses destroy_all for proper dependency cleanup.
 
         Returns:
@@ -1197,6 +1197,7 @@ end
 
         Raises:
             QueryExecutionError: If bulk deletion fails
+
         """
         try:
             # Get count before deletion for return value
@@ -1204,17 +1205,17 @@ end
             self.execute_query("CustomField.destroy_all")
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete all custom fields: {str(e)}")
+            raise QueryExecutionError(f"Failed to delete all custom fields: {e!s}")
 
     def delete_non_default_issue_types(self) -> int:
-        """
-        Delete non-default issue types (work package types).
+        """Delete non-default issue types (work package types).
 
         Returns:
             Number of deleted types
 
         Raises:
             QueryExecutionError: If deletion fails
+
         """
         script = """
         non_default_types = Type.where(is_default: false, is_standard: false)
@@ -1227,17 +1228,17 @@ end
             count = self.execute_query(script)
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete non-default issue types: {str(e)}")
+            raise QueryExecutionError(f"Failed to delete non-default issue types: {e!s}")
 
     def delete_non_default_issue_statuses(self) -> int:
-        """
-        Delete non-default issue statuses.
+        """Delete non-default issue statuses.
 
         Returns:
             Number of deleted statuses
 
         Raises:
             QueryExecutionError: If deletion fails
+
         """
         script = """
         non_default_statuses = Status.where(is_default: false)
@@ -1250,11 +1251,10 @@ end
             count = self.execute_query(script)
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete non-default issue statuses: {str(e)}")
+            raise QueryExecutionError(f"Failed to delete non-default issue statuses: {e!s}")
 
     def create_users_in_bulk(self, users_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """
-        Create multiple users in OpenProject with a single API call.
+        """Create multiple users in OpenProject with a single API call.
 
         Args:
             users_data: List of user data dictionaries
@@ -1264,6 +1264,7 @@ end
 
         Raises:
             QueryExecutionError: If bulk user creation fails
+
         """
         if not users_data:
             return []
@@ -1322,4 +1323,4 @@ end
             # Return the results
             return result
         except Exception as e:
-            raise QueryExecutionError(f"Failed to create users in bulk: {str(e)}")
+            raise QueryExecutionError(f"Failed to create users in bulk: {e!s}")

@@ -1,5 +1,4 @@
-"""
-Tests for the main entry point (src/main.py).
+"""Tests for the main entry point (src/main.py).
 """
 
 import argparse

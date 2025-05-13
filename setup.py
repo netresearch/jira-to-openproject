@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Setup script for the Jira to OpenProject migration tool.
+"""Setup script for the Jira to OpenProject migration tool.
 """
 
 from setuptools import find_packages, setup
@@ -13,12 +12,12 @@ with open("requirements.txt") as f:
 requirements = [line for line in requirements if line and not line.startswith("#")]
 
 setup(
-    name="j2o",
+    name="jira-to-openproject",
     version="0.1.0",
     description="Jira to OpenProject migration tool",
-    author="SME",
-    author_email="sme@example.com",
-    url="https://github.com/sme/j2o",
+    author="Sebastian Mendel",
+    author_email="sebastian.mendel@netresearch.de",
+    url="https://github.com/netresearch/jira-to-openproject",
     packages=find_packages(),
     include_package_data=True,
     python_requires=">=3.8,<4.0",

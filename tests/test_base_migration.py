@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Tests for the BaseMigration class, focused on dependency injection.
+"""Tests for the BaseMigration class, focused on dependency injection.
 """
 
 import unittest
@@ -16,7 +15,7 @@ class TestBaseMigration(unittest.TestCase):
 
     @patch("src.migrations.base_migration.JiraClient")
     @patch("src.migrations.base_migration.OpenProjectClient")
-    def test_init_without_dependencies(self, mock_op_client, mock_jira_client):
+    def test_init_without_dependencies(self, mock_op_client: MagicMock, mock_jira_client: MagicMock) -> None:
         """Test initialization without providing any client instances"""
         # Setup the mocks
         mock_jira_instance = MagicMock()
@@ -35,7 +34,7 @@ class TestBaseMigration(unittest.TestCase):
         self.assertEqual(migration.jira_client, mock_jira_instance)
         self.assertEqual(migration.op_client, mock_op_instance)
 
-    def test_init_with_jira_client(self):
+    def test_init_with_jira_client(self) -> None:
         """Test initialization with JiraClient provided"""
         # Create a mock JiraClient
         mock_jira = MagicMock(spec=JiraClient)
@@ -52,7 +51,7 @@ class TestBaseMigration(unittest.TestCase):
             self.assertEqual(migration.op_client, mock_op_instance)
             mock_op_client.assert_called_once()
 
-    def test_init_with_op_client(self):
+    def test_init_with_op_client(self) -> None:
         """Test initialization with OpenProjectClient provided"""
         # Create a mock OpenProjectClient
         mock_op = MagicMock(spec=OpenProjectClient)
@@ -69,7 +68,7 @@ class TestBaseMigration(unittest.TestCase):
             self.assertEqual(migration.jira_client, mock_jira_instance)
             mock_jira_client.assert_called_once()
 
-    def test_init_with_both_clients(self):
+    def test_init_with_both_clients(self) -> None:
         """Test initialization with both clients provided"""
         # Create mock clients
         mock_jira = MagicMock(spec=JiraClient)

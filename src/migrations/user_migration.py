@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-User migration module for Jira to OpenProject migration.
+"""User migration module for Jira to OpenProject migration.
 Handles the migration of users and their accounts from Jira to OpenProject.
 """
 
@@ -17,8 +16,7 @@ logger = config.logger
 
 
 class UserMigration(BaseMigration):
-    """
-    Handles the migration of users from Jira to OpenProject.
+    """Handles the migration of users from Jira to OpenProject.
 
     Since both systems use LDAP/AD for authentication, the focus is on:
     1. Identifying the users in Jira
@@ -32,13 +30,13 @@ class UserMigration(BaseMigration):
         op_client=None,
         data_dir=None,
     ) -> None:
-        """
-        Initialize the user migration tools.
+        """Initialize the user migration tools.
 
         Args:
             jira_client: Initialized Jira client instance
             op_client: Initialized OpenProject client instance
             data_dir: Path to data directory for storing mappings
+
         """
         # Initialize base migration with client dependencies
         super().__init__(
@@ -69,14 +67,14 @@ class UserMigration(BaseMigration):
         self.user_mapping = self._load_from_json("user_mapping.json") or {}
 
     def extract_jira_users(self) -> list:
-        """
-        Extract users from Jira.
+        """Extract users from Jira.
 
         Returns:
             List of Jira users
 
         Raises:
             MigrationError: If users cannot be extracted from Jira
+
         """
         self.logger.info("Extracting users from Jira...", extra={"markup": True})
 
@@ -92,14 +90,14 @@ class UserMigration(BaseMigration):
         return self.jira_users
 
     def extract_openproject_users(self) -> list:
-        """
-        Extract users from OpenProject.
+        """Extract users from OpenProject.
 
         Returns:
             List of OpenProject users
 
         Raises:
             MigrationError: If users cannot be extracted from OpenProject
+
         """
         self.logger.info("Extracting users from OpenProject...", extra={"markup": True})
 
@@ -119,14 +117,14 @@ class UserMigration(BaseMigration):
         return self.op_users
 
     def create_user_mapping(self) -> dict:
-        """
-        Create a mapping between Jira and OpenProject users.
+        """Create a mapping between Jira and OpenProject users.
 
         Returns:
             Dictionary mapping Jira user keys to OpenProject user IDs
 
         Raises:
             MigrationError: If required user data is missing
+
         """
         self.logger.info("Creating user mapping...", extra={"markup": True})
 
@@ -202,8 +200,7 @@ class UserMigration(BaseMigration):
         return mapping
 
     def create_missing_users(self, batch_size: int = 10) -> dict:
-        """
-        Create missing users in OpenProject using the LDAP synchronization.
+        """Create missing users in OpenProject using the LDAP synchronization.
 
         Args:
             batch_size: Number of users to create in each batch
@@ -213,6 +210,7 @@ class UserMigration(BaseMigration):
 
         Raises:
             MigrationError: If user mapping is missing or if users cannot be created
+
         """
         self.logger.info("Creating missing users in OpenProject...", extra={"markup": True})
 
@@ -254,7 +252,7 @@ class UserMigration(BaseMigration):
                             "mail": user["jira_email"],
                             "admin": False,
                             "status": "active",
-                        }
+                        },
                     )
 
                 batch_users = [user["jira_name"] for user in batch]
@@ -288,7 +286,7 @@ class UserMigration(BaseMigration):
                                     # If everything fails, rely on string counts for basic success metrics
                                     self.logger.warning("Could not parse JSON, using basic string parsing")
                                     batch_created = result_str.count('"status": "success"') or result_str.count(
-                                        '"status" => "success"'
+                                        '"status" => "success"',
                                     )
                                     batch_failed = len(batch) - batch_created
                                     result = {"created_count": batch_created, "created_users": [], "failed_users": []}
@@ -301,7 +299,7 @@ class UserMigration(BaseMigration):
                         # If somehow json module is not available
                         self.logger.warning("JSON module not available, using basic string parsing")
                         batch_created = result_str.count('"status": "success"') or result_str.count(
-                            '"status" => "success"'
+                            '"status" => "success"',
                         )
                         batch_failed = len(batch) - batch_created
                         result = {"created_count": batch_created, "created_users": [], "failed_users": []}
@@ -319,7 +317,7 @@ class UserMigration(BaseMigration):
 
                     tracker.add_log_item(f"Created {batch_created}/{len(batch)} users in batch")
                 except Exception as e:
-                    error_msg = f"Exception during bulk user creation: {str(e)}"
+                    error_msg = f"Exception during bulk user creation: {e!s}"
                     self.logger.error(error_msg, extra={"markup": True})
                     failed += len(batch)
                     tracker.add_log_item(f"Exception during creation: {', '.join(batch_users)}")
@@ -340,14 +338,14 @@ class UserMigration(BaseMigration):
         }
 
     def analyze_user_mapping(self) -> dict:
-        """
-        Analyze the user mapping for statistics and potential issues.
+        """Analyze the user mapping for statistics and potential issues.
 
         Returns:
             Dictionary with analysis results
 
         Raises:
             MigrationError: If user mapping is missing
+
         """
         if not self.user_mapping:
             self.create_user_mapping()
@@ -393,11 +391,11 @@ class UserMigration(BaseMigration):
         return analysis
 
     def run(self) -> ComponentResult:
-        """
-        Run the user migration.
+        """Run the user migration.
 
         Returns:
             ComponentResult with migration results
+
         """
         self.logger.info("Starting user migration...", extra={"markup": True})
 
@@ -444,10 +442,10 @@ class UserMigration(BaseMigration):
                 total_count=analysis["total_users"],
             )
         except Exception as e:
-            self.logger.error(f"Error in user migration: {str(e)}", extra={"markup": True})
+            self.logger.error(f"Error in user migration: {e!s}", extra={"markup": True})
             return ComponentResult(
                 success=False,
-                errors=[f"Error in user migration: {str(e)}"],
+                errors=[f"Error in user migration: {e!s}"],
                 success_count=0,
                 failed_count=0,
                 total_count=0,

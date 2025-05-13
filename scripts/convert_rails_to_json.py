@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Convert Rails output to JSON.
+"""Convert Rails output to JSON.
 
 This script takes Ruby-formatted output and converts it to valid JSON.
 """
@@ -11,12 +10,12 @@ import sys
 
 
 def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
-    """
-    Convert Ruby hash syntax to valid JSON.
+    """Convert Ruby hash syntax to valid JSON.
 
     Args:
         input_file: Path to input file with Ruby hash syntax
         output_file: Path to output JSON file
+
     """
     # Read the input file
     with open(input_file) as f:

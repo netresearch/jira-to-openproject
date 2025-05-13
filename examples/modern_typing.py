@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Modern Python Type Annotations Example
+"""Modern Python Type Annotations Example
 
 This file demonstrates best practices for type annotations in Python 3.9+ projects.
 """
@@ -27,36 +26,36 @@ class DataProcessor:
         config: dict[str, Any] | None = None,
         cache_dir: Path | str | None = None,
     ) -> None:
-        """
-        Initialize with modern type annotations.
+        """Initialize with modern type annotations.
 
         Args:
             config: Optional configuration dictionary
             cache_dir: Optional cache directory path
+
         """
         self.config = config or {}
         self.cache_dir = Path(cache_dir) if cache_dir else Path.home() / ".cache"
         self.handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
 
     def register_handler(self, name: str, handler: Callable[[dict[str, Any]], Any]) -> None:
-        """
-        Register a data handler function.
+        """Register a data handler function.
 
         Args:
             name: Handler name
             handler: Handler function that processes data
+
         """
         self.handlers[name] = handler
 
     def process_items(self, items: Sequence[dict[str, Any]]) -> list[Any]:
-        """
-        Process a sequence of items.
+        """Process a sequence of items.
 
         Args:
             items: Sequence of data items to process
 
         Returns:
             List of processed results
+
         """
         results: list[Any] = []
 
@@ -80,8 +79,7 @@ class DataProcessor:
         data_sources: Iterable[str | Path | dict[str, Any]],
         output_format: str = "dict",
     ) -> dict[str, list[Any]] | list[Any]:
-        """
-        Process multiple data sources.
+        """Process multiple data sources.
 
         Args:
             data_sources: Iterable of file paths or data dictionaries
@@ -89,12 +87,13 @@ class DataProcessor:
 
         Returns:
             Processed data in requested format
+
         """
         all_results: dict[str, list[Any]] = {}
 
         for source in data_sources:
             # Handle different input types
-            if isinstance(source, (str, Path)):
+            if isinstance(source, str | Path):
                 source_path = Path(source)
                 source_name = source_path.stem
 
@@ -123,8 +122,7 @@ class DataProcessor:
         results: Mapping[str, list[Any]],
         predicate: Callable[[Any], bool],
     ) -> dict[str, list[Any]]:
-        """
-        Filter results using a predicate function.
+        """Filter results using a predicate function.
 
         Args:
             results: Results mapping
@@ -132,6 +130,7 @@ class DataProcessor:
 
         Returns:
             Filtered results
+
         """
         filtered: dict[str, list[Any]] = {}
 
@@ -178,7 +177,7 @@ def main() -> None:
 
     # Filter results
     filtered_results = processor.filter_results(
-        results, lambda x: isinstance(x, dict) and x.get("id") == 1 if "id" in x else False
+        results, lambda x: isinstance(x, dict) and x.get("id") == 1 if "id" in x else False,
     )
 
     print(f"All results: {results}")

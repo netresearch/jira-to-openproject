@@ -1,5 +1,4 @@
-"""
-Work package migration module for Jira to OpenProject migration.
+"""Work package migration module for Jira to OpenProject migration.
 Handles the migration of issues from Jira to work packages in OpenProject.
 """
 
@@ -23,8 +22,7 @@ from src.utils import data_handler
 
 
 class WorkPackageMigration(BaseMigration):
-    """
-    Handles the migration of issues from Jira to work packages in OpenProject.
+    """Handles the migration of issues from Jira to work packages in OpenProject.
 
     This class is responsible for:
     1. Extracting issues from Jira projects
@@ -42,13 +40,13 @@ class WorkPackageMigration(BaseMigration):
         op_client: OpenProjectClient,
         data_dir: str | None = None,
     ) -> None:
-        """
-        Initialize the work package migration.
+        """Initialize the work package migration.
 
         Args:
             jira_client: JiraClient instance.
             op_client: OpenProjectClient instance.
             data_dir: Path to data directory for storing mappings.
+
         """
         super().__init__(jira_client, op_client)
 
@@ -88,21 +86,21 @@ class WorkPackageMigration(BaseMigration):
 
         # Load mappings from disk
         self.project_mapping = data_handler.load_dict(
-            filename="project_mapping.json", directory=self.data_dir, default={}
+            filename="project_mapping.json", directory=self.data_dir, default={},
         )
 
         self.user_mapping = data_handler.load_dict(filename="user_mapping.json", directory=self.data_dir, default={})
 
         self.issue_type_mapping = data_handler.load_dict(
-            filename="issue_type_mapping.json", directory=self.data_dir, default={}
+            filename="issue_type_mapping.json", directory=self.data_dir, default={},
         )
 
         self.issue_type_id_mapping = data_handler.load_dict(
-            filename="issue_type_id_mapping.json", directory=self.data_dir, default={}
+            filename="issue_type_id_mapping.json", directory=self.data_dir, default={},
         )
 
         self.status_mapping = data_handler.load_dict(
-            filename="status_mapping.json", directory=self.data_dir, default={}
+            filename="status_mapping.json", directory=self.data_dir, default={},
         )
 
     def _extract_jira_issues(
@@ -111,8 +109,7 @@ class WorkPackageMigration(BaseMigration):
         batch_size: int = 100,
         project_tracker: ProgressTracker = None,
     ) -> list[Issue]:
-        """
-        Extract issues from a Jira project.
+        """Extract issues from a Jira project.
 
         Args:
             project_key: The key of the Jira project to extract issues from
@@ -121,6 +118,7 @@ class WorkPackageMigration(BaseMigration):
 
         Returns:
             List of Jira issue dictionaries
+
         """
         self.logger.info(
             f"Extracting issues from Jira project {project_key}...",
@@ -172,14 +170,14 @@ class WorkPackageMigration(BaseMigration):
                         retry_count += 1
                         retry_msg = (
                             f"Error fetching issues for {project_key} "
-                            f"(attempt {retry_count}/{max_retries}): {str(e)}"
+                            f"(attempt {retry_count}/{max_retries}): {e!s}"
                         )
                         self.logger.warning(retry_msg, extra={"markup": True})
                         project_tracker.add_log_item(retry_msg)
 
                         if retry_count >= max_retries:
                             self.logger.error(
-                                f"Failed to fetch issues after {max_retries} attempts: {str(e)}",
+                                f"Failed to fetch issues after {max_retries} attempts: {e!s}",
                                 extra={"markup": True},
                             )
                             project_tracker.add_log_item(f"Failed to fetch issues after {max_retries} attempts")
@@ -220,7 +218,7 @@ class WorkPackageMigration(BaseMigration):
                 # Update trackers
                 retrieved_count = len(issues)
                 project_tracker.add_log_item(
-                    f"Retrieved {retrieved_count} issues from {project_key} (batch #{current_batch})"
+                    f"Retrieved {retrieved_count} issues from {project_key} (batch #{current_batch})",
                 )
 
                 # Only log at the NOTICE level for large projects with multiple batches
@@ -244,7 +242,7 @@ class WorkPackageMigration(BaseMigration):
                     extra={"markup": True},
                 )
             except Exception as e:
-                self.logger.error(f"Failed to save issues to file: {str(e)}", extra={"markup": True})
+                self.logger.error(f"Failed to save issues to file: {e!s}", extra={"markup": True})
                 # Try to save to alternate location as backup
                 backup_path = (
                     self.data_dir / f"jira_issues_{project_key}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -258,23 +256,22 @@ class WorkPackageMigration(BaseMigration):
                     )
                 except Exception as backup_error:
                     self.logger.critical(
-                        f"Also failed to save backup: {str(backup_error)}",
+                        f"Also failed to save backup: {backup_error!s}",
                         extra={"markup": True},
                     )
 
             return all_issues
 
         except Exception as e:
-            error_msg = f"Failed to extract issues from project {project_key}: {str(e)}"
+            error_msg = f"Failed to extract issues from project {project_key}: {e!s}"
             self.logger.error(error_msg, extra={"markup": True})
             if project_tracker:
                 project_tracker.add_log_item(error_msg)
             # Reraise with more context
-            raise RuntimeError(f"Jira issue extraction failed for project {project_key}: {str(e)}") from e
+            raise RuntimeError(f"Jira issue extraction failed for project {project_key}: {e!s}") from e
 
     def _prepare_work_package(self, jira_issue: dict[str, Any], project_id: int) -> dict[str, Any]:
-        """
-        Internal method to prepare a work package object from a Jira issue (without creating it).
+        """Internal method to prepare a work package object from a Jira issue (without creating it).
 
         Args:
             jira_issue: The Jira issue dictionary or jira.Issue object
@@ -282,6 +279,7 @@ class WorkPackageMigration(BaseMigration):
 
         Returns:
             Dictionary with work package data
+
         """
         # Extract the necessary fields from the Jira Issue object
         issue_type_id = jira_issue.fields.issuetype.id
@@ -324,7 +322,7 @@ class WorkPackageMigration(BaseMigration):
                     if watchers_data:
                         watchers = [watcher.get("name") for watcher in watchers_data]
                 except Exception as e:
-                    self.logger.exception(f"Failed to fetch watchers for issue {jira_issue.key}: {str(e)}")
+                    self.logger.exception(f"Failed to fetch watchers for issue {jira_issue.key}: {e!s}")
 
         # Extract custom fields
         custom_fields = {}
@@ -470,8 +468,7 @@ class WorkPackageMigration(BaseMigration):
         return work_package
 
     def prepare_work_package(self, jira_issue: dict[str, Any], project_id: int) -> dict[str, Any]:
-        """
-        Prepare a work package object from a Jira issue (without creating it).
+        """Prepare a work package object from a Jira issue (without creating it).
         Public method that calls the internal _prepare_work_package method.
 
         Args:
@@ -480,6 +477,7 @@ class WorkPackageMigration(BaseMigration):
 
         Returns:
             Dictionary with work package data
+
         """
         # In tests, we receive a dictionary directly
         if isinstance(jira_issue, dict):
@@ -515,9 +513,8 @@ class WorkPackageMigration(BaseMigration):
                     work_package["_links"]["status"] = {"href": f"/api/v3/statuses/{status_id}"}
 
             return work_package
-        else:
-            # It's a Jira issue object, use the internal method
-            return self._prepare_work_package(jira_issue, project_id)
+        # It's a Jira issue object, use the internal method
+        return self._prepare_work_package(jira_issue, project_id)
 
     def _map_issue_type(self, type_id: str | None = None, type_name: str | None = None) -> int | None:
         """Map Jira issue type to OpenProject type ID"""
@@ -548,11 +545,11 @@ class WorkPackageMigration(BaseMigration):
         return 1
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
-        """
-        Load custom field mapping from disk.
+        """Load custom field mapping from disk.
 
         Returns:
             Dictionary mapping Jira custom field IDs to OpenProject custom field IDs
+
         """
         mapping_file = os.path.join(self.data_dir, "custom_field_mapping.json")
         if os.path.exists(mapping_file):
@@ -561,15 +558,14 @@ class WorkPackageMigration(BaseMigration):
                     return json.load(f)
             except Exception as e:
                 self.logger.warning(
-                    f"Error loading custom field mapping: {str(e)}",
+                    f"Error loading custom field mapping: {e!s}",
                     extra={"markup": True},
                 )
 
         return {}
 
     def _process_custom_field_value(self, value: Any, field_type: str) -> Any:
-        """
-        Process a custom field value based on its type.
+        """Process a custom field value based on its type.
 
         Args:
             value: The value to process
@@ -577,6 +573,7 @@ class WorkPackageMigration(BaseMigration):
 
         Returns:
             Processed value suitable for OpenProject
+
         """
         if value is None:
             return None
@@ -584,7 +581,7 @@ class WorkPackageMigration(BaseMigration):
         if field_type in ("string", "text"):
             return str(value)
 
-        elif field_type == "date":
+        if field_type == "date":
             # Convert to ISO format if it's not already
             if isinstance(value, str):
                 # Check if already in ISO format
@@ -609,18 +606,18 @@ class WorkPackageMigration(BaseMigration):
                     return value
             return value
 
-        elif field_type == "list":
+        if field_type == "list":
             # Handle list fields (dropdown/select)
             if isinstance(value, dict) and "value" in value:
                 return value["value"]
-            elif isinstance(value, list):
+            if isinstance(value, list):
                 # If it's a multi-select list, take the first value
                 if value and isinstance(value[0], dict) and "value" in value[0]:
                     return [item["value"] for item in value]
                 return value
             return value
 
-        elif field_type == "user":
+        if field_type == "user":
             # Handle user custom fields
             if isinstance(value, dict) and "name" in value:
                 user_name = value["name"]
@@ -628,11 +625,11 @@ class WorkPackageMigration(BaseMigration):
                     return self.user_mapping[user_name]
             return None
 
-        elif field_type == "boolean":
+        if field_type == "boolean":
             # Convert to boolean
             if isinstance(value, bool):
                 return value
-            elif isinstance(value, str):
+            if isinstance(value, str):
                 return value.lower() in ("true", "yes", "1")
             return bool(value)
 
@@ -640,8 +637,7 @@ class WorkPackageMigration(BaseMigration):
         return value
 
     def _migrate_work_packages(self) -> dict[str, Any]:
-        """
-        Migrate issues from Jira to work packages in OpenProject.
+        """Migrate issues from Jira to work packages in OpenProject.
 
         This method handles the complete migration process, including:
         - Loading necessary mappings
@@ -651,6 +647,7 @@ class WorkPackageMigration(BaseMigration):
 
         Returns:
             Dictionary mapping Jira issue IDs to OpenProject work package IDs
+
         """
         self.logger.info("Starting work package migration...", extra={"markup": True})
 
@@ -664,7 +661,7 @@ class WorkPackageMigration(BaseMigration):
 
         # Get list of Jira projects to process
         jira_projects = list(
-            {entry.get("jira_key") for entry in self.project_mapping.values() if entry.get("jira_key")}
+            {entry.get("jira_key") for entry in self.project_mapping.values() if entry.get("jira_key")},
         )
 
         if not jira_projects:
@@ -696,7 +693,7 @@ class WorkPackageMigration(BaseMigration):
                         extra={"markup": True},
                     )
             except Exception as e:
-                self.logger.warning(f"Error loading migration state: {str(e)}", extra={"markup": True})
+                self.logger.warning(f"Error loading migration state: {e!s}", extra={"markup": True})
                 # Create a backup of the corrupted state file if it exists
                 if os.path.exists(migration_state_file):
                     backup_file = f"{migration_state_file}.bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -708,7 +705,7 @@ class WorkPackageMigration(BaseMigration):
                         )
                     except Exception as backup_err:
                         self.logger.warning(
-                            f"Failed to create backup of state file: {str(backup_err)}",
+                            f"Failed to create backup of state file: {backup_err!s}",
                             extra={"markup": True},
                         )
 
@@ -751,7 +748,7 @@ class WorkPackageMigration(BaseMigration):
                         )
                 except Exception as e:
                     self.logger.warning(
-                        f"Error saving migration state: {str(e)}",
+                        f"Error saving migration state: {e!s}",
                         extra={"markup": True},
                     )
                     # Try alternate location if main save fails
@@ -773,7 +770,7 @@ class WorkPackageMigration(BaseMigration):
                         )
                     except Exception as alt_err:
                         self.logger.error(
-                            f"Failed to save migration state to alternate location: {str(alt_err)}",
+                            f"Failed to save migration state to alternate location: {alt_err!s}",
                             extra={"markup": True},
                         )
 
@@ -814,7 +811,7 @@ class WorkPackageMigration(BaseMigration):
                         continue
                 except Exception as e:
                     self.logger.error(
-                        f"Failed to extract issues for project {project_key}: {str(e)}",
+                        f"Failed to extract issues for project {project_key}: {e!s}",
                         extra={"markup": True},
                     )
                     project_tracker.add_log_item(f"Failed: {project_key} (issue extraction error)")
@@ -824,7 +821,7 @@ class WorkPackageMigration(BaseMigration):
                             "project_key": project_key,
                             "reason": "extraction_error",
                             "error": str(e),
-                        }
+                        },
                     )
                     # Continue with next project instead of failing completely
                     continue
@@ -877,7 +874,7 @@ class WorkPackageMigration(BaseMigration):
                         except Exception as e:
                             # Log the error with details about the issue
                             self.logger.error(
-                                f"Error preparing work package for issue {issue_key}: {str(e)}",
+                                f"Error preparing work package for issue {issue_key}: {e!s}",
                                 extra={"markup": True},
                             )
                             self.logger.debug(f"Issue type: {type(issue)}", extra={"markup": True})
@@ -887,7 +884,7 @@ class WorkPackageMigration(BaseMigration):
 
                     except Exception as e:
                         self.logger.error(
-                            f"Error processing issue at index {i}: {str(e)}",
+                            f"Error processing issue at index {i}: {e!s}",
                             extra={"markup": True},
                         )
                         preparation_errors += 1
@@ -921,7 +918,7 @@ class WorkPackageMigration(BaseMigration):
                 if op_project_id and required_type_ids:
                     # A simpler, more direct approach with fewer Rails client calls
                     self.logger.info(
-                        f"Enabling work package types {list(required_type_ids)} " f"for project {op_project_id}",
+                        f"Enabling work package types {list(required_type_ids)} for project {op_project_id}",
                         extra={"markup": True},
                     )
 
@@ -989,19 +986,19 @@ class WorkPackageMigration(BaseMigration):
                     while retry_count < max_retries:
                         try:
                             types_result = self.op_client.rails_client.execute_query(
-                                enable_types_header + enable_types_script
+                                enable_types_header + enable_types_script,
                             )
                             break
                         except Exception as e:
                             retry_count += 1
                             self.logger.warning(
-                                f"Error enabling types (attempt {retry_count}/{max_retries}): {str(e)}",
+                                f"Error enabling types (attempt {retry_count}/{max_retries}): {e!s}",
                                 extra={"markup": True},
                             )
 
                             if retry_count >= max_retries:
                                 self.logger.error(
-                                    f"Failed to enable types after {max_retries} attempts: {str(e)}",
+                                    f"Failed to enable types after {max_retries} attempts: {e!s}",
                                     extra={"markup": True},
                                 )
                                 project_tracker.add_log_item(f"Warning: Failed to enable types for {project_key}")
@@ -1375,74 +1372,73 @@ class WorkPackageMigration(BaseMigration):
                                 "error": ", ".join(error.get("errors", [])),
                                 "error_type": error.get("error_type"),
                             }
-                else:
-                    # If direct output doesn't work, try to get the result file
-                    if self.op_client.rails_client.transfer_file_from_container(
-                        result_file_container, result_file_local
-                    ):
-                        try:
-                            # Also save a debug copy with timestamp
-                            debug_result_path = os.path.join(
-                                self.data_dir, f"wp_result_{project_key}_{debug_timestamp}.json"
-                            )
-                            shutil.copy2(result_file_local, debug_result_path)
-                            self.logger.info(
-                                f"Saved debug copy of result file to {debug_result_path}",
-                                extra={"markup": True},
-                            )
-
-                            with open(result_file_local) as f:
-                                result_data = json.load(f)
-
-                                if result_data.get("status") == "success":
-                                    created_wps = result_data.get("created", [])
-                                    created_count = len(created_wps)
-                                    errors = result_data.get("errors", [])
-                                    updated_custom_fields = result_data.get("updated_custom_fields", [])
-
-                                    # Log any custom fields that were updated
-                                    self.log_custom_field_updates(updated_custom_fields)
-
-                                    # Update the mapping
-                                    for wp in created_wps:
-                                        jira_id = wp.get("jira_id")
-                                        if jira_id:
-                                            self.work_package_mapping[jira_id] = wp
-
-                                    # Handle errors
-                                    for error in errors:
-                                        jira_id = error.get("jira_id")
-                                        if jira_id:
-                                            self.work_package_mapping[jira_id] = {
-                                                "jira_id": jira_id,
-                                                "jira_key": error.get("jira_key"),
-                                                "openproject_id": None,
-                                                "subject": error.get("subject"),
-                                                "error": ", ".join(error.get("errors", [])),
-                                                "error_type": error.get("error_type"),
-                                            }
-                        except Exception as e:
-                            self.logger.error(
-                                f"Error processing result file: {str(e)}",
-                                extra={"markup": True},
-                            )
-                    else:
-                        # Last resort - try to parse the console output
-                        self.logger.warning(
-                            "Could not get result file - parsing console output",
+                # If direct output doesn't work, try to get the result file
+                elif self.op_client.rails_client.transfer_file_from_container(
+                    result_file_container, result_file_local,
+                ):
+                    try:
+                        # Also save a debug copy with timestamp
+                        debug_result_path = os.path.join(
+                            self.data_dir, f"wp_result_{project_key}_{debug_timestamp}.json",
+                        )
+                        shutil.copy2(result_file_local, debug_result_path)
+                        self.logger.info(
+                            f"Saved debug copy of result file to {debug_result_path}",
                             extra={"markup": True},
                         )
-                        if isinstance(output, str):
-                            created_matches = re.findall(
-                                r"Created work package #(\d+): (.+?)$",
-                                output,
-                                re.MULTILINE,
-                            )
-                            created_count = len(created_matches)
-                            self.logger.info(
-                                f"Found {created_count} created work packages in console output",
-                                extra={"markup": True},
-                            )
+
+                        with open(result_file_local) as f:
+                            result_data = json.load(f)
+
+                            if result_data.get("status") == "success":
+                                created_wps = result_data.get("created", [])
+                                created_count = len(created_wps)
+                                errors = result_data.get("errors", [])
+                                updated_custom_fields = result_data.get("updated_custom_fields", [])
+
+                                # Log any custom fields that were updated
+                                self.log_custom_field_updates(updated_custom_fields)
+
+                                # Update the mapping
+                                for wp in created_wps:
+                                    jira_id = wp.get("jira_id")
+                                    if jira_id:
+                                        self.work_package_mapping[jira_id] = wp
+
+                                # Handle errors
+                                for error in errors:
+                                    jira_id = error.get("jira_id")
+                                    if jira_id:
+                                        self.work_package_mapping[jira_id] = {
+                                            "jira_id": jira_id,
+                                            "jira_key": error.get("jira_key"),
+                                            "openproject_id": None,
+                                            "subject": error.get("subject"),
+                                            "error": ", ".join(error.get("errors", [])),
+                                            "error_type": error.get("error_type"),
+                                        }
+                    except Exception as e:
+                        self.logger.error(
+                            f"Error processing result file: {e!s}",
+                            extra={"markup": True},
+                        )
+                else:
+                    # Last resort - try to parse the console output
+                    self.logger.warning(
+                        "Could not get result file - parsing console output",
+                        extra={"markup": True},
+                    )
+                    if isinstance(output, str):
+                        created_matches = re.findall(
+                            r"Created work package #(\d+): (.+?)$",
+                            output,
+                            re.MULTILINE,
+                        )
+                        created_count = len(created_matches)
+                        self.logger.info(
+                            f"Found {created_count} created work packages in console output",
+                            extra={"markup": True},
+                        )
 
                 self.logger.success(
                     f"Created {created_count} work packages for project {project_key} (errors: {len(errors)})",
@@ -1474,7 +1470,7 @@ class WorkPackageMigration(BaseMigration):
                     indent=2,
                 )
         except Exception as e:
-            self.logger.warning(f"Error saving final migration state: {str(e)}", extra={"markup": True})
+            self.logger.warning(f"Error saving final migration state: {e!s}", extra={"markup": True})
 
         self.logger.success("Work package migration completed", extra={"markup": True})
         self.logger.info(f"Total issues processed: {total_issues}", extra={"markup": True})
@@ -1483,11 +1479,11 @@ class WorkPackageMigration(BaseMigration):
         return self.work_package_mapping
 
     def analyze_work_package_mapping(self) -> dict[str, Any]:
-        """
-        Analyze the work package mapping to identify potential issues.
+        """Analyze the work package mapping to identify potential issues.
 
         Returns:
             Dictionary with analysis results
+
         """
         self.logger.info("Analyzing work package mapping...", extra={"markup": True})
 
@@ -1497,7 +1493,7 @@ class WorkPackageMigration(BaseMigration):
                     self.work_package_mapping = json.load(f)
             except Exception as e:
                 self.logger.error(
-                    f"Failed to load work package mapping: {str(e)}",
+                    f"Failed to load work package mapping: {e!s}",
                     extra={"markup": True},
                 )
                 return {"status": "error", "message": str(e)}
@@ -1551,7 +1547,7 @@ class WorkPackageMigration(BaseMigration):
                     error_types[error_type] = error_types.get(error_type, 0) + 1
 
                     # Collect specific validation errors
-                    if "validation_errors" in wp_data and wp_data["validation_errors"]:
+                    if wp_data.get("validation_errors"):
                         for error in wp_data["validation_errors"]:
                             # Create a simplified key for the error
                             simple_error = error.lower()
@@ -1578,7 +1574,7 @@ class WorkPackageMigration(BaseMigration):
                     "count": len(failed_creations),
                     "error_types": error_types,
                     "validation_errors": validation_errors,
-                }
+                },
             )
 
         # Prepare analysis results
@@ -1595,12 +1591,12 @@ class WorkPackageMigration(BaseMigration):
         }
 
     def _save_to_json(self, data: Any, filename: str):
-        """
-        Save data to a JSON file in the data directory.
+        """Save data to a JSON file in the data directory.
 
         Args:
             data: The data to save
             filename: The name of the file to save to
+
         """
         # Convert Jira Issue objects to dictionaries if needed
         if isinstance(data, list) and data and hasattr(data[0], "raw"):
@@ -1649,16 +1645,15 @@ class WorkPackageMigration(BaseMigration):
                 "_type": "WorkPackage",
                 "subject": record_data.get("subject"),
             }
-        else:
-            self.logger.error(f"Failed to create WP for {jira_key} via Rails client: {error_message}")
-            return None
+        self.logger.error(f"Failed to create WP for {jira_key} via Rails client: {error_message}")
+        return None
 
     def run(self) -> ComponentResult:
-        """
-        Run the work package migration process.
+        """Run the work package migration process.
 
         Returns:
             ComponentResult with migration results
+
         """
         self.logger.info("Starting work package migration", extra={"markup": True})
         start_time = datetime.now()
@@ -1714,7 +1709,7 @@ class WorkPackageMigration(BaseMigration):
                             issues_data = json.load(f)
                     except Exception as e:
                         self.logger.warning(
-                            f"Error loading migration issues file: {str(e)}",
+                            f"Error loading migration issues file: {e!s}",
                             extra={"markup": True},
                         )
 
@@ -1729,7 +1724,7 @@ class WorkPackageMigration(BaseMigration):
                         "type": "warning",
                         "message": warning_message,
                         "missing_mappings": missing_mappings,
-                    }
+                    },
                 )
 
                 try:
@@ -1737,7 +1732,7 @@ class WorkPackageMigration(BaseMigration):
                         json.dump(issues_data, f, indent=2)
                 except Exception as e:
                     self.logger.warning(
-                        f"Error writing to migration issues file: {str(e)}",
+                        f"Error writing to migration issues file: {e!s}",
                         extra={"markup": True},
                     )
 
@@ -1746,7 +1741,7 @@ class WorkPackageMigration(BaseMigration):
             try:
                 migration_results = self._migrate_work_packages()
             except Exception as e:
-                error_message = f"Work package migration failed with error: {str(e)}"
+                error_message = f"Work package migration failed with error: {e!s}"
                 self.logger.error(error_message, extra={"markup": True})
 
                 # Record the error in the migration issues file
@@ -1759,7 +1754,7 @@ class WorkPackageMigration(BaseMigration):
                             issues_data = json.load(f)
                     except Exception as read_err:
                         self.logger.warning(
-                            f"Error loading migration issues file: {str(read_err)}",
+                            f"Error loading migration issues file: {read_err!s}",
                             extra={"markup": True},
                         )
 
@@ -1775,7 +1770,7 @@ class WorkPackageMigration(BaseMigration):
                         "message": error_message,
                         "error": str(e),
                         "traceback": str(getattr(e, "__traceback__", "No traceback available")),
-                    }
+                    },
                 )
 
                 try:
@@ -1783,7 +1778,7 @@ class WorkPackageMigration(BaseMigration):
                         json.dump(issues_data, f, indent=2)
                 except Exception as write_err:
                     self.logger.warning(
-                        f"Error writing to migration issues file: {str(write_err)}",
+                        f"Error writing to migration issues file: {write_err!s}",
                         extra={"markup": True},
                     )
 
@@ -1832,7 +1827,7 @@ class WorkPackageMigration(BaseMigration):
             end_time = datetime.now()
             duration_seconds = (end_time - start_time).total_seconds()
 
-            error_message = f"Unexpected error in work package migration: {str(e)}"
+            error_message = f"Unexpected error in work package migration: {e!s}"
             self.logger.critical(error_message, extra={"markup": True})
 
             # Try to save error information
@@ -1853,7 +1848,7 @@ class WorkPackageMigration(BaseMigration):
                 self.logger.info(f"Error details saved to {error_file}", extra={"markup": True})
             except Exception as save_err:
                 self.logger.warning(
-                    f"Could not save error details: {str(save_err)}",
+                    f"Could not save error details: {save_err!s}",
                     extra={"markup": True},
                 )
 
@@ -1865,11 +1860,11 @@ class WorkPackageMigration(BaseMigration):
             )
 
     def log_custom_field_updates(self, updated_fields):
-        """
-        Log information about custom fields that were updated during migration.
+        """Log information about custom fields that were updated during migration.
 
         Args:
             updated_fields: List of custom field names and values that were updated
+
         """
         if not updated_fields:
             return
@@ -1891,14 +1886,14 @@ class WorkPackageMigration(BaseMigration):
                 self.logger.info(f"  - {field_value}", extra={"markup": True})
 
     def _collect_missing_custom_field_values(self, work_packages_data):
-        """
-        Collect custom field values from work packages that might need to be added to OpenProject.
+        """Collect custom field values from work packages that might need to be added to OpenProject.
 
         Args:
             work_packages_data: List of prepared work package dictionaries
 
         Returns:
             Dictionary mapping custom field names to sets of values to add
+
         """
         self.logger.info("Checking for missing custom field values...")
 
@@ -1909,7 +1904,7 @@ class WorkPackageMigration(BaseMigration):
 
         if not isinstance(work_packages_data, list):
             self.logger.error(
-                f"Expected work_packages_data to be a list, got {type(work_packages_data)}", extra={"markup": True}
+                f"Expected work_packages_data to be a list, got {type(work_packages_data)}", extra={"markup": True},
             )
             return {}
 
@@ -1933,7 +1928,7 @@ class WorkPackageMigration(BaseMigration):
 
             self.logger.success(f"Successfully retrieved {len(custom_fields)} custom fields", extra={"markup": True})
         except Exception as e:
-            self.logger.error(f"Error retrieving custom fields from OpenProject: {str(e)}", extra={"markup": True})
+            self.logger.error(f"Error retrieving custom fields from OpenProject: {e!s}", extra={"markup": True})
             return {}
 
         # Create a dictionary of custom field ID to name and allowed values
@@ -2013,7 +2008,7 @@ class WorkPackageMigration(BaseMigration):
                             self.logger.debug(f"Found missing value '{value}' for field '{cf_name}'")
                 except Exception as e:
                     self.logger.warning(
-                        f"Error processing custom field in work package {i}: {str(e)}", extra={"markup": True}
+                        f"Error processing custom field in work package {i}: {e!s}", extra={"markup": True},
                     )
                     continue
 
@@ -2032,14 +2027,14 @@ class WorkPackageMigration(BaseMigration):
         return result
 
     def _update_custom_field_allowed_values(self, missing_values):
-        """
-        Update OpenProject custom fields with missing values.
+        """Update OpenProject custom fields with missing values.
 
         Args:
             missing_values: Dictionary mapping field names to lists of values to add
 
         Returns:
             Boolean indicating if all updates were successful
+
         """
         # Add detailed debugging of the input
         self.logger.debug(f"_update_custom_field_allowed_values received: type={type(missing_values)}")
@@ -2047,7 +2042,7 @@ class WorkPackageMigration(BaseMigration):
         # Check if missing_values is a dictionary
         if not isinstance(missing_values, dict):
             self.logger.error(
-                f"Expected missing_values to be a dictionary, got {type(missing_values)}", extra={"markup": True}
+                f"Expected missing_values to be a dictionary, got {type(missing_values)}", extra={"markup": True},
             )
             # Try to handle it if it's a string that might be JSON
             if isinstance(missing_values, str):
@@ -2081,7 +2076,7 @@ class WorkPackageMigration(BaseMigration):
             # Ensure values is a list
             if not isinstance(values, list):
                 self.logger.warning(
-                    f"Values for field '{field_name}' is not a list, attempting to convert", extra={"markup": True}
+                    f"Values for field '{field_name}' is not a list, attempting to convert", extra={"markup": True},
                 )
                 if isinstance(values, str):
                     # Try to parse as JSON if it's a string
@@ -2169,7 +2164,7 @@ class WorkPackageMigration(BaseMigration):
                 all_success = False
             elif "SKIP:" in output:
                 self.logger.warning(
-                    f"Skipped updating custom field '{field_name}': not a list type", extra={"markup": True}
+                    f"Skipped updating custom field '{field_name}': not a list type", extra={"markup": True},
                 )
             elif "INFO:" in output:
                 self.logger.info(f"No new values needed for custom field '{field_name}'", extra={"markup": True})
@@ -2177,14 +2172,14 @@ class WorkPackageMigration(BaseMigration):
         return all_success
 
     def _format_values_list(self, values):
-        """
-        Format a list of values for logging.
+        """Format a list of values for logging.
 
         Args:
             values: List of values to format
 
         Returns:
             Formatted string of values
+
         """
         if not values:
             return ""
@@ -2196,11 +2191,11 @@ class WorkPackageMigration(BaseMigration):
         return formatted
 
     def migrate_work_packages(self) -> dict[str, Any]:
-        """
-        Migrate work packages from Jira to OpenProject.
+        """Migrate work packages from Jira to OpenProject.
         Public method that calls the internal _migrate_work_packages method.
 
         Returns:
             Dictionary with migration results
+
         """
         return self._migrate_work_packages()

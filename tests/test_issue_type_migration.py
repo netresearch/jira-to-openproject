@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""
-Test module for IssueTypeMigration.
+"""Test module for IssueTypeMigration.
 
 This module contains test cases for validating the issue type migration from Jira to OpenProject.
 """
 
 import json
 import unittest
-from typing import Any, Dict, cast
+from typing import Any, cast
 from unittest.mock import MagicMock, call, mock_open, patch
 
 from src.migrations.issue_type_migration import IssueTypeMigration
@@ -26,28 +25,28 @@ class TestIssueTypeMigration(unittest.TestCase):
                 "id": "10000",
                 "name": "Bug",
                 "description": "A bug in the software",
-                "iconUrl": "https://jira.example.com/images/icons/bug.svg",
+                "iconUrl": "https://jira.local/images/icons/bug.svg",
                 "subtask": False,
             },
             {
                 "id": "10001",
                 "name": "Task",
                 "description": "A task that needs to be done",
-                "iconUrl": "https://jira.example.com/images/icons/task.svg",
+                "iconUrl": "https://jira.local/images/icons/task.svg",
                 "subtask": False,
             },
             {
                 "id": "10002",
                 "name": "Epic",
                 "description": "A big user story",
-                "iconUrl": "https://jira.example.com/images/icons/epic.svg",
+                "iconUrl": "https://jira.local/images/icons/epic.svg",
                 "subtask": False,
             },
             {
                 "id": "10003",
                 "name": "Custom Type",
                 "description": "A custom issue type",
-                "iconUrl": "https://jira.example.com/images/icons/custom.svg",
+                "iconUrl": "https://jira.local/images/icons/custom.svg",
                 "subtask": False,
             },
         ]
@@ -215,7 +214,7 @@ class TestIssueTypeMigration(unittest.TestCase):
     @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.IssueTypeMigration._save_to_json")
     def test_migrate_issue_types_via_rails(
-        self, mock_save_to_json: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock
+        self, mock_save_to_json: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock,
     ) -> None:
         """Test the migrate_issue_types_via_rails method with fully mocked file operations."""
         # Set up mocks
@@ -237,8 +236,8 @@ class TestIssueTypeMigration(unittest.TestCase):
                         {
                             "created": [{"id": 4, "name": "Epic", "status": "created", "jira_type_name": "Epic"}],
                             "errors": [],
-                        }
-                    )
+                        },
+                    ),
                 ),
             ),
             patch("json.dump"),
@@ -271,7 +270,7 @@ class TestIssueTypeMigration(unittest.TestCase):
                     "openproject_id": None,
                     "matched_by": "default_mapping_to_create",
                     "color": "#9B59B6",
-                }
+                },
             }
 
             # Call the method
@@ -324,7 +323,7 @@ class TestIssueTypeMigration(unittest.TestCase):
             # Set test data
             migration.jira_issue_types = self.jira_issue_types
             migration.op_work_package_types = self.op_work_package_types
-            migration.issue_type_mapping = cast(dict[str, dict[str, Any]], self.expected_mapping)
+            migration.issue_type_mapping = cast("dict[str, dict[str, Any]]", self.expected_mapping)
 
             # Call method
             result = migration.migrate_issue_types()
@@ -360,7 +359,7 @@ class TestIssueTypeMigration(unittest.TestCase):
 
         # Create instance without rails_console parameter
         migration = IssueTypeMigration(jira_client=mock_jira_instance, op_client=mock_op_instance)
-        migration.issue_type_mapping = cast(dict[str, dict[str, Any]], self.expected_mapping)
+        migration.issue_type_mapping = cast("dict[str, dict[str, Any]]", self.expected_mapping)
 
         # Call method
         result = migration.analyze_issue_type_mapping()
@@ -419,7 +418,7 @@ class TestIssueTypeMigration(unittest.TestCase):
                     "openproject_name": "Task",
                     "matched_by": "none",
                 },
-            }
+            },
         )
 
         # Mock OpenProject client to return work package types that match EXACTLY the names
@@ -511,8 +510,7 @@ class TestIssueTypeMigration(unittest.TestCase):
 
 
 def issue_type_migration_test_steps() -> Any:
-    """
-    Testing steps for issue type migration validation.
+    """Testing steps for issue type migration validation.
 
     These steps should be executed in a real environment to validate
     the issue type migration functionality:

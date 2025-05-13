@@ -1,3 +1,2 @@
-"""
-Migration scripts package for the Jira to OpenProject migration.
+"""Migration scripts package for the Jira to OpenProject migration.
 """

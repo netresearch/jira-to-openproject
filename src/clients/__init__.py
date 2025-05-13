@@ -1,5 +1,4 @@
-"""
-API clients package for the Jira to OpenProject migration.
+"""API clients package for the Jira to OpenProject migration.
 """
 
 from .jira_client import JiraClient

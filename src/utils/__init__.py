@@ -1,3 +1,2 @@
-"""
-Utility modules for common operations.
+"""Utility modules for common operations.
 """

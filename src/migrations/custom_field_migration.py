@@ -1,5 +1,4 @@
-"""
-Custom field migration module for Jira to OpenProject migration.
+"""Custom field migration module for Jira to OpenProject migration.
 Handles the migration of custom fields from Jira to OpenProject.
 """
 
@@ -23,8 +22,7 @@ console = console
 
 
 class CustomFieldMigration(BaseMigration):
-    """
-    Handles the migration of custom fields from Jira to OpenProject.
+    """Handles the migration of custom fields from Jira to OpenProject.
 
     This class supports two approaches:
     1. Generate a Ruby script for manual execution via Rails console (traditional approach)
@@ -37,13 +35,13 @@ class CustomFieldMigration(BaseMigration):
         op_client: OpenProjectClient | None = None,
         rails_console: OpenProjectClient | None = None,
     ) -> None:
-        """
-        Initialize the custom field migration process.
+        """Initialize the custom field migration process.
 
         Args:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
             rails_console: Initialized OpenProjectClient instance (optional)
+
         """
         super().__init__(jira_client, op_client)
         self.jira_custom_fields: list = []
@@ -69,14 +67,14 @@ class CustomFieldMigration(BaseMigration):
         self.logger.info(f"Loaded analysis with {len(self.analysis)} keys: {list(self.analysis.keys())}")
 
     def extract_jira_custom_fields(self) -> list:
-        """
-        Extract custom field information from Jira.
+        """Extract custom field information from Jira.
 
         Returns:
             List of Jira custom fields
 
         Raises:
             MigrationError: If extraction fails
+
         """
         custom_fields_file = os.path.join(self.data_dir, "jira_custom_fields.json")
 
@@ -128,11 +126,11 @@ class CustomFieldMigration(BaseMigration):
 
                         if allowed_values:
                             self.logger.debug(
-                                f"Found {len(allowed_values)} options for field '{field.get('name')}' (ID: {field_id})"
+                                f"Found {len(allowed_values)} options for field '{field.get('name')}' (ID: {field_id})",
                             )
                             enhanced_field["allowed_values"] = allowed_values
                     except Exception as e:
-                        self.logger.warning(f"Could not retrieve options for field '{field.get('name')}': {str(e)}")
+                        self.logger.warning(f"Could not retrieve options for field '{field.get('name')}': {e!s}")
 
                 enhanced_fields.append(enhanced_field)
 
@@ -144,19 +142,19 @@ class CustomFieldMigration(BaseMigration):
 
             return self.jira_custom_fields
         except Exception as e:
-            error_msg = f"Failed to extract custom fields from Jira: {str(e)}"
+            error_msg = f"Failed to extract custom fields from Jira: {e!s}"
             self.logger.error(error_msg)
             raise MigrationError(error_msg) from e
 
     def extract_openproject_custom_fields(self) -> list:
-        """
-        Extract custom field information from OpenProject and save to a JSON file.
+        """Extract custom field information from OpenProject and save to a JSON file.
 
         Returns:
             List of custom field dictionaries retrieved from OpenProject
 
         Raises:
             MigrationError: If extraction fails
+
         """
         self.logger.info("Starting OpenProject custom field extraction...")
 
@@ -172,7 +170,7 @@ class CustomFieldMigration(BaseMigration):
             except json.JSONDecodeError:
                 self.logger.warning(f"Existing file {output_file} is invalid. Re-extracting data.")
             except Exception as e:
-                self.logger.error(f"Error reading existing data: {str(e)}. Re-extracting data.")
+                self.logger.error(f"Error reading existing data: {e!s}. Re-extracting data.")
 
         self.logger.info("Retrieving custom fields from OpenProject via Rails console...")
 
@@ -189,19 +187,19 @@ class CustomFieldMigration(BaseMigration):
 
             return all_fields
         except Exception as e:
-            error_msg = f"Failed to extract custom fields from OpenProject: {str(e)}"
+            error_msg = f"Failed to extract custom fields from OpenProject: {e!s}"
             self.logger.error(error_msg)
             raise MigrationError(error_msg) from e
 
     def map_jira_field_to_openproject_format(self, jira_field: dict[str, Any]) -> str:
-        """
-        Map a Jira custom field type to the closest OpenProject field format.
+        """Map a Jira custom field type to the closest OpenProject field format.
 
         Args:
             jira_field: Jira custom field information
 
         Returns:
             OpenProject custom field format
+
         """
         schema = jira_field.get("schema", {})
         jira_type = schema.get("type", "")
@@ -242,44 +240,39 @@ class CustomFieldMigration(BaseMigration):
         }
 
         if jira_custom_type:
-            if "multiselect" in jira_custom_type.lower() or "checkbox" in jira_custom_type.lower():
+            if "multiselect" in jira_custom_type.lower() or "checkbox" in jira_custom_type.lower() or "select" in jira_custom_type.lower() or "radio" in jira_custom_type.lower():
                 return "list"
-            elif "select" in jira_custom_type.lower() or "radio" in jira_custom_type.lower():
-                return "list"
-            elif "date" in jira_custom_type.lower():
+            if "date" in jira_custom_type.lower():
                 return "date"
-            elif "number" in jira_custom_type.lower() or "float" in jira_custom_type.lower():
+            if "number" in jira_custom_type.lower() or "float" in jira_custom_type.lower():
                 return "float"
-            elif "integer" in jira_custom_type.lower():
+            if "integer" in jira_custom_type.lower():
                 return "int"
-            elif "user" in jira_custom_type.lower():
+            if "user" in jira_custom_type.lower():
                 return "user"
-            elif "text" in jira_custom_type.lower() or "string" in jira_custom_type.lower():
+            if "text" in jira_custom_type.lower() or "string" in jira_custom_type.lower() or "url" in jira_custom_type.lower():
                 return "text"
-            elif "url" in jira_custom_type.lower():
-                return "text"
-            elif "boolean" in jira_custom_type.lower():
+            if "boolean" in jira_custom_type.lower():
                 return "bool"
 
         if jira_type == "array":
             items_type = schema.get("items", "")
             if items_type == "string":
                 return "list"
-            elif items_type == "user":
+            if items_type == "user":
                 return "user"
-            elif items_type == "date":
+            if items_type == "date":
                 return "date"
-            else:
-                return "list"
+            return "list"
 
         return op_format_map.get(jira_type, op_format_map.get("default", "text"))
 
     def create_custom_field_mapping(self) -> dict[str, Any]:
-        """
-        Create a mapping between Jira and OpenProject custom fields.
+        """Create a mapping between Jira and OpenProject custom fields.
 
         Returns:
             Dictionary mapping Jira custom field IDs to OpenProject field information
+
         """
         self.logger.info("Creating custom field mapping...")
 
@@ -296,7 +289,7 @@ class CustomFieldMigration(BaseMigration):
             jira_name = jira_field.get("name", "")
             jira_name_lower = jira_name.lower()
 
-            op_field = op_fields_by_name.get(jira_name_lower, None)
+            op_field = op_fields_by_name.get(jira_name_lower)
 
             if op_field:
                 mapping[jira_id] = {
@@ -310,33 +303,32 @@ class CustomFieldMigration(BaseMigration):
                     "matched_by": "name",
                 }
                 return None
-            else:
-                op_format = self.map_jira_field_to_openproject_format(jira_field)
+            op_format = self.map_jira_field_to_openproject_format(jira_field)
 
-                mapping_entry = {
-                    "jira_id": jira_id,
-                    "jira_name": jira_name,
-                    "jira_type": jira_field.get("schema", {}).get("type", ""),
-                    "jira_custom_type": jira_field.get("schema", {}).get("custom", ""),
-                    "openproject_id": None,
-                    "openproject_name": jira_name,
-                    "openproject_type": op_format,
-                    "matched_by": "create",
-                }
+            mapping_entry = {
+                "jira_id": jira_id,
+                "jira_name": jira_name,
+                "jira_type": jira_field.get("schema", {}).get("type", ""),
+                "jira_custom_type": jira_field.get("schema", {}).get("custom", ""),
+                "openproject_id": None,
+                "openproject_name": jira_name,
+                "openproject_type": op_format,
+                "matched_by": "create",
+            }
 
-                if op_format == "list" and "allowed_values" in jira_field:
-                    allowed_values = jira_field.get("allowed_values", [])
-                    if allowed_values:
-                        mapping_entry["possible_values"] = allowed_values
-                        field_info = f"{jira_name} (Format: {op_format}, Options: {len(allowed_values)})"
-                    else:
-                        field_info = f"{jira_name} (Format: {op_format}, No options)"
+            if op_format == "list" and "allowed_values" in jira_field:
+                allowed_values = jira_field.get("allowed_values", [])
+                if allowed_values:
+                    mapping_entry["possible_values"] = allowed_values
+                    field_info = f"{jira_name} (Format: {op_format}, Options: {len(allowed_values)})"
                 else:
-                    field_info = f"{jira_name} (Format: {op_format})"
+                    field_info = f"{jira_name} (Format: {op_format}, No options)"
+            else:
+                field_info = f"{jira_name} (Format: {op_format})"
 
-                mapping[jira_id] = mapping_entry
+            mapping[jira_id] = mapping_entry
 
-                return field_info
+            return field_info
 
         with ProgressTracker(
             description="Creating custom field mapping",
@@ -371,14 +363,14 @@ class CustomFieldMigration(BaseMigration):
         return mapping
 
     def create_custom_field_via_rails(self, field_data: dict) -> dict[str, Any]:
-        """
-        Create a custom field in OpenProject via Rails console.
+        """Create a custom field in OpenProject via Rails console.
 
         Args:
             field_data: Custom field definition
 
         Returns:
             dict: Result of the operation
+
         """
         field_type = field_data.get("openproject_type", "string")
         field_name = field_data.get("openproject_name", field_data.get("jira_name", "Unnamed Field"))
@@ -399,7 +391,7 @@ class CustomFieldMigration(BaseMigration):
             else:
                 possible_values_ruby = '["Default option"]'
                 self.logger.warning(
-                    f"Custom field '{field_name}' is a list type but has no options. Adding a default option."
+                    f"Custom field '{field_name}' is a list type but has no options. Adding a default option.",
                 )
 
         # Header section with Python variable interpolation
@@ -481,6 +473,7 @@ class CustomFieldMigration(BaseMigration):
 
         Returns:
             Boolean indicating success or failure
+
         """
         self.logger.info(f"Migrating {len(fields_to_migrate)} custom fields using batch migration")
 
@@ -746,33 +739,32 @@ class CustomFieldMigration(BaseMigration):
             error_count = output.get("error_count", 0)
 
             self.logger.info(f"Retrieved results with {len(results)} entries")
-        else:
-            # If direct output doesn't work, try to get the result file
-            if rails_client.transfer_file_from_container(result_file_container, result_file_local):
-                try:
-                    with open(result_file_local) as f:
-                        result_data = json.load(f)
+        # If direct output doesn't work, try to get the result file
+        elif rails_client.transfer_file_from_container(result_file_container, result_file_local):
+            try:
+                with open(result_file_local) as f:
+                    result_data = json.load(f)
 
-                        if result_data.get("status") == "success":
-                            results = []
-                            results.extend(result_data.get("created", []))
-                            results.extend(result_data.get("existing", []))
-                            results.extend(result_data.get("errors", []))
+                    if result_data.get("status") == "success":
+                        results = []
+                        results.extend(result_data.get("created", []))
+                        results.extend(result_data.get("existing", []))
+                        results.extend(result_data.get("errors", []))
 
-                            created_count = result_data.get("created_count", 0)
-                            existing_count = result_data.get("existing_count", 0)
-                            error_count = result_data.get("error_count", 0)
+                        created_count = result_data.get("created_count", 0)
+                        existing_count = result_data.get("existing_count", 0)
+                        error_count = result_data.get("error_count", 0)
 
-                            self.logger.info(f"Retrieved results with {len(results)} entries")
-                        else:
-                            self.logger.error(f"Error in result data: {result_data.get('message', 'Unknown error')}")
-                            return False
-                except Exception as e:
-                    self.logger.error(f"Error processing result file: {str(e)}")
-                    return False
-            else:
-                self.logger.error("Failed to retrieve result file from container")
+                        self.logger.info(f"Retrieved results with {len(results)} entries")
+                    else:
+                        self.logger.error(f"Error in result data: {result_data.get('message', 'Unknown error')}")
+                        return False
+            except Exception as e:
+                self.logger.error(f"Error processing result file: {e!s}")
                 return False
+        else:
+            self.logger.error("Failed to retrieve result file from container")
+            return False
 
         # Process the results
         for result_entry in results:
@@ -808,18 +800,18 @@ class CustomFieldMigration(BaseMigration):
         if created_count > 0:
             self.logger.success(f"Successfully created {created_count} custom fields")
             return True
-        elif error_count == 0:
+        if error_count == 0:
             self.logger.info("No new custom fields created, but no errors either")
             return True
-        else:
-            self.logger.error("Failed to create any custom fields")
-            return False
+        self.logger.error("Failed to create any custom fields")
+        return False
 
     def migrate_custom_fields(self) -> bool:
         """Migrate custom fields from Jira to OpenProject
 
         Returns:
             Boolean indicating success or failure
+
         """
         # Use the mapping analysis to decide whether to migrate
         analysis = self.analyze_custom_field_mapping()
@@ -846,11 +838,11 @@ class CustomFieldMigration(BaseMigration):
         return self.migrate_custom_fields_via_json(fields_to_create)
 
     def analyze_custom_field_mapping(self) -> dict[str, Any]:
-        """
-        Analyze the custom field mapping to identify potential issues.
+        """Analyze the custom field mapping to identify potential issues.
 
         Returns:
             Dictionary with analysis results
+
         """
         # Check if analysis was recently performed to avoid duplicate logging
         if hasattr(self, "_last_analysis_time") and time.time() - self._last_analysis_time < 5:
@@ -922,29 +914,29 @@ class CustomFieldMigration(BaseMigration):
 
         if to_create_fields > 0:
             self.logger.warning(
-                f"Action required: {to_create_fields} custom fields need manual creation or script execution."
+                f"Action required: {to_create_fields} custom fields need manual creation or script execution.",
             )
             self.logger.warning("Details saved to custom_field_analysis.json")
 
         return analysis
 
     def update_mapping_file(self) -> bool:
-        """
-        Update the mapping file after manual creation of custom fields.
+        """Update the mapping file after manual creation of custom fields.
 
         Returns:
             True if mapping was updated, False otherwise
+
         """
         self.extract_openproject_custom_fields()
         self.extract_jira_custom_fields()
         return self.create_custom_field_mapping() is not None
 
     def run(self) -> ComponentResult:
-        """
-        Run the custom field migration process.
+        """Run the custom field migration process.
 
         Returns:
             Dictionary with migration results
+
         """
         self.logger.info("Starting custom field migration", extra={"markup": True})
 
@@ -984,7 +976,7 @@ class CustomFieldMigration(BaseMigration):
             )
         except Exception as e:
             self.logger.exception(
-                f"Error during custom field migration: {str(e)}",
+                f"Error during custom field migration: {e!s}",
                 extra={"markup": True, "traceback": True},
             )
             return ComponentResult(

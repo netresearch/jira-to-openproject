@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""
-OpenProject Cleanup Script
+"""OpenProject Cleanup Script
 
 This script removes all existing work packages, projects, and custom fields from an OpenProject instance.
 """
 
 import argparse
-import re
 import sys
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from src import config
 from src.clients.openproject_client import OpenProjectClient
@@ -21,8 +19,7 @@ T = TypeVar("T")
 
 
 class OpenProjectCleaner:
-    """
-    Class to clean up an OpenProject instance by removing specified entities.
+    """Class to clean up an OpenProject instance by removing specified entities.
     """
 
     def __init__(
@@ -30,13 +27,13 @@ class OpenProjectCleaner:
         entities_to_delete: list[str],
         dry_run: bool = False,
     ) -> None:
-        """
-        Initialize the OpenProject cleaner.
+        """Initialize the OpenProject cleaner.
 
         Args:
             entities_to_delete: List of entity types to delete (e.g., ["work_packages", "projects"])
             op_client: Initialized OpenProject client
             dry_run: If True, simulate deletion without making changes
+
         """
         self.entities = entities_to_delete
         self.dry_run = dry_run
@@ -45,11 +42,11 @@ class OpenProjectCleaner:
         self.data_dir = config.get_path("data")
 
     def cleanup_work_packages(self) -> int:
-        """
-        Remove all work packages from OpenProject.
+        """Remove all work packages from OpenProject.
 
         Returns:
             Number of work packages deleted
+
         """
         logger.info("Starting work package cleanup...", extra={"markup": True})
 
@@ -68,11 +65,11 @@ class OpenProjectCleaner:
         return self.op_client.delete_all_work_packages()
 
     def cleanup_projects(self) -> int:
-        """
-        Remove all projects from OpenProject.
+        """Remove all projects from OpenProject.
 
         Returns:
             Number of projects deleted
+
         """
         logger.info("Starting project cleanup...", extra={"markup": True})
 
@@ -92,11 +89,11 @@ class OpenProjectCleaner:
         return self.op_client.delete_all_projects()
 
     def cleanup_custom_fields(self) -> int:
-        """
-        Remove custom fields from OpenProject using bulk operation.
+        """Remove custom fields from OpenProject using bulk operation.
 
         Returns:
             Number of custom fields deleted
+
         """
         logger.info("Starting custom field cleanup...", extra={"markup": True})
 
@@ -115,12 +112,12 @@ class OpenProjectCleaner:
         return self.op_client.delete_all_custom_fields()
 
     def cleanup_issue_types(self) -> int:
-        """
-        Clean up issue types (work package types) in OpenProject,
+        """Clean up issue types (work package types) in OpenProject,
         preserving default ones.
 
         Returns:
             Number of issue types deleted
+
         """
         logger.info("Starting issue type cleanup...", extra={"markup": True})
 
@@ -139,12 +136,12 @@ class OpenProjectCleaner:
         return self.op_client.delete_non_default_issue_types()
 
     def cleanup_issue_statuses(self) -> int:
-        """
-        Clean up issue statuses in OpenProject,
+        """Clean up issue statuses in OpenProject,
         preserving default ones.
 
         Returns:
             Number of issue statuses deleted
+
         """
         logger.info("Starting issue status cleanup...", extra={"markup": True})
 
@@ -163,12 +160,12 @@ class OpenProjectCleaner:
         return self.op_client.delete_non_default_issue_statuses()
 
     def cleanup_users(self) -> int:
-        """
-        Remove users from OpenProject (placeholder, not implemented).
+        """Remove users from OpenProject (placeholder, not implemented).
         Users cannot be bulk deleted in OpenProject for safety reasons.
 
         Returns:
             Number of users deleted
+
         """
         logger.info("Starting user cleanup...", extra={"markup": True})
 
@@ -188,11 +185,11 @@ class OpenProjectCleaner:
         return 0
 
     def run_cleanup(self) -> dict[str, int]:
-        """
-        Run the complete cleanup process for specified entities.
+        """Run the complete cleanup process for specified entities.
 
         Returns:
             Dictionary with cleanup statistics
+
         """
         logger.info("Starting OpenProject cleanup...", extra={"markup": True})
 
@@ -231,7 +228,7 @@ class OpenProjectCleaner:
                         results["issue_statuses_deleted"] = self.cleanup_issue_statuses()
                 except Exception as e:
                     logger.exception(
-                        f"Error during cleanup of {entity_type}: {str(e)}",
+                        f"Error during cleanup of {entity_type}: {e!s}",
                         extra={"markup": True},
                     )
 
@@ -277,12 +274,11 @@ class OpenProjectCleaner:
 
 
 def main() -> None:
-    """
-    Main function to run the cleanup script.
+    """Main function to run the cleanup script.
     """
     parser = argparse.ArgumentParser(
         description="Clean up OpenProject by removing specified entities. "
-        "Defaults to all entities if none are specified."
+        "Defaults to all entities if none are specified.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Run in dry-run mode (no actual changes)")
 
@@ -363,7 +359,7 @@ def main() -> None:
                 extra={"markup": True},
             )
     except Exception as e:
-        logger.exception(f"Error during cleanup: {str(e)}", extra={"markup": True})
+        logger.exception(f"Error during cleanup: {e!s}", extra={"markup": True})
         sys.exit(1)
 
 

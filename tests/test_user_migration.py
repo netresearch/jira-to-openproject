@@ -1,12 +1,11 @@
-"""
-Tests for the user migration component.
+"""Tests for the user migration component.
 """
 
 import json
 import shutil
 import tempfile
 import unittest
-from unittest.mock import MagicMock, Mock, mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from src.migrations.user_migration import UserMigration
 
@@ -282,7 +281,7 @@ class TestUserMigration(unittest.TestCase):
                         {"id": 102, "login": "test_user2", "email": "test2@example.com"},
                     ],
                     "failed_users": [],
-                }
+                },
             )
 
             # Test create_missing_users method

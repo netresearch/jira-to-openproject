@@ -59,9 +59,35 @@ profile = "black"
 line_length = 120
 
 [tool.ruff]
-select = ["UP"]
 target-version = "py312"
 fix = true
 
 [tool.ruff.lint]
-extend-select = ["UP006"]
+select = ["ALL"]
+
+# Exclude specific rules in test files
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",   # Use of assert detected
+    "ARG002", # Unused method argument
+    "E501",   # Line too long
+    "PLR0913", # Too many arguments in function definition
+    "SLF001", # Private member accessed
+    "S108",   # Probable insecure usage of temporary file or directory
+    "B018",   # Found useless expression
+    "ANN401", # Dynamically typed expressions (Any)
+    "D401",   # First line of docstring should be in imperative mood
+    "D200"    # One-line docstring should fit on one line
+]
+"**/test_*.py" = [
+    "S101",   # Use of assert detected
+    "ARG002", # Unused method argument
+    "E501",   # Line too long
+    "PLR0913", # Too many arguments in function definition
+    "SLF001", # Private member accessed
+    "S108",   # Probable insecure usage of temporary file or directory
+    "B018",   # Found useless expression
+    "ANN401", # Dynamically typed expressions (Any)
+    "D401",   # First line of docstring should be in imperative mood
+    "D200"    # One-line docstring should fit on one line
+]

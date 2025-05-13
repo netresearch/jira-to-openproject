@@ -67,7 +67,7 @@ Example usage:
 ```python
 # Creating an SSHClient
 ssh_client = SSHClient(
-    host="remote-server.example.com",
+    host="remote.local",
     user="username",
     key_file="/path/to/key",
     retry_count=3,
@@ -160,7 +160,7 @@ Example usage:
 # Creating an OpenProjectClient (initializes all layers)
 client = OpenProjectClient(
     container_name="openproject-web-1",
-    ssh_host="remote-server.example.com",
+    ssh_host="remote.local",
     ssh_user="username",
     tmux_session_name="rails_console"
 )

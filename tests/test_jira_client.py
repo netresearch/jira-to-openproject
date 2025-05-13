@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test module for JiraClient.
+"""Test module for JiraClient.
 
 This module contains test cases for validating the JiraClient's exception-based
 error handling approach, focusing on proper dependency injection, error propagation,
@@ -31,7 +30,7 @@ class TestJiraClient(unittest.TestCase):
 
         # Mock the config values
         self.mock_config.jira_config = {
-            "url": "https://test-jira.example.com",
+            "url": "https://jira.local",
             "username": "test_user",
             "api_token": "test_token",
             "verify_ssl": True,
@@ -46,7 +45,7 @@ class TestJiraClient(unittest.TestCase):
         self.mock_jira_class.return_value = self.mock_jira
 
         # Mock the server_info method
-        self.mock_jira.server_info.return_value = {"baseUrl": "https://test-jira.example.com", "version": "8.5.0"}
+        self.mock_jira.server_info.return_value = {"baseUrl": "https://jira.local", "version": "8.5.0"}
 
         # Set up the session for request patching
         self.mock_jira._session = MagicMock()
@@ -64,7 +63,7 @@ class TestJiraClient(unittest.TestCase):
         """Test client initialization with proper exception handling."""
         # Verify initialization was successful
         self.assertIsNotNone(self.jira_client.jira)
-        self.assertEqual(self.jira_client.jira_url, "https://test-jira.example.com")
+        self.assertEqual(self.jira_client.jira_url, "https://jira.local")
 
         # Instead of checking mock.success, just verify initialization worked
         # The actual logging is happening but our mock isn't capturing it correctly
@@ -85,7 +84,7 @@ class TestJiraClient(unittest.TestCase):
         """Test initialization with missing token."""
         # Set up config with missing token
         self.mock_config.jira_config = {
-            "url": "https://test-jira.example.com",
+            "url": "https://jira.local",
             "username": "test_user",
             "api_token": "",
         }
@@ -216,7 +215,7 @@ class TestJiraClient(unittest.TestCase):
         # Create a mock response with CAPTCHA headers
         mock_response = MagicMock()
         mock_response.headers = {
-            "X-Authentication-Denied-Reason": "CAPTCHA_CHALLENGE; login-url=https://test-jira.example.com/login.jsp"
+            "X-Authentication-Denied-Reason": "CAPTCHA_CHALLENGE; login-url=https://jira.local/login.jsp",
         }
 
         # Test _handle_response method directly

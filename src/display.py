@@ -1,5 +1,4 @@
-"""
-Centralized display utilities for console output and progress tracking.
+"""Centralized display utilities for console output and progress tracking.
 Provides standardized progress bars and logging displays using rich.
 """
 
@@ -44,7 +43,7 @@ LOGGING_THEME = Theme(
         "logging.level.error": "bold red",
         "logging.level.critical": "bold red on white",
         "logging.level.success": "bold green",
-    }
+    },
 )
 
 # Global console instance with theme
@@ -64,8 +63,7 @@ rich_handler = RichHandler(
 
 
 def configure_logging(level: str = "INFO", log_file: str | None = None) -> ExtendedLogger:
-    """
-    Configure logging with rich formatting.
+    """Configure logging with rich formatting.
 
     Args:
         level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -73,6 +71,7 @@ def configure_logging(level: str = "INFO", log_file: str | None = None) -> Exten
 
     Returns:
         Configured logger instance
+
     """
     # Define custom log levels first
     # Create a special success level (between INFO and WARNING)
@@ -133,21 +132,20 @@ def configure_logging(level: str = "INFO", log_file: str | None = None) -> Exten
             self._log(21, message, args, stacklevel=2, **kwargs)
 
     # Add the success method to the logger class
-    setattr(logging.Logger, "success", success)
+    logging.Logger.success = success
 
     # Add the notice method to the logger class
-    setattr(logging.Logger, "notice", notice)
+    logging.Logger.notice = notice
 
     logger.info("Rich logging configured")
     if log_file:
         logger.info(f"Log file: {log_file}")
 
-    return cast(ExtendedLogger, logger)
+    return cast("ExtendedLogger", logger)
 
 
 class ProgressTracker(Generic[T]):
-    """
-    Centralized progress tracker that provides standardized rich progress bars
+    """Centralized progress tracker that provides standardized rich progress bars
     with a rolling log of recent items below the progress bar.
     """
 
@@ -158,14 +156,14 @@ class ProgressTracker(Generic[T]):
         log_title: str = "Recent Items",
         max_log_items: int = 5,
     ):
-        """
-        Initialize a progress tracker with a progress bar and rolling log.
+        """Initialize a progress tracker with a progress bar and rolling log.
 
         Args:
             description: Initial description for the progress bar
             total: Total number of items to process
             log_title: Title for the rolling log panel
             max_log_items: Maximum number of items to show in the rolling log
+
         """
         self.description = description
         self.total = total
@@ -199,22 +197,22 @@ class ProgressTracker(Generic[T]):
         self.progress.update(self.task_id, description=description)
 
     def add_log_item(self, item: str) -> None:
-        """
-        Add an item to the rolling log.
+        """Add an item to the rolling log.
 
         Args:
             item: Item text to add to the log
+
         """
         self.recent_items.append(item)
         self._update_display()
 
     def increment(self, advance: int = 1, description: str | None = None) -> None:
-        """
-        Increment the progress bar.
+        """Increment the progress bar.
 
         Args:
             advance: Number of steps to advance
             description: New description (optional)
+
         """
         self.processed_count += advance
         if description:
@@ -259,14 +257,14 @@ class ProgressTracker(Generic[T]):
         return combined
 
     def track(self, iterable: Iterable[T]) -> Iterable[T]:
-        """
-        Track progress through an iterable.
+        """Track progress through an iterable.
 
         Args:
             iterable: The iterable to track
 
         Yields:
             Items from the iterable with progress tracking
+
         """
         for item in iterable:
             yield item

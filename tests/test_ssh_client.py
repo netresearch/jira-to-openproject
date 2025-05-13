@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test module for SSHClient.
+"""Test module for SSHClient.
 
 This module contains test cases for validating SSH operations.
 """
@@ -263,7 +262,7 @@ class TestSSHClient(unittest.TestCase):
 
         # Directly simulate the FileNotFoundError
         with patch.object(
-            self.ssh_client, "copy_file_to_remote", side_effect=FileNotFoundError("Local file does not exist")
+            self.ssh_client, "copy_file_to_remote", side_effect=FileNotFoundError("Local file does not exist"),
         ):
             # Call the method - should raise FileNotFoundError
             with self.assertRaises(FileNotFoundError):
@@ -283,7 +282,7 @@ class TestSSHClient(unittest.TestCase):
             self.ssh_client,
             "copy_file_to_remote",
             side_effect=SSHFileTransferError(
-                source="/local/file.txt", destination="testuser@testhost:/remote/file.txt", message="Permission denied"
+                source="/local/file.txt", destination="testuser@testhost:/remote/file.txt", message="Permission denied",
             ),
         ):
             # Call the method - should raise SSHFileTransferError

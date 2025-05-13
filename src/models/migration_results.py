@@ -1,5 +1,4 @@
-"""
-Migration result models for tracking overall migration operations.
+"""Migration result models for tracking overall migration operations.
 """
 
 from datetime import datetime
@@ -39,13 +38,12 @@ class MigrationResult(BaseModel):
         """Support dictionary-style item access for top-level attributes."""
         if key == "components":
             return self.components
-        elif key == "overall":
+        if key == "overall":
             return self.overall
-        else:
-            # Fallback to overall dictionary for other keys
-            if key not in self.overall:
-                raise KeyError(key)
-            return self.overall[key]
+        # Fallback to overall dictionary for other keys
+        if key not in self.overall:
+            raise KeyError(key)
+        return self.overall[key]
 
     def __contains__(self, key: str) -> bool:
         """Support 'in' operator for top-level attributes."""

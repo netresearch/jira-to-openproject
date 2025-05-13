@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Get Complete Custom Fields
+"""Get Complete Custom Fields
 
 This script runs commands in the Rails console to get detailed
 information about custom fields and saves it to a JSON file.
@@ -48,10 +47,9 @@ def capture_tmux_output(session_name: str, lines: int = 1000) -> str:
 
 
 def get_complete_custom_fields(
-    session_name: str = "rails_console", output_file: str | None = None
+    session_name: str = "rails_console", output_file: str | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Get detailed information about custom fields from the Rails console.
+    """Get detailed information about custom fields from the Rails console.
 
     Args:
         session_name: tmux session name
@@ -59,6 +57,7 @@ def get_complete_custom_fields(
 
     Returns:
         List of custom field data
+
     """
     # Markers for our output
     start_marker = "CUSTOM_FIELDS_DETAIL_START"
