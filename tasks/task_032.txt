@@ -1,0 +1,52 @@
+# Task ID: 32
+# Title: Link Type Migration: Jira to OpenProject
+# Status: done
+# Dependencies: None
+# Priority: medium
+# Description: Migrate Jira issue link types to their corresponding OpenProject relation types, handling unmapped types via custom fields.
+# Details:
+1. Extract issue link types from the Jira instance using the Jira REST API or direct DB queries, capturing issue IDs and link type names.
+2. Define a mapping table for standard link types (e.g., "blocks", "is blocked by", "duplicates", "relates to", etc.) to OpenProject relation types ("precedes", "follows", "duplicates", "relates").
+3. Implement the migration script to:
+   a. Read extracted link data.
+   b. For each link: look up the mapping table; if found, call the OpenProject API to create the corresponding relation.
+   c. If a link type is not in the mapping table, ensure a custom field exists in OpenProject: programmatically create a text or enum custom field named after the Jira link type and assign it to relevant trackers or project types.
+   d. For unmapped links, update the issue in OpenProject by setting the custom field value to the original Jira link type and related issue ID.
+4. Add logging and error handling: record successes, failures, and any link types skipped or requiring manual review.
+5. Organize code for maintainability: separate modules for extraction, mapping, API interaction, and custom field management.
+6. Document the mapping table and custom field definitions for future reference.
+Priority: High.
+
+# Test Strategy:
+1. Unit tests for mapping logic: verify that each Jira link type maps to the correct OpenProject relation and that unmapped types trigger custom field creation logic.
+2. Integration tests with a test Jira/OpenProject environment: create sample issues with all standard and a few custom link types in Jira; run the migration script; verify in OpenProject that:
+   a. Standard link relations are created with correct source/target and relation type.
+   b. Custom fields exist for each unmapped link type and are assigned to issues with the correct values.
+3. Edge case tests: handle circular links, duplicate migrations, missing permissions, network failures and ensure retry/logging.
+4. Manual verification: spot-check a subset of migrated relationships and custom field entries to ensure data integrity and completeness.
+
+# Subtasks:
+## 1. Analyze the LinkTypeMigration class [done]
+### Dependencies: None
+### Description: Review the existing LinkTypeMigration implementation to understand the current logic and identify where custom field creation needs to be added
+### Details:
+
+
+## 2. Implement custom field creation method for link types [done]
+### Dependencies: None
+### Description: Create a method in LinkTypeMigration class to leverage the CustomFieldMigration class for creating custom fields for unmapped link types
+### Details:
+
+
+## 3. Update the run method to use custom field creation [done]
+### Dependencies: None
+### Description: Modify the run method in LinkTypeMigration to automatically create custom fields for unmapped link types instead of displaying a warning
+### Details:
+
+
+## 4. Test custom field creation for link types [done]
+### Dependencies: None
+### Description: Develop and execute tests to verify that custom fields are created correctly for unmapped link types
+### Details:
+
+

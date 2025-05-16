@@ -1,0 +1,11 @@
+# Task ID: 29
+# Title: Comprehensive Testing for Refactored Client Architecture
+# Status: done
+# Dependencies: 25, 26
+# Priority: high
+# Description: Develop a suite of tests to verify the functionality and interactions of all components in the refactored client architecture, including error handling, dependency injection, file transfers, and command execution workflows.
+# Details:
+Implement both unit and integration tests for all client classes (OpenProjectClient, SSHClient, DockerClient, RailsConsoleClient). Use mocking and test doubles to simulate SSH sessions, Docker container environments, and Rails console interactions. Verify dependency injection by instantiating OpenProjectClient with mocked clients and asserting correct delegation. Cover error paths such as network failures, permission issues, and container not found errors. Include end-to-end workflow tests for file transfers (local→remote host, remote host→container) and command execution sequences through OpenProjectClient. Ensure clean setup and teardown procedures for temporary files, SSH connections, and containers. Integrate tests into the CI pipeline for automatic execution.
+
+# Test Strategy:
+Use a testing framework (e.g., RSpec or Jest) with mocking libraries to isolate units. Write unit tests for each client class covering successful and failure scenarios (e.g., SSH connect failures, Docker copy errors, Rails command exceptions). Create integration tests using lightweight SSH/Docker stubs or ephemeral containers to validate end-to-end workflows. Inject faults to verify error handling and recovery logic. Assert that OpenProjectClient correctly delegates to underlying clients in hierarchical order. Measure code coverage to ensure all critical paths, including dependency injection wiring, are exercised. Maintain tests in CI so that any regression in client interactions or error handling causes build failures.

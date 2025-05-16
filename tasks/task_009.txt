@@ -1,0 +1,11 @@
+# Task ID: 9
+# Title: Issue Type Migration
+# Status: done
+# Dependencies: None
+# Priority: medium
+# Description: Migrate issue types from Jira to OpenProject work package types
+# Details:
+Extract Jira issue types, map to OpenProject work package types, and create work package types via Rails console. Normalize sub-task types as needed.
+
+# Test Strategy:
+Verify issue type count and attributes match expected values. Test type creation and mapping.

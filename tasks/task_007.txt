@@ -1,0 +1,11 @@
+# Task ID: 7
+# Title: Tempo Data Migration
+# Status: done
+# Dependencies: None
+# Priority: medium
+# Description: Migrate Tempo account and company data to OpenProject
+# Details:
+Extract Tempo accounts and company data, map to OpenProject custom fields and projects, and create appropriate structures in OpenProject. Map Tempo companies to top-level OpenProject projects.
+
+# Test Strategy:
+Verify Tempo accounts are correctly migrated as custom fields. Test company/project structure creation.

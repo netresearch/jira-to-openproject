@@ -1,0 +1,11 @@
+# Task ID: 5
+# Title: User Migration
+# Status: done
+# Dependencies: None
+# Priority: medium
+# Description: Implement migration of users from Jira to OpenProject
+# Details:
+Extract Jira users, map them to OpenProject users based on email/username, and create non-existent users in OpenProject. Generate user mapping for reference by other components.
+
+# Test Strategy:
+Test user extraction, mapping strategy, and creation in OpenProject. Verify user counts match expected values.
