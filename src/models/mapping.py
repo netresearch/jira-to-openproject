@@ -11,8 +11,7 @@ logger = config.logger
 
 
 class JiraToOPMapping:
-    """Mapping between Jira and OpenProject data models.
-    """
+    """Mapping between Jira and OpenProject data models."""
 
     @staticmethod
     def map_issue_type(jira_issue_type: JiraData) -> OpenProjectData:

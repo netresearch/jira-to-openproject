@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Script to set up the var directory structure for data, logs, backups, and output.
-"""
+"""Script to set up the var directory structure for data, logs, backups, and output."""
 
 import logging
 
@@ -46,7 +45,7 @@ def main() -> bool:
         print("After confirming everything works, you can clean up the old directories.")
 
     except Exception as e:
-        logger.error(f"Error setting up var directories: {e!s}")
+        logger.exception(f"Error setting up var directories: {e!s}")
         return False
 
     return True

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Example usage of the OpenProjectClient
+"""Example usage of the OpenProjectClient.
 
 This example demonstrates how to use the new OpenProjectClient
 to interact with OpenProject through the Rails console.
@@ -11,8 +11,7 @@ from src.clients.openproject_client import OpenProjectClient
 
 
 def main() -> None:
-    """Example usage of OpenProjectClient
-    """
+    """Example usage of OpenProjectClient."""
     print("Initializing OpenProjectClient...")
 
     # Initialize the client - values can come from config or be specified directly

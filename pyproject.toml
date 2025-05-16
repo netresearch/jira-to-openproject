@@ -77,17 +77,13 @@ select = ["ALL"]
     "B018",   # Found useless expression
     "ANN401", # Dynamically typed expressions (Any)
     "D401",   # First line of docstring should be in imperative mood
-    "D200"    # One-line docstring should fit on one line
+    "D200",    # One-line docstring should fit on one line
+    "T201",    # Allow print in tests
+    "T203",    # Allow pprint in tests
+    "PLR2004", # Use of magic number
+    "D103",
+    "D100",
+    "PT011"
 ]
-"**/test_*.py" = [
-    "S101",   # Use of assert detected
-    "ARG002", # Unused method argument
-    "E501",   # Line too long
-    "PLR0913", # Too many arguments in function definition
-    "SLF001", # Private member accessed
-    "S108",   # Probable insecure usage of temporary file or directory
-    "B018",   # Found useless expression
-    "ANN401", # Dynamically typed expressions (Any)
-    "D401",   # First line of docstring should be in imperative mood
-    "D200"    # One-line docstring should fit on one line
-]
+"scripts/**/*.py" = ["T201", "T203"]  # Allow (p)print in scripts
+"examples/**/*.py" = ["T201", "T203"]  # Allow (p)print in examples

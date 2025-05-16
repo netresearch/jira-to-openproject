@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 from typing import Any
 
 from src.config import logger
@@ -9,29 +9,31 @@ from src.utils import data_handler
 
 class Mappings:
     """Handles loading and accessing various mapping files generated during migration.
+
     Also provides methods that utilize these mappings, like preparing work packages.
+
     """
 
     # Define constants as class attributes
-    USER_MAPPING_FILE = "user_mapping.json"
-    PROJECT_MAPPING_FILE = "project_mapping.json"
-    ACCOUNT_MAPPING_FILE = "account_mapping.json"  # For parent project ID info
-    COMPANY_MAPPING_FILE = "company_mapping.json"
-    ISSUE_TYPE_MAPPING_FILE = "issue_type_mapping.json"
-    STATUS_MAPPING_FILE = "status_mapping.json"
-    LINK_TYPE_MAPPING_FILE = "link_type_mapping.json"
-    CUSTOM_FIELD_MAPPING_FILE = "custom_field_mapping.json"
-    WORK_PACKAGE_MAPPING_FILE_PATTERN = "work_package_mapping_{}.json"  # Per project
+    USER_MAPPING_FILE = Path("user_mapping.json")
+    PROJECT_MAPPING_FILE = Path("project_mapping.json")
+    ACCOUNT_MAPPING_FILE = Path("account_mapping.json")  # For parent project ID info
+    COMPANY_MAPPING_FILE = Path("company_mapping.json")
+    ISSUE_TYPE_MAPPING_FILE = Path("issue_type_mapping.json")
+    STATUS_MAPPING_FILE = Path("status_mapping.json")
+    LINK_TYPE_MAPPING_FILE = Path("link_type_mapping.json")
+    CUSTOM_FIELD_MAPPING_FILE = Path("custom_field_mapping.json")
+    WORK_PACKAGE_MAPPING_FILE_PATTERN = Path("work_package_mapping_{}.json")  # Per project
 
-    TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
-    OP_PROJECTS_FILE = "openproject_projects.json"
-    TEMPO_COMPANIES_FILE = "tempo_companies.json"
+    TEMPO_ACCOUNTS_FILE = Path("tempo_accounts.json")
+    OP_PROJECTS_FILE = Path("openproject_projects.json")
+    TEMPO_COMPANIES_FILE = Path("tempo_companies.json")
 
     def __init__(
         self,
-        data_dir: str,
+        data_dir: Path,
     ) -> None:
-        self.data_dir = data_dir
+        self.data_dir: Path = data_dir
 
         # Load all mappings using class attributes for filenames
         self.user_mapping = self._load_mapping(self.USER_MAPPING_FILE)
@@ -48,9 +50,15 @@ class Mappings:
 
         # Check essential mappings
         if not self.project_mapping:
-            logger.warning(f"Project mapping ({self.PROJECT_MAPPING_FILE}) is missing or empty!")
+            logger.warning(
+                "Project mapping (%s) is missing or empty!",
+                self.PROJECT_MAPPING_FILE,
+            )
         if not self.issue_type_mapping:
-            logger.warning(f"Issue type mapping ({self.ISSUE_TYPE_MAPPING_FILE}) is missing or empty!")
+            logger.warning(
+                "Issue type mapping (%s) is missing or empty!",
+                self.ISSUE_TYPE_MAPPING_FILE,
+            )
         # Add checks for other critical mappings as needed
 
     def __setitem__(self, key: str, value: Any) -> None:
@@ -64,7 +72,7 @@ class Mappings:
         if hasattr(self, key):
             setattr(self, key, value)
         else:
-            logger.warning(f"Setting unknown mapping attribute: {key}")
+            logger.warning("Setting unknown mapping attribute: %s", key)
             setattr(self, key, value)
 
     def __getitem__(self, key: str) -> Any:
@@ -79,16 +87,17 @@ class Mappings:
         """
         if hasattr(self, key):
             return getattr(self, key)
-        raise KeyError(f"Mapping '{key}' not found")
+        msg = f"Mapping '{key}' not found"
+        raise KeyError(msg)
 
-    def _load_mapping(self, filename: str) -> dict[str, Any]:
-        """Loads a specific mapping file from the data directory."""
-        file_path = os.path.join(self.data_dir, filename)
+    def _load_mapping(self, filename: Path) -> dict[str, Any]:
+        """Load a specific mapping file from the data directory."""
+        file_path = self.data_dir / filename
         mapping = data_handler.load_dict(file_path)
         if mapping is None:
-            logger.warning(f"Mapping file not found or invalid: {filename}")
+            logger.warning("Mapping file not found or invalid: %s", filename)
             return {}
-        logger.notice(f"Loaded mapping '{filename}' with {len(mapping)} entries.")
+        logger.notice("Loaded mapping '%s' with %d entries.", filename, len(mapping))
         return mapping
 
     def get_op_project_id(self, jira_project_key: str) -> int | None:
@@ -96,7 +105,10 @@ class Mappings:
         entry = self.project_mapping.get(jira_project_key)
         if entry and entry.get("openproject_id"):
             return entry["openproject_id"]
-        logger.debug(f"No OpenProject ID found in mapping for Jira project key: {jira_project_key}")
+        logger.debug(
+            "No OpenProject ID found in mapping for Jira project key: %s",
+            jira_project_key,
+        )
         return None
 
     def get_op_user_id(self, jira_user_id: str) -> int | None:
@@ -106,7 +118,10 @@ class Mappings:
         if entry and entry.get("openproject_id"):
             return entry["openproject_id"]
         # Add fallback logic if key format varies
-        logger.debug(f"No OpenProject ID found in mapping for Jira user ID: {jira_user_id}")
+        logger.debug(
+            "No OpenProject ID found in mapping for Jira user ID: %s",
+            jira_user_id,
+        )
         return None
 
     def get_op_type_id(self, jira_issue_type_name: str) -> int | None:
@@ -114,7 +129,10 @@ class Mappings:
         entry = self.issue_type_mapping.get(jira_issue_type_name)
         if entry and entry.get("openproject_id"):
             return entry["openproject_id"]
-        logger.debug(f"No OpenProject ID found in mapping for Jira issue type name: {jira_issue_type_name}")
+        logger.debug(
+            "No OpenProject ID found in mapping for Jira issue type name: %s",
+            jira_issue_type_name,
+        )
         return None
 
     def get_op_status_id(self, jira_status_name: str) -> int | None:
@@ -122,7 +140,10 @@ class Mappings:
         entry = self.status_mapping.get(jira_status_name)
         if entry and entry.get("openproject_id"):
             return entry["openproject_id"]
-        logger.debug(f"No OpenProject ID found in mapping for Jira status name: {jira_status_name}")
+        logger.debug(
+            "No OpenProject ID found in mapping for Jira status name: %s",
+            jira_status_name,
+        )
         return None
 
     def has_mapping(self, mapping_name: str) -> bool:
@@ -157,20 +178,17 @@ class Mappings:
         logger.warning(f"Mapping '{mapping_name}' not found")
         return {}
 
-    def set_mapping(self, mapping_name: str, mapping_data: dict[str, Any]) -> bool:
+    def set_mapping(self, mapping_name: str, mapping_data: dict[str, Any]) -> None:
         """Set or update a specific mapping and save it to file.
 
         Args:
             mapping_name: Name of the mapping (e.g., 'projects', 'users', etc.)
             mapping_data: The mapping dictionary to save
 
-        Returns:
-            True if successful, False otherwise
-
         """
         # First update the instance variable
         mapping_attr = f"{mapping_name}_mapping"
-        filename = f"{mapping_name}_mapping.json"
+        filename = Path(f"{mapping_name}_mapping.json")
 
         # Use the constant filename if available
         if hasattr(self, f"{mapping_name.upper()}_MAPPING_FILE"):
@@ -180,11 +198,14 @@ class Mappings:
         setattr(self, mapping_attr, mapping_data)
 
         # Save to file
-        file_path = os.path.join(self.data_dir, filename)
+        file_path = self.data_dir / filename
         try:
             data_handler.save_dict(mapping_data, file_path)
-            logger.info(f"Saved mapping '{mapping_name}' with {len(mapping_data)} entries")
-            return True
-        except Exception as e:
-            logger.error(f"Error saving mapping '{mapping_name}': {e!s}")
-            return False
+            logger.info(
+                "Saved mapping '%s' with %d entries",
+                mapping_name,
+                len(mapping_data),
+            )
+        except Exception:
+            logger.exception("Error saving mapping '%s'", mapping_name)
+            raise

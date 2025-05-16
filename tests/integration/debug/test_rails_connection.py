@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Test script to verify Rails console connection.
-"""
+"""Test script to verify Rails console connection."""
 
 import pytest
 

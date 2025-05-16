@@ -1,5 +1,4 @@
-"""Component result models for tracking migration operations.
-"""
+"""Component result models for tracking migration operations."""
 
 from typing import Any
 
@@ -13,8 +12,8 @@ class ComponentResult(BaseModel):
     message: str = ""
     details: dict[str, Any] = Field(default_factory=dict)
     data: dict[str, Any] | list[dict[str, Any]] | None = None
-    errors: list[str] | None = None
-    warnings: list[str] | None = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     dry_run: bool = False
     total_types: int = 0
     matched_types: int = 0
@@ -31,6 +30,13 @@ class ComponentResult(BaseModel):
     success_count: int = 0
     failed_count: int = 0
     total_count: int = 0
+    updated: int = 0
+    failed: int = 0
+    analysis: dict[str, Any] = Field(default_factory=dict)
+    jira_fields_count: int = 0
+    op_fields_count: int = 0
+    mapped_fields_count: int = 0
+    error: str | None = None
 
     # Helper methods to make the class more usable
     def add_error(self, error: str) -> None:

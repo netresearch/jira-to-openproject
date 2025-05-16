@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Setup script for the Jira to OpenProject migration tool.
-"""
+"""Setup script for the Jira to OpenProject migration tool."""
 
 from setuptools import find_packages, setup
 

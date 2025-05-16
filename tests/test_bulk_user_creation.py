@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, Mock
 
 import pytest
-
+from pytest import MonkeyPatch
 from src.clients.openproject_client import OpenProjectClient
 from src.migrations.user_migration import UserMigration
 
@@ -22,8 +22,12 @@ def mock_rails_client() -> MagicMock:
 
 
 @pytest.fixture
-def op_client(mock_ssh_client: MagicMock, mock_docker_client: MagicMock, mock_rails_client: MagicMock) -> OpenProjectClient:
-    client = OpenProjectClient(
+def op_client(
+    mock_ssh_client: MagicMock,
+    mock_docker_client: MagicMock,
+    mock_rails_client: MagicMock,
+) -> OpenProjectClient:
+    return OpenProjectClient(
         container_name="test-container",
         ssh_host="test-host",
         ssh_user="test-user",
@@ -31,7 +35,6 @@ def op_client(mock_ssh_client: MagicMock, mock_docker_client: MagicMock, mock_ra
         docker_client=mock_docker_client,
         rails_client=mock_rails_client,
     )
-    return client
 
 
 @pytest.fixture
@@ -42,11 +45,10 @@ def jira_client() -> MagicMock:
 @pytest.fixture
 def user_migration(jira_client: MagicMock, op_client: OpenProjectClient) -> UserMigration:
     # Create a user migration instance with mocked clients
-    migration = UserMigration(
+    return UserMigration(
         jira_client=jira_client,
         op_client=op_client,
     )
-    return migration
 
 
 def test_create_users_in_bulk(op_client: OpenProjectClient, mock_rails_client: MagicMock) -> None:
@@ -93,7 +95,12 @@ def test_create_users_in_bulk(op_client: OpenProjectClient, mock_rails_client: M
     assert "user3@example.com" in result
 
 
-def test_user_migration_create_missing_users(user_migration: UserMigration, op_client: OpenProjectClient, jira_client: MagicMock) -> None:
+def test_user_migration_create_missing_users(
+    monkeypatch: MonkeyPatch,
+    user_migration: UserMigration,
+    op_client: OpenProjectClient,
+    jira_client: MagicMock,
+) -> None:
     """Test creating missing users."""
     # Mock get_users to return empty list (no existing users)
     op_client.get_users = Mock(return_value=[])
@@ -103,7 +110,7 @@ def test_user_migration_create_missing_users(user_migration: UserMigration, op_c
         {"key": "user1", "name": "user1", "emailAddress": "user1@example.com", "displayName": "User One"},
         {"key": "user2", "name": "user2", "emailAddress": "user2@example.com", "displayName": "User Two"},
     ]
-    jira_client.get_users = Mock(return_value=jira_users)
+    monkeypatch.setattr(jira_client, "get_users", Mock(return_value=jira_users))
 
     # Mock create_user_mapping to return unmatched users and avoid any file operations
     user_mapping = {
@@ -128,27 +135,31 @@ def test_user_migration_create_missing_users(user_migration: UserMigration, op_c
             "matched_by": "none",
         },
     }
-    user_migration.create_user_mapping = Mock(return_value=user_mapping)
+    monkeypatch.setattr(user_migration, "create_user_mapping", Mock(return_value=user_mapping))
     user_migration.user_mapping = user_mapping
 
     # Mock extract methods to avoid file operations
-    user_migration.extract_jira_users = Mock(return_value=jira_users)
-    user_migration.extract_openproject_users = Mock(return_value=[])
-    user_migration._save_to_json = Mock()
+    monkeypatch.setattr(user_migration, "extract_jira_users", Mock(return_value=jira_users))
+    monkeypatch.setattr(user_migration, "extract_openproject_users", Mock(return_value=[]))
+    monkeypatch.setattr(user_migration, "_save_to_json", Mock())
 
     # Mock create_users_in_bulk to return a string response instead of dict
-    op_client.create_users_in_bulk = Mock(
-        return_value="""
-    {
-        "created_count": 2,
-        "failed_count": 0,
-        "created_users": [
-            {"id": 1, "login": "user1", "email": "user1@example.com"},
-            {"id": 2, "login": "user2", "email": "user2@example.com"}
-        ],
-        "failed_users": []
-    }
-    """,
+    monkeypatch.setattr(
+        op_client,
+        "create_users_in_bulk",
+        Mock(
+            return_value="""
+            {
+                "created_count": 2,
+                "failed_count": 0,
+                "created_users": [
+                    {"id": 1, "login": "user1", "email": "user1@example.com"},
+                    {"id": 2, "login": "user2", "email": "user2@example.com"}
+                ],
+                "failed_users": []
+            }
+            """,
+        ),
     )
 
     # Call the method
@@ -163,7 +174,12 @@ def test_user_migration_create_missing_users(user_migration: UserMigration, op_c
     assert result["created_count"] == 2
 
 
-def test_user_migration_create_missing_users_no_unmatched(user_migration: UserMigration, op_client: OpenProjectClient, jira_client: MagicMock) -> None:
+def test_user_migration_create_missing_users_no_unmatched(
+    monkeypatch: MonkeyPatch,
+    user_migration: UserMigration,
+    op_client: OpenProjectClient,
+    jira_client: MagicMock,
+) -> None:
     """Test handling empty user list (no unmatched users)."""
     # Create test data with all users matched
     user_mapping = {
@@ -176,20 +192,21 @@ def test_user_migration_create_missing_users_no_unmatched(user_migration: UserMi
         {"key": "user1", "name": "user1", "emailAddress": "user1@example.com", "displayName": "User One"},
         {"key": "user2", "name": "user2", "emailAddress": "user2@example.com", "displayName": "User Two"},
     ]
-    jira_client.get_users = MagicMock(return_value=jira_users)
+    monkeypatch.setattr(jira_client, "get_users", MagicMock(return_value=jira_users))
 
     # Mock create_user_mapping to return matched users
-    user_migration.create_user_mapping = MagicMock(return_value=user_mapping)
+    monkeypatch.setattr(user_migration, "create_user_mapping", MagicMock(return_value=user_mapping))
 
     # Set user_mapping directly
     user_migration.user_mapping = user_mapping
 
-    # Mock sync_ldap_users and create_users_in_bulk to make them no-ops
-    user_migration.sync_ldap_users = MagicMock(return_value={})
-    user_migration.create_users_in_bulk = MagicMock(return_value={})
+    # Replace op_client.create_users_in_bulk with a MagicMock
+    mock_create_users = MagicMock()
+    monkeypatch.setattr(op_client, "create_users_in_bulk", mock_create_users)
 
-    # Mock _save_to_json to avoid IO problems
-    user_migration._save_to_json = MagicMock(return_value=True)
+    # UserMigration doesn't have sync_ldap_users, and we don't need to mock it
+    # Just mock _save_to_json to avoid IO problems
+    monkeypatch.setattr(user_migration, "_save_to_json", MagicMock(return_value=True))
 
     # Call the method
     result = user_migration.create_missing_users()
@@ -198,14 +215,16 @@ def test_user_migration_create_missing_users_no_unmatched(user_migration: UserMi
     # Should have an empty result due to no unmatched users
     assert isinstance(result, dict)
 
-    # Verify sync_ldap_users was not called due to no unmatched users
-    user_migration.sync_ldap_users.assert_not_called()
-
     # Verify create_users_in_bulk was not called due to no unmatched users
-    user_migration.create_users_in_bulk.assert_not_called()
+    mock_create_users.assert_not_called()
 
 
-def test_user_migration_create_missing_users_with_existing_email(user_migration: UserMigration, op_client: OpenProjectClient, jira_client: MagicMock) -> None:
+def test_user_migration_create_missing_users_with_existing_email(
+    monkeypatch: MonkeyPatch,
+    user_migration: UserMigration,
+    op_client: OpenProjectClient,
+    jira_client: MagicMock,
+) -> None:
     """Test handling mixed case where some users exist but with different emails."""
     # Mock jira_client to return test users
     jira_users = [
@@ -222,54 +241,62 @@ def test_user_migration_create_missing_users_with_existing_email(user_migration:
     op_client.get_users = Mock(return_value=op_users)
 
     # Mock create_user_mapping to return one matched user and two unmatched
-    user_migration.create_user_mapping = Mock(
-        return_value={
-            "user1": {
-                "jira_key": "user1",
-                "jira_name": "user1",
-                "jira_email": "user1@example.com",
-                "jira_display_name": "User One",
-                "openproject_id": 101,
-                "openproject_login": "op_user1",
-                "openproject_email": "user1@example.com",
-                "matched_by": "email",
+    monkeypatch.setattr(
+        user_migration,
+        "create_user_mapping",
+        Mock(
+            return_value={
+                "user1": {
+                    "jira_key": "user1",
+                    "jira_name": "user1",
+                    "jira_email": "user1@example.com",
+                    "jira_display_name": "User One",
+                    "openproject_id": 101,
+                    "openproject_login": "op_user1",
+                    "openproject_email": "user1@example.com",
+                    "matched_by": "email",
+                },
+                "user2": {
+                    "jira_key": "user2",
+                    "jira_name": "user2",
+                    "jira_email": "user2@example.com",
+                    "jira_display_name": "User Two",
+                    "openproject_id": None,
+                    "openproject_login": None,
+                    "openproject_email": None,
+                    "matched_by": "none",
+                },
+                "user3": {
+                    "jira_key": "user3",
+                    "jira_name": "user3",
+                    "jira_email": "user3@example.com",
+                    "jira_display_name": "User Three",
+                    "openproject_id": None,
+                    "openproject_login": None,
+                    "openproject_email": None,
+                    "matched_by": "none",
+                },
             },
-            "user2": {
-                "jira_key": "user2",
-                "jira_name": "user2",
-                "jira_email": "user2@example.com",
-                "jira_display_name": "User Two",
-                "openproject_id": None,
-                "openproject_login": None,
-                "openproject_email": None,
-                "matched_by": "none",
-            },
-            "user3": {
-                "jira_key": "user3",
-                "jira_name": "user3",
-                "jira_email": "user3@example.com",
-                "jira_display_name": "User Three",
-                "openproject_id": None,
-                "openproject_login": None,
-                "openproject_email": None,
-                "matched_by": "none",
-            },
-        },
+        ),
     )
     user_migration.user_mapping = user_migration.create_user_mapping()
 
     # Mock create_users_in_bulk to return a string response instead of dict
-    op_client.create_users_in_bulk = Mock(
-        return_value="""
-    {
-        "created_count": 2,
-        "created_users": [
-            {"id": 102, "login": "user2", "email": "user2@example.com"},
-            {"id": 103, "login": "user3", "email": "user3@example.com"}
-        ],
-        "failed_users": []
-    }
-    """,
+    monkeypatch.setattr(
+        op_client,
+        "create_users_in_bulk",
+        Mock(
+            return_value="""
+            {
+                "created_count": 2,
+                "created_users": [
+                    {"id": 102, "login": "user2", "email": "user2@example.com"},
+                    {"id": 103, "login": "user3", "email": "user3@example.com"}
+                ],
+                "failed_users": []
+            }
+            """,
+        ),
     )
 
     # Call the method
@@ -287,10 +314,14 @@ def test_user_migration_create_missing_users_with_existing_email(user_migration:
     assert users_to_create[1]["login"] == "user3" or users_to_create[1]["login"] == "user2"
 
 
-def test_bulk_creation_error_handling(op_client: OpenProjectClient) -> None:
+def test_bulk_creation_error_handling(monkeypatch: MonkeyPatch, op_client: OpenProjectClient) -> None:
     """Test handling of errors when creating users in bulk."""
-    # Mock rails_client._send_command_to_tmux to fail instead of _transfer_and_execute_script
-    op_client.rails_client._send_command_to_tmux = Mock(side_effect=Exception("Failed to execute script"))
+    # Mock rails_client._send_command_to_tmux to fail
+    monkeypatch.setattr(
+        op_client.rails_client,
+        "_send_command_to_tmux",
+        Mock(side_effect=Exception("Failed to create users in bulk.")),
+    )
 
     # Test users
     users = [{"login": "user1", "firstname": "User", "lastname": "One", "email": "user1@example.com"}]
@@ -300,4 +331,4 @@ def test_bulk_creation_error_handling(op_client: OpenProjectClient) -> None:
         op_client.create_users_in_bulk(users)
 
     # Verify the error message
-    assert "Failed to execute script" in str(e.value)
+    assert "Failed to create users in bulk." in str(e.value)

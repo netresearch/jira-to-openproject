@@ -9,7 +9,10 @@ delegation to underlying clients, file transfers, error handling, and command ex
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.clients.docker_client import DockerClient
 from src.clients.openproject_client import FileTransferError, OpenProjectClient
@@ -23,10 +26,10 @@ class TestOpenProjectClient(unittest.TestCase):
     def setUp(self) -> None:
         """Set up the test environment."""
         # Create a temp directory for file operations
-        self.temp_dir = tempfile.mkdtemp()
+        self.temp_dir = Path(tempfile.mkdtemp())
         # Create the temp_scripts directory to ensure it exists
-        self.scripts_dir = os.path.join(self.temp_dir, "temp_scripts")
-        os.makedirs(self.scripts_dir, exist_ok=True)
+        self.scripts_dir = self.temp_dir / "temp_scripts"
+        self.scripts_dir.mkdir(parents=True, exist_ok=True)
 
         # Create patchers for all client dependencies
         # 1. SSHClient patcher
@@ -97,7 +100,7 @@ class TestOpenProjectClient(unittest.TestCase):
         self.os_patcher.stop()
 
         # Clean up temp directory
-        if os.path.exists(self.temp_dir):
+        if self.temp_dir.exists():
             import shutil
 
             shutil.rmtree(self.temp_dir)
@@ -105,40 +108,40 @@ class TestOpenProjectClient(unittest.TestCase):
     def test_initialization(self) -> None:
         """Test OpenProjectClient initialization and proper dependency injection."""
         # Verify client attributes
-        self.assertEqual(self.op_client.container_name, "test_container")
-        self.assertEqual(self.op_client.ssh_host, "test_server")
-        self.assertEqual(self.op_client.ssh_user, "test_user")
-        self.assertEqual(self.op_client.ssh_key_file, "/path/to/key.pem")
-        self.assertEqual(self.op_client.tmux_session_name, "test_session")
-        self.assertEqual(self.op_client.command_timeout, 180)
-        self.assertEqual(self.op_client.retry_count, 3)
-        self.assertEqual(self.op_client.retry_delay, 1.0)
+        assert self.op_client.container_name == "test_container"
+        assert self.op_client.ssh_host == "test_server"
+        assert self.op_client.ssh_user == "test_user"
+        assert self.op_client.ssh_key_file == "/path/to/key.pem"
+        assert self.op_client.tmux_session_name == "test_session"
+        assert self.op_client.command_timeout == 180
+        assert self.op_client.retry_count == 3
+        assert self.op_client.retry_delay == 1.0
 
         # Verify each client was properly initialized with correct parameters
         # 1. SSHClient initialization
         self.mock_ssh_client_class.assert_called_once()
         ssh_args = self.mock_ssh_client_class.call_args
-        self.assertEqual(ssh_args[1]["host"], "test_server")
-        self.assertEqual(ssh_args[1]["user"], "test_user")
-        self.assertEqual(ssh_args[1]["key_file"], "/path/to/key.pem")
-        self.assertEqual(ssh_args[1]["operation_timeout"], 180)
-        self.assertEqual(ssh_args[1]["retry_count"], 3)
-        self.assertEqual(ssh_args[1]["retry_delay"], 1.0)
+        assert ssh_args[1]["host"] == "test_server"
+        assert ssh_args[1]["user"] == "test_user"
+        assert ssh_args[1]["key_file"] == "/path/to/key.pem"
+        assert ssh_args[1]["operation_timeout"] == 180
+        assert ssh_args[1]["retry_count"] == 3
+        assert ssh_args[1]["retry_delay"] == 1.0
 
         # 2. DockerClient initialization with SSHClient dependency
         self.mock_docker_client_class.assert_called_once()
         docker_args = self.mock_docker_client_class.call_args
-        self.assertEqual(docker_args[1]["container_name"], "test_container")
-        self.assertEqual(docker_args[1]["ssh_client"], self.mock_ssh_client)  # Verify dependency injection
-        self.assertEqual(docker_args[1]["command_timeout"], 180)
-        self.assertEqual(docker_args[1]["retry_count"], 3)
-        self.assertEqual(docker_args[1]["retry_delay"], 1.0)
+        assert docker_args[1]["container_name"] == "test_container"
+        assert docker_args[1]["ssh_client"] == self.mock_ssh_client  # Verify dependency injection
+        assert docker_args[1]["command_timeout"] == 180
+        assert docker_args[1]["retry_count"] == 3
+        assert docker_args[1]["retry_delay"] == 1.0
 
         # 3. RailsConsoleClient initialization
         self.mock_rails_client_class.assert_called_once()
         rails_args = self.mock_rails_client_class.call_args
-        self.assertEqual(rails_args[1]["tmux_session_name"], "test_session")
-        self.assertEqual(rails_args[1]["command_timeout"], 180)
+        assert rails_args[1]["tmux_session_name"] == "test_session"
+        assert rails_args[1]["command_timeout"] == 180
 
     def test_init_missing_container(self) -> None:
         """Test initialization with missing container name."""
@@ -148,10 +151,10 @@ class TestOpenProjectClient(unittest.TestCase):
         self.mock_config.openproject_config = temp_config
 
         # Verify ValueError is raised
-        with self.assertRaises(ValueError) as context:
+        with pytest.raises(ValueError) as context:
             OpenProjectClient()
 
-        self.assertIn("Container name is required", str(context.exception))
+        assert "Container name is required" in str(context.value)
 
     def test_init_missing_ssh_host(self) -> None:
         """Test initialization with missing SSH host."""
@@ -161,92 +164,85 @@ class TestOpenProjectClient(unittest.TestCase):
         self.mock_config.openproject_config = temp_config
 
         # Verify ValueError is raised
-        with self.assertRaises(ValueError) as context:
+        with pytest.raises(ValueError) as context:
             OpenProjectClient()
 
-        self.assertIn("SSH host is required", str(context.exception))
+        assert "SSH host is required" in str(context.value)
 
     def test_create_script_file(self) -> None:
         """Test script file creation."""
         test_script = "puts 'Hello, World!'"
-        # Set up the mock for file operations
-        mock_file = MagicMock()
-        with patch("builtins.open", MagicMock(return_value=mock_file)) as mock_open:
-            script_path = self.op_client._create_script_file(test_script)
 
-        # Verify temp directory was created
-        self.mock_os.makedirs.assert_called_once()
-        makedirs_args = self.mock_os.makedirs.call_args
-        self.assertEqual(os.path.basename(makedirs_args[0][0]), "temp_scripts")
+        # Mock the data_dir path and os.urandom for the random filename
+        with patch("src.clients.openproject_client.os.urandom", return_value=b"abcd"):
+            # Mock Path.open to return a mock file
+            mock_file = MagicMock()
+            mock_file.__enter__.return_value = mock_file
 
-        # Verify file was opened with correct parameters
-        self.assertTrue(mock_open.called)
-        file_path_arg = mock_open.call_args[0][0]
-        self.assertIn("openproject_script_", file_path_arg)
-        self.assertTrue(file_path_arg.endswith(".rb"))
+            with patch("pathlib.Path.mkdir") as mock_mkdir:
+                with patch("pathlib.Path.open", return_value=mock_file) as mock_open:
+                    # Call the method being tested
+                    result = self.op_client._create_script_file(test_script)
 
-        # Verify script content was written to file
-        mock_file.__enter__().write.assert_called_once_with(test_script)
+                    # Verify the result is a Path with the expected name
+                    assert str(result).endswith("openproject_script_61626364.rb")
 
-        # Verify correct path was returned
-        self.assertEqual(script_path, file_path_arg)
+                    # Verify directory creation
+                    mock_mkdir.assert_called_with(parents=True, exist_ok=True)
+
+                    # Verify file was opened
+                    mock_open.assert_called_once()
+
+                    # Verify content was written
+                    mock_file.write.assert_called_once_with(test_script)
 
     def test_transfer_and_execute_script_success(self) -> None:
         """Test successful script transfer and execution."""
-        # Mock file creation to succeed
-        with patch.object(self.op_client, "_create_script_file") as mock_create:
-            mock_create.return_value = "/tmp/test_script.rb"
+        # Initialize the expected result
+        expected_result = '{"result": 42}'
 
-            # Mock _transfer_rails_script to succeed
-            with patch.object(self.op_client, "_transfer_rails_script") as mock_transfer:
-                mock_transfer.return_value = "/container/path/test_script.rb"
+        # Patch the rails_client to return the expected result
+        with patch.object(
+            self.op_client.rails_client,
+            "_send_command_to_tmux",
+            return_value=expected_result
+        ) as mock_send_command:
+            # Execute a query (which now directly calls _send_command_to_tmux)
+            result = self.op_client.execute_query("puts 'test'")
 
-                # Mock rails_client execute to return JSON result
-                self.mock_rails_client.execute.return_value = '{"result": 42}'
+            # Verify the result
+            assert result == expected_result
 
-                # Execute the test
-                result = self.op_client._transfer_and_execute_script("puts 'hello'")
-
-                # Verify the result
-                self.assertEqual(result, {"result": 42})
-
-                # Verify the methods were called with the right parameters
-                mock_create.assert_called_once_with("puts 'hello'")
-                mock_transfer.assert_called_once_with("/tmp/test_script.rb")
-                self.mock_rails_client.execute.assert_called_once()
+            # Verify the method calls
+            mock_send_command.assert_called_once()
 
     def test_transfer_and_execute_script_ssh_failure(self) -> None:
         """Test script execution failing during SSH transfer."""
-        # Mock file creation to succeed but SSH transfer to fail
-        with patch.object(self.op_client, "_create_script_file") as mock_create:
-            mock_create.return_value = "/tmp/test_script.rb"
-            # Make the _transfer_rails_script method raise an exception
-            with patch.object(self.op_client, "_transfer_rails_script") as mock_transfer:
-                mock_transfer.side_effect = FileTransferError("SSH transfer failed: Connection refused")
+        # Mock the rails_client._send_command_to_tmux to throw a CommandExecutionError
+        self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError(
+            "SSH transfer failed: Connection refused"
+        )
 
-                # Execute the test with expected exception
-                with self.assertRaises(FileTransferError) as context:
-                    self.op_client._transfer_and_execute_script("puts 'test'")
+        # Execute the test with expected exception
+        with pytest.raises(CommandExecutionError) as context:
+            self.op_client.execute_query("puts 'test'")
 
-                # Verify error message
-                self.assertIn("Connection refused", str(context.exception))
+        # Verify error message
+        assert "Connection refused" in str(context.value)
 
     def test_transfer_and_execute_script_docker_failure(self) -> None:
         """Test script execution failing during Docker transfer."""
-        # Mock file creation to succeed but Docker transfer to fail
-        with patch.object(self.op_client, "_create_script_file") as mock_create:
-            mock_create.return_value = "/tmp/test_script.rb"
-            # Make the docker client transfer_file_to_container method raise an exception
-            self.mock_docker_client.transfer_file_to_container.side_effect = FileTransferError(
-                "Failed to copy script to container",
-            )
+        # Mock the rails_client._send_command_to_tmux to throw a CommandExecutionError
+        self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError(
+            "Failed to copy script to container"
+        )
 
-            # Execute the test with expected exception
-            with self.assertRaises(FileTransferError) as context:
-                self.op_client._transfer_and_execute_script("puts 'test'")
+        # Execute the test with expected exception
+        with pytest.raises(CommandExecutionError) as context:
+            self.op_client.execute_query("puts 'test'")
 
-            # Verify error message
-            self.assertIn("Failed to copy script to container", str(context.exception))
+        # Verify error message
+        assert "Failed to copy script to container" in str(context.value)
 
     def test_execute_query_success(self) -> None:
         """Test successful query execution."""
@@ -257,12 +253,12 @@ class TestOpenProjectClient(unittest.TestCase):
         result = self.op_client.execute_query("puts 'hello world'")
 
         # Verify result
-        self.assertEqual(result, "42")
+        assert result == "42"
 
         # Verify mock was called with properly wrapped query
         self.mock_rails_client._send_command_to_tmux.assert_called_once()
         command_arg = self.mock_rails_client._send_command_to_tmux.call_args[0][0]
-        self.assertIn("puts (puts 'hello world')", command_arg)
+        assert "puts (puts 'hello world')" in command_arg
 
     def test_execute_query_error(self) -> None:
         """Test query execution with error."""
@@ -270,11 +266,11 @@ class TestOpenProjectClient(unittest.TestCase):
         self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError("Query execution failed")
 
         # Execute the query with error expected
-        with self.assertRaises(CommandExecutionError) as context:
+        with pytest.raises(CommandExecutionError) as context:
             self.op_client.execute_query("invalid syntax")
 
         # Verify error message
-        self.assertIn("Query execution failed", str(context.exception))
+        assert "Query execution failed" in str(context.value)
 
     def test_execute_script(self) -> None:
         """Test direct script execution."""
@@ -287,45 +283,38 @@ class TestOpenProjectClient(unittest.TestCase):
             result = self.op_client.execute(script_content)
 
             # Verify result
-            self.assertEqual(result["status"], "success")
-            self.assertEqual(result["output"], "Script executed successfully")
+            assert result["status"] == "success"
+            assert result["output"] == "Script executed successfully"
 
             # Verify mock was called with the right content
             mock_execute.assert_called_once_with(script_content)
 
     def test_file_transfer_methods(self) -> None:
         """Test file transfer methods."""
-        # Set up the mocks
-        self.mock_ssh_client.check_remote_file_exists.return_value = True
-        self.mock_ssh_client.copy_file_to_remote.return_value = "/remote/path/test_script.rb"
-
         # For transfer to container test
-        script_file = "/tmp/test_script.rb"
+        local_path = Path("/tmp/test_script.rb")
+        container_path = Path("/container/test_script.rb")
 
-        # Create a patched version of _transfer_rails_script that doesn't actually use docker_client
-        with patch.object(self.op_client, "docker_client") as mock_docker_client:
-            # Configure the mock docker client
-            mock_docker_client.check_file_exists_in_container.return_value = True
-            mock_docker_client.execute_command.return_value = ("file content", "", 0)
+        # Test transfer_file_to_container
+        self.op_client.transfer_file_to_container(local_path, container_path)
 
-            result = self.op_client._transfer_rails_script(script_file)
+        # Verify docker_client.transfer_file_to_container was called with the correct paths
+        self.mock_docker_client.transfer_file_to_container.assert_called_once_with(local_path, container_path)
 
-            # Since we've completely mocked the behavior, just verify that the result is as expected
-            self.assertEqual(result, f"/tmp/{os.path.basename(script_file)}")
+        # Reset the mock for the next test
+        self.mock_docker_client.transfer_file_to_container.reset_mock()
 
-            # Verify the docker_client methods were called
-            mock_docker_client.transfer_file_to_container.assert_called_once()
-            mock_docker_client.check_file_exists_in_container.assert_called_once()
-            mock_docker_client.execute_command.assert_called_once()
+        # Test transfer_file_from_container
+        self.op_client.transfer_file_from_container(container_path, local_path)
 
-        # Next test transfer_file_to_container with a failing transfer
-        with self.assertRaises(FileTransferError):
-            # Make the SSH client raise an exception
-            self.mock_ssh_client.copy_file_to_remote.side_effect = Exception("Connection refused")
-            self.op_client.transfer_file_to_container("/local/file2.txt", "/container/file2.txt")
+        # Verify docker_client.copy_file_from_container was called with the correct paths
+        self.mock_docker_client.copy_file_from_container.assert_called_once_with(container_path, local_path)
 
-        # Verify the SSH client was called with the right parameters
-        self.mock_ssh_client.copy_file_to_remote.assert_called()
+        # Test failing transfer (to container)
+        self.mock_docker_client.transfer_file_to_container.side_effect = Exception("Connection refused")
+
+        with pytest.raises(FileTransferError):
+            self.op_client.transfer_file_to_container(local_path, container_path)
 
     def test_is_connected(self) -> None:
         """Test connection check."""
@@ -339,12 +328,12 @@ class TestOpenProjectClient(unittest.TestCase):
             result = self.op_client.is_connected()
 
             # Verify result
-            self.assertTrue(result)
+            assert result
 
             # Verify Rails client was called with the correct connection test command
             self.mock_rails_client.execute.assert_called_once()
             command = self.mock_rails_client.execute.call_args[0][0]
-            self.assertIn("OPENPROJECT_CONNECTION_TEST_", command)
+            assert "OPENPROJECT_CONNECTION_TEST_" in command
 
             # Test with a failed execution
             self.mock_rails_client.execute.reset_mock()
@@ -353,7 +342,7 @@ class TestOpenProjectClient(unittest.TestCase):
             result = self.op_client.is_connected()
 
             # Verify result
-            self.assertFalse(result)
+            assert not result
 
 
 if __name__ == "__main__":

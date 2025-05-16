@@ -88,7 +88,7 @@ class TestJiraClientIntegration(unittest.TestCase):
             jira_client = JiraClient()
 
             # Verify client is initialized
-            self.assertIsNotNone(jira_client.jira)
+            assert jira_client.jira is not None
             print("✅ Successfully connected to Jira instance")
 
             # Get server info to ensure connection works
@@ -153,14 +153,14 @@ class TestJiraClientIntegration(unittest.TestCase):
             # Test with a project key that has an invalid format
             # This should raise a JiraApiError or JiraResourceNotFoundError
             invalid_project = "NONEXISTENT_PROJECT_KEY_123456789"
-            with self.assertRaises((JiraResourceNotFoundError, JiraApiError)):
+            with pytest.raises((JiraResourceNotFoundError, JiraApiError)):
                 jira_client.get_issue_count(invalid_project)
 
             print(f"✅ Correctly raised exception for nonexistent project {invalid_project}")
 
             # Test resource not found handling - use a deliberately invalid issue key
             invalid_issue = "FAKE-12345"
-            with self.assertRaises((JiraResourceNotFoundError, JiraApiError)):
+            with pytest.raises((JiraResourceNotFoundError, JiraApiError)):
                 jira_client.get_issue_details(invalid_issue)
 
             print(f"✅ Correctly raised exception for nonexistent issue {invalid_issue}")

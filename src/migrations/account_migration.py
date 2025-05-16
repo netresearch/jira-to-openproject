@@ -1,19 +1,22 @@
 """Account migration module for Jira to OpenProject migration.
+
 Handles the migration of Tempo timesheet accounts as custom fields in OpenProject.
 """
 
 from __future__ import annotations
 
 import json
-import os
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult, MigrationError
+
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
 
 # Constants for filenames
 ACCOUNT_MAPPING_FILE = "account_mapping.json"
@@ -78,21 +81,25 @@ class AccountMigration(BaseMigration):
                 self.account_custom_field_id = int(custom_field_id)
             except (ValueError, TypeError):
                 self.logger.warning(
-                    f"Invalid custom field ID in analysis file: {custom_field_id}, will create a new one",
+                    "Invalid custom field ID in analysis file: %s, will create a new one",
+                    custom_field_id,
                 )
                 self.account_custom_field_id = None
 
-        self.logger.info(f"Loaded {len(self.tempo_accounts)=} Tempo accounts")
-        self.logger.info(f"Loaded {len(self.op_projects)=} OpenProject projects")
-        self.logger.info(f"Loaded {len(self.company_mapping)=} company mappings")
-        self.logger.info(f"Loaded {len(self.account_mapping)=} account mappings")
+        self.logger.info("Loaded %d Tempo accounts", len(self.tempo_accounts))
+        self.logger.info("Loaded %d OpenProject projects", len(self.op_projects))
+        self.logger.info("Loaded %d company mappings", len(self.company_mapping))
+        self.logger.info("Loaded %d account mappings", len(self.account_mapping))
         if self.account_custom_field_id:
-            self.logger.info(f"Loaded existing {self.account_custom_field_id=}")
+            self.logger.info(
+                "Loaded existing custom field ID: %d",
+                self.account_custom_field_id,
+            )
         else:
             self.logger.info("No valid custom field ID found, will create a new one")
 
     def extract_tempo_accounts(self, force: bool = False) -> list:
-        """Extracts Tempo accounts using the JiraClient.
+        """Extract Tempo accounts using the JiraClient.
 
         Args:
             force: If True, forces re-extraction even if cached data exists.
@@ -105,7 +112,10 @@ class AccountMigration(BaseMigration):
 
         """
         if self.tempo_accounts and not config.migration_config.get("force", False) and not force:
-            self.logger.info(f"Using cached Tempo accounts from {Mappings.TEMPO_ACCOUNTS_FILE}")
+            self.logger.info(
+                "Using cached Tempo accounts from %s",
+                Mappings.TEMPO_ACCOUNTS_FILE,
+            )
             return self.tempo_accounts
 
         self.logger.info("Extracting Tempo accounts...")
@@ -115,7 +125,7 @@ class AccountMigration(BaseMigration):
             accounts = self.jira_client.get_tempo_accounts(expand=True)
 
             if accounts is not None:
-                self.logger.info(f"Retrieved {len(accounts)} Tempo accounts")
+                self.logger.info("Retrieved %d Tempo accounts", len(accounts))
                 self.tempo_accounts = accounts
                 self._save_to_json(accounts, Mappings.TEMPO_ACCOUNTS_FILE)
                 return accounts
@@ -125,7 +135,7 @@ class AccountMigration(BaseMigration):
 
         except Exception as e:
             error_msg = f"Failed to extract Tempo accounts: {e!s}"
-            self.logger.error(error_msg)
+            self.logger.exception(error_msg)
             raise MigrationError(error_msg) from e
 
     def extract_openproject_projects(self) -> list:
@@ -144,12 +154,13 @@ class AccountMigration(BaseMigration):
         self.op_projects = self.op_client.get_projects()
 
         if not self.op_projects:
-            raise MigrationError("Failed to get projects from OpenProject - no projects found")
+            msg = "Failed to get projects from OpenProject - no projects found"
+            raise MigrationError(msg)
 
         # Save projects for future reference
         self._save_to_json(self.op_projects, "openproject_projects.json")
 
-        self.logger.info(f"Extracted {len(self.op_projects)} projects from OpenProject")
+        self.logger.info("Extracted %d projects from OpenProject", len(self.op_projects))
         return self.op_projects
 
     def create_account_mapping(self) -> dict:
@@ -162,7 +173,7 @@ class AccountMigration(BaseMigration):
             MigrationError: If required data is missing
 
         """
-        self.logger.info("Creating account mapping...", extra={"markup": True})
+        self.logger.info("Creating account mapping...")
 
         if not self.tempo_accounts:
             self.extract_tempo_accounts()
@@ -188,7 +199,9 @@ class AccountMigration(BaseMigration):
             match_method = "name" if op_project else "none"
 
             if not op_project and default_project_key and default_project_key in jira_project_mapping:
-                op_project_id = jira_project_mapping[default_project_key].get("openproject_id")
+                op_project_id = jira_project_mapping[default_project_key].get(
+                    "openproject_id",
+                )
                 if op_project_id:
                     op_project = next(
                         (p for p in self.op_projects if str(p.get("id")) == str(op_project_id)),
@@ -249,25 +262,28 @@ class AccountMigration(BaseMigration):
         match_percentage = (matched_accounts / total_accounts) * 100 if total_accounts > 0 else 0
 
         self.logger.info(
-            f"Account mapping created for {total_accounts} accounts",
-            extra={"markup": True},
+            "Account mapping created for %d accounts",
+            total_accounts,
         )
         self.logger.info(
-            f"Successfully matched {matched_accounts} accounts ({match_percentage:.1f}%)",
-            extra={"markup": True},
+            "Successfully matched %d accounts (%f%%)",
+            matched_accounts,
+            match_percentage,
         )
         if name_matched > 0:
-            self.logger.info(f"  - {name_matched} accounts matched by name", extra={"markup": True})
+            self.logger.info(
+                "  - %d accounts matched by name",
+                name_matched,
+            )
         if default_project_matched > 0:
             self.logger.info(
-                f"  - {default_project_matched} accounts matched by default project",
-                extra={"markup": True},
+                "  - %d accounts matched by default project",
+                default_project_matched,
             )
 
         self.logger.info(
-            f"Unmatched accounts: {total_accounts - matched_accounts}"
-            f" - these will be available in the custom field but not linked to projects",
-            extra={"markup": True},
+            "Unmatched accounts: %d - these will be available in the custom field but not linked to projects",
+            total_accounts - matched_accounts,
         )
 
         return mapping
@@ -288,7 +304,10 @@ class AccountMigration(BaseMigration):
         existing_id = self.get_existing_custom_field_id()
 
         if existing_id:
-            self.logger.info(f"Found existing Tempo Account custom field with ID {existing_id}")
+            self.logger.info(
+                "Found existing Tempo Account custom field with ID %d",
+                existing_id,
+            )
             self.account_custom_field_id = existing_id
             return existing_id
 
@@ -308,14 +327,19 @@ class AccountMigration(BaseMigration):
         result = self.op_client.create_record("CustomField", field_options)
 
         if not result or "id" not in result:
-            raise MigrationError("Failed to create custom field: Invalid response from OpenProject")
+            msg = "Failed to create custom field: Invalid response from OpenProject"
+            raise MigrationError(msg)
 
         self.account_custom_field_id = result["id"]
-        self.logger.info(f"Created Tempo Account custom field with ID {self.account_custom_field_id}")
+        self.logger.info(
+            "Created Tempo Account custom field with ID %d",
+            self.account_custom_field_id,
+        )
 
         # Associate with all work package types
         if not self.associate_field_with_work_package_types(self.account_custom_field_id):
-            raise MigrationError("Failed to associate custom field with work package types")
+            msg = "Failed to associate custom field with work package types"
+            raise MigrationError(msg)
 
         return self.account_custom_field_id
 
@@ -326,7 +350,7 @@ class AccountMigration(BaseMigration):
             ComponentResult with migration results
 
         """
-        self.logger.info("Starting account migration", extra={"markup": True})
+        self.logger.info("Starting account migration")
 
         try:
             self._load_data()
@@ -341,7 +365,8 @@ class AccountMigration(BaseMigration):
             # Ensure the custom field exists
             custom_field_id = self.create_account_custom_field()
             if not custom_field_id:
-                raise MigrationError("Failed to create or retrieve account custom field")
+                msg = "Failed to create or retrieve account custom field"
+                raise MigrationError(msg)
 
             # Analyze results
             analysis = self.analyze_account_mapping()
@@ -357,9 +382,8 @@ class AccountMigration(BaseMigration):
                 total_count=analysis["total_accounts"],
             )
         except Exception as e:
-            self.logger.error(
-                f"Error during account migration: {e!s}",
-                extra={"markup": True},
+            self.logger.exception(
+                "Error during account migration",
             )
             return ComponentResult(
                 success=False,
@@ -377,14 +401,13 @@ class AccountMigration(BaseMigration):
 
         """
         if not self.account_mapping:
-            mapping_path = os.path.join(self.data_dir, Mappings.ACCOUNT_MAPPING_FILE)
-            if os.path.exists(mapping_path):
-                with open(mapping_path) as f:
+            mapping_path = Path(self.data_dir) / Mappings.ACCOUNT_MAPPING_FILE
+            if mapping_path.exists():
+                with mapping_path.open() as f:
                     self.account_mapping = json.load(f)
             else:
                 self.logger.error(
                     "No account mapping found. Run create_account_mapping() first.",
-                    extra={"markup": True},
                 )
                 return {}
 
@@ -439,39 +462,40 @@ class AccountMigration(BaseMigration):
 
         self._save_to_json(analysis, "account_mapping_analysis.json")
 
-        self.logger.info("=== Account Migration Summary ===", extra={"markup": True})
+        self.logger.info("=== Account Migration Summary ===")
         self.logger.info(
-            f"Total Tempo accounts processed: {analysis['summary']['total_tempo_accounts']}",
-            extra={"markup": True},
+            "Total Tempo accounts processed: %d",
+            analysis["summary"]["total_tempo_accounts"],
         )
         self.logger.info(
-            f"OpenProject projects available: {analysis['summary']['total_openproject_projects']}",
-            extra={"markup": True},
+            "OpenProject projects available: %d",
+            analysis["summary"]["total_openproject_projects"],
         )
         self.logger.info(
-            f"Accounts matched to projects: {analysis['summary']['accounts_matched_to_projects']} ({analysis['match_percentage']:.1f}%)",
-            extra={"markup": True},
+            "Accounts matched to projects: %d (%f%%)",
+            analysis["summary"]["accounts_matched_to_projects"],
+            analysis["match_percentage"],
         )
         if analysis["match_methods"]["name"] > 0:
             self.logger.info(
-                f"  - Matched by name: {analysis['match_methods']['name']}",
-                extra={"markup": True},
+                "  - Matched by name: %d",
+                analysis["match_methods"]["name"],
             )
         if analysis["match_methods"]["default_project"] > 0:
             self.logger.info(
-                f"  - Matched by default project: {analysis['match_methods']['default_project']}",
-                extra={"markup": True},
+                "  - Matched by default project: %d",
+                analysis["match_methods"]["default_project"],
             )
         self.logger.info(
             "Accounts added to custom field but not matched to projects:"
-            f" {analysis['summary']['accounts_without_project_match']}",
-            extra={"markup": True},
+            " %d",
+            analysis["summary"]["accounts_without_project_match"],
         )
         self.logger.info(
-            f"Custom field ID in OpenProject: {analysis['summary']['custom_field_id']}",
-            extra={"markup": True},
+            "Custom field ID in OpenProject: %d",
+            analysis["summary"]["custom_field_id"],
         )
-        self.logger.info("=====================", extra={"markup": True})
+        self.logger.info("=====================")
 
         return analysis
 
@@ -491,7 +515,10 @@ class AccountMigration(BaseMigration):
             # Ensure it's a valid integer
             cf_id = int(cf_id)
         except (ValueError, TypeError):
-            self.logger.warning(f"Not saving invalid custom field ID: {cf_id}")
+            self.logger.warning(
+                "Not saving invalid custom field ID: %s",
+                cf_id,
+            )
             return
 
         analysis = self._load_from_json("account_mapping_analysis.json", {})
@@ -506,7 +533,7 @@ class AccountMigration(BaseMigration):
             Dictionary of mapped accounts
 
         """
-        self.logger.info("Starting account migration", extra={"markup": True})
+        self.logger.info("Starting account migration")
 
         # Extract accounts if needed
         if not self.tempo_accounts:
@@ -545,10 +572,15 @@ class AccountMigration(BaseMigration):
                 self.logger.info("No existing 'Tempo Account' custom field found")
                 return None
 
-            self.logger.info(f"Found existing 'Tempo Account' custom field with ID: {existing_id}")
+            self.logger.info(
+                "Found existing 'Tempo Account' custom field with ID: %d",
+                existing_id,
+            )
             return existing_id
-        except Exception as e:
-            self.logger.warning(f"Error checking for existing custom field: {e!s}")
+        except Exception:
+            self.logger.warning(
+                "Error checking for existing custom field",
+            )
             return None
 
     def create_custom_field_via_rails(self) -> int | None:
@@ -584,7 +616,10 @@ class AccountMigration(BaseMigration):
 
             if result and "output" in result and result["output"] is not None:
                 new_id = int(result["output"])
-                self.logger.info(f"Successfully created custom field with ID: {new_id}")
+                self.logger.info(
+                    "Successfully created custom field with ID: %d",
+                    new_id,
+                )
 
                 # Make custom field available for all work package types
                 self.associate_field_with_work_package_types(new_id)
@@ -594,8 +629,10 @@ class AccountMigration(BaseMigration):
             self.logger.warning("Failed to create custom field via Rails")
             return None
 
-        except Exception as e:
-            self.logger.warning(f"Error creating custom field via Rails: {e!s}")
+        except Exception:
+            self.logger.warning(
+                "Error creating custom field via Rails",
+            )
             return None
 
     def associate_field_with_work_package_types(self, field_id: int) -> bool:
@@ -632,6 +669,8 @@ class AccountMigration(BaseMigration):
             self.logger.warning("Failed to activate custom field for all types")
             return False
 
-        except Exception as e:
-            self.logger.warning(f"Error associating custom field with types: {e!s}")
+        except Exception:
+            self.logger.warning(
+                "Error associating custom field with types",
+            )
             return False

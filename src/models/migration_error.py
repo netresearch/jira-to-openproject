@@ -1,5 +1,4 @@
-"""Defines exceptions for the migration process.
-"""
+"""Defines exceptions for the migration process."""
 
 
 class MigrationError(Exception):
@@ -9,7 +8,7 @@ class MigrationError(Exception):
     that prevents it from continuing execution.
     """
 
-    def __init__(self, message: str, *args, **kwargs):
+    def __init__(self, message: str, *args, **kwargs) -> None:
         """Initialize the exception with a descriptive message.
 
         Args:

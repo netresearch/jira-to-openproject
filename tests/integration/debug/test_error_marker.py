@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Test script to verify Rails console error marker handling
-"""
+"""Test script to verify Rails console error marker handling."""
 
 import pytest
 
@@ -8,7 +7,7 @@ from src.clients.rails_console_client import RailsConsoleClient
 
 
 def test_error_marker_detection() -> None:
-    """Test if Rails console client can distinguish between error markers in source code and actual errors"""
+    """Test if Rails console client can distinguish between error markers in source code and actual errors."""
     print("TESTING ERROR MARKER DETECTION")
     print("==============================")
 

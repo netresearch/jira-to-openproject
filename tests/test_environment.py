@@ -8,13 +8,13 @@ from dotenv import load_dotenv
 
 
 def test_python_version() -> None:
-    """Test Python version is 3.12.x"""
+    """Test Python version is 3.12.x."""
     assert sys.version_info.major == 3
     assert sys.version_info.minor == 12
 
 
 def _test_required_packages() -> None:
-    """Test all required packages are installed"""
+    """Test all required packages are installed."""
     # Test requests
     response = requests.get("https://httpbin.org/get")
     assert response.status_code == 200
@@ -29,7 +29,7 @@ def _test_required_packages() -> None:
 
 
 def test_env_file() -> None:
-    """Test .env file exists and can be loaded"""
+    """Test .env file exists and can be loaded."""
     # Try loading from .env first, then .env.test if needed
     load_dotenv()
 
@@ -45,5 +45,3 @@ def test_env_file() -> None:
 
     assert jira_url is not None, "Neither JIRA_URL nor J2O_JIRA_URL found in environment"
     assert jira_token is not None, "Neither JIRA_API_TOKEN nor J2O_JIRA_API_TOKEN found in environment"
-
-

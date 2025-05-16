@@ -5,7 +5,7 @@ with special handling for Pydantic models.
 """
 
 import json
-import os
+from pathlib import Path
 from typing import Any, TypeVar
 
 from src import config
@@ -14,7 +14,11 @@ T = TypeVar("T")
 
 
 def save_results(
-    data: Any, filename: str, directory: str | None = None, indent: int = 2, ensure_ascii: bool = False,
+    data: Any,
+    filename: Path | str,
+    directory: Path | str | None = None,
+    indent: int = 2,
+    ensure_ascii: bool = False,
 ) -> bool:
     """Save data to a JSON file, automatically handling Pydantic models.
 
@@ -35,7 +39,13 @@ def save_results(
     return save(data, filename, directory, indent, ensure_ascii)
 
 
-def save(data: Any, filename: str, directory: str | None = None, indent: int = 2, ensure_ascii: bool = False) -> bool:
+def save(
+    data: Any,
+    filename: str | Path,
+    directory: str | Path | None = None,
+    indent: int = 2,
+    ensure_ascii: bool = False
+) -> bool:
     """Save data to a JSON file, automatically handling Pydantic models.
 
     Args:
@@ -52,25 +62,38 @@ def save(data: Any, filename: str, directory: str | None = None, indent: int = 2
     if directory is None:
         directory = config.get_path("data")
 
-    filepath = os.path.join(directory, filename)
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    # Convert to Path objects
+    directory = Path(directory)
+    filename = Path(filename) if not isinstance(filename, Path) else filename
+
+    # Make sure we're just using the filename part if a full path was provided
+    if len(filename.parts) > 1:
+        filename = Path(filename.name)
+
+    filepath = directory / filename
+    filepath.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         # Convert Pydantic models to dict if necessary
         if hasattr(data, "model_dump"):
             data = data.model_dump()
 
-        with open(filepath, "w", encoding="utf-8") as f:
+        with filepath.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=indent, ensure_ascii=ensure_ascii)
 
         config.logger.info(f"Saved data to {filepath}")
         return True
-    except Exception as e:
-        config.logger.exception(f"Failed to save data to {filepath}: {e}")
+    except Exception:
+        config.logger.exception(f"Failed to save data to {filepath}")
         return False
 
 
-def load(model_class: type[T], filename: str, directory: str | None = None, default: Any | None = None) -> T | None:
+def load(
+    model_class: type[T],
+    filename: str | Path,
+    directory: str | Path | None = None,
+    default: Any | None = None
+) -> T | None:
     """Load data from a JSON file and convert to specified model type.
 
     Args:
@@ -86,26 +109,46 @@ def load(model_class: type[T], filename: str, directory: str | None = None, defa
     if directory is None:
         directory = config.get_path("data")
 
-    filepath = os.path.join(directory, filename)
+    # Convert to Path objects
+    directory = Path(directory)
+    filename = Path(filename) if not isinstance(filename, Path) else filename
 
-    if not os.path.exists(filepath):
+    # Make sure we're just using the filename part if a full path was provided
+    if len(filename.parts) > 1:
+        filename = Path(filename.name)
+
+    filepath = directory / filename
+
+    if not filepath.exists():
         config.logger.info(f"File not found: {filepath}, returning default")
         return default
 
     try:
-        with open(filepath, encoding="utf-8") as f:
+        with filepath.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
         # Convert dict to model instance
-        result = model_class.model_validate(data)
+        if hasattr(model_class, "model_validate"):
+            result = model_class.model_validate(data)
+        elif hasattr(model_class, "parse_obj"):
+            # Legacy Pydantic v1 support
+            result = model_class.parse_obj(data)
+        else:
+            # Fallback to normal constructor
+            result = model_class(**data)
+
         config.logger.info(f"Loaded data from {filepath}")
         return result
-    except Exception as e:
-        config.logger.exception(f"Failed to load data from {filepath}: {e}")
+    except Exception:
+        config.logger.exception(f"Failed to load data from {filepath}")
         return default
 
 
-def load_dict(filename: str, directory: str | None = None, default: dict[str, Any] | None = None) -> dict[str, Any]:
+def load_dict(
+    filename: Path,
+    directory: Path | None = None,
+    default: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Load dictionary data from a JSON file.
 
     Args:
@@ -123,24 +166,40 @@ def load_dict(filename: str, directory: str | None = None, default: dict[str, An
     if directory is None:
         directory = config.get_path("data")
 
-    filepath = os.path.join(directory, filename)
+    # Convert to Path objects
+    directory = Path(directory)
+    filename = Path(filename) if not isinstance(filename, Path) else filename
 
-    if not os.path.exists(filepath):
-        config.logger.info(f"File not found: {filepath}, returning empty dict")
-        return default
+    # Get full path
+    file_path = directory / filename
 
     try:
-        with open(filepath, encoding="utf-8") as f:
+        if not file_path.exists():
+            config.logger.debug("File does not exist: %s", file_path)
+            return default
+
+        with file_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
-        config.logger.info(f"Loaded dictionary data from {filepath}")
+        if not isinstance(data, dict):
+            config.logger.warning("File %s does not contain a dictionary", file_path)
+            return default
+
+        config.logger.info("Loaded dictionary data from %s", file_path)
         return data
-    except Exception as e:
-        config.logger.exception(f"Failed to load data from {filepath}: {e}")
+    except json.JSONDecodeError:
+        config.logger.exception("Error parsing JSON from %s", file_path)
+        return default
+    except Exception:
+        config.logger.exception("Error reading JSON file %s", file_path)
         return default
 
 
-def load_list(filename: str, directory: str | None = None, default: list[Any] | None = None) -> list[Any]:
+def load_list(
+    filename: str | Path,
+    directory: str | Path | None = None,
+    default: list[Any] | None = None
+) -> list[Any]:
     """Load list data from a JSON file.
 
     Args:
@@ -158,29 +217,46 @@ def load_list(filename: str, directory: str | None = None, default: list[Any] | 
     if directory is None:
         directory = config.get_path("data")
 
-    filepath = os.path.join(directory, filename)
+    # Convert to Path objects
+    directory = Path(directory)
+    filename = Path(filename) if not isinstance(filename, Path) else filename
 
-    if not os.path.exists(filepath):
-        config.logger.info(f"File not found: {filepath}, returning empty list")
-        return default
+    # Get full path
+    file_path = directory / filename
 
     try:
-        with open(filepath, encoding="utf-8") as f:
+        if not file_path.exists():
+            config.logger.debug("File does not exist: %s", file_path)
+            return default
+
+        with file_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
-        config.logger.info(f"Loaded list data from {filepath}")
+        if not isinstance(data, list):
+            config.logger.warning("File %s does not contain a list", file_path)
+            return default
+
+        config.logger.info("Loaded list data from %s", file_path)
         return data
-    except Exception as e:
-        config.logger.exception(f"Failed to load data from {filepath}: {e}")
+    except json.JSONDecodeError:
+        config.logger.exception("Error parsing JSON from %s", file_path)
+        return default
+    except Exception:
+        config.logger.exception("Error reading JSON file %s", file_path)
         return default
 
 
-def save_to_path(data: Any, filepath: str, indent: int = 2, ensure_ascii: bool = False) -> bool:
+def save_to_path(
+    data: Any,
+    filepath: Path | str,
+    indent: int = 2,
+    ensure_ascii: bool = False
+) -> bool:
     """Save data to a JSON file at a specific path.
 
     Args:
-        data: The data to save (Pydantic model or any JSON-serializable data)
-        filepath: Full file path to save to
+        data: Data to save
+        filepath: Path to save to
         indent: JSON indentation level
         ensure_ascii: Whether to escape non-ASCII characters
 
@@ -188,24 +264,47 @@ def save_to_path(data: Any, filepath: str, indent: int = 2, ensure_ascii: bool =
         True if save was successful, False otherwise
 
     """
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    # Convert to Path object if it's a string
+    filepath = Path(filepath) if isinstance(filepath, str) else filepath
 
     try:
-        # Convert Pydantic models to dict if necessary
+        # Ensure parent directory exists
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        # Handle Pydantic models by converting to dict first
         if hasattr(data, "model_dump"):
-            data = data.model_dump()
+            # For Pydantic v2+
+            json_data = data.model_dump()
+        elif hasattr(data, "dict"):
+            # For older Pydantic versions
+            json_data = data.dict()
+        else:
+            # Not a Pydantic model
+            json_data = data
 
+        # Write JSON data to file
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=indent, ensure_ascii=ensure_ascii)
+            json.dump(json_data, f, indent=indent, ensure_ascii=ensure_ascii)
 
-        config.logger.info(f"Saved data to {filepath}")
-        return True
+        # Verify file was created successfully
+        if filepath.exists():
+            file_size = filepath.stat().st_size
+            config.logger.info(f"Saved data to {filepath}")
+            return True
+        else:
+            config.logger.error(f"Failed to save data to {filepath}")
+            return False
+
     except Exception as e:
         config.logger.exception(f"Failed to save data to {filepath}: {e}")
         return False
 
 
-def load_from_path(model_class: type[T], filepath: str, default: Any | None = None) -> T | None:
+def load_from_path(
+    model_class: type[T],
+    filepath: Path | str,
+    default: Any | None = None
+) -> T | None:
     """Load data from a JSON file at a specific path.
 
     Args:
@@ -217,24 +316,35 @@ def load_from_path(model_class: type[T], filepath: str, default: Any | None = No
         Instance of model_class or default value if loading fails
 
     """
-    if not os.path.exists(filepath):
+    # Convert to Path object
+    filepath = Path(filepath)
+
+    if not filepath.exists():
         config.logger.info(f"File not found: {filepath}, returning default")
         return default
 
     try:
-        with open(filepath, encoding="utf-8") as f:
+        with filepath.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
         # Convert dict to model instance
-        result = model_class.model_validate(data)
+        if hasattr(model_class, "model_validate"):
+            result = model_class.model_validate(data)
+        elif hasattr(model_class, "parse_obj"):
+            # Legacy Pydantic v1 support
+            result = model_class.parse_obj(data)
+        else:
+            # Fallback to normal constructor
+            result = model_class(**data)
+
         config.logger.info(f"Loaded data from {filepath}")
         return result
-    except Exception as e:
-        config.logger.exception(f"Failed to load data from {filepath}: {e}")
+    except Exception:
+        config.logger.exception(f"Failed to load data from {filepath}")
         return default
 
 
-def save_dict(data: dict[str, Any], filepath: str, indent: int = 2, ensure_ascii: bool = False) -> bool:
+def save_dict(data: dict[str, Any], filepath: Path, indent: int = 2, ensure_ascii: bool = False) -> bool:
     """Save dictionary data to a JSON file.
 
     This is a convenience wrapper around save_to_path for dictionaries.
@@ -250,3 +360,43 @@ def save_dict(data: dict[str, Any], filepath: str, indent: int = 2, ensure_ascii
 
     """
     return save_to_path(data, filepath, indent, ensure_ascii)
+
+
+def load_model(model_class: type[T], filename: str | Path, directory: str | Path | None = None) -> T | None:
+    """Load a Pydantic model from a JSON file.
+
+    Args:
+        model_class: Pydantic model class to instantiate
+        filename: File to load from
+        directory: Directory to load from (default: config.get_path("data"))
+
+    Returns:
+        Pydantic model instance or None if loading fails
+
+    """
+    if directory is None:
+        directory = config.get_path("data")
+
+    # Convert to Path objects
+    directory = Path(directory)
+    filename = Path(filename) if not isinstance(filename, Path) else filename
+
+    # Get full path
+    file_path = directory / filename
+
+    try:
+        if not file_path.exists():
+            config.logger.debug("File does not exist: %s", file_path)
+            return None
+
+        with file_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        config.logger.info("Loaded data from %s", file_path)
+        return model_class.model_validate(data)
+    except json.JSONDecodeError:
+        config.logger.exception("Error parsing JSON from %s", file_path)
+        return None
+    except Exception:
+        config.logger.exception("Error loading model from %s", file_path)
+        return None

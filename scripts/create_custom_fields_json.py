@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create Custom Fields JSON
+"""Create Custom Fields JSON.
 
 This script parses a custom fields list captured from the Rails console
 and creates a JSON file with the custom field data.

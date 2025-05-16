@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""OpenProject Cleanup Script
+"""OpenProject Cleanup Script.
 
 This script removes all existing work packages, projects, and custom fields from an OpenProject instance.
 """
 
 import argparse
 import sys
+from pathlib import Path
 from typing import TypeVar
 
 from src import config
@@ -19,8 +20,7 @@ T = TypeVar("T")
 
 
 class OpenProjectCleaner:
-    """Class to clean up an OpenProject instance by removing specified entities.
-    """
+    """Class to clean up an OpenProject instance by removing specified entities."""
 
     def __init__(
         self,
@@ -39,7 +39,7 @@ class OpenProjectCleaner:
         self.dry_run = dry_run
 
         self.op_client = OpenProjectClient()
-        self.data_dir = config.get_path("data")
+        self.data_dir: Path = config.get_path("data")
 
     def cleanup_work_packages(self) -> int:
         """Remove all work packages from OpenProject.
@@ -48,17 +48,16 @@ class OpenProjectCleaner:
             Number of work packages deleted
 
         """
-        logger.info("Starting work package cleanup...", extra={"markup": True})
+        logger.info("Starting work package cleanup...")
 
         count = self.op_client.count_records("WorkPackage")
         if count <= 0:
-            logger.info("No work packages found to delete", extra={"markup": True})
+            logger.info("No work packages found to delete")
             return 0
 
         if self.dry_run:
             logger.info(
                 f"DRY RUN: Would delete {count} work packages",
-                extra={"markup": True},
             )
             return count
 
@@ -71,18 +70,17 @@ class OpenProjectCleaner:
             Number of projects deleted
 
         """
-        logger.info("Starting project cleanup...", extra={"markup": True})
+        logger.info("Starting project cleanup...")
 
         count = self.op_client.count_records("Project")
         logger.debug(f"Count: {count}")
         if count <= 0:
-            logger.info("No projects found to delete", extra={"markup": True})
+            logger.info("No projects found to delete")
             return 0
 
         if self.dry_run:
             logger.info(
                 f"DRY RUN: Would delete {count} projects",
-                extra={"markup": True},
             )
             return count
 
@@ -95,17 +93,16 @@ class OpenProjectCleaner:
             Number of custom fields deleted
 
         """
-        logger.info("Starting custom field cleanup...", extra={"markup": True})
+        logger.info("Starting custom field cleanup...")
 
         count = self.op_client.count_records("CustomField")
         if count <= 0:
-            logger.info("No custom fields found to delete", extra={"markup": True})
+            logger.info("No custom fields found to delete")
             return 0
 
         if self.dry_run:
             logger.info(
                 f"DRY RUN: Would delete {count} custom fields",
-                extra={"markup": True},
             )
             return count
 
@@ -119,17 +116,16 @@ class OpenProjectCleaner:
             Number of issue types deleted
 
         """
-        logger.info("Starting issue type cleanup...", extra={"markup": True})
+        logger.info("Starting issue type cleanup...")
 
         count = self.op_client.count_records("Type")
         if count <= 1:
-            logger.info("No issue types found to delete", extra={"markup": True})
+            logger.info("No issue types found to delete")
             return 0
 
         if self.dry_run:
             logger.info(
                 f"DRY RUN: Would delete {count} issue types",
-                extra={"markup": True},
             )
             return count
 
@@ -143,17 +139,16 @@ class OpenProjectCleaner:
             Number of issue statuses deleted
 
         """
-        logger.info("Starting issue status cleanup...", extra={"markup": True})
+        logger.info("Starting issue status cleanup...")
 
         count = self.op_client.count_records("Status")
         if count <= 1:
-            logger.info("No issue statuses found to delete", extra={"markup": True})
+            logger.info("No issue statuses found to delete")
             return 0
 
         if self.dry_run:
             logger.info(
                 f"DRY RUN: Would delete {count} issue statuses",
-                extra={"markup": True},
             )
             return count
 
@@ -167,17 +162,16 @@ class OpenProjectCleaner:
             Number of users deleted
 
         """
-        logger.info("Starting user cleanup...", extra={"markup": True})
+        logger.info("Starting user cleanup...")
 
         count = self.op_client.count_records("User")
         if count <= 0:
-            logger.info("No users found to delete", extra={"markup": True})
+            logger.info("No users found to delete")
             return 0
 
         if self.dry_run:
             logger.info(
                 f"DRY RUN: Would delete {count} users",
-                extra={"markup": True},
             )
             return count
 
@@ -191,10 +185,10 @@ class OpenProjectCleaner:
             Dictionary with cleanup statistics
 
         """
-        logger.info("Starting OpenProject cleanup...", extra={"markup": True})
+        logger.info("Starting OpenProject cleanup...")
 
         if self.dry_run:
-            logger.warning("DRY RUN MODE: No actual changes will be made", extra={"markup": True})
+            logger.warning("DRY RUN MODE: No actual changes will be made")
 
         results = {
             "work_packages_deleted": 0,
@@ -229,53 +223,44 @@ class OpenProjectCleaner:
                 except Exception as e:
                     logger.exception(
                         f"Error during cleanup of {entity_type}: {e!s}",
-                        extra={"markup": True},
                     )
 
         logger.success(
             "OpenProject cleanup completed for specified entities",
-            extra={"markup": True},
         )
-        logger.info("Summary:", extra={"markup": True})
+        logger.info("Summary:")
         if "wp" in self.entities:
             logger.info(
                 f"  Work packages deleted: {results['work_packages_deleted']}",
-                extra={"markup": True},
             )
         if "p" in self.entities:
             logger.info(
                 f"  Projects deleted: {results['projects_deleted']}",
-                extra={"markup": True},
             )
         if "cf" in self.entities:
             logger.info(
                 f"  Custom fields deleted: {results['custom_fields_deleted']}",
-                extra={"markup": True},
             )
         if "u" in self.entities:
-            logger.info(f"  Users deleted: {results['users_deleted']}", extra={"markup": True})
+            logger.info(f"  Users deleted: {results['users_deleted']}")
         if "it" in self.entities:
             logger.info(
                 f"  Issue types deleted: {results['issue_types_deleted']}",
-                extra={"markup": True},
             )
         if "is" in self.entities:
             logger.info(
                 f"  Issue statuses deleted: {results['issue_statuses_deleted']}",
-                extra={"markup": True},
             )
         if "il" in self.entities:
             logger.info(
                 f"  Issue link types deleted: {results['issue_link_types_deleted']}",
-                extra={"markup": True},
             )
 
         return results
 
 
 def main() -> None:
-    """Main function to run the cleanup script.
-    """
+    """Main function to run the cleanup script."""
     parser = argparse.ArgumentParser(
         description="Clean up OpenProject by removing specified entities. "
         "Defaults to all entities if none are specified.",
@@ -352,14 +337,11 @@ def main() -> None:
         cleaner.run_cleanup()
 
         # Log summary (already done in run_cleanup, but keep a final message)
-        logger.info("Cleanup process finished.", extra={"markup": True})
+        logger.info("Cleanup process finished.")
         if args.dry_run:
-            logger.warning(
-                "This was a dry run. No actual changes were made.",
-                extra={"markup": True},
-            )
+            logger.warning("This was a dry run. No actual changes were made.")
     except Exception as e:
-        logger.exception(f"Error during cleanup: {e!s}", extra={"markup": True})
+        logger.exception(f"Error during cleanup: {e!s}")
         sys.exit(1)
 
 

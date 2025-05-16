@@ -1,2 +1,1 @@
-"""Jira to OpenProject migration tool.
-"""
+"""Jira to OpenProject migration tool."""

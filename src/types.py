@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 type JiraData = dict[str, Any]
@@ -49,6 +50,8 @@ type ConfigDict = dict[str, dict[str, ConfigValue]]
 
 
 class OpenProjectConfig(TypedDict):
+    """Configuration for the OpenProject client."""
+
     url: str
     api_key: str
     tmux_session_name: str
@@ -61,12 +64,50 @@ class OpenProjectConfig(TypedDict):
     key_file: str
 
 
-type JiraConfig = dict[str, str | bool | int | None]
-type MigrationConfig = dict[str, str | bool | int | None]
+class JiraConfig(TypedDict):
+    """Configuration for the Jira client."""
+
+    url: str
+    username: str
+    api_token: str
+    verify_ssl: bool
+    scriptrunner: dict[str, Any]
+
+
+type LogLevel = Literal[
+    "DEBUG",
+    "INFO",
+    "NOTICE",
+    "WARNING",
+    "ERROR",
+    "CRITICAL",
+    "SUCCESS",
+]
+
+
+class MigrationConfig(TypedDict):
+    """Configuration for the migration."""
+
+    scriptrunner: dict[str, Any]
+    log_level: LogLevel
+    batch_size: int
+    ssl_verify: bool
+    dry_run: bool
+    force: bool
+    no_backup: bool
+
+
+class Config(TypedDict):
+    """Configuration for the config loader."""
+
+    jira: JiraConfig
+    openproject: OpenProjectConfig
+    migration: MigrationConfig
+
 
 type SectionName = Literal["jira", "openproject", "migration"]
 
-type BackupDir = str | None
+type BackupDir = Path
 type ComponentStatus = Literal["success", "failed", "interrupted"]
 type ComponentName = Literal[
     "users",
@@ -82,14 +123,23 @@ type ComponentName = Literal[
 
 
 # PEP 695 Type Aliases
-type DirType = Literal["root", "data", "logs", "output", "backups", "temp", "exports", "results"]
-
-type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+type DirType = Literal[
+    "backups",
+    "data",
+    "debug",
+    "exports",
+    "logs",
+    "output",
+    "output_test",
+    "results",
+    "root",
+    "temp",
+]
 
 
 @dataclass(slots=True)
 class ConfigSection:
-    """Configuration section with its settings"""
+    """Configuration section with its settings."""
 
     name: str
     settings: dict[str, Any] = field(default_factory=dict)

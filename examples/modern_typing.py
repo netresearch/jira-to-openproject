@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Modern Python Type Annotations Example
+"""Modern Python Type Annotations Example.
 
 This file demonstrates best practices for type annotations in Python 3.9+ projects.
 """
@@ -7,10 +7,12 @@ This file demonstrates best practices for type annotations in Python 3.9+ projec
 from __future__ import annotations  # For forward references
 
 import json
-from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Mapping, Sequence
 
 # Type variables
 T = TypeVar("T")
@@ -177,7 +179,8 @@ def main() -> None:
 
     # Filter results
     filtered_results = processor.filter_results(
-        results, lambda x: isinstance(x, dict) and x.get("id") == 1 if "id" in x else False,
+        results,
+        lambda x: isinstance(x, dict) and x.get("id") == 1 if "id" in x else False,
     )
 
     print(f"All results: {results}")

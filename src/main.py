@@ -15,8 +15,7 @@ from src.migration import restore_backup, run_migration, setup_tmux_session
 
 
 def main() -> None:
-    """Parse arguments and execute the appropriate command.
-    """
+    """Parse arguments and execute the appropriate command."""
     # Create the top-level parser
     parser = argparse.ArgumentParser(
         description="Jira to OpenProject migration tool",

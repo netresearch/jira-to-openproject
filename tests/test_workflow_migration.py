@@ -1,7 +1,7 @@
-"""Tests for the workflow migration component.
-"""
+"""Tests for the workflow migration component."""
 
 import unittest
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -148,14 +148,14 @@ class TestWorkflowMigration(unittest.TestCase):
         mock_jira_instance.base_url = "https://jira.local"
 
         mock_op_instance = mock_op_client.return_value
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
 
         # Create instance and call method
         migration = WorkflowMigration(mock_jira_instance, mock_op_instance)
         result = migration.extract_jira_statuses()
 
         # Assertions
-        self.assertEqual(result, self.jira_statuses)
+        assert result == self.jira_statuses
         mock_jira_instance.jira._session.get.assert_called_once_with("https://jira.local/rest/api/2/status")
         mock_file.assert_called_with("/tmp/test_data/jira_statuses.json", "w")
         mock_file().write.assert_called()
@@ -179,14 +179,14 @@ class TestWorkflowMigration(unittest.TestCase):
         mock_op_instance = mock_op_client.return_value
         mock_op_instance.get_statuses.return_value = self.op_statuses
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
 
         # Create instance and call method
         migration = WorkflowMigration(mock_jira_instance, mock_op_instance)
         result = migration.extract_openproject_statuses()
 
         # Assertions
-        self.assertEqual(result, self.op_statuses)
+        assert result == self.op_statuses
         mock_op_instance.get_statuses.assert_called_once()
         mock_file.assert_called_with("/tmp/test_data/openproject_statuses.json", "w")
         mock_file().write.assert_called()
@@ -214,7 +214,7 @@ class TestWorkflowMigration(unittest.TestCase):
         # Mock tracker context
         mock_progress_tracker.return_value.__enter__.return_value
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
 
         # Create instance and set data for the test
         migration = WorkflowMigration(mock_jira_instance, mock_op_instance)
@@ -225,21 +225,21 @@ class TestWorkflowMigration(unittest.TestCase):
         result = migration.create_status_mapping()
 
         # Assertions
-        self.assertEqual(len(result), 4)  # One mapping entry per Jira status
+        assert len(result) == 4  # One mapping entry per Jira status
 
         # Open, In Progress, and Done should match by name
-        self.assertEqual(result["1"]["openproject_id"], 1)
-        self.assertEqual(result["1"]["matched_by"], "name")
+        assert result["1"]["openproject_id"] == 1
+        assert result["1"]["matched_by"] == "name"
 
-        self.assertEqual(result["2"]["openproject_id"], 2)
-        self.assertEqual(result["2"]["matched_by"], "name")
+        assert result["2"]["openproject_id"] == 2
+        assert result["2"]["matched_by"] == "name"
 
-        self.assertEqual(result["3"]["openproject_id"], 3)
-        self.assertEqual(result["3"]["matched_by"], "name")
+        assert result["3"]["openproject_id"] == 3
+        assert result["3"]["matched_by"] == "name"
 
         # Custom Status should have no match
-        self.assertIsNone(result["4"]["openproject_id"])
-        self.assertEqual(result["4"]["matched_by"], "none")
+        assert result["4"]["openproject_id"] is None
+        assert result["4"]["matched_by"] == "none"
 
         mock_file.assert_called_with("/tmp/test_data/status_mapping.json", "w")
         mock_file().write.assert_called()
@@ -273,15 +273,15 @@ class TestWorkflowMigration(unittest.TestCase):
             },
         }
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
 
         # Create instance and call method with Custom Status
         migration = WorkflowMigration(mock_jira_instance, mock_op_instance)
         result = migration.create_status_in_openproject(self.jira_statuses[3])
 
         # Assertions
-        self.assertEqual(result["id"], 4)
-        self.assertEqual(result["name"], "Custom Status")
+        assert result["id"] == 4
+        assert result["name"] == "Custom Status"
         mock_op_instance.create_status.assert_called_with(name="Custom Status", color="#6C8CD5", is_closed=False)
 
     @patch("src.migrations.workflow_migration.JiraClient")
@@ -318,7 +318,7 @@ class TestWorkflowMigration(unittest.TestCase):
             },
         }
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
 
         # Create instance and set data for the test
         migration = WorkflowMigration(mock_jira_instance, mock_op_instance)
@@ -332,8 +332,8 @@ class TestWorkflowMigration(unittest.TestCase):
         # Assertions
         # Only 'Custom Status' should be created as it has no mapping
         mock_op_instance.create_status.assert_called_once()
-        self.assertEqual(result["4"]["openproject_id"], 4)
-        self.assertEqual(result["4"]["matched_by"], "created")
+        assert result["4"]["openproject_id"] == 4
+        assert result["4"]["matched_by"] == "created"
 
         mock_file.assert_called_with("/tmp/test_data/status_mapping.json", "w")
         mock_file().write.assert_called()
@@ -356,16 +356,16 @@ class TestWorkflowMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
 
         # Create instance and call method
         migration = WorkflowMigration(mock_jira_instance, mock_op_instance)
         result = migration.create_workflow_configuration()
 
         # Assertions
-        self.assertTrue(result["success"])
-        self.assertIn("automatically", result["message"])
-        self.assertIn("automatically", result["details"])
+        assert result["success"]
+        assert "automatically" in result["message"]
+        assert "automatically" in result["details"]
 
         mock_file.assert_called_with("/tmp/test_data/workflow_configuration.json", "w")
         mock_file().write.assert_called()
@@ -392,20 +392,18 @@ class TestWorkflowMigration(unittest.TestCase):
         migration = WorkflowMigration(mock_jira_instance, mock_op_instance)
         migration._get_jira_workflows = MagicMock(return_value=self.jira_workflows)
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
 
         # Call method
         result = migration.extract_jira_workflows()
 
         # Assertions
-        self.assertEqual(result, self.jira_workflows)
+        assert result == self.jira_workflows
         migration._get_jira_workflows.assert_called_once()
 
         # Check that we opened a file with a specific name pattern for writing
         # The exact path may vary due to mock implementation details
-        self.assertTrue(
-            any("/jira_workflows.json" in str(call) and "w" in str(call) for call in mock_file.call_args_list),
-        )
+        assert any("/jira_workflows.json" in str(call) and "w" in str(call) for call in mock_file.call_args_list)
         mock_file().write.assert_called()
 
 

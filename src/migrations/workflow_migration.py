@@ -1,9 +1,11 @@
 """Workflow migration module for Jira to OpenProject migration.
+
 Handles the migration of workflow states and their transitions from Jira to OpenProject.
 """
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 from src import config
@@ -25,7 +27,7 @@ class WorkflowMigration:
     4. Setting up workflow configurations in OpenProject
     """
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient):
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         """Initialize the workflow migration tools.
 
         Args:
@@ -35,13 +37,13 @@ class WorkflowMigration:
         """
         self.jira_client = jira_client
         self.op_client = op_client
-        self.jira_statuses = []
-        self.jira_workflows = []
-        self.op_statuses = []
-        self.status_mapping = {}
-        self.workflow_mapping = {}
+        self.jira_statuses: list[dict[str, Any]] = []
+        self.jira_workflows: list[dict[str, Any]] = []
+        self.op_statuses: list[dict[str, Any]] = []
+        self.status_mapping: dict[str, Any] = {}
+        self.workflow_mapping: dict[str, Any] = {}
 
-        self.data_dir = config.get_path("data")
+        self.data_dir: Path = config.get_path("data")
 
     def extract_jira_workflows(self) -> list[dict[str, Any]]:
         """Extract workflow definitions from Jira.
@@ -50,13 +52,12 @@ class WorkflowMigration:
             List of Jira workflow definitions
 
         """
-        logger.info("Extracting workflows from Jira...", extra={"markup": True})
+        logger.info("Extracting workflows from Jira...")
 
         self.jira_workflows = self._get_jira_workflows()
 
         logger.info(
             f"Extracted {len(self.jira_workflows)} workflows from Jira",
-            extra={"markup": True},
         )
 
         self._save_to_json(self.jira_workflows, "jira_workflows.json")
@@ -88,13 +89,12 @@ class WorkflowMigration:
                 except Exception as e:
                     logger.warning(
                         f"Failed to get transitions for workflow {workflow_name}: {e!s}",
-                        extra={"markup": True},
                     )
                     workflow["transitions"] = []
 
             return workflows
         except Exception as e:
-            logger.error(f"Failed to get workflows from Jira: {e!s}", extra={"markup": True})
+            logger.exception(f"Failed to get workflows from Jira: {e!s}")
             return []
 
     def extract_jira_statuses(self) -> list[dict[str, Any]]:
@@ -104,7 +104,7 @@ class WorkflowMigration:
             List of Jira status definitions
 
         """
-        logger.info("Extracting statuses from Jira...", extra={"markup": True})
+        logger.info("Extracting statuses from Jira...")
 
         try:
             url = f"{self.jira_client.base_url}/rest/api/2/status"
@@ -112,14 +112,14 @@ class WorkflowMigration:
             response.raise_for_status()
             statuses = response.json()
 
-            logger.info(f"Extracted {len(statuses)} statuses from Jira", extra={"markup": True})
+            logger.info(f"Extracted {len(statuses)} statuses from Jira")
 
             self.jira_statuses = statuses
             self._save_to_json(statuses, "jira_statuses.json")
 
             return statuses
         except Exception as e:
-            logger.error(f"Failed to get statuses from Jira: {e!s}", extra={"markup": True})
+            logger.exception(f"Failed to get statuses from Jira: {e!s}")
             return []
 
     def extract_openproject_statuses(self) -> list[dict[str, Any]]:
@@ -129,24 +129,21 @@ class WorkflowMigration:
             List of OpenProject status definitions
 
         """
-        logger.info("Extracting statuses from OpenProject...", extra={"markup": True})
+        logger.info("Extracting statuses from OpenProject...")
 
         try:
             self.op_statuses = self.op_client.get_statuses()
         except Exception as e:
             logger.warning(
                 f"Failed to get statuses from OpenProject: {e!s}",
-                extra={"markup": True},
             )
             logger.warning(
                 "Using an empty list of statuses for OpenProject",
-                extra={"markup": True},
             )
             self.op_statuses = []
 
         logger.info(
             f"Extracted {len(self.op_statuses)} statuses from OpenProject",
-            extra={"markup": True},
         )
 
         self._save_to_json(self.op_statuses, "openproject_statuses.json")
@@ -160,7 +157,7 @@ class WorkflowMigration:
             Dictionary mapping Jira status IDs to OpenProject status data
 
         """
-        logger.info("Creating status mapping...", extra={"markup": True})
+        logger.info("Creating status mapping...")
 
         if not self.jira_statuses:
             self.extract_jira_statuses()
@@ -230,11 +227,9 @@ class WorkflowMigration:
 
         logger.info(
             f"Status mapping created for {total_statuses} statuses",
-            extra={"markup": True},
         )
         logger.info(
             f"Successfully matched {matched_statuses} statuses ({match_percentage:.1f}%)",
-            extra={"markup": True},
         )
 
         return mapping
@@ -259,22 +254,20 @@ class WorkflowMigration:
 
         logger.info(
             f"Creating status in OpenProject: {name} (Closed: {is_closed})",
-            extra={"markup": True},
         )
 
         try:
             result = self.op_client.create_status(name=name, color=color, is_closed=is_closed)
 
             if result.get("success", False):
-                logger.info(f"Successfully created status: {name}", extra={"markup": True})
+                logger.info(f"Successfully created status: {name}")
                 return result.get("data")
             logger.error(
                 f"Failed to create status: {name} - {result.get('message', 'Unknown error')}",
-                extra={"markup": True},
             )
             return None
         except Exception as e:
-            logger.error(f"Error creating status {name}: {e!s}", extra={"markup": True})
+            logger.exception(f"Error creating status {name}: {e!s}")
             return None
 
     def migrate_statuses(self) -> dict[str, Any]:
@@ -284,7 +277,7 @@ class WorkflowMigration:
             Updated mapping between Jira statuses and OpenProject statuses
 
         """
-        logger.info("Starting status migration...", extra={"markup": True})
+        logger.info("Starting status migration...")
 
         if not self.jira_statuses:
             self.extract_jira_statuses()
@@ -301,17 +294,15 @@ class WorkflowMigration:
 
         logger.info(
             f"Found {len(statuses_to_create)} statuses that need to be created in OpenProject",
-            extra={"markup": True},
         )
 
         with ProgressTracker("Migrating statuses", len(statuses_to_create), "Recent Statuses") as tracker:
-            for i, (jira_id, mapping) in enumerate(statuses_to_create):
+            for _i, (jira_id, mapping) in enumerate(statuses_to_create):
                 jira_status = next((s for s in self.jira_statuses if s.get("id") == jira_id), None)
 
                 if not jira_status:
                     logger.warning(
                         f"Could not find Jira status definition for ID: {jira_id}",
-                        extra={"markup": True},
                     )
                     tracker.add_log_item(f"Skipped: Unknown Jira status ID {jira_id}")
                     tracker.increment()
@@ -341,17 +332,14 @@ class WorkflowMigration:
 
         logger.info(
             f"Status migration complete for {total_statuses} statuses",
-            extra={"markup": True},
         )
         logger.info(
             f"Successfully matched {matched_statuses} statuses ({matched_statuses / total_statuses * 100:.1f}% of total)",
-            extra={"markup": True},
         )
         logger.info(
             f"- Existing matches: {matched_statuses - created_statuses}",
-            extra={"markup": True},
         )
-        logger.info(f"- Newly created: {created_statuses}", extra={"markup": True})
+        logger.info(f"- Newly created: {created_statuses}")
 
         return self.status_mapping
 
@@ -362,7 +350,7 @@ class WorkflowMigration:
             Result of the workflow configuration
 
         """
-        logger.info("Creating workflow configuration in OpenProject...", extra={"markup": True})
+        logger.info("Creating workflow configuration in OpenProject...")
 
         result = {
             "success": True,
@@ -385,4 +373,4 @@ class WorkflowMigration:
         filepath = os.path.join(self.data_dir, filename)
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
-        logger.info(f"Saved data to {filepath}", extra={"markup": True})
+        logger.info(f"Saved data to {filepath}")

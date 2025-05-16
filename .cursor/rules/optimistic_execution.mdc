@@ -1,0 +1,135 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+# Optimistic Execution Pattern
+
+- **Assume Operations Will Succeed**
+  - Execute operations directly without extensive precondition checking
+  - Only perform diagnostics when operations actually fail
+  - Follow "happy path" programming with targeted exception handling
+
+- **Benefits of Optimistic Execution**
+  - Improves performance by avoiding unnecessary checks in common success cases
+  - Simplifies code by separating normal flow from error handling
+  - Provides detailed diagnostics only when needed
+  - Reduces indentation levels and conditional complexity
+
+- **Implementation Guidelines**
+  - Use try/except (Python) or try/catch (TypeScript) blocks around operations
+  - Place diagnostic checks inside exception handlers, not before operations
+  - Log detailed error information including context of the failure
+  - Follow the principle: "prepare for the worst, but expect the best"
+
+- **Examples**
+
+```python
+# ❌ DON'T: Excessive precondition checking
+def copy_file(source_path, target_path):
+    if not os.path.exists(source_path):
+        raise FileNotFoundError(f"Source file does not exist: {source_path}")
+
+    source_size = os.path.getsize(source_path)
+    if source_size == 0:
+        raise ValueError(f"Source file is empty: {source_path}")
+
+    if os.path.exists(target_path):
+        target_size = os.path.getsize(target_path)
+        if target_size > 0:
+            raise ValueError(f"Target file already exists and is not empty: {target_path}")
+
+    # Finally perform the actual operation
+    shutil.copy2(source_path, target_path)
+
+    # Post-operation checks
+    if not os.path.exists(target_path):
+        raise FileNotFoundError(f"Failed to create target file: {target_path}")
+
+    if os.path.getsize(target_path) != source_size:
+        raise ValueError(f"Target file size mismatch: {target_path}")
+```
+
+```python
+# ✅ DO: Optimistic execution with targeted diagnostics
+def copy_file(source_path, target_path):
+    try:
+        # Directly attempt the operation, assuming it will succeed
+        shutil.copy2(source_path, target_path)
+    except Exception as e:
+        # Only perform diagnostics if the operation fails
+        error_details = {
+            "source_exists": os.path.exists(source_path),
+            "source_size": os.path.getsize(source_path) if os.path.exists(source_path) else None,
+            "target_exists": os.path.exists(target_path),
+            "target_size": os.path.getsize(target_path) if os.path.exists(target_path) else None,
+            "original_error": str(e)
+        }
+
+        # Raise a more informative exception with diagnostics
+        raise FileOperationError(f"Failed to copy {source_path} to {target_path}", details=error_details) from e
+```
+
+```typescript
+// ❌ DON'T: Excessive precondition checking
+function saveFile(content: string, filePath: string): void {
+  const directory = path.dirname(filePath);
+
+  if (!fs.existsSync(directory)) {
+    throw new Error(`Directory does not exist: ${directory}`);
+  }
+
+  if (fs.existsSync(filePath)) {
+    const stats = fs.statSync(filePath);
+    if (stats.size > 0) {
+      throw new Error(`File already exists and is not empty: ${filePath}`);
+    }
+  }
+
+  // Finally perform the actual operation
+  fs.writeFileSync(filePath, content);
+
+  // Post-operation checks
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Failed to create file: ${filePath}`);
+  }
+
+  const writtenContent = fs.readFileSync(filePath, 'utf8');
+  if (writtenContent !== content) {
+    throw new Error(`File content mismatch: ${filePath}`);
+  }
+}
+```
+
+```typescript
+// ✅ DO: Optimistic execution with targeted diagnostics
+function saveFile(content: string, filePath: string): void {
+  try {
+    // Directly attempt the operation, assuming it will succeed
+    fs.writeFileSync(filePath, content);
+  } catch (error) {
+    // Only perform diagnostics if the operation fails
+    const diagnostics = {
+      directoryExists: fs.existsSync(path.dirname(filePath)),
+      fileExistedBefore: fs.existsSync(filePath),
+      fileSize: fs.existsSync(filePath) ? fs.statSync(filePath).size : null,
+      originalError: error instanceof Error ? error.message : String(error)
+    };
+
+    // Throw a more informative error with diagnostics
+    throw new FileOperationError(`Failed to save file: ${filePath}`, diagnostics, error);
+  }
+}
+```
+
+- **Error Handler Design**
+  - Create custom error classes that accept diagnostic details
+  - Include context from the original operation in error messages
+  - Structure error details in a way that's useful for debugging
+  - Consider adding helper methods for common diagnostic scenarios
+
+- **Exceptions and Edge Cases**
+  - Security-critical code may require upfront validation
+  - User input validation should still happen before operations
+  - Performance-critical loops may benefit from precondition hoisting
+  - Always validate external API inputs or network responses

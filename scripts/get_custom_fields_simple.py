@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Get Custom Fields (Simple Approach)
+"""Get Custom Fields (Simple Approach).
 
 This script uses the most reliable approach to get custom fields from Rails console:
 1. Directly runs a simple command with clear markers in the Rails console
@@ -8,16 +8,20 @@ This script uses the most reliable approach to get custom fields from Rails cons
 """
 
 import json
-import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
+
+from rich.console import Console
+
+console = Console()
 
 
 def run_command_in_tmux(session_name: str, command: str) -> bool:
     """Run a command in the specified tmux session."""
-    print(f"Running command in tmux session '{session_name}'...")
+    console.print(f"Running command in tmux session '{session_name}'...")
 
     # Clear the screen first (Ctrl+L)
     subprocess.run(["tmux", "send-keys", "-t", session_name, "C-l"], check=True)
@@ -27,13 +31,13 @@ def run_command_in_tmux(session_name: str, command: str) -> bool:
     subprocess.run(["tmux", "send-keys", "-t", session_name, command], check=True)
     subprocess.run(["tmux", "send-keys", "-t", session_name, "Enter"], check=True)
 
-    print("Command sent successfully")
+    console.print("Command sent successfully")
     return True
 
 
 def capture_tmux_output(session_name: str, lines: int = 1000) -> str:
     """Capture output from the tmux session."""
-    print(f"Capturing output from tmux session '{session_name}'...")
+    console.print(f"Capturing output from tmux session '{session_name}'...")
 
     # Capture pane content with history
     result = subprocess.run(
@@ -44,16 +48,16 @@ def capture_tmux_output(session_name: str, lines: int = 1000) -> str:
     )
 
     output = result.stdout
-    print(f"Captured {len(output)} characters")
+    console.print(f"Captured {len(output)} characters")
     return output
 
 
 def main() -> int:
     """Main entry point."""
     # Parse command line arguments
-    output_file = "var/data/openproject_custom_fields_rails.json"
+    output_file = Path("var/data/openproject_custom_fields_rails.json")
     if len(sys.argv) > 1:
-        output_file = sys.argv[1]
+        output_file = Path(sys.argv[1])
 
     session_name = "rails_console"
 
@@ -71,14 +75,14 @@ def main() -> int:
     run_command_in_tmux(session_name, command)
 
     # Wait for the command to complete
-    print("Waiting for command to complete...")
+    console.print("Waiting for command to complete...")
     time.sleep(5)
 
     # Capture the output
     output = capture_tmux_output(session_name, lines=2000)
 
     # Save the raw output for debugging if needed
-    with open("raw_output_simple.txt", "w") as f:
+    with Path("raw_output_simple.txt").open("w") as f:
         f.write(output)
 
     # Extract the data between markers
@@ -89,7 +93,7 @@ def main() -> int:
     end_idx = output.find(end_marker, start_idx)
 
     if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
-        print("Could not find the markers in the output")
+        console.print("Could not find the markers in the output")
         return 1
 
     # Extract and process the lines between markers
@@ -115,25 +119,29 @@ def main() -> int:
                 }
                 custom_fields.append(custom_field)
             except (ValueError, IndexError) as e:
-                print(f"Error parsing line: {line}, Error: {e}")
+                console.print(f"Error parsing line: {line}, Error: {e}")
 
     if not custom_fields:
-        print("No custom fields found in the output")
+        console.print("No custom fields found in the output")
         return 1
 
     # Save the custom fields to the output file
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    with open(output_file, "w") as f:
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with output_file.open("w") as f:
         json.dump(custom_fields, f, indent=2)
 
-    print(f"Successfully saved {len(custom_fields)} custom fields to {output_file}")
+    console.print(
+        f"Successfully saved {len(custom_fields)} custom fields to {output_file}",
+    )
 
     # Print a summary
-    print("\nCustom Fields:")
+    console.print("\nCustom Fields:")
     for field in custom_fields[:5]:  # Show first 5 fields
-        print(f"- {field['name']} (ID: {field['id']}, Type: {field['field_format']})")
+        console.print(
+            f"- {field['name']} (ID: {field['id']}, Type: {field['field_format']})",
+        )
     if len(custom_fields) > 5:
-        print(f"... and {len(custom_fields) - 5} more fields")
+        console.print(f"... and {len(custom_fields) - 5} more fields")
 
     return 0
 

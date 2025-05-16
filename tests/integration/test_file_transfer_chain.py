@@ -81,7 +81,8 @@ class FileTransferChainTest(unittest.TestCase):
         # 3. Rails Console Client
         print("Initializing Rails Console client...")
         self.rails_client = RailsConsoleClient(
-            tmux_session_name=self.op_config.get("tmux_session_name", "rails_console"), command_timeout=30,
+            tmux_session_name=self.op_config.get("tmux_session_name", "rails_console"),
+            command_timeout=30,
         )
 
         # 4. OpenProject Client
@@ -162,13 +163,13 @@ class FileTransferChainTest(unittest.TestCase):
         # Test connection
         is_connected = self.ssh_client.is_connected()
         print(f"SSH client is connected: {is_connected}")
-        self.assertTrue(is_connected, "SSH connection failed")
+        assert is_connected, "SSH connection failed"
 
         # Execute a simple command
         stdout, stderr, rc = self.ssh_client.execute_command("echo 'SSH connection successful'")
         print(f"SSH command output: {stdout.strip()}")
-        self.assertEqual(rc, 0, f"SSH command failed with rc={rc}, stderr={stderr}")
-        self.assertIn("SSH connection successful", stdout, "SSH command did not produce expected output")
+        assert rc == 0, f"SSH command failed with rc={rc}, stderr={stderr}"
+        assert "SSH connection successful" in stdout, "SSH command did not produce expected output"
 
     def test_02_docker_connectivity(self) -> None:
         """Test Docker container connectivity."""
@@ -177,13 +178,13 @@ class FileTransferChainTest(unittest.TestCase):
         # Check if container exists
         container_exists = self.docker_client.check_container_exists()
         print(f"Docker container exists: {container_exists}")
-        self.assertTrue(container_exists, "Docker container not found or not running")
+        assert container_exists, "Docker container not found or not running"
 
         # Execute a simple command in the container
         stdout, stderr, rc = self.docker_client.execute_command("echo 'Docker command successful'")
         print(f"Docker command output: {stdout.strip()}")
-        self.assertEqual(rc, 0, f"Docker command failed with rc={rc}, stderr={stderr}")
-        self.assertIn("Docker command successful", stdout, "Docker command did not produce expected output")
+        assert rc == 0, f"Docker command failed with rc={rc}, stderr={stderr}"
+        assert "Docker command successful" in stdout, "Docker command did not produce expected output"
 
     def test_03_rails_console_connectivity(self) -> None:
         """Test Rails console connectivity."""
@@ -193,7 +194,7 @@ class FileTransferChainTest(unittest.TestCase):
         try:
             result = self.rails_client.execute("puts 'Rails console test'")
             print(f"Rails console output: {result}")
-            self.assertIn("Rails console test", result, "Rails console did not produce expected output")
+            assert "Rails console test" in result, "Rails console did not produce expected output"
         except Exception as e:
             print(f"⚠️ WARNING: Rails console test encountered an issue: {e!s}")
             print("This error might be due to Rails console session state or timing issues.")
@@ -225,12 +226,12 @@ class FileTransferChainTest(unittest.TestCase):
         # Verify file exists on remote server
         stdout, stderr, rc = self.ssh_client.execute_command(f"test -f {remote_file} && echo 'FILE_EXISTS'")
         print(f"Remote file exists: {'FILE_EXISTS' in stdout}")
-        self.assertIn("FILE_EXISTS", stdout, "File not found on remote server")
+        assert "FILE_EXISTS" in stdout, "File not found on remote server"
 
         # Verify file content
         stdout, stderr, rc = self.ssh_client.execute_command(f"cat {remote_file}")
         print(f"Remote file content: {stdout.strip()}")
-        self.assertEqual(stdout.strip(), test_content, "Remote file content does not match")
+        assert stdout.strip() == test_content, "Remote file content does not match"
 
     def test_05_remote_to_container_file_transfer(self) -> None:
         """Test transferring files from remote server to Docker container."""
@@ -254,12 +255,12 @@ class FileTransferChainTest(unittest.TestCase):
         # Verify file exists in container
         stdout, stderr, rc = self.docker_client.execute_command(f"test -f {container_file} && echo 'FILE_EXISTS'")
         print(f"Container file exists: {'FILE_EXISTS' in stdout}")
-        self.assertIn("FILE_EXISTS", stdout, "File not found in container")
+        assert "FILE_EXISTS" in stdout, "File not found in container"
 
         # Verify file content
         stdout, stderr, rc = self.docker_client.execute_command(f"cat {container_file}")
         print(f"Container file content: {stdout.strip()}")
-        self.assertEqual(stdout.strip(), test_content, "Container file content does not match")
+        assert stdout.strip() == test_content, "Container file content does not match"
 
     def test_06_ruby_script_execution(self) -> None:
         """Test creating, transferring, and executing a Ruby script."""
@@ -313,17 +314,17 @@ class FileTransferChainTest(unittest.TestCase):
             # Verify script exists in container
             file_exists = self.docker_client.check_file_exists_in_container(transferred_path)
             print(f"Container script exists: {file_exists}")
-            self.assertTrue(file_exists, "Script not found in container")
+            assert file_exists, "Script not found in container"
 
             # Execute the script in Rails console
             result = self.rails_client.execute(f'load "{transferred_path}"')
             print(f"Script execution result: {result}")
 
             # Look for expected values in the output
-            self.assertIn(
-                'message: "Script executed successfully"', result, "Script execution didn't return expected message",
-            )
-            self.assertIn("test_value: 42", result, "Script execution didn't return expected test value")
+            assert (
+                'message: "Script executed successfully"' in result
+            ), "Script execution didn't return expected message"
+            assert "test_value: 42" in result, "Script execution didn't return expected test value"
 
         except Exception as e:
             self.fail(f"Script execution failed: {e!s}")
@@ -361,10 +362,10 @@ class FileTransferChainTest(unittest.TestCase):
             print(f"OpenProject client query result: {result}")
 
             # Verify result - now expecting a string instead of a dict
-            self.assertIsNotNone(result, "Query returned None")
+            assert result is not None, "Query returned None"
             # Check for expected text strings in the result directly
-            self.assertIn('test: "success"', result, "Query result missing 'test' key")
-            self.assertIn("value: 42", result, "Query did not return expected numeric value")
+            assert 'test: "success"' in result, "Query result missing 'test' key"
+            assert "value: 42" in result, "Query did not return expected numeric value"
 
         except Exception as e:
             self.fail(f"OpenProject client query execution failed: {e!s}")
@@ -401,15 +402,15 @@ class FileTransferChainTest(unittest.TestCase):
             print(f"Full chain execution result: {result}")
 
             # Verify that execution completed without raising exceptions
-            self.assertIsNotNone(result, "Chain execution returned None")
+            assert result is not None, "Chain execution returned None"
 
             # Instead of strict content checking, we simply ensure some output was captured
             # Depending on response formatting, different containers may return differently
             # structured responses, but they will all have some content
             if isinstance(result, dict):
-                self.assertTrue(any(result.values()), "Chain execution returned empty response")
+                assert any(result.values()), "Chain execution returned empty response"
             else:
-                self.assertTrue(str(result), "Chain execution returned empty string")
+                assert str(result), "Chain execution returned empty string"
 
         except Exception as e:
             print(f"❌ Error in chain execution: {e!s}")

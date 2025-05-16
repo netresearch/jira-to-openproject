@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Script to clean up var directories or remove old directories after migration.
-"""
+"""Script to clean up var directories or remove old directories after migration."""
 
 import argparse
 import logging
-import os
 import shutil
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+from rich.console import Console
 
 from src.config import var_dirs
 from src.types import DirType
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -17,6 +20,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("cleanup_var")
+console = Console()
 
 
 def clean_var_directory(dir_name: DirType | None = None, confirm: bool = True) -> bool:
@@ -29,13 +33,13 @@ def clean_var_directory(dir_name: DirType | None = None, confirm: bool = True) -
 
     """
     # Determine which directories to clean
-    dirs_to_clean: dict[str, str] = {}
+    dirs_to_clean: dict[DirType, Path] = {}
     if dir_name:
         if dir_name in var_dirs and dir_name != "root":
             dirs_to_clean[dir_name] = var_dirs[dir_name]
         else:
-            logger.error(f"Unknown directory: {dir_name}")
-            return False
+            msg = f"Unknown directory: {dir_name}"
+            raise ValueError(msg)
     else:
         # Exclude the root var directory
         dirs_to_clean = {k: v for k, v in var_dirs.items() if k != "root"}
@@ -43,47 +47,53 @@ def clean_var_directory(dir_name: DirType | None = None, confirm: bool = True) -
     # Confirm deletion if required
     if confirm:
         dirs_str = ", ".join(dirs_to_clean.keys())
-        print(f"\nYou are about to delete all contents from: {dirs_str}")
-        response = input("Are you sure you want to proceed? (y/n): ")
+        console.print(f"\nYou are about to delete all contents from: {dirs_str}")
+        response = console.input("Are you sure you want to proceed? (y/n): ")
         if response.lower() != "y":
-            print("Operation cancelled.")
+            console.print("Operation cancelled.")
             return False
 
     # Clean each directory
     for name, path in dirs_to_clean.items():
-        if os.path.exists(path):
-            logger.info(f"Cleaning directory: {name}")
-            for item in Path(path).glob("*"):
+        if path.exists():
+            logger.info("Cleaning directory: %s", name)
+            for item in path.glob("*"):
                 if item.is_file():
                     item.unlink()
-                    logger.info(f"Deleted file: {item}")
+                    logger.info("Deleted file: %s", item)
                 elif item.is_dir():
                     shutil.rmtree(item)
-                    logger.info(f"Deleted directory: {item}")
-            logger.info(f"Directory {name} cleaned successfully")
+                    logger.info("Deleted directory: %s", item)
+            logger.info("Directory %s cleaned successfully", name)
         else:
-            logger.warning(f"Directory {name} does not exist")
+            logger.warning("Directory %s does not exist", name)
 
     return True
 
 
 def main() -> bool:
     """Main function to handle directory cleanup."""
-    parser = argparse.ArgumentParser(description="Clean up var directories or remove old directories.")
+    parser = argparse.ArgumentParser(
+        description="Clean up var directories or remove old directories.",
+    )
 
     # Add arguments
     parser.add_argument(
         "--clean",
-        choices=list(k for k in var_dirs.keys() if k != "root") + ["all"],
+        choices=[k for k in var_dirs if k != "root"] + ["all"],
         help="Clean specified var directory or 'all' for all directories",
     )
-    parser.add_argument("--no-confirm", action="store_true", help="Skip confirmation prompts")
+    parser.add_argument(
+        "--no-confirm",
+        action="store_true",
+        help="Skip confirmation prompts",
+    )
 
     args = parser.parse_args()
 
-    if not args.clean and not args.remove_old:
+    if not args.clean:
         parser.print_help()
-        print("\nPlease specify at least one operation.")
+        console.print("\nPlease specify at least one operation.")
         return False
 
     try:
@@ -94,8 +104,8 @@ def main() -> bool:
 
         logger.info("Cleanup completed successfully!")
 
-    except Exception as e:
-        logger.error(f"Error during cleanup: {e!s}")
+    except Exception:
+        logger.exception("Error during cleanup")
         return False
 
     return True
