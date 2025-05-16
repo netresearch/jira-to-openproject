@@ -1,0 +1,11 @@
+# Task ID: 34
+# Title: Split RailsConsoleClient into TmuxClient and RailsClient
+# Status: pending
+# Dependencies: None
+# Priority: medium
+# Description: Refactor the existing RailsConsoleClient by extracting core tmux session management into a new TmuxClient and implementing a Rails-specific RailsClient to improve modularity and single responsibility.
+# Details:
+1. Create tmux_client.py containing all tmux session management functionality (session existence checks, command sending, output capture and parsing, and wait-for-completion logic) with no Rails or Ruby-specific code. 2. Create rails_client.py that composes or inherits from TmuxClient and implements Rails console configuration (IRB settings), Ruby output parsing and error handling, and Rails-specific command templating. 3. Update all imports and references in dependent modules to use the new TmuxClient and RailsClient classes. 4. Deprecate and remove rails_console_client.py once functionality is fully migrated. 5. Ensure documentation and inline comments clearly delineate responsibilities of each client. Maintain backward compatibility during transition and follow existing layered client patterns (SSHClient → DockerClient → TmuxClient → RailsClient → OpenProjectClient).
+
+# Test Strategy:
+• Unit test TmuxClient: simulate tmux sessions to verify session existence checks, command dispatch, output capture, parsing of stdout/stderr, and wait-for-completion behavior. • Unit test RailsClient: mock a TmuxClient to validate Rails console configuration (IRB init), templated command generation, proper error detection, and parsing of Ruby exceptions. • Integration test: spin up a real or simulated tmux session running a Rails console, execute sample commands, and assert correct end-to-end behavior. • Refactoring validation: run full test suite and CI pipeline ensuring no regressions, verify removal of rails_console_client.py and that no code references remain.

@@ -1,0 +1,21 @@
+# Task ID: 30
+# Title: Enhance and Fix cleanup_openproject.py for Refactored Client Architecture
+# Status: done
+# Dependencies: None
+# Priority: medium
+# Description: Revise the cleanup_openproject.py script to integrate directly with the refactored Rails console client, improve error handling, implement direct counting and batch processing, and add detailed logging for reliable large-scale cleanup operations.
+# Details:
+1. Replace temporary file transfers with direct calls to the Rails console client API for all read/write operations. 
+2. Centralize error detection using try/except around each client invocation and file operation, categorizing errors (network, parsing, permission) and implementing retry logic with exponential backoff. 
+3. Implement a direct counting method by querying the client’s count API endpoint instead of iterating over paginated resources. Ensure counts are accurate even under concurrent modifications. 
+4. Design and integrate a batch-processing mechanism for custom fields: fetch field IDs in chunks (e.g., 100 at a time), process updates/deletions in bulk, and handle partial failures by rolling back or retrying specific batches. 
+5. Embed structured logging at DEBUG, INFO, WARNING, and ERROR levels, outputting JSON-formatted entries with timestamps, operation names, parameters, execution time, and error details. 
+6. Refactor the script into modular functions (connect_client, count_resources, process_custom_fields_batch, handle_errors, configure_logging) to improve testability and maintainability.
+
+# Test Strategy:
+• Unit Tests: Mock the Rails console client to simulate successful and failed API calls; validate error categorization, retry behavior, and direct counting logic.  
+• Integration Tests: Run the script against a staging OpenProject instance; verify data cleanup, custom-field batch updates, and counts match database state.  
+• Performance Tests: Simulate large datasets (10,000+ custom fields) and measure batch-processing throughput and memory usage.  
+• Error Injection: Introduce network timeouts, permission errors, and partial failures during batch operations to confirm error handling, retries, and logging are functioning correctly.  
+• Logging Verification: Parse log output for expected JSON structure, correct log levels, and presence of critical metadata (timestamps, durations, error stack traces).  
+• Rollback Simulation: Force a partial batch failure and ensure subsequent runs resume or rollback appropriately without data corruption.

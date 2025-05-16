@@ -48,9 +48,6 @@ Thumbs.db
 # Migration specific
 id_mapping.json
 
-tasks.json
-tasks/
-
 # Added by Claude Task Master
 # Logs
 logs

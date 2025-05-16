@@ -1,0 +1,11 @@
+# Task ID: 23
+# Title: Update RailsConsoleClient to accept DockerClient dependency
+# Status: done
+# Dependencies: 22
+# Priority: high
+# Description: Modify RailsConsoleClient to accept an optional docker_client parameter in its constructor and use the provided client instead of instantiating its own, continuing the dependency injection pattern.
+# Details:
+In rails_console_client.rb, change the constructor signature to accept docker_client = nil. Assign @docker_client = docker_client || DockerClient.new. Refactor all internal calls (e.g., run_console, execute_script) to use @docker_client instead of creating a new client. Ensure that documentation and comments reflect the new optional parameter. Maintain backward compatibility by defaulting to a new DockerClient when none is provided. Audit usages of RailsConsoleClient across the codebase (factory methods, service initializers, CLI entry points) and update them to pass in an existing DockerClient where appropriate (for example, in tests or higher-level service classes). Add constructor parameter to any factory or helper methods that build a RailsConsoleClient.
+
+# Test Strategy:
+1. Unit tests: create a mock or stub DockerClient, pass it into RailsConsoleClient, and verify that all methods delegate to the injected client (e.g., expect(mock_client).to receive(:run_container) when calling run_console). 2. Default behavior: instantiate RailsConsoleClient without parameters and assert @docker_client is a real DockerClient. 3. Integration test: spin up a lightweight Docker container, inject a real DockerClient, and run a sample Rails console command to confirm end-to-end behavior. 4. Negative case: passing an invalid object (e.g., nil or wrong type) should still fallback to default or raise a clear ArgumentError. 5. Regression: ensure no existing higher-level functionality (e.g., Rails deployment tasks) breaks by running the full test suite and smoke tests in a staging environment.

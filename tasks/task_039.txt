@@ -1,0 +1,38 @@
+# Task ID: 39
+# Title: Refactor File Operations to Optimistic Execution Pattern
+# Status: pending
+# Dependencies: None
+# Priority: medium
+# Description: Update all file operations—particularly copy routines—to perform the action first and defer detailed validation checks to the failure path, improving performance on success while still providing rich diagnostics on errors.
+# Details:
+1. Identify and catalog every file operation in the codebase (copy, move, delete) focusing on routines that perform pre- and post-validation (e.g., os.path.exists checks, size comparisons, target existence checks).  
+2. Refactor each operation to follow an optimistic execution approach:  
+   a. Attempt the file operation immediately without pre-checks.  
+   b. On successful completion, return or propagate the result with minimal overhead.  
+   c. On failure (caught exception or non-zero return), trigger detailed diagnostics:  
+      - Verify source path existence and readability.  
+      - Validate permissions on source and target directories.  
+      - Check disk space availability on target.  
+      - Ensure the target path is valid and not locked by another process.  
+      - Provide clear, context-rich error messages including file paths, expected vs. actual sizes, and system error codes.  
+3. Remove or disable redundant pre- and post-checks on the success path to minimize latency.  
+4. Ensure all refactored code adheres to the existing exception-based error handling standard (Task #38).  
+5. Update documentation and inline comments to explain the optimistic execution pattern and how to extend it for new file operations.
+
+# Test Strategy:
+1. Unit Tests:  
+   - Success Path: Copy/move/delete small and large files under normal conditions, measuring that no validation functions are called before the operation.  
+   - Failure Path Simulations:  
+     • Source missing: Attempt to copy non-existent file and verify the error message includes source existence diagnostic.  
+     • Permission denied: Mock filesystem permissions to trigger permission errors and verify diagnostic details.  
+     • Insufficient disk space: Simulate low-disk scenarios and check for disk-space diagnostics.  
+     • Target locked/in-use: Simulate file locks and verify the appropriate error is reported.  
+2. Integration Tests:  
+   - Perform batch file operations in a staging environment to measure end-to-end performance before and after refactor, ensuring a measurable reduction in latency on success paths.  
+   - Run file operations against NFS or network-mounted drives to validate diagnostics across different filesystems.  
+3. Performance Benchmarking:  
+   - Automate benchmarks that record operation times for large file sets, comparing pre-refactor and post-refactor runs to confirm at least a 20% improvement on average.  
+4. Code Review Checklist:  
+   - Verify no preemptive os.path.exists or similar checks on the success path.  
+   - Confirm exception handlers trigger only on failure, performing all diagnostic steps.  
+   - Ensure compliance with project-wide exception-based error-handling guidelines.
