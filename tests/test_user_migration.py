@@ -1,10 +1,10 @@
-"""Tests for the user migration component.
-"""
+"""Tests for the user migration component."""
 
 import json
 import shutil
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 from src.migrations.user_migration import UserMigration
@@ -97,7 +97,7 @@ class TestUserMigration(unittest.TestCase):
 
         mock_op_instance = mock_op_client.return_value
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
 
         # Initialize migration
@@ -110,8 +110,8 @@ class TestUserMigration(unittest.TestCase):
         mock_jira_instance.get_users.assert_called_once()
 
         # Verify data was extracted
-        self.assertEqual(len(result), 2)
-        self.assertEqual(migration.jira_users, self.jira_users)
+        assert len(result) == 2
+        assert migration.jira_users == self.jira_users
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
@@ -133,7 +133,7 @@ class TestUserMigration(unittest.TestCase):
         mock_op_instance = mock_op_client.return_value
         mock_op_instance.get_users.return_value = self.op_users
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
 
         # Initialize migration
@@ -146,8 +146,8 @@ class TestUserMigration(unittest.TestCase):
         mock_op_instance.get_users.assert_called_once()
 
         # Verify data was extracted
-        self.assertEqual(len(result), 2)
-        self.assertEqual(migration.op_users, self.op_users)
+        assert len(result) == 2
+        assert migration.op_users == self.op_users
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
@@ -172,7 +172,7 @@ class TestUserMigration(unittest.TestCase):
         mock_op_instance = mock_op_client.return_value
         mock_op_instance.get_users.return_value = self.op_users
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
 
         # Mock the progress tracker context manager
@@ -186,16 +186,16 @@ class TestUserMigration(unittest.TestCase):
         result = migration.create_user_mapping()
 
         # Verify mappings
-        self.assertIn("user1", result)
-        self.assertIn("user2", result)
-        self.assertEqual(result["user1"]["openproject_id"], 2)
-        self.assertEqual(result["user1"]["openproject_login"], "user1")
-        self.assertEqual(result["user1"]["openproject_email"], "user1@example.com")
-        self.assertEqual(result["user1"]["matched_by"], "username")
-        self.assertIsNone(result["user2"]["openproject_id"])
-        self.assertIsNone(result["user2"]["openproject_login"])
-        self.assertIsNone(result["user2"]["openproject_email"])
-        self.assertEqual(result["user2"]["matched_by"], "none")
+        assert "user1" in result
+        assert "user2" in result
+        assert result["user1"]["openproject_id"] == 2
+        assert result["user1"]["openproject_login"] == "user1"
+        assert result["user1"]["openproject_email"] == "user1@example.com"
+        assert result["user1"]["matched_by"] == "username"
+        assert result["user2"]["openproject_id"] is None
+        assert result["user2"]["openproject_login"] is None
+        assert result["user2"]["openproject_email"] is None
+        assert result["user2"]["matched_by"] == "none"
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
@@ -230,7 +230,7 @@ class TestUserMigration(unittest.TestCase):
         mock_tracker.return_value.__enter__.return_value = mock_tracker_instance
 
         # Create UserMigration instance with mocked clients
-        data_dir = tempfile.mkdtemp()
+        data_dir = Path(tempfile.mkdtemp())
 
         # Use patch.object to avoid calling the real methods during initialization
         with (
@@ -238,7 +238,10 @@ class TestUserMigration(unittest.TestCase):
             patch.object(UserMigration, "_load_from_json", return_value=None),
         ):
 
-            migration = UserMigration(jira_client=mock_jira_instance, op_client=mock_op_instance, data_dir=data_dir)
+            migration = UserMigration(
+                jira_client=mock_jira_instance,
+                op_client=mock_op_instance,
+            )
 
             # Add mocks to avoid file operations that cause serialization errors
             migration._save_to_json = MagicMock()
@@ -292,7 +295,7 @@ class TestUserMigration(unittest.TestCase):
             mock_op_instance.create_users_in_bulk.assert_called_once()
 
             # Verify result
-            self.assertEqual(result["created_count"], 2)
+            assert result["created_count"] == 2
 
         # Clean up
         shutil.rmtree(data_dir)

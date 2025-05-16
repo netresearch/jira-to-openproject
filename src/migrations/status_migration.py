@@ -42,24 +42,20 @@ class StatusMigration(BaseMigration):
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
         mappings: Mappings | None = None,
-        data_dir: str | None = None,
         tracker: ProgressTracker[T] | None = None,
-    ):
+    ) -> None:
         """Initialize the status migration tools.
 
         Args:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
             mappings: Initialized Mappings instance
-            data_dir: Path to the data directory
             tracker: Optional progress tracker instance
 
         """
         super().__init__(jira_client, op_client)
 
         self.mappings = mappings
-        if data_dir:
-            self.data_dir = data_dir
         self.tracker = tracker
 
         # Initialize empty lists
@@ -123,7 +119,7 @@ class StatusMigration(BaseMigration):
 
             return statuses
         except Exception as e:
-            logger.error(f"Failed to extract statuses from Jira: {e!s}")
+            logger.exception(f"Failed to extract statuses from Jira: {e!s}")
             return []
 
     def extract_status_categories(self) -> list[dict[str, Any]]:
@@ -156,7 +152,7 @@ class StatusMigration(BaseMigration):
 
             return categories
         except Exception as e:
-            logger.error(f"Failed to extract status categories from Jira: {e!s}")
+            logger.exception(f"Failed to extract status categories from Jira: {e!s}")
             return []
 
     def get_openproject_statuses(self) -> list[dict[str, Any]]:
@@ -198,7 +194,7 @@ class StatusMigration(BaseMigration):
                         # Handle Ruby output format
                         statuses = json.loads(statuses.replace("=>", ":").replace("nil", "null"))
                     except json.JSONDecodeError:
-                        logger.error("Failed to parse statuses from OpenProject")
+                        logger.exception("Failed to parse statuses from OpenProject")
                         return []
 
             # Ensure statuses is a list of dictionaries
@@ -229,7 +225,7 @@ class StatusMigration(BaseMigration):
 
             return result_statuses
         except Exception as e:
-            logger.error(f"Failed to get statuses from OpenProject: {e!s}")
+            logger.exception(f"Failed to get statuses from OpenProject: {e!s}")
             return []
 
     def create_statuses_bulk_via_rails(self, statuses_to_create: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -366,7 +362,7 @@ class StatusMigration(BaseMigration):
             return {}
 
         except Exception as e:
-            logger.error(f"Exception during Rails bulk execution: {e!s}")
+            logger.exception(f"Exception during Rails bulk execution: {e!s}")
             return {}
 
     def create_status_mapping(self) -> dict[str, Any]:
@@ -770,7 +766,7 @@ class StatusMigration(BaseMigration):
             migration_result = self.migrate_statuses()
 
             return ComponentResult(
-                success=True if migration_result.get("status", "success") == "success" else False,
+                success=migration_result.get("status", "success") == "success",
                 message=migration_result.get("message", "Status migration completed"),
                 success_count=migration_result.get("created_count", 0)
                 + migration_result.get("already_exists_count", 0),
@@ -780,7 +776,7 @@ class StatusMigration(BaseMigration):
             )
 
         except Exception as e:
-            logger.error(f"Error during status migration: {e!s}")
+            logger.exception(f"Error during status migration: {e!s}")
             return ComponentResult(
                 success=False,
                 errors=[f"Error during status migration: {e!s}"],

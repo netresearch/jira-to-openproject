@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Script to update imports from OpenProjectRailsClient to OpenProjectClient.
-"""
+"""Script to update imports from OpenProjectRailsClient to OpenProjectClient."""
 
 import argparse
 import re
@@ -33,7 +32,9 @@ def update_file(file_path: str, dry_run: bool = False) -> bool:
     new_content = re.sub(r"OpenProjectRailsClient\(", "OpenProjectClient(", new_content)
     new_content = re.sub(r"OpenProjectRailsClient\.", "OpenProjectClient.", new_content)
     new_content = re.sub(
-        r"isinstance\((.+?), OpenProjectRailsClient\)", r"isinstance(\1, OpenProjectClient)", new_content,
+        r"isinstance\((.+?), OpenProjectRailsClient\)",
+        r"isinstance(\1, OpenProjectClient)",
+        new_content,
     )
 
     if content == new_content:

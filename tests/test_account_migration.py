@@ -1,8 +1,8 @@
-"""Tests for the account migration component.
-"""
+"""Tests for the account migration component."""
 
 import json
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 from src.migrations.account_migration import AccountMigration
@@ -87,18 +87,16 @@ class TestAccountMigration(unittest.TestCase):
         # Initialize AccountMigration
         self.account_migration = AccountMigration(MagicMock(), MagicMock())
 
-    @patch("src.migrations.account_migration.JiraClient")
-    @patch("src.migrations.account_migration.OpenProjectClient")
-    @patch("src.migrations.account_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
-    @patch("os.path.exists")
+    @patch("src.migrations.account_migration.Path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_tempo_accounts(
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
         mock_get_path: MagicMock,
-        mock_rails_client: MagicMock,
         mock_op_client: MagicMock,
         mock_jira_client: MagicMock,
     ) -> None:
@@ -109,25 +107,29 @@ class TestAccountMigration(unittest.TestCase):
 
         mock_op_instance = mock_op_client.return_value
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
+
+        # Test extraction from API first (file doesn't exist)
         mock_exists.return_value = False  # Force new extraction
 
-        # Initialize migration
-        migration = AccountMigration(mock_jira_instance, mock_op_instance)
+        # Mock _save_to_json to avoid actually writing to file
+        with patch("src.migrations.account_migration.BaseMigration._save_to_json") as mock_save:
+            # Initialize migration
+            migration = AccountMigration(mock_jira_instance, mock_op_instance)
 
-        # Call extract_tempo_accounts
-        result = migration.extract_tempo_accounts()
+            # Call extract_tempo_accounts
+            result = migration.extract_tempo_accounts()
 
-        # Verify calls
-        mock_jira_instance.get_tempo_accounts.assert_called_once_with(expand=True)
+            # Verify API was called and data was saved
+            mock_jira_instance.get_tempo_accounts.assert_called_once_with(expand=True)
+            mock_save.assert_called_once()
 
-        # Verify data was extracted
-        self.assertEqual(len(result), 2)
-        self.assertEqual(migration.tempo_accounts, self.tempo_accounts)
+            # Verify data was extracted
+            assert len(result) == 2
+            assert migration.tempo_accounts == self.tempo_accounts
 
-    @patch("src.migrations.account_migration.JiraClient")
-    @patch("src.migrations.account_migration.OpenProjectClient")
-    @patch("src.migrations.account_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -136,7 +138,6 @@ class TestAccountMigration(unittest.TestCase):
         mock_file: MagicMock,
         mock_exists: MagicMock,
         mock_get_path: MagicMock,
-        mock_rails_client: MagicMock,
         mock_op_client: MagicMock,
         mock_jira_client: MagicMock,
     ) -> None:
@@ -146,7 +147,7 @@ class TestAccountMigration(unittest.TestCase):
         mock_op_instance = mock_op_client.return_value
         mock_op_instance.get_projects.return_value = self.op_projects
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
 
         # Initialize migration
@@ -159,12 +160,11 @@ class TestAccountMigration(unittest.TestCase):
         mock_op_instance.get_projects.assert_called_once()
 
         # Verify data was extracted
-        self.assertEqual(len(result), 2)
-        self.assertEqual(migration.op_projects, self.op_projects)
+        assert len(result) == 2
+        assert migration.op_projects == self.op_projects
 
-    @patch("src.migrations.account_migration.JiraClient")
-    @patch("src.migrations.account_migration.OpenProjectClient")
-    @patch("src.migrations.account_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("src.migrations.account_migration.config.migration_config")
     @patch("os.path.exists")
@@ -175,7 +175,6 @@ class TestAccountMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_rails_client: MagicMock,
         mock_op_client: MagicMock,
         mock_jira_client: MagicMock,
     ) -> None:
@@ -188,7 +187,7 @@ class TestAccountMigration(unittest.TestCase):
         mock_op_instance.get_projects.return_value = self.op_projects
 
         mock_migration_config.get.return_value = False  # Not force mode
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
 
         # Mock the JSON file loading for jira_project_mapping
@@ -217,13 +216,13 @@ class TestAccountMigration(unittest.TestCase):
                 result = migration.create_account_mapping()
 
                 # Verify mappings
-                self.assertIn("101", result)
-                self.assertIn("102", result)
-                self.assertEqual(result["101"]["tempo_name"], "Account One")
-                self.assertEqual(result["101"]["openproject_id"], 1)
-                self.assertEqual(result["101"]["matched_by"], "name")
-                self.assertIsNone(result["102"]["openproject_id"])
-                self.assertEqual(result["102"]["matched_by"], "none")
+                assert "101" in result
+                assert "102" in result
+                assert result["101"]["tempo_name"] == "Account One"
+                assert result["101"]["openproject_id"] == 1
+                assert result["101"]["matched_by"] == "name"
+                assert result["102"]["openproject_id"] is None
+                assert result["102"]["matched_by"] == "none"
 
     def test_create_account_custom_field(self) -> None:
         """Test the create_account_custom_field method."""

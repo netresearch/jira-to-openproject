@@ -10,8 +10,11 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import TypedDict
+
+from rich.console import Console
 
 from src import config
 from src.clients.docker_client import DockerClient
@@ -34,12 +37,21 @@ from src.models import ComponentResult, MigrationResult
 from src.types import BackupDir, ComponentName
 from src.utils import data_handler
 
+console = Console()
+
 
 class AvailableComponents(TypedDict):
-    """Available components for the migration.
-    """
+    """Available components for the migration."""
 
-    dict[ComponentName, BaseMigration]
+    users: UserMigration
+    custom_fields: CustomFieldMigration
+    companies: CompanyMigration
+    projects: ProjectMigration
+    link_types: LinkTypeMigration
+    issue_types: IssueTypeMigration
+    status_types: StatusMigration
+    work_packages: WorkPackageMigration
+    accounts: AccountMigration
 
 
 def print_component_header(component_name: str) -> None:
@@ -49,12 +61,10 @@ def print_component_header(component_name: str) -> None:
         component_name: Name of the component to display
 
     """
-    print("\n" + "=" * 50)
-    print(f"  RUNNING COMPONENT: {component_name}")
-    print("=" * 50 + "\n")
+    console.rule(f"RUNNING COMPONENT: {component_name}")
 
 
-def create_backup(backup_dir: BackupDir = None) -> BackupDir:
+def create_backup(backup_dir: BackupDir | None = None) -> BackupDir:
     """Create a backup of the data directory before running the migration.
 
     Args:
@@ -66,44 +76,39 @@ def create_backup(backup_dir: BackupDir = None) -> BackupDir:
 
     """
     # Use the centralized config for var directories
-    data_dir = config.get_path("data")
+    data_dir: Path = config.get_path("data")
 
-    # If data directory doesn't exist, there's nothing to back up
-    if not os.path.exists(data_dir):
-        config.logger.warning("No data directory found, nothing to back up")
-        return None
-
+    backup_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
     # Create backup directory
     if not backup_dir:
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        backup_dir = os.path.join(config.get_path("backups"), f"backup_{timestamp}")
+        backup_dir = Path(config.get_path("backups")) / f"backup_{backup_timestamp}"
 
-    os.makedirs(backup_dir, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True)
     config.logger.info(f"Creating backup in: {backup_dir=}")
 
     # Copy all files from data directory to backup directory
-    for file_name in os.listdir(data_dir):
-        file_path = os.path.join(data_dir, file_name)
-        if os.path.isfile(file_path):
+    for file_path in data_dir.iterdir():
+        if file_path.is_file():
             shutil.copy2(file_path, backup_dir)
 
-    file_count = len(os.listdir(backup_dir))
+    backup_files = list(backup_dir.iterdir())
+    file_count = len(backup_files)
     config.logger.info(f"Backup created with {file_count=} files")
 
     # Save migration metadata to backup
     metadata = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": backup_timestamp,
         "backup_dir": backup_dir,
-        "files_backed_up": os.listdir(backup_dir),
+        "files_backed_up": [file.name for file in backup_files],
     }
 
-    with open(os.path.join(backup_dir, "backup_metadata.json"), "w") as f:
+    with (backup_dir / "backup_metadata.json").open("w") as f:
         json.dump(metadata, f, indent=2)
 
     return backup_dir
 
 
-def restore_backup(backup_dir: str) -> bool:
+def restore_backup(backup_dir: Path) -> bool:
     """Restore data from a backup directory.
 
     Args:
@@ -114,22 +119,22 @@ def restore_backup(backup_dir: str) -> bool:
 
     """
     # Use the centralized config for var directories
-    data_dir = config.get_path("data")
+    data_dir: Path = config.get_path("data")
 
-    if not os.path.exists(backup_dir):
+    if not backup_dir.exists():
         config.logger.error(f"Backup directory not found: {backup_dir=}")
         return False
 
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
+    if not data_dir.exists():
+        data_dir.mkdir(parents=True, exist_ok=True)
 
     config.logger.info(f"Restoring from backup: {backup_dir=}")
 
     # Check for metadata file to verify it's a valid backup
-    metadata_path = os.path.join(backup_dir, "backup_metadata.json")
-    if os.path.exists(metadata_path):
+    metadata_path = backup_dir / "backup_metadata.json"
+    if metadata_path.exists():
         try:
-            with open(metadata_path) as f:
+            with metadata_path.open("r") as f:
                 metadata = json.load(f)
             config.logger.info(f"Backup was created on: {metadata.get('timestamp')}")
             files_count = len(metadata.get("files_backed_up", []))
@@ -139,13 +144,12 @@ def restore_backup(backup_dir: str) -> bool:
 
     # Copy all files from backup to data directory
     restored_count = 0
-    for file_name in os.listdir(backup_dir):
+    for file_path in backup_dir.iterdir():
         # Skip metadata file
-        if file_name == "backup_metadata.json":
+        if file_path.name == "backup_metadata.json":
             continue
 
-        file_path = os.path.join(backup_dir, file_name)
-        if os.path.isfile(file_path):
+        if file_path.is_file():
             shutil.copy2(file_path, data_dir)
             restored_count += 1
 
@@ -170,7 +174,6 @@ def run_migration(
         if config.migration_config.get("dry_run", False):
             config.logger.warning(
                 "Running in DRY RUN mode - no changes will be made to OpenProject",
-                extra={"markup": True},
             )
             time.sleep(1)  # Give the user a moment to see this warning
             mode = "DRY RUN"
@@ -179,7 +182,6 @@ def run_migration(
 
         config.logger.info(
             f"Starting Jira to OpenProject migration - mode='{mode}'",
-            extra={"markup": True},
         )
 
         # Create a timestamp for this migration run
@@ -204,16 +206,16 @@ def run_migration(
         # Create a backup if not disabled
         backup_path = None
         if not config.migration_config.get("no_backup", False) and not config.migration_config.get("dry_run", False):
-            config.logger.info("Creating backup before migration...", extra={"markup": True})
+            config.logger.info("Creating backup before migration...")
             backup_path = create_backup()
             if backup_path:
                 results.overall["backup_path"] = backup_path
-                config.logger.success(f"Backup created at: {backup_path}", extra={"markup": True})
+                config.logger.success(f"Backup created at: {backup_path}")
             else:
-                config.logger.warning("No backup created (no data to back up)", extra={"markup": True})
+                config.logger.warning("No backup created (no data to back up)")
 
         # Initialize clients
-        config.logger.info("Initializing API clients...", extra={"markup": True})
+        config.logger.info("Initializing API clients...")
 
         # Debug: print available config keys to help identify the correct ones
         config.logger.info(f"Available OpenProject config keys: {list(config.openproject_config.keys())}")
@@ -232,7 +234,8 @@ def run_migration(
         docker_client = DockerClient(
             container_name=str(
                 config.openproject_config.get(
-                    "container_name", config.openproject_config.get("container", "openproject"),
+                    "container_name",
+                    config.openproject_config.get("container", "openproject"),
                 ),
             ),
             ssh_client=ssh_client,
@@ -247,7 +250,7 @@ def run_migration(
         jira_client = JiraClient()
         op_client = OpenProjectClient(ssh_client=ssh_client, docker_client=docker_client, rails_client=rails_client)
 
-        config.logger.success("All clients initialized successfully", extra={"markup": True})
+        config.logger.success("All clients initialized successfully")
 
         # Initialize mappings
         config.mappings = Mappings(data_dir=config.get_path("data"))
@@ -289,15 +292,13 @@ def run_migration(
         components = [c for c in components if c in available_components]
 
         # Show which components will be run
-        config.logger.info(
-            f"Migration will run the following components in order: {components}",
-            extra={"markup": True},
-        )
+        config.logger.info(f"Migration will run the following components in order: {components}")
 
         # Initialize work package migration if it's in the components list
         if "work_packages" in components:
             available_components["work_packages"] = WorkPackageMigration(
-                jira_client=jira_client, op_client=op_client, data_dir=config.get_path("data"),
+                jira_client=jira_client,
+                op_client=op_client,
             )
 
         # Run each component in order
@@ -340,29 +341,21 @@ def run_migration(
                                 f"Component '{component_name}' completed successfully "
                                 f"({success_count}/{total_count} items migrated), "
                                 f"took {component_time:.2f} seconds",
-                                extra={"markup": True},
                             )
                         else:
                             config.logger.error(
                                 f"Component '{component_name}' failed or had errors "
                                 f"({success_count}/{total_count} items migrated, {failed_count} failed), "
                                 f"took {component_time:.2f} seconds",
-                                extra={"markup": True},
                             )
                     else:
                         # Handle case where component didn't return a result (should not happen with dataclass)
-                        config.logger.warning(
-                            f"Component '{component_name}' did not return a result",
-                            extra={"markup": True},
-                        )
+                        config.logger.warning(f"Component '{component_name}' did not return a result")
                         results.components[component_name] = component_result
 
                 except KeyboardInterrupt:
                     # Handle user interruption within a component
-                    config.logger.warning(
-                        f"Component '{component_name}' was interrupted by user",
-                        extra={"markup": True},
-                    )
+                    config.logger.warning(f"Component '{component_name}' was interrupted by user")
                     # Create a basic result reflecting interruption
                     interrupted_result = ComponentResult(
                         success=False,
@@ -377,7 +370,6 @@ def run_migration(
                     # Handle unexpected errors during component execution
                     config.logger.exception(
                         f"Error during '{component_name}' migration: {e!s}",
-                        extra={"markup": True, "traceback": True},
                     )
                     # Create a basic result reflecting the error
                     error_result = ComponentResult(
@@ -407,23 +399,21 @@ def run_migration(
                             if hasattr(current_result, "errors") and current_result.errors:
                                 result = f"\033[1;31mFAILED\033[0m with errors: {current_result.errors}"
 
-                        print("\n" + "-" * 50)
-                        print(f"Component '{component_name}' has {result}.")
-                        print("-" * 50)
+                        console.rule(f"Component '{component_name}' has {result}.")
 
                         if results.overall["status"] != "success":
-                            print("\nWARNING: Previous component had errors.")
+                            console.print("WARNING: Previous component had errors.")
 
                         next_component = components[components.index(component_name) + 1]
 
                         user_input = input(f"\nContinue to next component: {next_component}? [Y/n]: ").strip().lower()
                         if user_input and user_input not in ("y", "yes"):
-                            config.logger.warning("Migration paused by user", extra={"markup": True})
+                            config.logger.warning("Migration paused by user")
                             results.overall["status"] = "interrupted"
                             results.overall["message"] = "Migration was paused by user"
                             break
                     except KeyboardInterrupt:
-                        config.logger.warning("Migration interrupted by user", extra={"markup": True})
+                        config.logger.warning("Migration interrupted by user")
                         results.overall["status"] = "interrupted"
                         results.overall["message"] = "Migration was interrupted by user"
                         break
@@ -436,13 +426,12 @@ def run_migration(
                     if component_name in ["users", "projects"]:
                         config.logger.error(
                             f"Critical component '{component_name}' failed, aborting migration",
-                            extra={"markup": True},
                         )
                         break
 
         except KeyboardInterrupt:
             # Handle user interruption at the top level
-            config.logger.warning("Migration interrupted by user", extra={"markup": True})
+            config.logger.warning("Migration interrupted by user")
             results.overall["status"] = "interrupted"
             results.overall["message"] = "Migration was interrupted by user"
 
@@ -457,15 +446,9 @@ def run_migration(
 
         # Print final status
         if results.overall["status"] == "success":
-            config.logger.success(
-                f"Migration completed successfully in {total_seconds:.2f} seconds.",
-                extra={"markup": True},
-            )
+            config.logger.success(f"Migration completed successfully in {total_seconds:.2f} seconds.")
         else:
-            config.logger.error(
-                f"Migration completed with status '{results.overall['status']}' in {total_seconds:.2f} seconds.",
-                extra={"markup": True},
-            )
+            config.logger.error(f"Migration completed with status '{results.overall['status']}' in {total_seconds:.2f} seconds.")
 
         # Save results to file
         results_file = f"migration_results_{migration_timestamp}.json"
@@ -474,17 +457,14 @@ def run_migration(
             filename=results_file,
         )
 
-        config.logger.info(f"Migration results saved to {results_file}", extra={"markup": True})
+        config.logger.info(f"Migration results saved to {results_file}")
 
         return results
 
     except Exception as e:
         # Handle unexpected errors at the top level
         config.logger.exception(e)
-        config.logger.error(
-            f"Unexpected error during migration: {e!s}",
-            extra={"markup": True, "traceback": True},
-        )
+        config.logger.error(f"Unexpected error during migration: {e!s}")
 
         # Create a basic result object
         return MigrationResult(
@@ -544,10 +524,7 @@ def setup_tmux_session() -> bool:
 
     session_name = config.openproject_config.get("tmux_session_name", "rails_console")
 
-    config.logger.info(
-        f"Setting up tmux session '{session_name}' for Rails console...",
-        extra={"markup": True},
-    )
+    config.logger.info(f"Setting up tmux session '{session_name}' for Rails console...")
 
     try:
         # Check if tmux is installed
@@ -561,17 +538,17 @@ def setup_tmux_session() -> bool:
         )
 
         if result.returncode == 0:
-            config.logger.warning(f"tmux session '{session_name}' already exists", extra={"markup": True})
-            config.logger.info("To attach to this session, run:", extra={"markup": True})
-            config.logger.info(f"tmux attach -t {session_name}", extra={"markup": True})
+            config.logger.warning(f"tmux session '{session_name}' already exists")
+            config.logger.info("To attach to this session, run:")
+            config.logger.info(f"tmux attach -t {session_name}")
             return True
 
         # Create a new session
         subprocess.run(["tmux", "new-session", "-d", "-s", session_name], check=True)
 
-        config.logger.success(f"Created tmux session '{session_name}'", extra={"markup": True})
-        config.logger.info("To attach to this session, run:", extra={"markup": True})
-        config.logger.info(f"tmux attach -t {session_name}", extra={"markup": True})
+        config.logger.success(f"Created tmux session '{session_name}'")
+        config.logger.info("To attach to this session, run:")
+        config.logger.info(f"tmux attach -t {session_name}")
 
         # Determine if Docker is being used
         using_docker = "container" in config.openproject_config
@@ -579,51 +556,36 @@ def setup_tmux_session() -> bool:
         # Send commands to the session to set up Rails console
         if using_docker:
             container = config.openproject_config.get("container", "openproject")
-            config.logger.info(
-                f"Detected Docker setup with container '{container}'",
-                extra={"markup": True},
-            )
+            config.logger.info(f"Detected Docker setup with container '{container}'")
             config.logger.info(
                 "Please manually run the following commands in the tmux session:",
-                extra={"markup": True},
             )
-            config.logger.info(f"docker exec -it {container} bash", extra={"markup": True})
-            config.logger.info("cd /app && bundle exec rails console", extra={"markup": True})
+            config.logger.info(f"docker exec -it {container} bash")
+            config.logger.info("cd /app && bundle exec rails console")
         else:
             server = config.openproject_config.get("server")
             if server:
-                config.logger.info(f"Detected remote server '{server}'", extra={"markup": True})
+                config.logger.info(f"Detected remote server '{server}'")
                 config.logger.info(
                     "Please manually run the following commands in the tmux session:",
-                    extra={"markup": True},
                 )
-                config.logger.info(f"ssh {server}", extra={"markup": True})
-                config.logger.info(
-                    "cd /opt/openproject && bundle exec rails console",
-                    extra={"markup": True},
-                )
+                config.logger.info(f"ssh {server}")
+                config.logger.info("cd /opt/openproject && bundle exec rails console")
             else:
                 config.logger.info(
                     "Please manually run the following command in the tmux session:",
-                    extra={"markup": True},
                 )
-                config.logger.info(
-                    "cd /path/to/openproject && bundle exec rails console",
-                    extra={"markup": True},
-                )
+                config.logger.info("cd /path/to/openproject && bundle exec rails console")
 
-        config.logger.info(
-            "After running Rails console, you can use the direct migration features.",
-            extra={"markup": True},
-        )
+        config.logger.info("After running Rails console, you can use the direct migration features.")
 
         return True
     except (subprocess.SubprocessError, FileNotFoundError):
-        config.logger.error("tmux is not installed or not available in PATH", extra={"markup": True})
-        config.logger.info("Please install tmux first:", extra={"markup": True})
-        config.logger.info("  On Ubuntu/Debian: sudo apt-get install tmux", extra={"markup": True})
-        config.logger.info("  On CentOS/RHEL: sudo yum install tmux", extra={"markup": True})
-        config.logger.info("  On macOS with Homebrew: brew install tmux", extra={"markup": True})
+        config.logger.error("tmux is not installed or not available in PATH")
+        config.logger.info("Please install tmux first:")
+        config.logger.info("  On Ubuntu/Debian: sudo apt-get install tmux")
+        config.logger.info("  On CentOS/RHEL: sudo yum install tmux")
+        config.logger.info("  On macOS with Homebrew: brew install tmux")
         return False
 
 
@@ -664,7 +626,8 @@ def main() -> None:
             docker_client = DockerClient(
                 container_name=str(
                     config.openproject_config.get(
-                        "container_name", config.openproject_config.get("container", "openproject"),
+                        "container_name",
+                        config.openproject_config.get("container", "openproject"),
                     ),
                 ),
                 ssh_client=ssh_client,
@@ -678,9 +641,9 @@ def main() -> None:
             op_client = OpenProjectClient(ssh_client=ssh_client, docker_client=docker_client, rails_client=rails_client)
 
             # List options to choose which mapping to update
-            print("\nSelect mapping to update:")
-            print("1. Custom Field mapping")
-            print("2. Issue Type mapping")
+            console.print("\nSelect mapping to update:")
+            console.print("1. Custom Field mapping")
+            console.print("2. Issue Type mapping")
 
             while True:
                 try:
@@ -708,7 +671,7 @@ def main() -> None:
             return
 
         # dump args
-        config.logger.debug(f"Args: {args}", extra={"markup": True})
+        config.logger.debug(f"Args: {args}")
 
         # Update configuration with CLI arguments
         config.update_from_cli_args(args)
@@ -725,31 +688,28 @@ def main() -> None:
 
             # Show summary header based on status
             if overall_status == "success":
-                config.logger.success("Migration completed successfully", extra={"markup": True})
+                config.logger.success("Migration completed successfully")
             elif overall_status == "interrupted":
-                config.logger.warning(
-                    "Migration was interrupted before completion",
-                    extra={"markup": True},
-                )
+                config.logger.warning("Migration was interrupted before completion")
             else:
-                config.logger.error("Migration completed with errors", extra={"markup": True})
+                config.logger.error("Migration completed with errors")
 
             # Print component results
-            config.logger.info("Component results:", extra={"markup": True})
+            config.logger.info("Component results:")
             # Fix: Access components property correctly
             component_items = migration_result.components.items() if hasattr(migration_result, "components") else {}
             for component, comp_result in component_items:
                 # Access status from details
                 status = comp_result.details.get("status", "unknown") if comp_result.details else "unknown"
                 if status == "success":
-                    config.logger.success(f"✓ {component}: {status}", extra={"markup": True})
+                    config.logger.success(f"✓ {component}: {status}")
                 elif status == "interrupted":
-                    config.logger.warning(f"⚠ {component}: {status}", extra={"markup": True})
+                    config.logger.warning(f"⚠ {component}: {status}")
                 else:
-                    config.logger.error(f"✗ {component}: {status}", extra={"markup": True})
+                    config.logger.error(f"✗ {component}: {status}")
 
     except KeyboardInterrupt:
-        print("\nMigration manually interrupted. Exiting...")
+        console.print("\nMigration manually interrupted. Exiting...")
         sys.exit(0)
 
 

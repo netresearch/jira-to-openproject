@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DockerClient
+"""DockerClient.
 
 Manages Docker container interactions, including command execution and file transfers.
 Uses SSHClient for remote operations.
@@ -12,7 +12,9 @@ Part of the layered client architecture where:
 
 import os
 import random
-import time
+from datetime import datetime, timezone
+from pathlib import Path
+from shlex import quote
 
 from src import config
 from src.clients.ssh_client import SSHClient
@@ -23,10 +25,11 @@ logger = config.logger
 
 class DockerClient:
     """Client for interacting with Docker containers on remote servers.
+
     Part of the layered client architecture where:
     1. OpenProjectClient owns SSHClient, DockerClient, and RailsConsoleClient
     2. DockerClient uses SSHClient for remote Docker operations
-    3. RailsConsoleClient uses DockerClient for container interactions
+    3. RailsConsoleClient uses DockerClient for container interactions.
     """
 
     def __init__(
@@ -58,9 +61,10 @@ class DockerClient:
 
         # Verify container exists
         if not self.check_container_exists():
-            raise ValueError(f"Docker container not found or not running: {container_name}")
+            msg = f"Docker container not found or not running: {container_name}"
+            raise ValueError(msg)
 
-        logger.debug(f"DockerClient initialized for container {container_name}")
+        logger.debug("DockerClient initialized for container %s", container_name)
 
     def check_container_exists(self) -> bool:
         """Check if the specified container exists and is running.
@@ -78,7 +82,7 @@ class DockerClient:
             )
 
             if returncode == 0 and self.container_name in stdout:
-                logger.debug(f"Container verified: {self.container_name}")
+                logger.debug("Container verified: %s", self.container_name)
                 return True
 
             # Check if container exists but is not running
@@ -87,21 +91,21 @@ class DockerClient:
             )
 
             if returncode == 0 and self.container_name in stdout:
-                logger.warning(f"Container exists but is not running: {self.container_name}")
+                logger.warning("Container exists but is not running: %s", self.container_name)
                 return False
 
-            logger.error(f"Container not found: {self.container_name}")
+            logger.error("Container not found: %s", self.container_name)
             return False
 
         except Exception as e:
-            logger.error(f"Error checking if container exists: {e!s}")
+            logger.exception("Error checking if container exists: %s", e)
             raise
 
     def execute_command(
         self,
         command: str,
         user: str | None = None,
-        workdir: str | None = None,
+        workdir: Path | str | None = None,
         timeout: int | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[str, str, int]:
@@ -133,24 +137,21 @@ class DockerClient:
 
         # Add working directory if specified
         if workdir:
-            docker_cmd.extend(["-w", workdir])
+            # Convert to Path object if it is a string
+            if isinstance(workdir, str):
+                workdir = Path(workdir)
+            docker_cmd.extend(["-w", quote(workdir.resolve(strict=False).as_posix())])
 
         # Add environment variables if specified
         if env:
             for key, value in env.items():
-                docker_cmd.extend(["-e", f"{key}={value}"])
+                docker_cmd.extend(["-e", f"{key}={quote(value)}"])
 
         # Add container name and command
         docker_cmd.append(self.container_name)
 
         # For complex commands, use bash -c
-        if " " in command or ";" in command or "|" in command or ">" in command:
-            # Escape quotes in the command
-            escaped_command = command.replace('"', '\\"')
-            docker_cmd.extend(["bash", "-c", f'"{escaped_command}"'])
-        else:
-            # Simple command can be passed directly
-            docker_cmd.append(command)
+        docker_cmd.extend(["bash", "-c", quote(command)])
 
         # Convert list to space-separated string
         docker_cmd_str = " ".join(docker_cmd)
@@ -158,7 +159,7 @@ class DockerClient:
         # Execute via SSH
         return self.ssh_client.execute_command(docker_cmd_str, timeout=timeout)
 
-    def copy_file_to_container(self, local_path: str, container_path: str) -> None:
+    def copy_file_to_container(self, local_path: Path | str, container_path: Path | str) -> None:
         """Copy a file from local machine to the Docker container.
 
         Args:
@@ -169,165 +170,175 @@ class DockerClient:
             None on success
 
         Raises:
+            FileNotFoundError: If the file does not exist or cannot be accessed
             ValueError: If the file transfer fails
             Exception: For other errors during command execution or file transfer
 
         """
-        # We don't validate if the remote file exists, since this method is called
-        # with a path on the remote server, not on the local machine
+        # Convert to Path objects if they're strings
+        local_path = Path(local_path) if isinstance(local_path, str) else local_path
+        container_path = Path(container_path) if isinstance(container_path, str) else container_path
 
         try:
-            # Copy from remote host to container (we assume the file exists on remote host)
-            logger.debug(f"Copying file from remote host to container: {local_path} -> {container_path}")
+            # Check if local file exists via SSH
+            logger.debug(f"Checking if local file exists: {local_path}")
+            local_file_exists = self.ssh_client.check_remote_file_exists(local_path)
 
-            # Create docker cp command
-            docker_cp_cmd = f"docker cp {local_path} {self.container_name}:{container_path}"
+            if not local_file_exists:
+                logger.error(f"Local file not found: {local_path}")
+                raise FileNotFoundError(f"Local file does not exist: {local_path}")
 
-            # Execute via SSH
-            stdout, stderr, returncode = self.ssh_client.execute_command(docker_cp_cmd)
+            # Build docker cp command on remote
+            cmd = f"docker cp {quote(str(local_path))} {self.container_name}:{quote(str(container_path))}"
 
-            if returncode != 0:
-                logger.error(f"Docker cp failed: {stderr}")
+            # Execute the command
+            stdout, stderr, returncode = self.ssh_client.execute_command(
+                cmd, check=True, timeout=self.command_timeout
+            )
+
+            # Verify that the file was copied successfully
+            if returncode == 0:
+                # Check if the file exists in the container
+                if not self.check_file_exists_in_container(container_path):
+                    logger.error(f"File not found in container after copy: {container_path}")
+                    raise ValueError(f"File not found in container after copy: {container_path}")
+
+                # Get file size in container
+                size = self.get_file_size_in_container(container_path)
+                logger.debug(f"Successfully copied file to container: {local_path} -> {container_path} (size: {size} bytes)")
+            else:
+                logger.error(f"Failed to copy file to container: {stderr}")
                 raise ValueError(f"Failed to copy file to container: {stderr}")
 
-            # Verify the file exists in the container
-            exists_cmd = (
-                f"docker exec {self.container_name} bash -c "
-                f"\"test -e {container_path} && echo 'EXISTS' || echo 'NOT_EXISTS'\""
-            )
-            stdout, _, _ = self.ssh_client.execute_command(exists_cmd)
-
-            if "EXISTS" not in stdout:
-                logger.error(f"File not found in container after docker cp: {container_path}")
-                raise ValueError(f"File not found in container after copy: {container_path}")
-
-            logger.debug(f"File copied successfully to container: {container_path}")
-            return
-
+        except FileNotFoundError:
+            # Re-raise file not found errors
+            raise
         except Exception as e:
-            logger.error(f"Error copying file to container: {e!s}")
-            raise ValueError(f"Failed to copy file to container: {e!s}")
+            logger.exception(f"Error copying file to container: {e}")
+            msg = f"Failed to copy file to container: {e}"
+            raise ValueError(msg) from e
 
-    def copy_file_from_container(self, container_path: str, local_path: str) -> str:
-        """Copy a file from the Docker container to the local system.
-        This uses a direct approach to copy the file from container to local.
+    def copy_file_from_container(self, container_path: Path | str, local_path: Path | str) -> Path:
+        """Copy a file from Docker container to local machine.
 
         Args:
-            container_path: Path to the file in the container
-            local_path: Path where to save the file locally
+            container_path: Path in container
+            local_path: Path to save file locally on the remote server
 
         Returns:
-            Path to the downloaded file
+            Path to the file on success
 
         Raises:
-            FileNotFoundError: If the file doesn't exist in container or isn't created locally
+            FileNotFoundError: If the file does not exist in the container
             ValueError: If the file transfer fails
             Exception: For other errors during command execution or file transfer
 
         """
-        # Create a unique temporary filename on the remote host
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        unique_id = f"{random.randrange(16**6):06x}"
-        remote_temp_path = f"/tmp/{timestamp}_{unique_id}_{os.path.basename(container_path)}"
+        # Convert to Path objects if they're strings
+        container_path = Path(container_path) if isinstance(container_path, str) else container_path
+        local_path = Path(local_path) if isinstance(local_path, str) else local_path
 
         try:
-            # Step 1: Check if file exists in container
-            exists_cmd = (
-                f"docker exec {self.container_name} bash -c "
-                f"\"test -e {container_path} && echo 'EXISTS' || echo 'NOT_EXISTS'\""
-            )
-            stdout, _, _ = self.ssh_client.execute_command(exists_cmd)
-
-            if "EXISTS" not in stdout:
+            # Check if file exists in container
+            if not self.check_file_exists_in_container(container_path):
                 logger.error(f"File not found in container: {container_path}")
                 raise FileNotFoundError(f"File not found in container: {container_path}")
 
-            # Step 2: Copy from container to remote host
-            docker_cmd = f"docker cp {self.container_name}:{container_path} {remote_temp_path}"
-            logger.debug(f"Running docker cp command: {docker_cmd}")
-            stdout, stderr, returncode = self.ssh_client.execute_command(docker_cmd)
+            # Ensure local directory exists
+            local_dir = local_path.parent
+            mkdir_cmd = f"mkdir -p {quote(str(local_dir))}"
+            self.ssh_client.execute_command(mkdir_cmd, check=True)
 
-            if returncode != 0:
-                logger.error(f"Docker cp failed: {stderr}")
+            # Build docker cp command
+            cmd = f"docker cp {self.container_name}:{quote(str(container_path))} {quote(str(local_path))}"
+
+            # Execute the command
+            stdout, stderr, returncode = self.ssh_client.execute_command(
+                cmd, check=True, timeout=self.command_timeout
+            )
+
+            # Verify that the file was copied successfully
+            if returncode == 0:
+                # Check if local file exists
+                if not self.ssh_client.check_remote_file_exists(local_path):
+                    logger.error(f"File not found locally after copy: {local_path}")
+                    raise ValueError(f"File not found locally after copy: {local_path}")
+
+                # Get file size
+                size = self.ssh_client.get_remote_file_size(local_path)
+                logger.debug(f"Successfully copied file from container: {container_path} -> {local_path} (size: {size} bytes)")
+
+                return local_path
+            else:
+                logger.error(f"Failed to copy file from container: {stderr}")
                 raise ValueError(f"Failed to copy file from container: {stderr}")
 
-            # Step 3: Verify the file exists on remote host
-            verify_cmd = f"test -e {remote_temp_path} && echo 'EXISTS' || echo 'NOT_EXISTS'"
-            stdout, _, _ = self.ssh_client.execute_command(verify_cmd)
+        except FileNotFoundError:
+            # Re-raise file not found errors
+            raise
+        except Exception as e:
+            logger.exception(f"Error copying file from container: {e}")
+            msg = f"Failed to copy file from container: {e}"
+            raise ValueError(msg) from e
 
-            if "EXISTS" not in stdout:
-                logger.error(f"File not found on remote host after docker cp: {remote_temp_path}")
-                raise FileNotFoundError(f"File not found on remote host after docker cp: {remote_temp_path}")
-
-            # Step 4: Use SCP to copy the file from remote to local
-            logger.debug(f"Copying file from remote to local: {remote_temp_path} -> {local_path}")
-            local_file_path = self.ssh_client.copy_file_from_remote(remote_temp_path, local_path)
-
-            # Step 5: Verify local file exists and has content
-            if not os.path.exists(local_path):
-                logger.error(f"Local file not found after copy: {local_path}")
-                raise FileNotFoundError(f"Local file not found after copy: {local_path}")
-
-            local_size = os.path.getsize(local_path)
-            logger.debug(f"File copied successfully: {local_path} ({local_size} bytes)")
-
-            return local_file_path
-
-        finally:
-            # Clean up the temporary file on the remote host
-            try:
-                self.ssh_client.execute_command(f"rm -f {remote_temp_path}", check=False)
-            except Exception:
-                # Non-critical error, just log it
-                logger.warning(f"Failed to clean up temporary file: {remote_temp_path}")
-
-    def check_file_exists_in_container(self, container_path: str) -> bool:
-        """Check if a file exists in the container.
+    def check_file_exists_in_container(self, container_path: Path | str) -> bool:
+        """Check if a file exists in the Docker container.
 
         Args:
-            container_path: Path in container
+            container_path: Path to check in container
 
         Returns:
-            True if file exists, False otherwise
+            True if the file exists, False otherwise
 
         """
+        container_path_str = str(container_path)
+
         try:
-            stdout, _, _ = self.execute_command(f"test -e {container_path} && echo 'EXISTS' || echo 'NOT_EXISTS'")
-            return "EXISTS" in stdout
+            # Use stat to check if file exists
+            cmd = f"docker exec {self.container_name} bash -c 'test -e {quote(container_path_str)} && echo \"EXISTS\" || echo \"NOT_EXISTS\"'"
+            stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
+
+            return "EXISTS" in stdout and returncode == 0
         except Exception as e:
-            logger.error(f"Error checking if file exists in container: {e!s}")
+            logger.warning(f"Error checking if file exists in container: {e}")
             return False
 
-    def get_file_size_in_container(self, container_path: str) -> int | None:
-        """Get the size of a file in the container.
+    def get_file_size_in_container(self, container_path: Path | str) -> int | None:
+        """Get the size of a file in the Docker container.
 
         Args:
-            container_path: Path in container
+            container_path: Path to the file in the container
 
         Returns:
-            File size in bytes or None if file doesn't exist
+            Size of the file in bytes, or None if the file does not exist or cannot be accessed
 
         """
+        container_path_str = str(container_path)
+
         try:
-            stdout, _, _ = self.execute_command(f"stat -c %s {container_path} 2>/dev/null || echo 'NOT_EXISTS'")
+            # Use stat to get file size
+            cmd = f"docker exec {self.container_name} bash -c 'stat -c %s {quote(container_path_str)} 2>/dev/null || echo \"NOT_EXISTS\"'"
+            stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
 
-            if "NOT_EXISTS" not in stdout:
-                try:
-                    return int(stdout.strip())
-                except ValueError:
-                    logger.warning(f"Invalid file size returned for {container_path}: {stdout.strip()}")
-                    return None
-            return None
+            if "NOT_EXISTS" in stdout or returncode != 0:
+                return None
+
+            try:
+                return int(stdout.strip())
+            except ValueError:
+                logger.warning(f"Invalid file size returned for {container_path}: {stdout.strip()}")
+                return None
         except Exception as e:
-            logger.error(f"Error getting file size in container: {e!s}")
+            logger.warning(f"Error getting file size in container: {e}")
             return None
 
-    def transfer_file_to_container(self, local_path: str, container_path: str) -> None:
+    def transfer_file_to_container(self, local_path: Path | str, container_path: Path | str) -> None:
         """Transfer a file directly from the local machine to the Docker container in one operation.
+
         This method handles:
         1. Copying the file from local machine to the remote server (via SSH)
         2. Copying the file from remote server to the container
-        3. Setting proper permissions in the container using root user
+        3. Setting proper permissions in the container using root user.
 
         Args:
             local_path: Path to file on local machine
@@ -337,42 +348,61 @@ class DockerClient:
             ValueError: If transfer fails at any step
 
         """
+        # Convert to Path objects if they are strings
+        local_path = Path(local_path) if isinstance(local_path, str) else local_path
+        container_path = Path(container_path) if isinstance(container_path, str) else container_path
+
         # Use a temporary path on the remote server
-        remote_temp_path = f"/tmp/{os.path.basename(local_path)}"
+        remote_temp_path = Path(f"/tmp/{local_path.name}")
 
         try:
             # Step 1: Transfer from local to remote server via SSH
-            logger.debug(f"Copying file from local to remote: {local_path} -> {remote_temp_path}")
+            logger.debug(
+                "Copying file from local to remote: %s -> %s",
+                local_path,
+                remote_temp_path,
+            )
             self.ssh_client.copy_file_to_remote(local_path, remote_temp_path)
 
             # Verify remote file exists
             if not self.ssh_client.check_remote_file_exists(remote_temp_path):
-                raise ValueError(f"File not found on remote server after transfer: {remote_temp_path}")
+                msg = f"File not found on remote server after transfer: {remote_temp_path}"
+                raise ValueError(msg)
 
             # Step 2: Transfer from remote server to container
-            logger.debug(f"Copying file from remote to container: {remote_temp_path} -> {container_path}")
+            logger.debug(
+                "Copying file from remote to container: %s -> %s",
+                remote_temp_path,
+                container_path,
+            )
             self.copy_file_to_container(remote_temp_path, container_path)
 
             # Step 3: Set proper permissions as root to ensure Rails can read it
-            logger.debug(f"Setting permissions on file in container: {container_path}")
+            logger.debug("Setting permissions on file in container: %s", container_path)
             stdout, stderr, rc = self.execute_command(
-                f"chmod 644 {container_path}", user="root",  # Execute as root user
+                f"chmod 644 {container_path}",
+                user="root",  # Execute as root user
             )
 
             if rc != 0:
-                logger.warning(f"Failed to set permissions in container: {stderr}")
+                logger.warning("Failed to set permissions in container: %s", stderr)
                 # We continue anyway since the file might still be usable
 
             # Step 4: Verify file exists and is readable in container
             if not self.check_file_exists_in_container(container_path):
-                raise ValueError(f"File not found in container after transfer: {container_path}")
+                msg = f"File not found in container after transfer: {container_path}"
+                raise ValueError(msg)
 
-            logger.debug(f"Successfully transferred file from local to container: {local_path} -> {container_path}")
+            logger.debug(
+                "Successfully transferred file from local to container: %s -> %s",
+                local_path,
+                container_path,
+            )
 
         finally:
             # Clean up the temporary file on the remote server
             try:
-                self.ssh_client.execute_command(f"rm -f {remote_temp_path}")
-            except Exception as e:
+                self.ssh_client.execute_command(f"rm -f {remote_temp_path.as_posix()}")
+            except Exception:
                 # Non-critical error, just log it
-                logger.warning(f"Failed to clean up temporary file: {remote_temp_path}, Error: {e!s}")
+                logger.exception("Failed to clean up temporary file: %s", remote_temp_path)

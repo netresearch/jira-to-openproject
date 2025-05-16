@@ -1,5 +1,4 @@
-"""Tests for the data_handler utility module.
-"""
+"""Tests for the data_handler utility module."""
 
 import os
 import tempfile
@@ -30,22 +29,24 @@ class TestDataHandler(unittest.TestCase):
         """Test saving and loading a Pydantic model."""
         # Create a test model
         test_result = ComponentResult(
-            success=True, message="Test successful", details={"total": 10, "success": 8, "failed": 2},
+            success=True,
+            message="Test successful",
+            details={"total": 10, "success": 8, "failed": 2},
         )
 
         # Save the model
         success = data_handler.save(test_result, self.test_filename, directory=self.temp_dir)
-        self.assertTrue(success)
-        self.assertTrue(os.path.exists(self.test_filepath))
+        assert success
+        assert os.path.exists(self.test_filepath)
 
         # Load the model
         loaded_result = data_handler.load(ComponentResult, self.test_filename, directory=self.temp_dir)
 
         # Verify loaded model matches original
-        self.assertIsNotNone(loaded_result)
-        self.assertEqual(loaded_result.success, test_result.success)
-        self.assertEqual(loaded_result.message, test_result.message)
-        self.assertEqual(loaded_result.details, test_result.details)
+        assert loaded_result is not None
+        assert loaded_result.success == test_result.success
+        assert loaded_result.message == test_result.message
+        assert loaded_result.details == test_result.details
 
     def test_save_and_load_dict(self) -> None:
         """Test saving and loading a dictionary."""
@@ -53,13 +54,13 @@ class TestDataHandler(unittest.TestCase):
 
         # Save the dictionary
         success = data_handler.save(test_data, self.test_filename, directory=self.temp_dir)
-        self.assertTrue(success)
+        assert success
 
         # Load as a dictionary
         loaded_data = data_handler.load_dict(self.test_filename, directory=self.temp_dir)
 
         # Verify loaded data matches original
-        self.assertEqual(loaded_data, test_data)
+        assert loaded_data == test_data
 
     def test_save_and_load_list(self) -> None:
         """Test saving and loading a list."""
@@ -67,13 +68,13 @@ class TestDataHandler(unittest.TestCase):
 
         # Save the list
         success = data_handler.save(test_data, self.test_filename, directory=self.temp_dir)
-        self.assertTrue(success)
+        assert success
 
         # Load as a list
         loaded_data = data_handler.load_list(self.test_filename, directory=self.temp_dir)
 
         # Verify loaded data matches original
-        self.assertEqual(loaded_data, test_data)
+        assert loaded_data == test_data
 
     def test_save_and_load_with_path(self) -> None:
         """Test saving and loading using direct file paths."""
@@ -82,27 +83,27 @@ class TestDataHandler(unittest.TestCase):
 
         # Save using path
         success = data_handler.save_to_path(test_result, self.test_filepath)
-        self.assertTrue(success)
+        assert success
 
         # Load using path
         loaded_result = data_handler.load_from_path(ComponentResult, self.test_filepath)
 
         # Verify loaded model matches original
-        self.assertIsNotNone(loaded_result)
-        self.assertEqual(loaded_result.success, test_result.success)
-        self.assertEqual(loaded_result.message, test_result.message)
-        self.assertEqual(loaded_result.errors, test_result.errors)
+        assert loaded_result is not None
+        assert loaded_result.success == test_result.success
+        assert loaded_result.message == test_result.message
+        assert loaded_result.errors == test_result.errors
 
     def test_load_nonexistent_file(self) -> None:
         """Test loading a file that doesn't exist."""
         # Try to load a nonexistent file
         result = data_handler.load(ComponentResult, "nonexistent.json", directory=self.temp_dir)
-        self.assertIsNone(result)
+        assert result is None
 
         # Try with a default value
         default = ComponentResult(success=False, message="Default")
         result = data_handler.load(ComponentResult, "nonexistent.json", directory=self.temp_dir, default=default)
-        self.assertEqual(result, default)
+        assert result == default
 
     def test_handling_invalid_json(self) -> None:
         """Test handling invalid JSON data."""
@@ -112,9 +113,9 @@ class TestDataHandler(unittest.TestCase):
 
         # Try to load the invalid file
         result = data_handler.load(ComponentResult, self.test_filename, directory=self.temp_dir)
-        self.assertIsNone(result)
+        assert result is None
 
         # Try with a default value
         default = ComponentResult(success=False, message="Default")
         result = data_handler.load(ComponentResult, self.test_filename, directory=self.temp_dir, default=default)
-        self.assertEqual(result, default)
+        assert result == default

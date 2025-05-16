@@ -1,5 +1,5 @@
 import json
-import os
+from pathlib import Path
 from typing import Any
 
 from src import config
@@ -10,6 +10,7 @@ from src.models import ComponentResult
 
 class BaseMigration:
     """Base class for all migration classes.
+
     Provides common functionality and initialization for all migration types.
 
     Follows the layered client architecture:
@@ -23,6 +24,7 @@ class BaseMigration:
         op_client: OpenProjectClient | None = None,
     ) -> None:
         """Initialize the base migration with common attributes.
+
         Follows dependency injection pattern for the high-level clients only.
 
         Args:
@@ -34,8 +36,8 @@ class BaseMigration:
         self.jira_client = jira_client or JiraClient()
         self.op_client = op_client or OpenProjectClient()
 
-        self.data_dir = config.get_path("data")
-        self.output_dir = config.get_path("output")
+        self.data_dir: Path = config.get_path("data")
+        self.output_dir: Path = config.get_path("output")
 
         self.logger = config.logger
 
@@ -45,7 +47,7 @@ class BaseMigration:
 
             config.mappings = Mappings(data_dir=self.data_dir)
 
-    def _load_from_json(self, filename: str, default: Any = None) -> Any:
+    def _load_from_json(self, filename: Path, default: Any = None) -> Any:
         """Load data from a JSON file in the data directory.
 
         Args:
@@ -56,17 +58,17 @@ class BaseMigration:
             Loaded JSON data or default value
 
         """
-        filepath = os.path.join(self.data_dir, filename)
-        if os.path.exists(filepath):
+        filepath = self.data_dir / filename
+        if filepath.exists():
             try:
-                with open(filepath) as f:
+                with filepath.open("r") as f:
                     return json.load(f)
-            except Exception as e:
-                self.logger.warning(f"Failed to load {filepath}: {e}")
+            except Exception:
+                self.logger.exception("Failed to load %s", filepath)
                 return default
         return default
 
-    def _save_to_json(self, data: Any, filename: str) -> str:
+    def _save_to_json(self, data: Any, filename: Path) -> Path:
         """Save data to a JSON file in the data directory.
 
         Args:
@@ -77,23 +79,26 @@ class BaseMigration:
             Path to the saved file
 
         """
-        filepath = os.path.join(self.data_dir, filename)
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        filepath = self.data_dir / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(filepath, "w") as f:
+        with filepath.open("w") as f:
             json.dump(data, f, indent=2)
 
-        self.logger.debug(f"Saved data to {filepath}")
+        self.logger.debug("Saved data to %s", filepath)
         return filepath
 
     def run(self) -> ComponentResult:
-        """Default implementation of the run method that all migration classes should implement.
+        """Implement the default run method that all migration classes should implement.
 
         Returns:
             Dictionary with migration results
 
         """
-        self.logger.warning(f"The run method has not been implemented for {self.__class__.__name__}")
+        self.logger.warning(
+            "The run method has not been implemented for %s",
+            self.__class__.__name__,
+        )
         return ComponentResult(
             success=False,
             errors=[f"The run method has not been implemented for {self.__class__.__name__}"],

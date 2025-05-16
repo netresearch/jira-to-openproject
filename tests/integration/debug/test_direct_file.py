@@ -41,7 +41,8 @@ def main() -> None:
     docker_client = DockerClient(container_name=op_config.get("container"), ssh_client=ssh_client, command_timeout=30)
 
     rails_client = RailsConsoleClient(
-        tmux_session_name=op_config.get("tmux_session_name", "rails_console"), command_timeout=30,
+        tmux_session_name=op_config.get("tmux_session_name", "rails_console"),
+        command_timeout=30,
     )
 
     op_client = OpenProjectClient(

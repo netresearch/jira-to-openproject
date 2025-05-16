@@ -1,5 +1,4 @@
-"""Migration result models for tracking overall migration operations.
-"""
+"""Migration result models for tracking overall migration operations."""
 
 from datetime import datetime
 from typing import Any

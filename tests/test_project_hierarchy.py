@@ -79,7 +79,7 @@ def analyze_project_hierarchy() -> dict[str, Any]:
 
     # Find projects that should have a parent but don't
     expected_parent_mapping = {}
-    for key, project in project_mapping.items():
+    for project in project_mapping.values():
         if project.get("parent_id"):
             expected_parent_mapping[project.get("openproject_id")] = project
 
@@ -120,7 +120,7 @@ def analyze_project_hierarchy() -> dict[str, Any]:
 
 
 def run_hierarchy_test() -> Any:
-    """Run the project hierarchy test"""
+    """Run the project hierarchy test."""
     logger.info("Running project hierarchy test...")
     analysis = analyze_project_hierarchy()
 

@@ -1,8 +1,8 @@
-"""Tests for the project migration component.
-"""
+"""Tests for the project migration component."""
 
 import json
 import unittest
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -99,8 +99,8 @@ class TestProjectMigration(unittest.TestCase):
             },
         }
 
-    @patch("src.migrations.project_migration.JiraClient")
-    @patch("src.migrations.project_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.project_migration.config.get_path")
     @patch("src.migrations.project_migration.config.migration_config")
     @patch("os.path.exists")
@@ -132,17 +132,17 @@ class TestProjectMigration(unittest.TestCase):
             result = migration.extract_jira_projects()
 
             # Assertions - we can't use direct equality because the mock has changed
-            self.assertEqual(len(result), len(self.jira_projects))
+            assert len(result) == len(self.jira_projects)
             for i, project in enumerate(result):
-                self.assertEqual(project["id"], self.jira_projects[i]["id"])
-                self.assertEqual(project["key"], self.jira_projects[i]["key"])
-                self.assertEqual(project["name"], self.jira_projects[i]["name"])
+                assert project["id"] == self.jira_projects[i]["id"]
+                assert project["key"] == self.jira_projects[i]["key"]
+                assert project["name"] == self.jira_projects[i]["name"]
 
             # Verify the right method was called
             jira_client.get_projects.assert_called_once()
 
-    @patch("src.migrations.project_migration.JiraClient")
-    @patch("src.migrations.project_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.project_migration.config.get_path")
     @patch("src.migrations.project_migration.config.migration_config")
     @patch("os.path.exists")
@@ -160,7 +160,7 @@ class TestProjectMigration(unittest.TestCase):
         mock_op_instance = mock_op_client.return_value
         mock_op_instance.get_projects.return_value = self.op_projects
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = False
 
         # Mock the config to return force=True
@@ -174,11 +174,11 @@ class TestProjectMigration(unittest.TestCase):
         result = migration.extract_openproject_projects()
 
         # Assertions
-        self.assertEqual(result, self.op_projects)
+        assert result == self.op_projects
         mock_op_instance.get_projects.assert_called_once()
 
-    @patch("src.migrations.project_migration.JiraClient")
-    @patch("src.migrations.project_migration.OpenProjectClient")
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.project_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -195,7 +195,7 @@ class TestProjectMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
 
-        mock_get_path.return_value = "/tmp/test_data"
+        mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
 
         # Mock file reads
@@ -209,14 +209,14 @@ class TestProjectMigration(unittest.TestCase):
         result = migration.analyze_project_mapping()
 
         # Assertions
-        self.assertEqual(result["total_projects"], 3)
-        self.assertEqual(result["migrated_projects"], 3)
-        self.assertEqual(result["new_projects"], 2)  # PROJ2 and PROJ3 are new
-        self.assertEqual(result["existing_projects"], 1)  # PROJ1 already existed
-        self.assertEqual(result["projects_with_accounts"], 2)  # PROJ1 and PROJ2 have accounts
+        assert result["total_projects"] == 3
+        assert result["migrated_projects"] == 3
+        assert result["new_projects"] == 2  # PROJ2 and PROJ3 are new
+        assert result["existing_projects"] == 1  # PROJ1 already existed
+        assert result["projects_with_accounts"] == 2  # PROJ1 and PROJ2 have accounts
 
     def test_find_parent_company_for_project(self) -> None:
-        """Test that we resolve parent company via default Tempo account"""
+        """Test that we resolve parent company via default Tempo account."""
         migration = ProjectMigration(MagicMock(), MagicMock())
         # Stub mappings
         migration.project_account_mapping = {"ACMEWEB": [{"id": "42", "key": "ACC-42", "name": "Q1 Review"}]}
@@ -230,20 +230,20 @@ class TestProjectMigration(unittest.TestCase):
             },
         }
         parent = migration.find_parent_company_for_project({"key": "ACMEWEB"})
-        self.assertIsNotNone(parent)
-        self.assertEqual(parent.get("openproject_id"), 123)
-        self.assertEqual(parent.get("tempo_name"), "AcmeCorp")
+        assert parent is not None
+        assert parent.get("openproject_id") == 123
+        assert parent.get("tempo_name") == "AcmeCorp"
 
     def test_find_parent_company_warns_on_missing(self) -> None:
-        """Test that missing mappings return None and log a warning"""
+        """Test that missing mappings return None and log a warning."""
         migration = ProjectMigration(MagicMock(), MagicMock())
         migration.project_account_mapping = {}
         # Make sure we can capture warnings
         with self.assertLogs(config.logger.name, level="DEBUG") as cm:
             parent = migration.find_parent_company_for_project({"key": "UNKNOWN"})
-        self.assertIsNone(parent)
+        assert parent is None
         # Should log a debug about missing account mapping
-        self.assertTrue(any("No account mapping found for project UNKNOWN" in msg for msg in cm.output))
+        assert any("No account mapping found for project UNKNOWN" in msg for msg in cm.output)
 
 
 # Define testing steps for project migration validation

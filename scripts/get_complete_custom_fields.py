@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Get Complete Custom Fields
+"""Get Complete Custom Fields.
 
 This script runs commands in the Rails console to get detailed
 information about custom fields and saves it to a JSON file.
 """
 
+import contextlib
 import json
 import subprocess
 import sys
@@ -47,7 +48,8 @@ def capture_tmux_output(session_name: str, lines: int = 1000) -> str:
 
 
 def get_complete_custom_fields(
-    session_name: str = "rails_console", output_file: str | None = None,
+    session_name: str = "rails_console",
+    output_file: str | None = None,
 ) -> list[dict[str, Any]]:
     """Get detailed information about custom fields from the Rails console.
 
@@ -161,28 +163,20 @@ def get_complete_custom_fields(
             current_field = {}
 
         elif line.startswith("  ID:") and current_field is not None:
-            try:
+            with contextlib.suppress(ValueError, IndexError):
                 current_field["id"] = int(line.split(":", 1)[1].strip())
-            except (ValueError, IndexError):
-                pass
 
         elif line.startswith("  Name:") and current_field is not None:
-            try:
+            with contextlib.suppress(IndexError):
                 current_field["name"] = line.split(":", 1)[1].strip()
-            except IndexError:
-                pass
 
         elif line.startswith("  Format:") and current_field is not None:
-            try:
+            with contextlib.suppress(IndexError):
                 current_field["field_format"] = line.split(":", 1)[1].strip()
-            except IndexError:
-                pass
 
         elif line.startswith("  Type:") and current_field is not None:
-            try:
+            with contextlib.suppress(IndexError):
                 current_field["type"] = line.split(":", 1)[1].strip()
-            except IndexError:
-                pass
 
         elif line.startswith("  Required:") and current_field is not None:
             current_field["is_required"] = "true" in line.lower()

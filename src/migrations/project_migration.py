@@ -7,14 +7,16 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult
+
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
 
 # Get logger from config
 logger = config.logger
@@ -46,7 +48,7 @@ class ProjectMigration(BaseMigration):
         self,
         jira_client: JiraClient,
         op_client: OpenProjectClient,
-    ):
+    ) -> None:
         """Initialize the project migration tools.
 
         Args:
@@ -230,8 +232,7 @@ class ProjectMigration(BaseMigration):
         return mapping
 
     def find_parent_company_for_project(self, jira_project: dict[str, Any]) -> dict[str, Any] | None:
-        """Find the appropriate parent company for a Jira project based on its default Tempo account.
-        """
+        """Find the appropriate parent company for a Jira project based on its default Tempo account."""
         jira_key = jira_project.get("key")
 
         # 1) Check project-account mapping
@@ -329,7 +330,7 @@ class ProjectMigration(BaseMigration):
             account_name = None
             if jira_key in self.project_account_mapping:
                 accounts = self.project_account_mapping[jira_key]
-                if isinstance(accounts, int) or isinstance(accounts, str):
+                if isinstance(accounts, (int, str)):
                     account_id = accounts
                 elif isinstance(accounts, list) and len(accounts) > 0:
                     account_id = accounts[0].get("id")
@@ -545,7 +546,7 @@ class ProjectMigration(BaseMigration):
         result = self.op_client.rails_client.execute_query(header_script + main_script)
 
         if result.get("status") != "success":
-            logger.error(f"Rails error during bulk project creation: {result.get('error', 'Unknown error')}")
+            logger.error("Rails error during bulk project creation: %s", result.get("error", "Unknown error"))
             logger.error("Bulk project migration failed. Aborting.")
             return ComponentResult(
                 success=False,
@@ -574,7 +575,7 @@ class ProjectMigration(BaseMigration):
                             created_projects = result_data.get("created", [])
                             errors = result_data.get("errors", [])
                 except Exception as e:
-                    logger.error(f"Error reading result file: {e!s}")
+                    logger.exception(f"Error reading result file: {e!s}")
 
         # Create mapping from results
         mapping = {}

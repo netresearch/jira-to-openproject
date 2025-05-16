@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.clients.rails_console_client import (
     CommandExecutionError,
     ConsoleNotReadyError,
@@ -101,15 +103,18 @@ class TestRailsConsoleClient(unittest.TestCase):
     def test_initialization(self) -> None:
         """Test RailsConsoleClient initialization."""
         # Test that default parameters are set correctly
-        self.assertEqual(self.rails_client.tmux_session_name, "test_session")
-        self.assertEqual(self.rails_client.window, 0)
-        self.assertEqual(self.rails_client.pane, 0)
-        self.assertEqual(self.rails_client.command_timeout, 180)
-        self.assertEqual(self.rails_client.inactivity_timeout, 30)
+        assert self.rails_client.tmux_session_name == "test_session"
+        assert self.rails_client.window == 0
+        assert self.rails_client.pane == 0
+        assert self.rails_client.command_timeout == 180
+        assert self.rails_client.inactivity_timeout == 30
 
         # Verify session existence was checked using tmux directly
         self.mock_subprocess.run.assert_any_call(
-            ["tmux", "has-session", "-t", "test_session"], capture_output=True, text=True, check=False,
+            ["tmux", "has-session", "-t", "test_session"],
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
         # Verify success message was logged
@@ -121,7 +126,7 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.mock_subprocess.run.return_value.returncode = 1
 
         # Test initialization with non-existent session
-        with self.assertRaises(TmuxSessionError):
+        with pytest.raises(TmuxSessionError):
             RailsConsoleClient(tmux_session_name="nonexistent_session")
 
     def test_execute_script(self) -> None:
@@ -144,7 +149,7 @@ irb(main):002:0>
                 result = self.rails_client.execute("load '/tmp/test_script.rb'")
 
                 # Verify result is the actual output value from between load and EXEC_END
-                self.assertEqual(result, "42")
+                assert result == "42"
 
     def test_execute_with_error(self) -> None:
         """Test executing a script that causes an error."""
@@ -165,11 +170,11 @@ irb(main):002:0>
             # Mock _send_command_to_tmux to return sample output
             with patch.object(self.rails_client, "_send_command_to_tmux", return_value=output):
                 # Execute the test with expected exception
-                with self.assertRaises(RubyError) as context:
+                with pytest.raises(RubyError) as context:
                     self.rails_client.execute("undefined_variable + 1")
 
                 # Verify error message
-                self.assertIn("NameError: undefined local variable", str(context.exception))
+                assert "NameError: undefined local variable" in str(context.value)
 
     def test_start_marker_not_found(self) -> None:
         """Test handling when start marker is not found in output."""
@@ -185,10 +190,10 @@ irb(main):002:0>
                 mock_get_state.return_value = {"ready": False, "state": "unknown"}
 
                 # Now we should get an error about missing start marker
-                with self.assertRaises(CommandExecutionError) as context:
+                with pytest.raises(CommandExecutionError) as context:
                     self.rails_client.execute("load '/tmp/test_script.rb'")
 
-                self.assertIn("Start marker", str(context.exception))
+                assert "Start marker" in str(context.value)
 
     def test_end_marker_not_found(self) -> None:
         """Test handling when end marker is not found in output."""
@@ -202,12 +207,14 @@ irb(main):002:0>
         with patch.object(self.rails_client.file_manager, "generate_unique_id", return_value=marker_id):
             with patch.object(self.rails_client, "_send_command_to_tmux", return_value=output):
                 with patch.object(
-                    self.rails_client, "_get_console_state", return_value={"ready": False, "state": "unknown"},
+                    self.rails_client,
+                    "_get_console_state",
+                    return_value={"ready": False, "state": "unknown"},
                 ):
-                    with self.assertRaises(CommandExecutionError) as context:
+                    with pytest.raises(CommandExecutionError) as context:
                         self.rails_client.execute("load '/tmp/test_script.rb'")
 
-                    self.assertIn("End marker", str(context.exception))
+                    assert "End marker" in str(context.value)
 
     def test_ruby_error_pattern_detection(self) -> None:
         """Test detection of Ruby error patterns in output."""
@@ -222,28 +229,30 @@ irb(main):002:0>
 """
         with patch.object(self.rails_client.file_manager, "generate_unique_id", return_value=marker_id):
             with patch.object(self.rails_client, "_send_command_to_tmux", return_value=output):
-                with self.assertRaises(RubyError) as context:
+                with pytest.raises(RubyError) as context:
                     self.rails_client.execute("load '/tmp/test_script.rb'")
 
-                self.assertIn("SyntaxError:", str(context.exception))
+                assert "SyntaxError:" in str(context.value)
 
     def test_tmux_command_failure(self) -> None:
         """Test handling of tmux command failure."""
         # Mock _send_command_to_tmux to raise subprocess error
         with patch.object(
-            self.rails_client, "_send_command_to_tmux", side_effect=TmuxSessionError("Tmux command failed"),
-        ):
-            with self.assertRaises(TmuxSessionError):
-                self.rails_client.execute("some command")
+            self.rails_client,
+            "_send_command_to_tmux",
+            side_effect=TmuxSessionError("Tmux command failed"),
+        ), pytest.raises(TmuxSessionError):
+            self.rails_client.execute("some command")
 
     def test_console_not_ready(self) -> None:
         """Test handling when console is not ready."""
         # Mock _send_command_to_tmux to raise ConsoleNotReadyError
         with patch.object(
-            self.rails_client, "_send_command_to_tmux", side_effect=ConsoleNotReadyError("Console not ready"),
-        ):
-            with self.assertRaises(ConsoleNotReadyError):
-                self.rails_client.execute("some command")
+            self.rails_client,
+            "_send_command_to_tmux",
+            side_effect=ConsoleNotReadyError("Console not ready"),
+        ), pytest.raises(ConsoleNotReadyError):
+            self.rails_client.execute("some command")
 
 
 if __name__ == "__main__":

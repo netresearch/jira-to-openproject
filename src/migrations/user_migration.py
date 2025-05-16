@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 
 from src import config
+from src.clients.jira_client import JiraClient
+from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult, MigrationError
@@ -26,16 +28,14 @@ class UserMigration(BaseMigration):
 
     def __init__(
         self,
-        jira_client=None,
-        op_client=None,
-        data_dir=None,
+        jira_client: JiraClient | None = None,
+        op_client: OpenProjectClient | None = None,
     ) -> None:
         """Initialize the user migration tools.
 
         Args:
             jira_client: Initialized Jira client instance
             op_client: Initialized OpenProject client instance
-            data_dir: Path to data directory for storing mappings
 
         """
         # Initialize base migration with client dependencies
@@ -44,14 +44,10 @@ class UserMigration(BaseMigration):
             op_client=op_client,
         )
 
-        # Configure paths
-        self.data_dir = Path(data_dir or config.get_path("data"))
-        os.makedirs(self.data_dir, exist_ok=True)
-
         # Data storage
-        self.jira_users = []
-        self.op_users = []
-        self.user_mapping = {}
+        self.jira_users: list[dict[str, Any]] = []
+        self.op_users: list[dict[str, Any]] = []
+        self.user_mapping: dict[str, Any] = {}
 
         # Setup file paths
         self.jira_users_file = self.data_dir / "jira_users.json"
@@ -76,14 +72,15 @@ class UserMigration(BaseMigration):
             MigrationError: If users cannot be extracted from Jira
 
         """
-        self.logger.info("Extracting users from Jira...", extra={"markup": True})
+        self.logger.info("Extracting users from Jira...")
 
         self.jira_users = self.jira_client.get_users()
 
         if not self.jira_users:
-            raise MigrationError("Failed to extract users from Jira")
+            msg = "Failed to extract users from Jira"
+            raise MigrationError(msg)
 
-        self.logger.info(f"Extracted {len(self.jira_users)} users from Jira", extra={"markup": True})
+        self.logger.info(f"Extracted {len(self.jira_users)} users from Jira")
 
         self._save_to_json(self.jira_users, "jira_users.json")
 
@@ -99,17 +96,17 @@ class UserMigration(BaseMigration):
             MigrationError: If users cannot be extracted from OpenProject
 
         """
-        self.logger.info("Extracting users from OpenProject...", extra={"markup": True})
+        self.logger.info("Extracting users from OpenProject...")
 
         # Get users from OpenProject - no fallbacks or mocks
         self.op_users = self.op_client.get_users()
 
         if not self.op_users:
-            raise MigrationError("Failed to extract users from OpenProject")
+            msg = "Failed to extract users from OpenProject"
+            raise MigrationError(msg)
 
         self.logger.info(
             f"Extracted {len(self.op_users)} users from OpenProject",
-            extra={"markup": True},
         )
 
         self._save_to_json(self.op_users, "op_users.json")
@@ -126,7 +123,7 @@ class UserMigration(BaseMigration):
             MigrationError: If required user data is missing
 
         """
-        self.logger.info("Creating user mapping...", extra={"markup": True})
+        self.logger.info("Creating user mapping...")
 
         if not self.jira_users:
             self.extract_jira_users()
@@ -212,7 +209,7 @@ class UserMigration(BaseMigration):
             MigrationError: If user mapping is missing or if users cannot be created
 
         """
-        self.logger.info("Creating missing users in OpenProject...", extra={"markup": True})
+        self.logger.info("Creating missing users in OpenProject...")
 
         if not self.user_mapping:
             self.create_user_mapping()
@@ -220,12 +217,11 @@ class UserMigration(BaseMigration):
         missing_users = [user for user in self.user_mapping.values() if user["matched_by"] == "none"]
 
         if not missing_users:
-            self.logger.info("No missing users to create", extra={"markup": True})
+            self.logger.info("No missing users to create")
             return {"created": 0, "failed": 0, "total": 0}
 
         self.logger.info(
             f"Found {len(missing_users)} users missing in OpenProject",
-            extra={"markup": True},
         )
 
         created = 0
@@ -318,7 +314,7 @@ class UserMigration(BaseMigration):
                     tracker.add_log_item(f"Created {batch_created}/{len(batch)} users in batch")
                 except Exception as e:
                     error_msg = f"Exception during bulk user creation: {e!s}"
-                    self.logger.error(error_msg, extra={"markup": True})
+                    self.logger.exception(error_msg)
                     failed += len(batch)
                     tracker.add_log_item(f"Exception during creation: {', '.join(batch_users)}")
                     raise MigrationError(error_msg) from e
@@ -369,23 +365,19 @@ class UserMigration(BaseMigration):
         }
 
         # Display the analysis
-        self.logger.info("User mapping analysis:", extra={"markup": True})
-        self.logger.info(f"Total users: {total_users}", extra={"markup": True})
+        self.logger.info("User mapping analysis:")
+        self.logger.info(f"Total users: {total_users}")
         self.logger.info(
             f"Matched by username: {matched_by_username} ({analysis['username_match_percentage']:.2f}%)",
-            extra={"markup": True},
         )
         self.logger.info(
             f"Matched by email: {matched_by_email} ({analysis['email_match_percentage']:.2f}%)",
-            extra={"markup": True},
         )
         self.logger.info(
             f"Total matched: {matched_by_username + matched_by_email} ({analysis['total_match_percentage']:.2f}%)",
-            extra={"markup": True},
         )
         self.logger.info(
             f"Not matched: {not_matched} ({analysis['not_matched_percentage']:.2f}%)",
-            extra={"markup": True},
         )
 
         return analysis
@@ -397,7 +389,7 @@ class UserMigration(BaseMigration):
             ComponentResult with migration results
 
         """
-        self.logger.info("Starting user migration...", extra={"markup": True})
+        self.logger.info("Starting user migration...")
 
         try:
             # Extract users from both systems
@@ -417,12 +409,10 @@ class UserMigration(BaseMigration):
                 creation_results = self.create_missing_users()
                 self.logger.info(
                     f"Created {creation_results['created']} users, {creation_results['failed']} failed",
-                    extra={"markup": True},
                 )
             else:
                 self.logger.info(
                     "Skipping creation of missing users (disabled in config)",
-                    extra={"markup": True},
                 )
 
             # Update mappings with new data
@@ -442,7 +432,7 @@ class UserMigration(BaseMigration):
                 total_count=analysis["total_users"],
             )
         except Exception as e:
-            self.logger.error(f"Error in user migration: {e!s}", extra={"markup": True})
+            self.logger.exception(f"Error in user migration: {e!s}")
             return ComponentResult(
                 success=False,
                 errors=[f"Error in user migration: {e!s}"],

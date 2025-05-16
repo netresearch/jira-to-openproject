@@ -9,6 +9,8 @@ and resource handling.
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.clients.jira_client import (
     JiraApiError,
     JiraAuthenticationError,
@@ -62,12 +64,12 @@ class TestJiraClient(unittest.TestCase):
     def test_initialization(self) -> None:
         """Test client initialization with proper exception handling."""
         # Verify initialization was successful
-        self.assertIsNotNone(self.jira_client.jira)
-        self.assertEqual(self.jira_client.jira_url, "https://jira.local")
+        assert self.jira_client.jira is not None
+        assert self.jira_client.jira_url == "https://jira.local"
 
         # Instead of checking mock.success, just verify initialization worked
         # The actual logging is happening but our mock isn't capturing it correctly
-        self.assertIsNotNone(self.jira_client.jira)
+        assert self.jira_client.jira is not None
 
     def test_initialization_missing_url(self) -> None:
         """Test initialization with missing URL."""
@@ -75,10 +77,10 @@ class TestJiraClient(unittest.TestCase):
         self.mock_config.jira_config = {"url": "", "username": "test_user", "api_token": "test_token"}
 
         # Initialization should raise ValueError
-        with self.assertRaises(ValueError) as context:
+        with pytest.raises(ValueError) as context:
             JiraClient()
 
-        self.assertIn("Jira URL is required", str(context.exception))
+        assert "Jira URL is required" in str(context.value)
 
     def test_initialization_missing_token(self) -> None:
         """Test initialization with missing token."""
@@ -90,10 +92,10 @@ class TestJiraClient(unittest.TestCase):
         }
 
         # Initialization should raise ValueError
-        with self.assertRaises(ValueError) as context:
+        with pytest.raises(ValueError) as context:
             JiraClient()
 
-        self.assertIn("Jira API token is required", str(context.exception))
+        assert "Jira API token is required" in str(context.value)
 
     def test_connection_failure(self) -> None:
         """Test connection failure during initialization."""
@@ -109,12 +111,12 @@ class TestJiraClient(unittest.TestCase):
         ]
 
         # Attempt to initialize client should raise JiraAuthenticationError
-        with self.assertRaises(JiraAuthenticationError) as context:
+        with pytest.raises(JiraAuthenticationError) as context:
             JiraClient()
 
         # Verify error message contains both error messages
-        self.assertIn("Token auth failed", str(context.exception))
-        self.assertIn("Basic auth failed", str(context.exception))
+        assert "Token auth failed" in str(context.value)
+        assert "Basic auth failed" in str(context.value)
 
     def test_get_projects_success(self) -> None:
         """Test successful retrieval of projects."""
@@ -135,9 +137,9 @@ class TestJiraClient(unittest.TestCase):
         result = self.jira_client.get_projects()
 
         # Verify the result
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]["key"], "PROJ1")
-        self.assertEqual(result[1]["name"], "Project Two")
+        assert len(result) == 2
+        assert result[0]["key"] == "PROJ1"
+        assert result[1]["name"] == "Project Two"
 
     def test_get_projects_failure(self) -> None:
         """Test failure in retrieving projects raises appropriate exception."""
@@ -145,10 +147,10 @@ class TestJiraClient(unittest.TestCase):
         self.mock_jira.projects.side_effect = Exception("API Error: Cannot get projects")
 
         # Call should raise JiraApiError
-        with self.assertRaises(JiraApiError) as context:
+        with pytest.raises(JiraApiError) as context:
             self.jira_client.get_projects()
 
-        self.assertIn("Failed to get projects", str(context.exception))
+        assert "Failed to get projects" in str(context.value)
 
     def test_get_issue_details_success(self) -> None:
         """Test successful retrieval of issue details."""
@@ -196,10 +198,10 @@ class TestJiraClient(unittest.TestCase):
         result = self.jira_client.get_issue_details("PROJ-123")
 
         # Verify the result
-        self.assertEqual(result["key"], "PROJ-123")
-        self.assertEqual(result["summary"], "Test Issue")
-        self.assertEqual(result["issue_type"]["name"], "Bug")
-        self.assertEqual(result["status"]["name"], "In Progress")
+        assert result["key"] == "PROJ-123"
+        assert result["summary"] == "Test Issue"
+        assert result["issue_type"]["name"] == "Bug"
+        assert result["status"]["name"] == "In Progress"
 
     def test_get_issue_details_not_found(self) -> None:
         """Test issue not found raises appropriate exception."""
@@ -207,7 +209,7 @@ class TestJiraClient(unittest.TestCase):
         self.mock_jira.issue.side_effect = Exception("Issue does not exist")
 
         # Call should raise JiraResourceNotFoundError
-        with self.assertRaises(JiraResourceNotFoundError):
+        with pytest.raises(JiraResourceNotFoundError):
             self.jira_client.get_issue_details("NONEXISTENT-123")
 
     def test_captcha_detection(self) -> None:
@@ -219,10 +221,10 @@ class TestJiraClient(unittest.TestCase):
         }
 
         # Test _handle_response method directly
-        with self.assertRaises(JiraCaptchaError) as context:
+        with pytest.raises(JiraCaptchaError) as context:
             self.jira_client._handle_response(mock_response)
 
-        self.assertIn("CAPTCHA challenge detected", str(context.exception))
+        assert "CAPTCHA challenge detected" in str(context.value)
 
     def test_get_all_issues_for_project_not_found(self) -> None:
         """Test getting issues for non-existent project raises appropriate exception."""
@@ -230,10 +232,10 @@ class TestJiraClient(unittest.TestCase):
         self.mock_jira.project.side_effect = Exception("Project not found")
 
         # Call should raise JiraResourceNotFoundError
-        with self.assertRaises(JiraResourceNotFoundError) as context:
+        with pytest.raises(JiraResourceNotFoundError) as context:
             self.jira_client.get_all_issues_for_project("NONEXISTENT")
 
-        self.assertIn("Project 'NONEXISTENT' not found", str(context.exception))
+        assert "Project 'NONEXISTENT' not found" in str(context.value)
 
     def test_make_request_client_not_initialized(self) -> None:
         """Test _make_request when client is not initialized."""
@@ -241,10 +243,10 @@ class TestJiraClient(unittest.TestCase):
         self.jira_client.jira = None
 
         # Call should raise JiraConnectionError
-        with self.assertRaises(JiraConnectionError) as context:
+        with pytest.raises(JiraConnectionError) as context:
             self.jira_client._make_request("/some/path")
 
-        self.assertIn("Jira client is not initialized", str(context.exception))
+        assert "Jira client is not initialized" in str(context.value)
 
     def test_http_error_handling(self) -> None:
         """Test HTTP error response handling."""
@@ -255,11 +257,11 @@ class TestJiraClient(unittest.TestCase):
         mock_response.json.return_value = {"errorMessages": ["Invalid input", "Field is required"]}
 
         # Test _handle_response method directly
-        with self.assertRaises(JiraApiError) as context:
+        with pytest.raises(JiraApiError) as context:
             self.jira_client._handle_response(mock_response)
 
-        self.assertIn("HTTP Error 400", str(context.exception))
-        self.assertIn("Invalid input", str(context.exception))
+        assert "HTTP Error 400" in str(context.value)
+        assert "Invalid input" in str(context.value)
 
     def test_not_found_error_handling(self) -> None:
         """Test 404 Not Found error handling."""
@@ -270,10 +272,10 @@ class TestJiraClient(unittest.TestCase):
         mock_response.json.return_value = {"errorMessages": ["Resource does not exist"]}
 
         # Test _handle_response method directly
-        with self.assertRaises(JiraResourceNotFoundError) as context:
+        with pytest.raises(JiraResourceNotFoundError) as context:
             self.jira_client._handle_response(mock_response)
 
-        self.assertIn("HTTP Error 404", str(context.exception))
+        assert "HTTP Error 404" in str(context.value)
 
     def test_authentication_error_handling(self) -> None:
         """Test authentication error handling."""
@@ -284,10 +286,10 @@ class TestJiraClient(unittest.TestCase):
         mock_response.json.return_value = {"errorMessages": ["Authentication failed"]}
 
         # Test _handle_response method directly
-        with self.assertRaises(JiraAuthenticationError) as context:
+        with pytest.raises(JiraAuthenticationError) as context:
             self.jira_client._handle_response(mock_response)
 
-        self.assertIn("HTTP Error 401", str(context.exception))
+        assert "HTTP Error 401" in str(context.value)
 
 
 if __name__ == "__main__":

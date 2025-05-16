@@ -1,4 +1,5 @@
 """Jira API client for the migration project.
+
 Provides a clean, exception-based interface for Jira resource access.
 """
 
@@ -51,33 +52,36 @@ class JiraClient:
     def __init__(self) -> None:
         """Initialize the Jira client with proper exception handling."""
         # Get connection details from config
-        self.jira_url = config.jira_config.get("url", "")
-        self.jira_username = config.jira_config.get("username", "")
-        self.jira_api_token = config.jira_config.get("api_token", "")
-        self.verify_ssl = config.jira_config.get("verify_ssl", True)
+        self.jira_url: str = config.jira_config.get("url", "")
+        self.jira_username: str = config.jira_config.get("username", "")
+        self.jira_api_token: str = config.jira_config.get("api_token", "")
+        self.verify_ssl: bool = config.jira_config.get("verify_ssl", True)
 
         # Validate required configuration
         if not self.jira_url:
-            raise ValueError("Jira URL is required")
+            msg = "Jira URL is required"
+            raise ValueError(msg)
         if not self.jira_api_token:
-            raise ValueError("Jira API token is required")
+            msg = "Jira API token is required"
+            raise ValueError(msg)
 
         # ScriptRunner configuration
         self.scriptrunner_enabled = config.jira_config.get("scriptrunner", {}).get("enabled", False)
         self.scriptrunner_custom_field_options_endpoint = config.jira_config.get("scriptrunner", {}).get(
-            "custom_field_options_endpoint", "",
+            "custom_field_options_endpoint",
+            "",
         )
 
         # Initialize client
-        self.jira = None
+        self.jira: JIRA | None = None
         self.request_count = 0
         self.period_start = time.time()
         self.base_url = self.jira_url.rstrip("/")
 
         # Cache fields
-        self.project_cache = None
-        self.issue_type_cache = None
-        self.field_options_cache = {}
+        self.project_cache: list[dict[str, Any]] | None = None
+        self.issue_type_cache: list[dict[str, Any]] | None = None
+        self.field_options_cache: dict[str, Any] = {}
 
         # Connect to Jira
         self._connect()
@@ -99,7 +103,9 @@ class JiraClient:
             self.jira = JIRA(server=self.jira_url, token_auth=self.jira_api_token)
             server_info = self.jira.server_info()
             logger.success(
-                f"Successfully connected to Jira server: {server_info.get('baseUrl')} ({server_info.get('version')})",
+                "Successfully connected to Jira server: %s (%s)",
+                server_info.get("baseUrl"),
+                server_info.get("version"),
             )
             return  # Success
         except Exception as e:
@@ -127,7 +133,8 @@ class JiraClient:
         # If all methods failed, raise exception with details
         error_details = "; ".join(connection_errors)
         logger.error(f"All authentication methods failed for Jira connection to {self.jira_url}")
-        raise JiraAuthenticationError(f"Failed to authenticate with Jira: {error_details}")
+        msg = f"Failed to authenticate with Jira: {error_details}"
+        raise JiraAuthenticationError(msg)
 
     def get_projects(self) -> list[dict[str, Any]]:
         """Get all projects from Jira.
@@ -149,7 +156,7 @@ class JiraClient:
             return result
         except Exception as e:
             error_msg = f"Failed to get projects: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
     def get_issue_types(self) -> list[dict[str, Any]]:
@@ -179,7 +186,7 @@ class JiraClient:
             return result
         except Exception as e:
             error_msg = f"Failed to get issue types: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
     def get_all_issues_for_project(self, project_key: str, expand_changelog: bool = True) -> list[Issue]:
@@ -212,7 +219,8 @@ class JiraClient:
             # Simple way to check if project exists - will raise exception if not found
             self.jira.project(project_key)
         except Exception as e:
-            raise JiraResourceNotFoundError(f"Project '{project_key}' not found: {e!s}")
+            msg = f"Project '{project_key}' not found: {e!s}"
+            raise JiraResourceNotFoundError(msg)
 
         # Fetch all pages
         while True:
@@ -243,7 +251,7 @@ class JiraClient:
 
             except Exception as e:
                 error_msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {e!s}"
-                logger.error(error_msg)
+                logger.exception(error_msg)
                 raise JiraApiError(error_msg)
 
         logger.info(f"Finished fetching {len(all_issues)} issues for project '{project_key}'.")
@@ -329,9 +337,10 @@ class JiraClient:
             return issue_data
         except Exception as e:
             error_msg = f"Failed to get issue details for {issue_key}: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
-                raise JiraResourceNotFoundError(f"Issue {issue_key} not found")
+                msg = f"Issue {issue_key} not found"
+                raise JiraResourceNotFoundError(msg)
             raise JiraApiError(error_msg)
 
     def get_users(self) -> list[dict[str, Any]]:
@@ -350,7 +359,7 @@ class JiraClient:
             logger.info(f"Retrieved {len(users)} users from Jira API")
 
             # Convert user objects to dictionaries
-            result = [
+            return [
                 {
                     "key": getattr(user, "key", None),
                     "name": getattr(user, "name", None),
@@ -361,10 +370,9 @@ class JiraClient:
                 for user in users
             ]
 
-            return result
         except Exception as e:
             error_msg = f"Failed to get users: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
     def get_issue_count(self, project_key: str) -> int:
@@ -397,9 +405,10 @@ class JiraClient:
             return issues.total
         except Exception as e:
             error_msg = f"Failed to get issue count for project {project_key}: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             if "project does not exist" in str(e).lower() or "project not found" in str(e).lower():
-                raise JiraResourceNotFoundError(f"Project {project_key} not found")
+                msg = f"Project {project_key} not found"
+                raise JiraResourceNotFoundError(msg)
             raise JiraApiError(error_msg)
 
     def get_issue_watchers(self, issue_key: str) -> list[dict[str, Any]]:
@@ -436,9 +445,10 @@ class JiraClient:
             ]
         except Exception as e:
             error_msg = f"Failed to get watchers for issue {issue_key}: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
-                raise JiraResourceNotFoundError(f"Issue {issue_key} not found")
+                msg = f"Issue {issue_key} not found"
+                raise JiraResourceNotFoundError(msg)
             raise JiraApiError(error_msg)
 
     def get_all_statuses(self) -> list[dict[str, Any]]:
@@ -494,8 +504,9 @@ class JiraClient:
             path = "/rest/api/2/statuscategory"
             response = self._make_request(path)
             if not response or response.status_code != 200:
+                msg = f"Failed to get status categories: HTTP {response.status_code if response else 'No response'}"
                 raise JiraApiError(
-                    f"Failed to get status categories: HTTP {response.status_code if response else 'No response'}",
+                    msg,
                 )
 
             categories = response.json()
@@ -505,8 +516,9 @@ class JiraClient:
             path = "/rest/api/2/status"
             response = self._make_request(path)
             if not response or response.status_code != 200:
+                msg = f"Failed to get statuses: HTTP {response.status_code if response else 'No response'}"
                 raise JiraApiError(
-                    f"Failed to get statuses: HTTP {response.status_code if response else 'No response'}",
+                    msg,
                 )
 
             statuses = response.json()
@@ -516,7 +528,7 @@ class JiraClient:
 
         except Exception as e:
             error_msg = f"Failed to get statuses: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
     def _handle_response(self, response: Response) -> None:
@@ -562,7 +574,7 @@ class JiraClient:
 
             if response.status_code == 404:
                 raise JiraResourceNotFoundError(error_msg)
-            if response.status_code == 401 or response.status_code == 403:
+            if response.status_code in {401, 403}:
                 raise JiraAuthenticationError(error_msg)
             raise JiraApiError(error_msg)
 
@@ -583,10 +595,12 @@ class JiraClient:
             # Make the request using our generic method
             response = self._make_request(path)
             if not response:
-                raise JiraApiError("Failed to get status categories (request failed)")
+                msg = "Failed to get status categories (request failed)"
+                raise JiraApiError(msg)
 
             if response.status_code != 200:
-                raise JiraApiError(f"Failed to get status categories: HTTP {response.status_code}")
+                msg = f"Failed to get status categories: HTTP {response.status_code}"
+                raise JiraApiError(msg)
 
             categories = response.json()
             logger.info(f"Retrieved {len(categories)} status categories from Jira API")
@@ -594,7 +608,7 @@ class JiraClient:
             return categories
         except Exception as e:
             error_msg = f"Failed to get status categories: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
     def _get_field_metadata_via_createmeta(self, field_id: str) -> dict[str, Any]:
@@ -619,12 +633,14 @@ class JiraClient:
             # Get a list of projects
             projects = self.project_cache or self.get_projects()
             if not projects:
-                raise JiraApiError("No projects found to retrieve field metadata")
+                msg = "No projects found to retrieve field metadata"
+                raise JiraApiError(msg)
 
             # Get a list of issue types
             issue_types = self.issue_type_cache or self.get_issue_types()
             if not issue_types:
-                raise JiraApiError("No issue types found to retrieve field metadata")
+                msg = "No issue types found to retrieve field metadata"
+                raise JiraApiError(msg)
 
             # Try with each project/issue type combination until we find field metadata
             for project in projects:
@@ -664,7 +680,8 @@ class JiraClient:
             if field_data:
                 return field_data
 
-            raise JiraResourceNotFoundError(f"Field {field_id} not found in any project/issue type combination")
+            msg = f"Field {field_id} not found in any project/issue type combination"
+            raise JiraResourceNotFoundError(msg)
 
         except JiraResourceNotFoundError:
             raise  # Re-raise specific exceptions
@@ -704,7 +721,7 @@ class JiraClient:
                         # Cache all fields data
                         self.field_options_cache[scriptrunner_cache_key] = response.json()
                 except Exception as e:
-                    logger.error(f"Error fetching ScriptRunner data: {e}")
+                    logger.exception(f"Error fetching ScriptRunner data: {e}")
                     # Fall through to standard method - don't raise here
 
             # Try to get the specific field from the cached ScriptRunner data
@@ -728,14 +745,16 @@ class JiraClient:
             self.field_options_cache[field_id] = result
             return result
         except Exception as e:
-            raise JiraApiError(f"Failed to get field metadata for {field_id}: {e!s}")
+            msg = f"Failed to get field metadata for {field_id}: {e!s}"
+            raise JiraApiError(msg)
 
     def _patch_jira_client(self) -> None:
         """Patch the JIRA client to catch CAPTCHA challenges.
         This adds CAPTCHA detection to all API requests made through the JIRA library.
         """
         if not self.jira:
-            raise JiraConnectionError("Cannot patch JIRA client: No active connection")
+            msg = "Cannot patch JIRA client: No active connection"
+            raise JiraConnectionError(msg)
 
         # Store original _session.request method
         original_request = self.jira._session.request
@@ -755,7 +774,8 @@ class JiraClient:
             except (JiraCaptchaError, JiraAuthenticationError, JiraResourceNotFoundError):
                 raise  # Re-raise specific exceptions
             except Exception as e:
-                raise JiraApiError(f"Error during API request to {url}: {e!s}")
+                msg = f"Error during API request to {url}: {e!s}"
+                raise JiraApiError(msg)
 
         # Replace the method with our patched version
         self.jira._session.request = patched_request
@@ -786,7 +806,8 @@ class JiraClient:
 
         """
         if not self.jira:
-            raise JiraConnectionError("Jira client is not initialized")
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
 
         # Construct full URL
         url = f"{self.base_url}{path}"
@@ -806,14 +827,14 @@ class JiraClient:
             headers.update(kwargs.pop("headers"))
 
         try:
-            response = self.jira._session.request(method, url, headers=headers, **kwargs)
+            return self.jira._session.request(method, url, headers=headers, **kwargs)
 
             # If we got here, we've passed the CAPTCHA check in patched_request
-            return response
         except (JiraCaptchaError, JiraAuthenticationError, JiraResourceNotFoundError, JiraApiError):
             raise  # Re-raise specific exceptions
         except Exception as e:
-            raise JiraConnectionError(f"Error during API request to {url}: {e!s}")
+            msg = f"Error during API request to {url}: {e!s}"
+            raise JiraConnectionError(msg)
 
     # Tempo API methods
     def get_tempo_accounts(self, expand: bool = False) -> list[dict[str, Any]]:
@@ -839,7 +860,8 @@ class JiraClient:
         try:
             response = self._make_request(path, params=params)
             if response.status_code != 200:
-                raise JiraApiError(f"Failed to retrieve Tempo accounts: HTTP {response.status_code}")
+                msg = f"Failed to retrieve Tempo accounts: HTTP {response.status_code}"
+                raise JiraApiError(msg)
 
             accounts = response.json()
             logger.info(f"Successfully retrieved {len(accounts)} Tempo accounts.")
@@ -848,7 +870,7 @@ class JiraClient:
             raise  # Re-raise specific exceptions
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo accounts: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
     def get_tempo_customers(self) -> list[dict[str, Any]]:
@@ -867,7 +889,8 @@ class JiraClient:
         try:
             response = self._make_request(path)
             if response.status_code != 200:
-                raise JiraApiError(f"Failed to retrieve Tempo customers: HTTP {response.status_code}")
+                msg = f"Failed to retrieve Tempo customers: HTTP {response.status_code}"
+                raise JiraApiError(msg)
 
             customers = response.json()
             logger.info(f"Successfully retrieved {len(customers)} Tempo customers.")
@@ -876,7 +899,7 @@ class JiraClient:
             raise  # Re-raise specific exceptions
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo customers: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
     def get_tempo_account_links_for_project(self, project_id: int) -> list[dict[str, Any]]:
@@ -906,7 +929,8 @@ class JiraClient:
                 return []
 
             if response.status_code != 200:
-                raise JiraApiError(f"Failed to retrieve account links: HTTP {response.status_code}")
+                msg = f"Failed to retrieve account links: HTTP {response.status_code}"
+                raise JiraApiError(msg)
 
             links = response.json()
             logger.debug(f"Successfully retrieved {len(links)} account links for project {project_id}.")
@@ -919,7 +943,7 @@ class JiraClient:
             return []
         except Exception as e:
             error_msg = f"Failed to retrieve account links for project {project_id}: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
     def get_issue_link_types(self) -> list[dict[str, Any]]:
@@ -938,7 +962,7 @@ class JiraClient:
             logger.info(f"Successfully retrieved {len(result)} issue link types")
 
             # Convert issue link type objects to dictionaries
-            link_types = [
+            return [
                 {
                     "id": link_type.id,
                     "name": link_type.name,
@@ -949,8 +973,7 @@ class JiraClient:
                 for link_type in result
             ]
 
-            return link_types
         except Exception as e:
             error_msg = f"Failed to retrieve issue link types: {e!s}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise JiraApiError(error_msg)

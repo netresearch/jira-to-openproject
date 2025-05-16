@@ -1,11 +1,9 @@
-"""Tests for the work package migration component.
-"""
+"""Tests for the work package migration component."""
 
 import unittest
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from src import config
 from src.migrations.work_package_migration import WorkPackageMigration
 
 
@@ -124,20 +122,23 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            data_dir=config.get_path("data"),
         )
 
         # Assertions
-        self.assertEqual(mock_load_dict.call_count, 5)  # Should be called 5 times for different mappings
-        self.assertIsInstance(migration.jira_client, MagicMock)
-        self.assertIsInstance(migration.op_client, MagicMock)
+        assert mock_load_dict.call_count == 5  # Should be called 5 times for different mappings
+        assert isinstance(migration.jira_client, MagicMock)
+        assert isinstance(migration.op_client, MagicMock)
 
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_load_mappings(
-        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock,
+        self,
+        mock_exists: MagicMock,
+        mock_load_dict: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test the _load_mappings method."""
         # Setup mocks
@@ -159,20 +160,22 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            data_dir=config.get_path("data"),
         )
 
         # Assertions - verify mappings were loaded correctly
-        self.assertEqual(migration.project_mapping, self.project_mapping)
-        self.assertEqual(migration.user_mapping, self.user_mapping)
-        self.assertEqual(migration.issue_type_mapping, self.issue_type_mapping)
-        self.assertEqual(migration.status_mapping, self.status_mapping)
+        assert migration.project_mapping == self.project_mapping
+        assert migration.user_mapping == self.user_mapping
+        assert migration.issue_type_mapping == self.issue_type_mapping
+        assert migration.status_mapping == self.status_mapping
 
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
     @patch("src.utils.data_handler.load_dict")
     def test_prepare_work_package(
-        self, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock,
+        self,
+        mock_load_dict: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test the prepare_work_package method."""
         # Setup mocks
@@ -187,7 +190,6 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            data_dir=config.get_path("data"),
         )
 
         # Create a mock issue with the correct structure
@@ -204,10 +206,10 @@ class TestWorkPackageMigration(unittest.TestCase):
         result = migration.prepare_work_package(mock_issue, 1)
 
         # Assertions
-        self.assertEqual(result["project_id"], 1)
-        self.assertEqual(result["subject"], "Test issue")
-        self.assertIn("PROJ-123", result["description"])
-        self.assertEqual(result["jira_key"], "PROJ-123")
+        assert result["project_id"] == 1
+        assert result["subject"] == "Test issue"
+        assert "PROJ-123" in result["description"]
+        assert result["jira_key"] == "PROJ-123"
 
     def test_migrate_work_packages(self) -> None:
         """Test the migrate_work_packages method exists."""
@@ -224,19 +226,22 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = MockedWorkPackageMigration(
             jira_client=MagicMock(),
             op_client=MagicMock(),
-            data_dir=config.get_path("data"),
         )
 
         # Verify the method exists
-        self.assertTrue(hasattr(migration, "migrate_work_packages"))
-        self.assertTrue(callable(migration.migrate_work_packages))
+        assert hasattr(migration, "migrate_work_packages")
+        assert callable(migration.migrate_work_packages)
 
     @patch("src.migrations.work_package_migration.JiraClient")
     @patch("src.migrations.work_package_migration.OpenProjectClient")
     @patch("src.utils.data_handler.load_dict")
     @patch("os.path.exists")
     def test_analyze_work_package_mapping(
-        self, mock_exists: MagicMock, mock_load_dict: MagicMock, mock_op_client: MagicMock, mock_jira_client: MagicMock,
+        self,
+        mock_exists: MagicMock,
+        mock_load_dict: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
     ) -> None:
         """Test the analyze_work_package_mapping method."""
         # Setup mocks
@@ -249,7 +254,6 @@ class TestWorkPackageMigration(unittest.TestCase):
         migration = WorkPackageMigration(
             jira_client=mock_jira_instance,
             op_client=mock_op_instance,
-            data_dir=config.get_path("data"),
         )
         migration.work_package_mapping = self.work_package_mapping
 
@@ -257,10 +261,10 @@ class TestWorkPackageMigration(unittest.TestCase):
         result = migration.analyze_work_package_mapping()
 
         # Assertions
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["work_packages_count"], 2)
-        self.assertEqual(result["success_count"], 2)
-        self.assertEqual(result["failed_count"], 0)
+        assert result["status"] == "success"
+        assert result["work_packages_count"] == 2
+        assert result["success_count"] == 2
+        assert result["failed_count"] == 0
 
 
 # Define testing steps for work package migration validation

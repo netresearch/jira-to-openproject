@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Client Architecture Demo
+"""Client Architecture Demo.
 
 This script demonstrates the layered client architecture with proper dependency injection:
 1. SSHClient (Foundation Layer)
@@ -11,11 +11,7 @@ Run this script with appropriate configuration to see how the components work to
 """
 
 import os
-import sys
 import traceback
-
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 # Import after path is set
 from src import config
@@ -25,9 +21,8 @@ from src.clients.rails_console_client import RailsConsoleClient
 from src.clients.ssh_client import SSHClient
 
 
-def demo_each_client_independently():
-    """Demonstrate each client layer independently, showing how they can be used directly.
-    """
+def demo_each_client_independently() -> None:
+    """Demonstrate each client layer independently, showing how they can be used directly."""
     print("=" * 80)
     print("DEMONSTRATING INDIVIDUAL CLIENT LAYERS")
     print("=" * 80)
@@ -73,9 +68,8 @@ def demo_each_client_independently():
     print(f"Rails Command Result: {result}")
 
 
-def demo_orchestrated_workflow():
-    """Demonstrate the complete orchestrated workflow using OpenProjectClient.
-    """
+def demo_orchestrated_workflow() -> None:
+    """Demonstrate the complete orchestrated workflow using OpenProjectClient."""
     print("\n" + "=" * 80)
     print("DEMONSTRATING ORCHESTRATED WORKFLOW WITH OpenProjectClient")
     print("=" * 80)
@@ -117,9 +111,8 @@ def demo_orchestrated_workflow():
         print(f"Query failed: {result.get('error')}")
 
 
-def demo_file_transfer():
-    """Demonstrate file transfer workflow.
-    """
+def demo_file_transfer() -> None:
+    """Demonstrate file transfer workflow."""
     print("\n" + "=" * 80)
     print("DEMONSTRATING FILE TRANSFER")
     print("=" * 80)
@@ -162,7 +155,7 @@ def demo_file_transfer():
     os.remove("/tmp/test_transfer.txt")
 
 
-def main():
+def main() -> None:
     """Main function demonstrating client architecture."""
     print("CLIENT ARCHITECTURE DEMONSTRATION")
     print("-" * 40)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test Rails Console Connection
+"""Test Rails Console Connection.
 
 This script tests the connection to the OpenProject Rails console.
 It's useful for verifying connectivity before running migrations
@@ -8,21 +8,16 @@ that require Rails console access.
 
 import argparse
 import json
-import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from rich.console import Console
 
-# Add parent directory to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.clients.openproject_client import OpenProjectClient
 
-# Import the OpenProject client
-try:
-    from src.clients.openproject_client import OpenProjectClient
-except ImportError:
-    print("Error: Could not import OpenProjectClient.")
-    sys.exit(1)
+console = Console()
 
 
 def test_rails_connection(session_name: str = "rails_console", debug: bool = False) -> bool:
@@ -36,38 +31,38 @@ def test_rails_connection(session_name: str = "rails_console", debug: bool = Fal
         bool: True if connection was successful, False otherwise
 
     """
-    print(f"Testing Rails console connection to tmux session: {session_name}")
+    console.print(f"Testing Rails console connection to tmux session: {session_name}")
 
     try:
         # Create an OpenProject client
         client = OpenProjectClient(tmux_session_name=session_name)
 
         # Run a simple command to test execution
-        print("Running test command...")
+        console.print("Running test command...")
         result = client.execute_query("Rails.version")
 
         if result["status"] == "success":
-            print(f"Rails version: {result['output']}")
+            console.print(f"Rails version: {result['output']}")
         else:
-            print(f"Error executing command: {result.get('error', 'Unknown error')}")
+            console.print(f"Error executing command: {result.get('error', 'Unknown error')}")
             return False
 
         # Run another command to test OpenProject environment
-        print("Testing OpenProject environment...")
+        console.print("Testing OpenProject environment...")
         result = client.execute_query("User.count")
 
         if result["status"] == "success":
-            print(f"OpenProject user count: {result['output']}")
+            console.print(f"OpenProject user count: {result['output']}")
         else:
-            print(f"Error executing command: {result.get('error', 'Unknown error')}")
+            console.print(f"Error executing command: {result.get('error', 'Unknown error')}")
             return False
 
-        print("\nRails console connection test PASSED ✅")
+        console.print("\nRails console connection test PASSED ✅")
         return True
 
     except Exception as e:
-        print(f"\nError testing Rails console connection: {e}")
-        print("Rails console connection test FAILED ❌")
+        console.print(f"\nError testing Rails console connection: {e}")
+        console.print("Rails console connection test FAILED ❌")
         if debug:
             import traceback
 
@@ -86,7 +81,7 @@ def get_custom_fields(session_name: str = "rails_console", debug: bool = False) 
         List of custom fields with their attributes
 
     """
-    print(f"Retrieving custom fields from OpenProject via Rails console in tmux session: {session_name}")
+    console.print(f"Retrieving custom fields from OpenProject via Rails console in tmux session: {session_name}")
 
     try:
         # Create an OpenProject client
@@ -104,11 +99,11 @@ def get_custom_fields(session_name: str = "rails_console", debug: bool = False) 
             "possible_values: cf.possible_values } }"
         )
 
-        print("Executing custom fields query...")
+        console.print("Executing custom fields query...")
         result = client.execute_query(command)
 
         if result["status"] == "error":
-            print(f"Error retrieving custom fields: {result.get('error', 'Unknown error')}")
+            console.print(f"Error retrieving custom fields: {result.get('error', 'Unknown error')}")
             return []
 
         # Extract and parse the custom fields from the output
@@ -126,19 +121,19 @@ def get_custom_fields(session_name: str = "rails_console", debug: bool = False) 
 
                 # Parse the JSON
                 fields = json.loads(python_array)
-                print(f"Successfully retrieved {len(fields)} custom fields")
+                console.print(f"Successfully retrieved {len(fields)} custom fields")
                 # Explicitly convert to the expected return type
                 return [dict(field) for field in fields]
             if isinstance(output, list):
                 # Output may already be parsed by the client
-                print(f"Successfully retrieved {len(output)} custom fields")
+                console.print(f"Successfully retrieved {len(output)} custom fields")
                 # Ensure each item is a dict[str, Any]
                 return [dict(item) for item in output]
-            print("Could not parse custom fields output as JSON")
-            print(f"Raw output: {output}")
+            console.print("Could not parse custom fields output as JSON")
+            console.print(f"Raw output: {output}")
             return []
         except Exception as e:
-            print(f"Error parsing custom fields output: {e!s}")
+            console.print(f"Error parsing custom fields output: {e!s}")
             if debug:
                 import traceback
 
@@ -146,7 +141,7 @@ def get_custom_fields(session_name: str = "rails_console", debug: bool = False) 
             return []
 
     except Exception as e:
-        print(f"\nError retrieving custom fields: {e}")
+        console.print(f"\nError retrieving custom fields: {e}")
         if debug:
             import traceback
 
@@ -207,15 +202,17 @@ def main() -> None:
 
         if fields:
             # Print fields to console
-            print("\nCustom Fields:")
+            console.print("\nCustom Fields:")
             for field in fields:
-                print(f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})")
+                console.print(f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})")
 
             # Save to file if output path provided
             if args.output:
-                with open(args.output, "w") as f:
+                output_file = Path(args.output)
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                with output_file.open("w") as f:
                     json.dump(fields, f, indent=2)
-                print(f"\nSaved {len(fields)} custom fields to {args.output}")
+                console.print(f"\nSaved {len(fields)} custom fields to {args.output}")
 
     sys.exit(0 if success else 1)
 

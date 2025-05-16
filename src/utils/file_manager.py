@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FileManager
+"""FileManager.
 
 Handles all file operations for the application, providing a centralized
 interface for file creation, tracking, and cleanup.
@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 import random
 import shutil
 import string
 import time
-from typing import Any
+from pathlib import Path
+from typing import Any, Self
 
 from src import config
 
@@ -22,12 +22,11 @@ logger = config.logger
 
 
 class FileRegistry:
-    """Tracks files created by the application to facilitate cleanup and management.
-    """
+    """Tracks files created by the application to facilitate cleanup and management."""
 
     def __init__(self) -> None:
         """Initialize the file registry."""
-        self._files: dict[str, set[str]] = {
+        self._files: dict[str, set[Path]] = {
             "temp": set(),
             "data": set(),
             "debug": set(),
@@ -35,7 +34,7 @@ class FileRegistry:
             "output": set(),
         }
 
-    def register(self, file_path: str, category: str = "temp") -> None:
+    def register(self, file_path: Path, category: str = "temp") -> None:
         """Register a file in the appropriate category.
 
         Args:
@@ -47,9 +46,9 @@ class FileRegistry:
             self._files[category] = set()
 
         self._files[category].add(file_path)
-        logger.debug(f"Registered {category} file: {file_path}")
+        logger.debug("Registered %s file: %s", category, file_path)
 
-    def unregister(self, file_path: str, category: str | None = None) -> None:
+    def unregister(self, file_path: Path, category: str | None = None) -> None:
         """Remove a file from the registry.
 
         Args:
@@ -65,10 +64,10 @@ class FileRegistry:
         for cat in categories:
             if file_path in self._files[cat]:
                 self._files[cat].remove(file_path)
-                logger.debug(f"Unregistered {cat} file: {file_path}")
+                logger.debug("Unregistered %s file: %s", cat, file_path)
                 break
 
-    def get_files(self, category: str | None = None) -> list[str]:
+    def get_files(self, category: str | None = None) -> list[Path]:
         """Get all registered files, optionally filtered by category.
 
         Args:
@@ -81,17 +80,22 @@ class FileRegistry:
         if category:
             return list(self._files.get(category, set()))
 
-        all_files = []
+        all_files: list[Path] = []
         for files in self._files.values():
             all_files.extend(list(files))
         return all_files
 
-    def cleanup(self, category: str | None = None, older_than: int | None = None) -> tuple[int, int]:
+    def cleanup(
+        self,
+        category: str | None = None,
+        older_than: int | None = None,
+    ) -> tuple[int, int]:
         """Clean up registered files.
 
         Args:
             category: Optional category to clean up
-            older_than: Optional age in seconds, only files older than this will be removed
+            older_than: Optional age in seconds, only files older than this will be
+            removed
 
         Returns:
             Tuple of (files_attempted, files_deleted)
@@ -104,37 +108,38 @@ class FileRegistry:
             try:
                 # Check file age if specified
                 if older_than is not None:
-                    file_age = time.time() - os.path.getmtime(file_path)
+                    file_age = time.time() - file_path.stat().st_mtime
                     if file_age < older_than:
                         continue
 
                 # Delete the file if it exists
-                if os.path.exists(file_path):
-                    if os.path.isdir(file_path):
+                if file_path.exists():
+                    if file_path.is_dir():
                         shutil.rmtree(file_path)
                     else:
-                        os.remove(file_path)
+                        file_path.unlink()
                     deleted_count += 1
-                    logger.debug(f"Deleted file: {file_path}")
+                    logger.debug("Deleted file: %s", file_path)
 
                 # Always unregister, even if file doesn't exist
                 self.unregister(file_path)
 
-            except Exception as e:
-                logger.error(f"Error cleaning up file {file_path}: {e!s}")
+            except Exception:
+                logger.exception("Error cleaning up file %s", file_path)
 
         return len(files_to_clean), deleted_count
 
 
 class FileManager:
-    """Manages file operations for the application, providing a centralized
-    interface for file creation, reading, and cleanup.
+    """Manages file operations for the application.
+
+    Provides a centralized interface for file creation, reading, and cleanup.
     """
 
     # Singleton instance
     _instance: FileManager | None = None
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> FileManager:
+    def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         """Create a singleton instance of the FileManager."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -153,19 +158,19 @@ class FileManager:
 
         # Set base directory
         if base_dir:
-            self.base_dir = base_dir
+            self.base_dir = Path(base_dir)
         else:
             # Default to project root directory
-            self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            self.base_dir = Path(__file__).parent.parent.parent
 
         # Create registry
         self.registry = FileRegistry()
 
         # Setup directories
-        self.var_dir = os.path.join(self.base_dir, "var")
-        self.debug_dir = os.path.join(self.var_dir, "debug")
-        self.data_dir = os.path.join(self.var_dir, "data")
-        self.temp_dir = os.path.join(self.var_dir, "temp")
+        self.var_dir: Path = self.base_dir / "var"
+        self.debug_dir: Path = self.var_dir / "debug"
+        self.data_dir: Path = self.var_dir / "data"
+        self.temp_dir: Path = self.var_dir / "temp"
 
         # Ensure directories exist
         self._setup_directories()
@@ -175,18 +180,17 @@ class FileManager:
         logger.debug("FileManager initialized")
 
     def _setup_directories(self) -> None:
-        """Ensure all required directories exist and are writable.
-        """
+        """Ensure all required directories exist and are writable."""
         directories = [self.var_dir, self.debug_dir, self.data_dir, self.temp_dir]
 
         for directory in directories:
-            os.makedirs(directory, exist_ok=True)
+            directory.mkdir(parents=True, exist_ok=True)
 
             # Verify directory is writable
-            if not os.access(directory, os.W_OK):
-                logger.error(f"Directory is not writable: {directory}")
+            if not directory.exists():
+                logger.error("Directory is not writable: %s", directory)
             else:
-                logger.debug(f"Directory verified: {directory}")
+                logger.debug("Directory verified: %s", directory)
 
     def generate_unique_id(self) -> str:
         """Generate a unique identifier with microsecond precision.
@@ -195,41 +199,34 @@ class FileManager:
             A unique ID string
 
         """
-        # Format: timestamp_microseconds_randomchars
-        timestamp = datetime.datetime.now()
+        timestamp = datetime.datetime.now(tz=datetime.UTC)
         microseconds = timestamp.microsecond
         timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
         random_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
         return f"{timestamp_str}_{microseconds:06d}_{random_suffix}"
 
-    def create_debug_session(self, session_id: str | None = None) -> str:
-        """Create a debug session directory for related files.
+    def create_debug_session(self, name: str | None = None) -> Path:
+        """Create a debug session directory with a unique name.
 
         Args:
-            session_id: Optional session ID, generated if not provided
+            name: Optional name to include in the session directory name
 
         Returns:
-            Path to debug session directory
+            Path to the debug session directory
 
         """
-        if session_id is None:
-            session_id = self.generate_unique_id()
+        session_id = self.generate_unique_id()
+        if name:
+            session_dir = f"{name}_{session_id}"
+        else:
+            session_dir = session_id
 
-        session_dir = os.path.join(self.debug_dir, f"debug_{session_id}")
-        os.makedirs(session_dir, exist_ok=True)
+        debug_dir = Path(self.debug_dir) / session_dir
+        debug_dir.mkdir(parents=True, exist_ok=True)
 
-        # Register the directory
-        self.registry.register(session_dir, "debug")
+        return debug_dir
 
-        # Create a debug log file
-        debug_log_path = os.path.join(session_dir, "debug_log.txt")
-        with open(debug_log_path, "w") as debug_log:
-            debug_log.write(f"=== Debug Session {datetime.datetime.now()} ===\n")
-            debug_log.write(f"Session ID: {session_id}\n\n")
-
-        return session_dir
-
-    def add_to_debug_log(self, session_dir: str, message: str) -> None:
+    def add_to_debug_log(self, session_dir: Path, message: str) -> None:
         """Add a message to the debug log file.
 
         Args:
@@ -237,20 +234,20 @@ class FileManager:
             message: Message to add to the log
 
         """
-        debug_log_path = os.path.join(session_dir, "debug_log.txt")
+        debug_log_path = session_dir / "debug_log.txt"
 
         try:
-            with open(debug_log_path, "a") as debug_log:
+            with debug_log_path.open("a") as debug_log:
                 debug_log.write(f"{message}\n")
-        except Exception as e:
-            logger.error(f"Error writing to debug log: {e!s}")
+        except Exception:
+            logger.exception("Error writing to debug log")
 
     def create_data_file(
         self,
-        data: Any,
-        filename: str | None = None,
-        session_dir: str | None = None,
-    ) -> str:
+        data: dict[str, Any] | list[Any] | str,
+        filename: str | Path | None = None,
+        session_dir: Path | str | None = None,
+    ) -> Path:
         """Create a data file with the provided content.
 
         Args:
@@ -267,45 +264,38 @@ class FileManager:
             filename = f"{unique_id}_data.json"
 
         # Determine the file path
-        if session_dir and os.path.exists(session_dir):
-            file_path = os.path.join(session_dir, filename)
+        if session_dir and Path(session_dir).exists():
+            session_dir_path = Path(session_dir)
+            file_path = session_dir_path / filename
         else:
-            file_path = os.path.join(self.data_dir, filename)
+            file_path = Path(self.data_dir) / filename
 
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        # Ensure the parent directory exists
+        file_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Write data to file
         try:
-            with open(file_path, "w") as f:
-                if isinstance(data, dict | list):
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+            # Write the content based on the type
+            with open(file_path, "w", encoding="utf-8") as f:
+                if isinstance(data, str):
+                    f.write(data)
                 else:
-                    f.write(str(data))
-
-            # Verify file was created
-            if os.path.exists(file_path):
-                file_size = os.path.getsize(file_path)
-                logger.debug(f"Created file: {file_path} ({file_size} bytes)")
-            else:
-                logger.error(f"Failed to create file: {file_path}")
-                raise OSError(f"Failed to create file: {file_path}")
+                    # Convert to JSON for dictionaries and lists
+                    json.dump(data, f, indent=2, ensure_ascii=False)
 
             # Register the file
             self.registry.register(file_path, "data")
-
             return file_path
 
         except Exception as e:
-            logger.error(f"Error creating data file: {e!s}")
-            raise
+            logger.exception(f"Failed to create data file: {e}")
+            raise IOError(f"Failed to create data file: {e}") from e
 
     def create_script_file(
         self,
         content: str,
         filename: str | None = None,
         session_dir: str | None = None,
-    ) -> str:
+    ) -> Path:
         """Create a script file with the provided content.
 
         Args:
@@ -322,37 +312,38 @@ class FileManager:
             filename = f"{unique_id}_script.rb"
 
         # Determine the file path
-        if session_dir and os.path.exists(session_dir):
-            file_path = os.path.join(session_dir, filename)
+        if session_dir and Path(session_dir).exists():
+            file_path = Path(session_dir) / filename
         else:
-            file_path = os.path.join(self.data_dir, filename)
+            file_path = self.data_dir / filename
 
         # Ensure directory exists
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Write content to file
         try:
-            with open(file_path, "w") as f:
+            with file_path.open("w") as f:
                 f.write(content)
 
             # Verify file was created
-            if os.path.exists(file_path):
-                file_size = os.path.getsize(file_path)
-                logger.debug(f"Created script file: {file_path} ({file_size} bytes)")
+            if file_path.exists():
+                file_size = file_path.stat().st_size
+                logger.debug("Created script file: %s (%d bytes)", file_path, file_size)
             else:
-                logger.error(f"Failed to create script file: {file_path}")
-                raise OSError(f"Failed to create script file: {file_path}")
+                logger.error("Failed to create script file: %s", file_path)
+                msg = f"Failed to create script file: {file_path}"
+                raise OSError(msg)
 
             # Register the file
             self.registry.register(file_path, "script")
 
-            return file_path
-
-        except Exception as e:
-            logger.error(f"Error creating script file: {e!s}")
+        except Exception:
+            logger.exception("Error creating script file")
             raise
 
-    def read_file(self, file_path: str) -> str:
+        return file_path
+
+    def read_file(self, file_path: Path) -> str:
         """Read content from a file.
 
         Args:
@@ -363,35 +354,43 @@ class FileManager:
 
         """
         try:
-            with open(file_path) as f:
-                content = f.read()
-            return content
-        except Exception as e:
-            logger.error(f"Error reading file {file_path}: {e!s}")
+            with file_path.open("r") as f:
+                return f.read()
+        except Exception:
+            logger.exception("Error reading file %s", file_path)
             raise
 
-    def read_json_file(self, file_path: str) -> Any:
-        """Read and parse a JSON file.
+    def read_json_file(self, file_path: Path | str) -> dict[str, Any]:
+        """Read a JSON file.
 
         Args:
-            file_path: Path to the JSON file
+            file_path: Path to the file
 
         Returns:
-            Parsed JSON content
+            Dictionary containing the parsed JSON
+
+        Raises:
+            FileNotFoundError: If the file does not exist
+            json.JSONDecodeError: If the file is not valid JSON
+            Exception: For other errors
 
         """
+        path = Path(file_path)
+
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+
         try:
-            with open(file_path) as f:
-                data = json.load(f)
-            return data
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
         except json.JSONDecodeError as e:
-            logger.error(f"Error parsing JSON from {file_path}: {e!s}")
+            logger.exception(f"Failed to parse JSON: {e}")
             raise
         except Exception as e:
-            logger.error(f"Error reading JSON file {file_path}: {e!s}")
+            logger.exception(f"Failed to read file: {e}")
             raise
 
-    def copy_file(self, source_path: str, dest_path: str) -> str:
+    def copy_file(self, source_path: Path, dest_path: Path) -> Path:
         """Copy a file from source to destination.
 
         Args:
@@ -404,27 +403,28 @@ class FileManager:
         """
         try:
             # Ensure destination directory exists
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Copy the file
             shutil.copy2(source_path, dest_path)
 
             # Verify file was copied
-            if os.path.exists(dest_path):
-                file_size = os.path.getsize(dest_path)
-                logger.debug(f"Copied file: {source_path} -> {dest_path} ({file_size} bytes)")
+            if dest_path.exists():
+                file_size = dest_path.stat().st_size
+                logger.debug("Copied file: %s -> %s (%s bytes)", source_path, dest_path, file_size)
             else:
-                logger.error(f"Failed to copy file: {source_path} -> {dest_path}")
-                raise OSError(f"Failed to copy file: {source_path} -> {dest_path}")
+                logger.error("Failed to copy file: %s -> %s", source_path, dest_path)
+                msg = f"Failed to copy file: {source_path} -> {dest_path}"
+                raise OSError(msg)
 
             # Register the file
             self.registry.register(dest_path, "temp")
 
-            return dest_path
-
-        except Exception as e:
-            logger.error(f"Error copying file: {e!s}")
+        except Exception:
+            logger.exception("Error copying file")
             raise
+
+        return dest_path
 
     def cleanup_old_files(self, days: int = 7) -> None:
         """Clean up files older than the specified number of days.
@@ -435,16 +435,16 @@ class FileManager:
         """
         seconds = days * 24 * 60 * 60  # Convert days to seconds
         attempted, deleted = self.registry.cleanup(older_than=seconds)
-        logger.info(f"Cleaned up {deleted} old files (attempted {attempted})")
+        logger.info("Cleaned up %d old files (attempted %d)", deleted, attempted)
 
     def cleanup_all(self) -> None:
-        """Clean up all registered files.
-        """
+        """Clean up all registered files."""
         attempted, deleted = self.registry.cleanup()
-        logger.info(f"Cleaned up {deleted} registered files (attempted {attempted})")
+        logger.info("Cleaned up %d registered files (attempted %d)", deleted, attempted)
 
     def register_debug_file(self) -> str:
         """Register a debug file and return a unique ID.
+
         This ID can be used to track debug information across operations.
 
         Returns:
@@ -452,7 +452,26 @@ class FileManager:
 
         """
         debug_id = self.generate_unique_id()
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        debug_dir = os.path.join(self.debug_dir, f"debug_{timestamp}_{debug_id}")
-        os.makedirs(debug_dir, exist_ok=True)
+        timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
+        debug_dir = self.debug_dir / f"debug_{timestamp}_{debug_id}"
+        debug_dir.mkdir(parents=True, exist_ok=True)
         return debug_id
+
+    def join(self, *paths: str | Path) -> Path:
+        """Join path components into a single Path object.
+
+        Args:
+            *paths: Path components to join
+
+        Returns:
+            Combined Path object
+
+        """
+        # Start with an empty path
+        result = Path("")
+
+        # Join each component using / operator
+        for component in paths:
+            result = result / Path(component)
+
+        return result

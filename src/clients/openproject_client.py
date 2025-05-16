@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenProjectClient
+"""OpenProjectClient.
 
 Main client interface for OpenProject operations.
 Coordinates SSHClient, DockerClient, and RailsConsoleClient in a layered architecture:
@@ -21,8 +21,8 @@ Workflow:
 import json
 import os
 import random
-import re
-import time
+from pathlib import Path
+from shlex import quote
 from typing import Any, cast
 
 from src import config
@@ -36,7 +36,6 @@ from src.clients.ssh_client import (
     SSHClient,
     SSHCommandError,
     SSHConnectionError,
-    SSHFileTransferError,
 )
 from src.utils.file_manager import FileManager
 
@@ -47,38 +46,33 @@ class OpenProjectError(Exception):
     """Base exception for all OpenProject client errors."""
 
 
-
 class ConnectionError(OpenProjectError):
     """Error when connection to OpenProject fails."""
-
 
 
 class FileTransferError(OpenProjectError):
     """Error when transferring files to/from OpenProject container."""
 
 
-
 class QueryExecutionError(OpenProjectError):
     """Error when executing a query in OpenProject."""
-
 
 
 class RecordNotFoundError(OpenProjectError):
     """Error when a record is not found in OpenProject."""
 
 
-
 class JsonParseError(OpenProjectError):
     """Error when parsing JSON output from OpenProject."""
 
 
-
 class OpenProjectClient:
     """Client for OpenProject operations.
+
     This is the top-level coordinator that orchestrates the client architecture:
     - SSHClient handles all SSH interactions
     - DockerClient (using SSHClient) handles container interactions
-    - RailsConsoleClient handles Rails console interactions
+    - RailsConsoleClient handles Rails console interactions.
 
     All error handling uses exceptions rather than status dictionaries.
     """
@@ -120,9 +114,9 @@ class OpenProjectClient:
         self._last_query = ""
 
         # Initialize caches
-        self._users_cache = None
-        self._users_cache_time = None
-        self._users_by_email_cache = {}
+        self._users_cache: list[dict[str, Any]] | None = None
+        self._users_cache_time: int | None = None
+        self._users_by_email_cache: dict[str, dict[str, Any]] = {}
 
         # Get config values
         op_config = config.openproject_config
@@ -139,9 +133,11 @@ class OpenProjectClient:
 
         # Verify required configuration
         if not self.container_name:
-            raise ValueError("Container name is required")
+            msg = "Container name is required"
+            raise ValueError(msg)
         if not self.ssh_host:
-            raise ValueError("SSH host is required")
+            msg = "SSH host is required"
+            raise ValueError(msg)
 
         # Initialize file manager
         self.file_manager = FileManager()
@@ -156,7 +152,9 @@ class OpenProjectClient:
             retry_count=self.retry_count,
             retry_delay=self.retry_delay,
         )
-        logger.debug(f"{'Using provided' if ssh_client else 'Initialized'} SSHClient for host {self.ssh_host}")
+        logger.debug(
+            f"{'Using provided' if ssh_client else 'Initialized'} SSHClient for host {self.ssh_host}",
+        )
 
         # 2. Next, create or use the Docker client
         self.docker_client = docker_client or DockerClient(
@@ -182,11 +180,11 @@ class OpenProjectClient:
 
         logger.success(f"OpenProjectClient initialized for host {self.ssh_host}, container {self.container_name}")
 
-    def _create_script_file(self, script_content: str) -> str:
-        """Create a temporary Ruby script file with the given content.
+    def _create_script_file(self, script_content: str) -> Path:
+        """Create a temporary file with the script content.
 
         Args:
-            script_content: Ruby code to write to the file
+            script_content: Content to write to the file
 
         Returns:
             Path to the created file
@@ -195,41 +193,37 @@ class OpenProjectClient:
             OSError: If unable to create or write to the script file
 
         """
+        file_path = None
         try:
             # Create a temporary directory if needed
-            temp_dir = os.path.join(self.file_manager.data_dir, "temp_scripts")
-            os.makedirs(temp_dir, exist_ok=True)
+            temp_dir = Path(self.file_manager.data_dir) / "temp_scripts"
+            temp_dir.mkdir(parents=True, exist_ok=True)
 
             # Generate a unique filename
             filename = f"openproject_script_{os.urandom(4).hex()}.rb"
-            file_path = os.path.join(temp_dir, filename)
+            file_path = temp_dir / filename
 
             # Write the content directly instead of using tempfile module
-            with open(file_path, mode="w", encoding="utf-8") as f:
+            with file_path.open("w", encoding="utf-8") as f:
                 f.write(script_content)
 
-            # Verify the file was created and is readable
-            if not os.path.exists(file_path):
-                raise OSError("Failed to create script file: File not found after creation")
-
-            if not os.access(file_path, os.R_OK):
-                raise OSError("Failed to create script file: File is not readable")
-
             # Log the absolute path for easier debugging
-            logger.debug(f"Created temporary script file: {os.path.abspath(file_path)}")
+            logger.debug("Created temporary script file: %s", file_path.as_posix())
             return file_path
-        except OSError as e:
-            logger.error(f"Failed to create script file: {e!s}")
-            raise OSError(f"Failed to create script file: {e!s}")
-        except Exception as e:
-            logger.error(f"Unexpected error creating script file: {e!s}")
-            raise OSError(f"Failed to create script file: {e!s}")
+        except OSError:
+            error_msg = f"Failed to create script file: {str(file_path)}"
+            logger.exception(error_msg)
+            raise OSError(error_msg)
+        except Exception:
+            error_msg = f"Failed to create script file: {str(file_path)}"
+            logger.exception(error_msg)
+            raise OSError(error_msg)
 
-    def _transfer_rails_script(self, local_path: str) -> str:
+    def _transfer_rails_script(self, local_path: Path | str) -> Path:
         """Transfer a script to the Rails environment.
 
         Args:
-            local_path: Path to the script file
+            local_path: Path to the script file (Path object or string)
 
         Returns:
             Path to the script in the container
@@ -239,43 +233,37 @@ class OpenProjectClient:
 
         """
         try:
-            # Verify the local file exists and is readable before attempting to transfer
-            if not os.path.isfile(local_path):
-                raise FileTransferError(f"Local file does not exist: {local_path}")
-
-            if not os.access(local_path, os.R_OK):
-                raise FileTransferError(f"Local file is not readable: {local_path}")
+            # Convert string to Path if needed
+            if isinstance(local_path, str):
+                local_path = Path(local_path)
 
             # Get the absolute path for better error messages
-            abs_path = os.path.abspath(local_path)
-            logger.debug(f"Transferring script from: {abs_path}")
+            abs_path = local_path.absolute()
+            logger.debug("Transferring script from: %s", abs_path)
 
             # Use just the base filename for the container path
-            container_path = f"/tmp/{os.path.basename(local_path)}"
+            container_path = Path("/tmp") / local_path.name
 
-            # Use Docker client to handle the entire transfer process
-            # This should internally:
-            # 1. Copy from local to remote (via SSH)
-            # 2. Copy from remote to container
-            # 3. Set permissions as root user in the container
             self.docker_client.transfer_file_to_container(abs_path, container_path)
 
-            # Verify file exists and is readable in container
-            if not self.docker_client.check_file_exists_in_container(container_path):
-                raise FileTransferError(f"File not found in container after transfer: {container_path}")
-
-            # Check if we can read the file content
-            stdout, stderr, rc = self.docker_client.execute_command(f"head -1 {container_path}")
-            if rc != 0:
-                raise FileTransferError(f"File in container is not readable: {stderr}")
-
-            logger.debug(f"Successfully transferred file to container at {container_path}")
-            return container_path
+            logger.debug("Successfully transferred file to container at %s", container_path)
 
         except Exception as e:
-            raise FileTransferError(f"Failed to transfer script: {e!s}")
+            # Verify the local file exists and is readable before attempting to transfer
+            if not local_path.is_file():
+                msg = f"Local file does not exist: {local_path}"
+                raise FileTransferError(msg)
 
-    def _cleanup_script_files(self, local_path: str, remote_path: str) -> None:
+            if not os.access(local_path, os.R_OK):
+                msg = f"Local file is not readable: {local_path}"
+                raise FileTransferError(msg)
+
+            msg = "Failed to transfer script."
+            raise FileTransferError(msg) from e
+
+        return container_path
+
+    def _cleanup_script_files(self, local_path: Path, remote_path: Path) -> None:
         """Clean up script files after execution.
 
         Args:
@@ -285,121 +273,23 @@ class OpenProjectClient:
         """
         # Clean up local file
         try:
-            if os.path.exists(local_path):
-                os.unlink(local_path)
-                logger.debug(f"Cleaned up local script file: {local_path}")
+            if local_path.exists():
+                local_path.unlink()
+                logger.debug("Cleaned up local script file: %s", local_path)
         except Exception as e:
-            logger.warning(f"Non-critical error cleaning up local file: {e!s}")
+            logger.warning("Non-critical error cleaning up local file: %s", e)
 
         # Clean up remote file
         try:
-            self.ssh_client.execute_command(f"rm -f {remote_path}")
-            logger.debug(f"Cleaned up remote script file: {remote_path}")
+            command = [
+                "rm",
+                "-f",
+                quote(remote_path.resolve(strict=True).as_posix()),
+            ]
+            self.ssh_client.execute_command(" ".join(command))
+            logger.debug("Cleaned up remote script file: %s", remote_path)
         except Exception as e:
-            logger.warning(f"Non-critical error cleaning up remote file: {e!s}")
-
-    def _transfer_and_execute_script(self, script_content: str) -> dict[str, Any]:
-        """Create, transfer and execute a script.
-
-        Args:
-            script_content: Script content to execute
-
-        Returns:
-            Execution result
-
-        Raises:
-            FileTransferError: If file transfer fails
-            QueryExecutionError: If script execution fails
-            JsonParseError: If result parsing fails
-
-        """
-        local_path = None
-        container_path = None
-        result = None  # Initialize result variable
-
-        try:
-            # Create a local script file
-            local_path = self._create_script_file(script_content)
-            logger.debug(f"Created script file at: {local_path}")
-
-            # Transfer the script to the container
-            container_path = self._transfer_rails_script(local_path)
-            logger.debug(f"Transferred script to container: {container_path}")
-
-            # We don't try to modify permissions, as we can't in this environment
-            # Just check if the file exists
-            file_exists = self.docker_client.check_file_exists_in_container(container_path)
-            logger.debug(f"Container script file exists: {file_exists}")
-
-            if not file_exists:
-                raise FileTransferError(f"Script file not found in container after transfer: {container_path}")
-
-            # Check permissions
-            stdout, stderr, rc = self.docker_client.execute_command(f"ls -la {container_path}")
-            logger.debug(f"File permissions in container: {stdout}")
-
-            # Print contents for debugging
-            stdout, stderr, rc = self.docker_client.execute_command(f"cat {container_path} | head -5")
-            logger.debug(f"First few lines of script: {stdout}")
-
-            # Execute the script in Rails console and get result
-            rails_output = self.rails_client.execute(f'load "{container_path}"')
-            logger.debug(f"Rails script execution output: {rails_output}")
-
-            # Parse the result from JSON format
-            try:
-                result = json.loads(rails_output)
-                logger.debug(f"Parsed result: {result}")
-            except json.JSONDecodeError as e:
-                # If JSON parsing fails, try to extract a hash from the Ruby output
-                logger.warning(f"JSON parse error: {e!s}")
-                logger.warning(f"Attempting to extract hash from Rails output: {rails_output}")
-
-                # Try to parse Ruby hash format into Python dict
-                hash_match = re.search(r"\{([^{}]*)\}", rails_output)
-                if hash_match:
-                    hash_str = hash_match.group(0)
-                    logger.debug(f"Found hash string: {hash_str}")
-
-                    # Very simple Ruby hash to Python dict conversion
-                    # This is not a general solution but works for our simple case
-                    try:
-                        # Replace Ruby symbols with strings
-                        dict_str = re.sub(r":([a-zA-Z_]\w*)\s*=>", r'"\1":', hash_str)
-                        # Replace => with :
-                        dict_str = dict_str.replace("=>", ":")
-                        # Try to parse resulting string as JSON
-                        result = json.loads(dict_str)
-                        logger.debug(f"Converted hash to dict: {result}")
-                    except Exception as e:
-                        logger.error(f"Failed to convert Ruby hash to dict: {e!s}")
-                        # Use the output as a string if we can't parse it
-                        result = {"raw_output": rails_output}
-                else:
-                    # Fallback to raw output if no hash found
-                    result = {"raw_output": rails_output}
-
-            # Return the result
-            return result if result is not None else {"raw_output": rails_output}
-        except FileTransferError as e:
-            raise e  # Re-raise FileTransferError
-        except Exception as e:
-            raise QueryExecutionError(f"Failed to execute script: {e!s}")
-        finally:
-            # Clean up local script file
-            if local_path and os.path.exists(local_path):
-                try:
-                    os.unlink(local_path)
-                except Exception as e:
-                    logger.warning(f"Failed to clean up local script file: {e!s}")
-
-            # Clean up container script file
-            if container_path:
-                try:
-                    # Use root user to remove the file, to handle permission issues
-                    self.docker_client.execute_command(f"rm -f {container_path}", user="root")
-                except Exception as e:
-                    logger.warning(f"Failed to clean up container script file: {e!s}")
+            logger.warning("Non-critical error cleaning up remote file: %s", e)
 
     def execute(self, script_content: str) -> dict[str, Any]:
         """Execute a Ruby script directly.
@@ -416,39 +306,23 @@ class OpenProjectClient:
         """
         return self.execute_query(script_content)
 
-    def transfer_file_to_container(self, local_path: str, container_path: str) -> bool:
+    def transfer_file_to_container(self, local_path: Path, container_path: Path) -> None:
         """Transfer a file from local to the OpenProject container.
 
         Args:
             local_path: Path to local file
             container_path: Destination path in container
 
-        Returns:
-            True if successful
-
         Raises:
             FileTransferError: If the transfer fails for any reason
 
         """
         try:
-            # Use just the base filename for the remote path
-            remote_filename = os.path.basename(local_path)
-            remote_path = f"/tmp/{remote_filename}"
-
-            # First copy to remote server's /tmp directory
-            self.ssh_client.copy_file_to_remote(local_path, remote_path)
-
-            # Then copy from remote server to container
-            self.docker_client.copy_file_to_container(remote_path, container_path)
-
-            # Clean up the temporary file on the remote server
-            self.ssh_client.execute_command(f"rm -f {remote_path}")
-
-            return True
+            self.docker_client.transfer_file_to_container(local_path, container_path)
         except Exception as e:
-            error_msg = f"Failed to transfer file to container: {e!s}"
-            logger.error(error_msg)
-            raise FileTransferError(error_msg)
+            error_msg = "Failed to transfer file to container."
+            logger.exception(error_msg)
+            raise FileTransferError(error_msg) from e
 
     def is_connected(self) -> bool:
         """Test if connected to OpenProject.
@@ -469,8 +343,8 @@ class OpenProjectClient:
 
             # Check if the unique ID is in the response
             return f"OPENPROJECT_CONNECTION_TEST_{unique_id}" in result
-        except Exception as e:
-            logger.error(f"Connection test failed: {e!s}")
+        except Exception:
+            logger.exception("Connection test failed.")
             return False
 
     def execute_query(self, query: str, timeout: int | None = None) -> str:
@@ -490,9 +364,7 @@ class OpenProjectClient:
         """
         self._last_query = query
 
-        result = self.rails_client._send_command_to_tmux(f"puts ({query})", 5)
-
-        return result
+        return self.rails_client._send_command_to_tmux(f"puts ({query})", 5)
 
     def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> Any:
         """Execute a Rails query and save the result to a JSON file, then transfer it back.
@@ -512,8 +384,8 @@ class OpenProjectClient:
         """
         # Generate filenames
         uid = self.file_manager.generate_unique_id()
-        remote_file = f"/tmp/query_result_{uid}.json"
-        local_file = os.path.join(self.file_manager.temp_dir, f"query_result_{uid}.json")
+        container_result_file = Path("/tmp") / f"query_result_{uid}.json"
+        local_result_file = self.file_manager.temp_dir / f"query_result_{uid}.json"
 
         # Create a simplified script that avoids variable name conflicts
         script = f"""
@@ -525,7 +397,7 @@ begin
 
   # Write to file
   file_content = result.nil? ? "null" : result.to_json
-  File.write('{remote_file}', file_content)
+  File.write('{quote(container_result_file.as_posix())}', file_content)
 
   # Return true to indicate success
   true
@@ -537,87 +409,53 @@ end
 
         try:
             # Create and transfer script
-            script_file = self._create_script_file(script)
-            container_path = self._transfer_rails_script(script_file)
+            local_script_file = self._create_script_file(script)
+            container_script_file = self._transfer_rails_script(local_script_file)
 
             # Run the script
-            self.rails_client.execute(f"load '{container_path}'", timeout=timeout or self.command_timeout)
+            self.rails_client.execute(
+                f"load '{container_script_file}'",
+                timeout=timeout or self.command_timeout,
+            )
+
+            self.docker_client.copy_file_from_container(
+                container_result_file,
+                local_result_file,
+            )
 
             # Clean up script file
-            if os.path.exists(script_file):
-                os.remove(script_file)
-
-            # Verify the JSON file exists in the container
-            if not self.docker_client.check_file_exists_in_container(remote_file):
-                raise FileTransferError(f"JSON result file was not created in container: {remote_file}")
-
-            # Get file size for debugging
-            size = self.docker_client.get_file_size_in_container(remote_file)
-            if size is None or size <= 0:
-                raise FileTransferError(f"JSON result file is empty or invalid: {remote_file}")
-
-            logger.debug(f"JSON file size in container: {size} bytes")
-
-            # Create a temporary file in the local tmp directory
-            local_temp_directory = os.path.dirname(local_file)
-            os.makedirs(local_temp_directory, exist_ok=True)
-
-            # Step 1: Generate a unique temporary filename on the remote host
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            unique_id = f"{random.randrange(16**6):06x}"
-            remote_temp_path = f"/tmp/{timestamp}_{unique_id}_{os.path.basename(remote_file)}"
-
-            # Step 2: Copy from container to remote host
-            docker_cmd = f"docker cp {self.docker_client.container_name}:{remote_file} {remote_temp_path}"
-            stdout, stderr, returncode = self.ssh_client.execute_command(docker_cmd)
-
-            if returncode != 0:
-                raise FileTransferError(f"Failed to copy file from container to remote host: {stderr}")
-
-            # Step 3: Verify file exists on remote host
-            if not self.ssh_client.check_remote_file_exists(remote_temp_path):
-                raise FileTransferError(f"File not found on remote host after docker cp: {remote_temp_path}")
-
-            # Step 4: Copy from remote host to local
-            local_file = self.ssh_client.copy_file_from_remote(remote_temp_path, local_file)
-
-            # Final checks - verify file exists and has content
-            if not os.path.exists(local_file):
-                raise FileTransferError(f"Local file not found after transfer: {local_file}")
-
-            local_size = os.path.getsize(local_file)
-            if local_size <= 0:
-                raise FileTransferError(f"Local file is empty after transfer: {local_file}")
-
-            logger.debug(f"File transfer succeeded: {local_file} ({local_size} bytes)")
-
-            # Clean up remote temp file
-            self.ssh_client.execute_command(f"rm -f {remote_temp_path}")
+            if local_script_file.exists():
+                local_script_file.unlink()
 
             # Clean up container file
-            self.docker_client.execute_command(f"rm -f {remote_file}")
+            rm_command = ["rm", "-f", quote(container_result_file.as_posix())]
+            self.docker_client.execute_command(" ".join(rm_command))
 
             # Parse and return
             try:
-                with open(local_file) as f:
+                with local_result_file.open("r") as f:
                     data = json.load(f)
-                logger.debug(f"Successfully parsed JSON data from {local_file}")
+                logger.debug("Successfully parsed JSON data from %s", local_result_file)
                 return data
             except json.JSONDecodeError as e:
-                raise JsonParseError(f"Failed to parse JSON result file: {e!s}")
+                msg = "Failed to parse JSON result file."
+                raise JsonParseError(msg) from e
             finally:
                 # Clean up local file
-                if os.path.exists(local_file):
-                    os.remove(local_file)
+                if local_result_file.exists():
+                    local_result_file.unlink()
 
         except (RubyError, CommandExecutionError) as e:
-            raise QueryExecutionError(f"Error executing query: {e!s}")
+            msg = "Error executing query."
+            raise QueryExecutionError(msg) from e
         except (SSHCommandError, SSHConnectionError) as e:
-            raise ConnectionError(f"SSH error during file operation: {e!s}")
-        except FileTransferError as e:
-            raise e  # Just re-raise FileTransferError
+            msg = "SSH error during file operation."
+            raise ConnectionError(msg) from e
+        except FileTransferError:
+            raise  # Just re-raise FileTransferError
         except Exception as e:
-            raise QueryExecutionError(f"Unexpected error during query execution: {e!s}")
+            msg = "Unexpected error during query execution."
+            raise QueryExecutionError(msg) from e
 
     def execute_json_query(self, query: str, timeout: int | None = None) -> Any:
         """Execute a Rails query and return parsed JSON result.
@@ -669,9 +507,14 @@ end
 
         if isinstance(result, str) and result.isdigit():
             return int(result)
-        raise QueryExecutionError(f"Unable to parse count result: {result}")
+        msg = "Unable to parse count result."
+        raise QueryExecutionError(msg)
 
-    def find_record(self, model: str, id_or_conditions: int | dict[str, Any]) -> dict[str, Any]:
+    def find_record(
+        self,
+        model: str,
+        id_or_conditions: int | dict[str, Any],
+    ) -> dict[str, Any]:
         """Find a record by ID or conditions.
 
         Args:
@@ -697,12 +540,14 @@ end
             result = self.execute_json_query(query)
 
             if result is None:
-                raise RecordNotFoundError(f"No {model} found with {id_or_conditions}")
+                msg = f"No {model} found with {id_or_conditions}"
+                raise RecordNotFoundError(msg)
 
             return result
 
         except (QueryExecutionError, JsonParseError) as e:
-            raise QueryExecutionError(f"Error finding record for {model}: {e!s}")
+            msg = f"Error finding record for {model}."
+            raise QueryExecutionError(msg) from e
 
     def create_record(self, model: str, attributes: dict[str, Any]) -> dict[str, Any]:
         """Create a record with given attributes.
@@ -732,12 +577,13 @@ end
         """
 
         try:
-            record = self.execute_query(command)
-            return record
+            return self.execute_query(command)
         except RubyError as e:
-            raise QueryExecutionError(f"Failed to create {model}: {e!s}")
+            msg = f"Failed to create {model}."
+            raise QueryExecutionError(msg) from e
         except Exception as e:
-            raise QueryExecutionError(f"Error creating {model}: {e!s}")
+            msg = f"Error creating {model}."
+            raise QueryExecutionError(msg) from e
 
     def update_record(self, model: str, id: int, attributes: dict[str, Any]) -> dict[str, Any]:
         """Update a record with given attributes.
@@ -771,14 +617,16 @@ end
         """
 
         try:
-            updated_record = self.execute_query(command)
-            return updated_record
+            return self.execute_query(command)
         except RubyError as e:
             if "Record not found" in str(e):
-                raise RecordNotFoundError(f"{model} with ID {id} not found")
-            raise QueryExecutionError(f"Failed to update {model}: {e!s}")
+                msg = f"{model} with ID {id} not found"
+                raise RecordNotFoundError(msg) from e
+            msg = f"Failed to update {model}."
+            raise QueryExecutionError(msg) from e
         except Exception as e:
-            raise QueryExecutionError(f"Error updating {model}: {e!s}")
+            msg = f"Error updating {model}."
+            raise QueryExecutionError(msg) from e
 
     def delete_record(self, model: str, id: int) -> None:
         """Delete a record.
@@ -807,10 +655,13 @@ end
             self.execute_query(command)
         except RubyError as e:
             if "Record not found" in str(e):
-                raise RecordNotFoundError(f"{model} with ID {id} not found")
-            raise QueryExecutionError(f"Failed to delete {model}: {e!s}")
+                msg = f"{model} with ID {id} not found"
+                raise RecordNotFoundError(msg) from e
+            msg = f"Failed to delete {model}."
+            raise QueryExecutionError(msg) from e
         except Exception as e:
-            raise QueryExecutionError(f"Error deleting {model}: {e!s}")
+            msg = f"Error deleting {model}."
+            raise QueryExecutionError(msg) from e
 
     def find_all_records(
         self,
@@ -862,7 +713,8 @@ end
                 return []
             return result
         except Exception as e:
-            raise QueryExecutionError(f"Error finding records for {model}: {e!s}")
+            msg = f"Error finding records for {model}."
+            raise QueryExecutionError(msg) from e
 
     def execute_transaction(self, commands: list[str]) -> Any:
         """Execute multiple commands in a transaction.
@@ -888,9 +740,14 @@ end
         try:
             return self.execute_query(transaction_block)
         except Exception as e:
-            raise QueryExecutionError(f"Transaction failed: {e!s}")
+            msg = "Transaction failed."
+            raise QueryExecutionError(msg) from e
 
-    def transfer_file_from_container(self, container_path: str, local_path: str) -> str:
+    def transfer_file_from_container(
+        self,
+        container_path: Path,
+        local_path: Path,
+    ) -> Path:
         """Copy a file from the container to the local system.
 
         Args:
@@ -906,37 +763,14 @@ end
 
         """
         try:
-            # Verify the container file exists
-            if not self.docker_client.check_file_exists_in_container(container_path):
-                raise FileNotFoundError(f"Container file not found: {container_path}")
+            return self.docker_client.copy_file_from_container(
+                container_path,
+                local_path,
+            )
 
-            # Create a temporary path on the remote host
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            unique_id = f"{random.randrange(16**6):06x}"
-            remote_temp_path = f"/tmp/{timestamp}_{unique_id}_{os.path.basename(container_path)}"
-
-            # Copy from container to remote host
-            self.docker_client.copy_file_from_container(container_path, remote_temp_path)
-
-            # Create local directory if needed
-            local_dir = os.path.dirname(local_path)
-            if local_dir:
-                os.makedirs(local_dir, exist_ok=True)
-
-            # Copy from remote host to local
-            local_file = self.ssh_client.copy_file_from_remote(remote_temp_path, local_path)
-
-            # Clean up remote temp file
-            self.ssh_client.execute_command(f"rm -f {remote_temp_path}")
-
-            return local_file
-
-        except (SSHFileTransferError, SSHCommandError) as e:
-            raise FileTransferError(f"SSH error transferring file: {e!s}")
-        except FileNotFoundError as e:
-            raise e  # Re-raise FileNotFoundError
         except Exception as e:
-            raise FileTransferError(f"Error transferring file from container: {e!s}")
+            msg = "Error transferring file from container."
+            raise FileTransferError(msg) from e
 
     def get_users(self) -> list[dict[str, Any]]:
         """Get all users from OpenProject.
@@ -961,7 +795,7 @@ end
         )
 
         if cache_valid:
-            logger.debug(f"Using cached users data ({len(self._users_cache)} users)")
+            logger.debug("Using cached users data (%d users)", len(self._users_cache))
             return self._users_cache
 
         try:
@@ -980,11 +814,12 @@ end
                     if email:
                         self._users_by_email_cache[email] = user
 
-            logger.debug(f"Retrieved {len(self._users_cache)} users from OpenProject")
+            logger.debug("Retrieved %d users from OpenProject", len(self._users_cache))
             return self._users_cache
 
         except Exception as e:
-            raise QueryExecutionError(f"Failed to retrieve users: {e!s}")
+            msg = "Failed to retrieve users."
+            raise QueryExecutionError(msg) from e
 
     def get_user_by_email(self, email: str) -> dict[str, Any]:
         """Get a user by email address.
@@ -1026,12 +861,14 @@ end
                 self._users_by_email_cache[email_lower] = user
                 return user
 
-            raise RecordNotFoundError(f"User with email '{email}' not found")
+            msg = f"User with email '{email}' not found"
+            raise RecordNotFoundError(msg)
 
-        except RecordNotFoundError as e:
-            raise e  # Re-raise RecordNotFoundError
+        except RecordNotFoundError:
+            raise  # Re-raise RecordNotFoundError
         except Exception as e:
-            raise QueryExecutionError(f"Error finding user by email: {e!s}")
+            msg = "Error finding user by email."
+            raise QueryExecutionError(msg) from e
 
     def get_custom_field_by_name(self, name: str) -> dict[str, Any]:
         """Find a custom field by name.
@@ -1067,7 +904,8 @@ end
 
             # Handle nil value from Ruby
             if result is None:
-                raise RecordNotFoundError(f"Custom field '{name}' not found")
+                msg = f"Custom field '{name}' not found"
+                raise RecordNotFoundError(msg)
 
             # Handle integer result
             if isinstance(result, int):
@@ -1078,14 +916,17 @@ end
                 try:
                     return int(result)
                 except ValueError:
-                    raise QueryExecutionError(f"Invalid ID format: {result}")
+                    msg = f"Invalid ID format: {result}"
+                    raise QueryExecutionError(msg)
 
-            raise QueryExecutionError(f"Unexpected result type: {type(result)}")
+            msg = f"Unexpected result type: {type(result)}"
+            raise QueryExecutionError(msg)
 
-        except RecordNotFoundError as e:
-            raise e  # Re-raise RecordNotFoundError
+        except RecordNotFoundError:
+            raise  # Re-raise RecordNotFoundError
         except Exception as e:
-            raise QueryExecutionError(f"Error getting custom field ID: {e!s}")
+            msg = "Error getting custom field ID."
+            raise QueryExecutionError(msg) from e
 
     def get_statuses(self) -> list[dict[str, Any]]:
         """Get all statuses from OpenProject.
@@ -1100,7 +941,8 @@ end
         try:
             return self.execute_json_query("Status.all") or []
         except Exception as e:
-            raise QueryExecutionError(f"Failed to get statuses: {e!s}")
+            msg = "Failed to get statuses."
+            raise QueryExecutionError(msg) from e
 
     def get_work_package_types(self) -> list[dict[str, Any]]:
         """Get all work package types from OpenProject.
@@ -1115,7 +957,8 @@ end
         try:
             return self.execute_json_query("Type.all") or []
         except Exception as e:
-            raise QueryExecutionError(f"Failed to get work package types: {e!s}")
+            msg = "Failed to get work package types."
+            raise QueryExecutionError(msg) from e
 
     def get_projects(self) -> list[dict[str, Any]]:
         """Get all projects from OpenProject.
@@ -1130,7 +973,8 @@ end
         try:
             return self.execute_json_query("Project.all") or []
         except Exception as e:
-            raise QueryExecutionError(f"Failed to get projects: {e!s}")
+            msg = "Failed to get projects."
+            raise QueryExecutionError(msg) from e
 
     def get_project_by_identifier(self, identifier: str) -> dict[str, Any]:
         """Get a project by identifier.
@@ -1147,14 +991,18 @@ end
 
         """
         try:
-            project = self.execute_json_query(f"Project.find_by(identifier: '{identifier}')")
+            project = self.execute_json_query(
+                f"Project.find_by(identifier: '{identifier}')",
+            )
             if project is None:
-                raise RecordNotFoundError(f"Project with identifier '{identifier}' not found")
+                msg = f"Project with identifier '{identifier}' not found"
+                raise RecordNotFoundError(msg)
             return project
-        except RecordNotFoundError as e:
-            raise e  # Re-raise RecordNotFoundError
+        except RecordNotFoundError:
+            raise  # Re-raise RecordNotFoundError
         except Exception as e:
-            raise QueryExecutionError(f"Failed to get project: {e!s}")
+            msg = "Failed to get project."
+            raise QueryExecutionError(msg) from e
 
     def delete_all_work_packages(self) -> int:
         """Delete all work packages in bulk.
@@ -1170,7 +1018,8 @@ end
             count = self.execute_query("WorkPackage.delete_all")
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete all work packages: {e!s}")
+            msg = "Failed to delete all work packages."
+            raise QueryExecutionError(msg) from e
 
     def delete_all_projects(self) -> int:
         """Delete all projects in bulk.
@@ -1186,10 +1035,12 @@ end
             count = self.execute_query("Project.delete_all")
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete all projects: {e!s}")
+            msg = "Failed to delete all projects."
+            raise QueryExecutionError(msg) from e
 
     def delete_all_custom_fields(self) -> int:
         """Delete all custom fields in bulk.
+
         Uses destroy_all for proper dependency cleanup.
 
         Returns:
@@ -1205,7 +1056,8 @@ end
             self.execute_query("CustomField.destroy_all")
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete all custom fields: {e!s}")
+            msg = "Failed to delete all custom fields."
+            raise QueryExecutionError(msg) from e
 
     def delete_non_default_issue_types(self) -> int:
         """Delete non-default issue types (work package types).
@@ -1228,7 +1080,8 @@ end
             count = self.execute_query(script)
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete non-default issue types: {e!s}")
+            msg = "Failed to delete non-default issue types."
+            raise QueryExecutionError(msg) from e
 
     def delete_non_default_issue_statuses(self) -> int:
         """Delete non-default issue statuses.
@@ -1251,9 +1104,13 @@ end
             count = self.execute_query(script)
             return count if isinstance(count, int) else 0
         except Exception as e:
-            raise QueryExecutionError(f"Failed to delete non-default issue statuses: {e!s}")
+            msg = "Failed to delete non-default issue statuses."
+            raise QueryExecutionError(msg) from e
 
-    def create_users_in_bulk(self, users_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def create_users_in_bulk(
+        self,
+        users_data: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """Create multiple users in OpenProject with a single API call.
 
         Args:
@@ -1318,9 +1175,9 @@ end
 
         try:
             # Execute the script
-            result = self.execute_query(script)
+            return self.execute_query(script)
 
             # Return the results
-            return result
         except Exception as e:
-            raise QueryExecutionError(f"Failed to create users in bulk: {e!s}")
+            msg = "Failed to create users in bulk."
+            raise QueryExecutionError(msg) from e

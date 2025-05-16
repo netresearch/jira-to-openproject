@@ -2,12 +2,12 @@
 Provides a centralized configuration interface using ConfigLoader.
 """
 
-import os
+from pathlib import Path
 from typing import Any
 
 from src.config_loader import ConfigLoader
 from src.display import configure_logging
-from src.types import ConfigDict, DirType, LogLevel, SectionName
+from src.types import Config, DirType, LogLevel, SectionName
 
 # Create a singleton instance of ConfigLoader
 _config_loader = ConfigLoader()
@@ -18,29 +18,31 @@ openproject_config = _config_loader.get_openproject_config()
 migration_config = _config_loader.get_migration_config()
 
 # Set up the var directory structure
-root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-var_dir = os.path.join(root_dir, "var")
+root_dir = Path(__file__).parent.parent
+var_dir = root_dir / "var"
 
 # Define all var directories
-var_dirs: dict[DirType, str] = {
+var_dirs: dict[DirType, Path] = {
     "root": var_dir,
-    "data": os.path.join(var_dir, "data"),
-    "logs": os.path.join(var_dir, "logs"),
-    "output": os.path.join(var_dir, "output"),
-    "backups": os.path.join(var_dir, "backups"),
-    "temp": os.path.join(var_dir, "temp"),
-    "exports": os.path.join(var_dir, "exports"),
-    "results": os.path.join(var_dir, "results"),
+    "backups": var_dir / "backups",
+    "data": var_dir / "data",
+    "debug": var_dir / "debug",
+    "exports": var_dir / "exports",
+    "logs": var_dir / "logs",
+    "output": var_dir / "output",
+    "output_test": var_dir / "output_test",
+    "results": var_dir / "results",
+    "temp": var_dir / "temp",
 }
 
 # Create all var directories
 created_dirs = []
-for dir_name, dir_path in var_dirs.items():
+for dir_path in var_dirs.values():
     # Check if directory already exists
-    dir_existed = os.path.exists(dir_path)
+    dir_existed = dir_path.exists()
 
     # Create if needed
-    os.makedirs(dir_path, exist_ok=True)
+    dir_path.mkdir(parents=True, exist_ok=True)
 
     # Store appropriate message
     if not dir_existed:
@@ -50,7 +52,7 @@ for dir_name, dir_path in var_dirs.items():
 
 # Set up logging with rich
 LOG_LEVEL: LogLevel = migration_config.get("log_level", "DEBUG")
-log_file = os.path.join(var_dirs["logs"], "migration.log")
+log_file = var_dirs["logs"] / "migration.log"
 # Configure rich logging instead of standard logging
 logger = configure_logging(LOG_LEVEL, log_file)
 
@@ -59,11 +61,11 @@ mappings = None
 
 # Now log the directory creation messages
 for message in created_dirs:
-    logger.debug(message, extra={"markup": True})
+    logger.debug(message)
 
 
 # Expose the function to get the full config
-def get_config() -> ConfigDict:
+def get_config() -> Config:
     """Get the complete configuration object."""
     return _config_loader.get_config()
 
@@ -73,15 +75,16 @@ def get_value(section: SectionName, key: str, default: Any = None) -> Any:
     return _config_loader.get_value(section, key, default)
 
 
-def get_path(path_type: DirType) -> str:
+def get_path(path_type: DirType) -> Path:
     """Get a specific path from var_dirs."""
     if path_type not in var_dirs:
-        raise ValueError(f"Invalid path type: {path_type}")
+        msg = f"Invalid path type: {path_type}"
+        raise ValueError(msg)
 
     return var_dirs[path_type]
 
 
-def ensure_subdir(parent_dir_type: DirType, subdir_name: str | None = None) -> str:
+def ensure_subdir(parent_dir_type: DirType, subdir_name: str | None = None) -> Path:
     """Ensure a subdirectory exists under one of the var directories.
 
     Args:
@@ -95,13 +98,13 @@ def ensure_subdir(parent_dir_type: DirType, subdir_name: str | None = None) -> s
     parent_dir = get_path(parent_dir_type)
 
     if subdir_name:
-        subdir_path = os.path.join(parent_dir, subdir_name)
-        os.makedirs(subdir_path, exist_ok=True)
-        logger.debug(f"Created subdirectory: {subdir_path}")
+        subdir_path = parent_dir / subdir_name
+        subdir_path.mkdir(parents=True, exist_ok=True)
+        logger.debug("Created subdirectory: %s", subdir_path)
         return subdir_path
     # Just ensure the parent directory exists
-    os.makedirs(parent_dir, exist_ok=True)
-    logger.debug(f"Created directory: {parent_dir}")
+    parent_dir.mkdir(parents=True, exist_ok=True)
+    logger.debug("Created directory: %s", parent_dir)
     return parent_dir
 
 
@@ -134,7 +137,7 @@ def validate_config() -> bool:
                 missing_vars.append(f"{prefix}{key.upper()}")
 
     if missing_vars:
-        logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        logger.error("Missing required environment variables: %s", ", ".join(missing_vars))
         return False
 
     return True

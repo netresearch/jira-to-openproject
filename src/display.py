@@ -1,12 +1,13 @@
 """Centralized display utilities for console output and progress tracking.
+
 Provides standardized progress bars and logging displays using rich.
 """
 
 import logging
-import os
 import time
 from collections import deque
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any, Generic, Protocol, TypeVar, cast
 
 from rich.console import Console
@@ -23,6 +24,8 @@ T = TypeVar("T")
 
 # Define Protocol for extended Logger with success and notice methods
 class ExtendedLogger(Protocol):
+    """Extended logger protocol with success and notice methods."""
+
     def debug(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
     def info(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
     def warning(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
@@ -62,7 +65,10 @@ rich_handler = RichHandler(
 )
 
 
-def configure_logging(level: str = "INFO", log_file: str | None = None) -> ExtendedLogger:
+def configure_logging(
+    level: str = "INFO",
+    log_file: Path | None = None,
+) -> ExtendedLogger:
     """Configure logging with rich formatting.
 
     Args:
@@ -94,12 +100,14 @@ def configure_logging(level: str = "INFO", log_file: str | None = None) -> Exten
     # Add a file handler if a log file path is provided
     if log_file:
         # Create directory for log file if it doesn't exist
-        log_dir = os.path.dirname(log_file)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir, exist_ok=True)
+        log_dir = log_file.parent
+        if log_dir and not log_dir.exists():
+            log_dir.mkdir(parents=True, exist_ok=True)
 
         # Create a file handler with a more detailed format for the log file
-        file_format = logging.Formatter("%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s")
+        file_format = logging.Formatter(
+            "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
+        )
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(file_format)
         file_handler.setLevel(numeric_level)
@@ -139,14 +147,16 @@ def configure_logging(level: str = "INFO", log_file: str | None = None) -> Exten
 
     logger.info("Rich logging configured")
     if log_file:
-        logger.info(f"Log file: {log_file}")
+        logger.info("Log file: %s", log_file)
 
     return cast("ExtendedLogger", logger)
 
 
 class ProgressTracker(Generic[T]):
-    """Centralized progress tracker that provides standardized rich progress bars
-    with a rolling log of recent items below the progress bar.
+    """Centralized progress tracker.
+
+    Provides standardized rich progress bars with a rolling log of recent
+    items below the progress bar.
     """
 
     def __init__(
@@ -155,7 +165,7 @@ class ProgressTracker(Generic[T]):
         total: int,
         log_title: str = "Recent Items",
         max_log_items: int = 5,
-    ):
+    ) -> None:
         """Initialize a progress tracker with a progress bar and rolling log.
 
         Args:
@@ -176,14 +186,19 @@ class ProgressTracker(Generic[T]):
             console=console,
         )
         self.task_id = self.progress.add_task(description, total=total)
-        self.recent_items = deque(maxlen=max_log_items)
+        self.recent_items: deque[str] = deque(maxlen=max_log_items)
         self.processed_count = 0
         self.log_panel = None
-        self.live = None
+        self.live: Live | None = None
 
     def __enter__(self) -> "ProgressTracker[T]":
         """Start the live display when entering context."""
-        self.live = Live(console=console, refresh_per_second=2, auto_refresh=True, vertical_overflow="ellipsis")
+        self.live = Live(
+            console=console,
+            refresh_per_second=2,
+            auto_refresh=True,
+            vertical_overflow="ellipsis",
+        )
         self.live.__enter__()
         return self
 
@@ -216,7 +231,11 @@ class ProgressTracker(Generic[T]):
         """
         self.processed_count += advance
         if description:
-            self.progress.update(self.task_id, completed=self.processed_count, description=description)
+            self.progress.update(
+                self.task_id,
+                completed=self.processed_count,
+                description=description,
+            )
         else:
             self.progress.update(self.task_id, completed=self.processed_count)
         self._update_display()
@@ -226,27 +245,22 @@ class ProgressTracker(Generic[T]):
         if not self.live:
             return
 
-        try:
-            # Create the rolling log table
-            log_table = Table.grid(padding=(0, 1))
-            log_table.add_column()
-            log_table.add_row(Text(f"{self.log_title}:", style="bold yellow"))
+        # Create the rolling log table
+        log_table = Table.grid(padding=(0, 1))
+        log_table.add_column()
+        log_table.add_row(Text(f"{self.log_title}:", style="bold yellow"))
 
-            # Add the recent items to the table
-            for item in self.recent_items:
-                log_table.add_row(f"  - {item}")
+        # Add the recent items to the table
+        for item in self.recent_items:
+            log_table.add_row(f"  - {item}")
 
-            # Update the live display with progress and panel
-            if self.recent_items:
-                content = self._create_combined_display(self.progress, log_table)
-                panel = Panel.fit(content, title=self.description, border_style="blue")
-                self.live.update(panel)
-            else:
-                self.live.update(self.progress)
-        except Exception:
-            # If there's any issue updating the display, just continue
-            # This helps prevent disrupting the main migration process
-            pass
+        # Update the live display with progress and panel
+        if self.recent_items:
+            content = self._create_combined_display(self.progress, log_table)
+            panel = Panel.fit(content, title=self.description, border_style="blue")
+            self.live.update(panel)
+        else:
+            self.live.update(self.progress)
 
     def _create_combined_display(self, progress: Progress, log_table: Table) -> Table:
         """Create a combined display with progress and log table."""
