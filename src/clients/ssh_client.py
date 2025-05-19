@@ -78,7 +78,7 @@ class SSHClient:
         Args:
             host: SSH host (hostname or IP)
             user: SSH username (default: current user)
-            key_file: Path to SSH key file (default: use SSH agent)
+            key_file: Path to SSH key file (default: use system's SSH configuration)
             connect_timeout: Connection timeout in seconds
             operation_timeout: Default timeout for operations
             retry_count: Number of retries for operations

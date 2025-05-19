@@ -4,8 +4,8 @@ Handles the migration of Tempo Timesheet accounts from Jira to OpenProject.
 
 import json
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any
 
 import requests

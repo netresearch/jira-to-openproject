@@ -49,12 +49,8 @@ def main() -> None:
         container_name=op_config.get("container"),
         ssh_host=op_config.get("server"),
         ssh_user=op_config.get("user"),
-        ssh_key_file=op_config.get("key_file"),
         tmux_session_name=op_config.get("tmux_session_name", "rails_console"),
         command_timeout=30,
-        ssh_client=ssh_client,
-        docker_client=docker_client,
-        rails_client=rails_client,
     )
 
     # Create a test script

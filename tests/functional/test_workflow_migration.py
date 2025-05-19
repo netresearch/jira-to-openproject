@@ -390,21 +390,26 @@ class TestWorkflowMigration(unittest.TestCase):
 
         # Setup for _get_jira_workflows method
         migration = WorkflowMigration(mock_jira_instance, mock_op_instance)
-        migration._get_jira_workflows = MagicMock(return_value=self.jira_workflows)
 
-        mock_get_path.return_value = Path("/tmp/test_data")
+        # Mock _get_jira_workflows
+        with patch.object(
+            migration,
+            "_get_jira_workflows",
+            return_value=self.jira_workflows
+        ) as mock_get_jira_workflows:
+            mock_get_path.return_value = Path("/tmp/test_data")
 
-        # Call method
-        result = migration.extract_jira_workflows()
+            # Call method
+            result = migration.extract_jira_workflows()
 
-        # Assertions
-        assert result == self.jira_workflows
-        migration._get_jira_workflows.assert_called_once()
+            # Assertions
+            assert result == self.jira_workflows
+            assert mock_get_jira_workflows.call_count == 1
 
-        # Check that we opened a file with a specific name pattern for writing
-        # The exact path may vary due to mock implementation details
-        assert any("/jira_workflows.json" in str(call) and "w" in str(call) for call in mock_file.call_args_list)
-        mock_file().write.assert_called()
+            # Check that we opened a file with a specific name pattern for writing
+            # The exact path may vary due to mock implementation details
+            assert any("/jira_workflows.json" in str(call) and "w" in str(call) for call in mock_file.call_args_list)
+            mock_file().write.assert_called()
 
 
 # Define testing steps for workflow migration validation

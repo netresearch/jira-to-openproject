@@ -521,7 +521,7 @@ class TestLinkTypeMigration(unittest.TestCase):
             assert result.details["custom_field_count"] == 1
 
             # Verify that the create_custom_fields_for_link_types method was called
-            migration.create_custom_fields_for_link_types.assert_called_once()
+            assert migration.create_custom_fields_for_link_types.call_count == 1
 
             # Verify the message indicates custom fields were created
             assert "custom fields" in result.message

@@ -10,9 +10,7 @@ import unittest
 from typing import ClassVar
 
 import pytest
-from dotenv import load_dotenv
 
-from src import config
 from src.clients.jira_client import (
     JiraApiError,
     JiraAuthenticationError,
@@ -33,15 +31,7 @@ class TestJiraClientIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Initialize environment variables for testing."""
-        # Load environment variables
-        load_dotenv()
-        if os.path.exists(".env.local"):
-            load_dotenv(".env.local")
-        if os.path.exists(".env.test"):
-            load_dotenv(".env.test")
-        if os.path.exists(".env.test.local"):
-            load_dotenv(".env.test.local")
-
+        # Environment variables are already loaded by the pytest fixtures
         # Get URL and token
         cls.jira_url = os.getenv("J2O_JIRA_URL")
         cls.jira_token = os.getenv("J2O_JIRA_API_TOKEN")
@@ -62,23 +52,6 @@ class TestJiraClientIntegration(unittest.TestCase):
         if self.__class__.skip_tests:
             pytest.skip("Tests skipped by class setup")
 
-        # Store original config to restore later
-        self.original_jira_config = config.jira_config.copy() if config.jira_config else {}
-
-        # Set up config for testing with shorter timeouts
-        config.jira_config = {
-            "url": self.__class__.jira_url,
-            "api_token": self.__class__.jira_token,
-            "verify_ssl": True,
-            "connect_timeout": 5,  # Short timeout to prevent hanging
-            "operation_timeout": 10,
-        }
-
-    def tearDown(self) -> None:
-        """Clean up after each test."""
-        # Restore original config
-        config.jira_config = self.original_jira_config
-
     def test_client_connection(self) -> None:
         """Test the JiraClient can connect to a Jira instance."""
         print(f"\n=== Testing Jira Client Connection to {self.__class__.jira_url} ===")
@@ -97,14 +70,6 @@ class TestJiraClientIntegration(unittest.TestCase):
                 print(f"Jira Server Version: {server_info.get('version')}")
                 print(f"Jira Base URL: {server_info.get('baseUrl')}")
 
-            # Test getting projects (basic functionality) - uncomment if needed
-            # projects = jira_client.get_projects()
-            # self.assertIsInstance(projects, list)
-            # print(f"Retrieved {len(projects)} projects from Jira")
-            # if projects:
-            #     sample_project = projects[0]
-            #     print(f"Sample project: {sample_project.get('key')} - {sample_project.get('name')}")
-
         except JiraAuthenticationError as e:
             print(f"❌ Authentication failed: {e}")
             self.fail(f"Jira authentication failed: {e}")
@@ -117,30 +82,6 @@ class TestJiraClientIntegration(unittest.TestCase):
         except Exception as e:
             print(f"❌ Unexpected error: {e}")
             self.fail(f"Unexpected error: {e}")
-
-    def test_invalid_credentials(self) -> None:
-        """Test JiraClient handles invalid credentials correctly."""
-        print("\n=== Testing Jira Client with Invalid Credentials ===")
-
-        pytest.skip("Skipping invalid credentials test")
-
-        # The following code is kept as reference but not executed
-        # The token must be completely invalid/wrong format to trigger auth error
-        # config.jira_config = {
-        #     "url": self.__class__.jira_url,
-        #     "api_token": "COMPLETELY_INVALID_TOKEN_FORMAT_12345!@#$%",
-        #     "verify_ssl": True,
-        #     "connect_timeout": 5,
-        #     "operation_timeout": 10,
-        # }
-
-        # jira_client = JiraClient()
-
-        # # Test authentication failure
-        # with self.assertRaises((JiraAuthenticationError, JiraConnectionError)):
-        #     jira_client.jira.projects()
-
-        # print("✅ Correctly raised exception for invalid credentials")
 
     def test_error_handling(self) -> None:
         """Test that JiraClient properly handles error responses."""

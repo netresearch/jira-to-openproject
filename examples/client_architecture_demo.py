@@ -36,7 +36,7 @@ def demo_each_client_independently() -> None:
 
     # 1. SSHClient (Foundation Layer)
     print("\n--- SSHClient Demo ---")
-    ssh_client = SSHClient(host=ssh_host, user=ssh_user, key_file=ssh_key_file, retry_count=3)
+    ssh_client = SSHClient(host=ssh_host, user=ssh_user, retry_count=3)
 
     # Execute a simple command
     result = ssh_client.execute_command("echo 'Hello from SSH Client'")
@@ -128,7 +128,7 @@ def demo_file_transfer() -> None:
     container_name = config.openproject_config.get("container")
 
     # 1. Create the SSHClient (Foundation Layer)
-    ssh_client = SSHClient(host=ssh_host, user=ssh_user, key_file=ssh_key_file)
+    ssh_client = SSHClient(host=ssh_host, user=ssh_user, retry_count=3)
 
     # 2. Create DockerClient with injected SSHClient
     docker_client = DockerClient(container_name=container_name, ssh_client=ssh_client)

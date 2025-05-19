@@ -25,6 +25,25 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 config_logger = logging.getLogger("config_loader")
 
 
+def is_test_environment() -> bool:
+    """Detect if code is running in a test environment.
+
+    This checks for environment variables that would indicate pytest is running.
+
+    Returns:
+        bool: True if running in a test environment, False otherwise
+    """
+    # Check for pytest environment variable
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return True
+
+    # Check for our custom test mode flag (set by test fixtures)
+    if os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes"):
+        return True
+
+    return False
+
+
 class ConfigLoader:
     """Loads and provides access to configuration settings from YAML files and environment variables."""
 
@@ -35,12 +54,8 @@ class ConfigLoader:
             config_file_path (str): Path to the YAML configuration file
 
         """
-        # Load environment variables from .env file (default values)
-        load_dotenv()
-
-        # Load environment variables from .env.local file
-        # (custom values that override defaults)
-        load_dotenv(".env.local", override=True)
+        # Load environment variables in the correct order based on context
+        self._load_environment_configuration()
 
         # Load YAML configuration
         self.config: Config = self._load_yaml_config(config_file_path)
@@ -55,6 +70,50 @@ class ConfigLoader:
 
         # Override with environment variables
         self._apply_environment_overrides()
+
+    def _load_environment_configuration(self) -> None:
+        """Load environment variables from .env files based on execution context.
+
+        The loading order respects precedence:
+        - .env (base config for all environments)
+        - .env.local (local development overrides, if present)
+        - .env.test (test-specific config, if in test environment)
+        - .env.test.local (local test overrides, if in test environment and present)
+
+        Later files override values from earlier files.
+        """
+        # Always load base configuration
+        load_dotenv(".env")
+        config_logger.debug("Loaded base environment from .env")
+
+        # Check if we're in test mode
+        test_mode = is_test_environment()
+
+        if test_mode:
+            config_logger.debug("Running in test environment")
+
+            # In test mode, load both .env.local and .env.test
+            # with test having higher precedence
+            if os.path.exists(".env.local"):
+                load_dotenv(".env.local", override=True)
+                config_logger.debug("Loaded local overrides from .env.local")
+
+            # Always load .env.test in test mode
+            if os.path.exists(".env.test"):
+                load_dotenv(".env.test", override=True)
+                config_logger.debug("Loaded test environment from .env.test")
+
+            # Load test-specific local overrides if they exist
+            if os.path.exists(".env.test.local"):
+                load_dotenv(".env.test.local", override=True)
+                config_logger.debug("Loaded local test overrides from .env.test.local")
+        else:
+            config_logger.debug("Running in development/production environment")
+
+            # In non-test mode, only load .env.local if it exists
+            if os.path.exists(".env.local"):
+                load_dotenv(".env.local", override=True)
+                config_logger.debug("Loaded local overrides from .env.local")
 
     def _load_yaml_config(self, config_file_path: str) -> Config:
         """Load configuration from YAML file.

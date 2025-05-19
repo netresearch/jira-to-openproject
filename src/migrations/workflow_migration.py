@@ -234,14 +234,14 @@ class WorkflowMigration:
 
         return mapping
 
-    def create_status_in_openproject(self, jira_status: dict[str, Any]) -> dict[str, Any] | None:
+    def create_status_in_openproject(self, jira_status: dict[str, Any]) -> dict[str, Any]:
         """Create a status in OpenProject based on a Jira status.
 
         Args:
             jira_status: The Jira status definition
 
         Returns:
-            The created OpenProject status or None if creation failed
+            The created OpenProject status
 
         """
         name = jira_status.get("name")
@@ -253,22 +253,25 @@ class WorkflowMigration:
         color = status_category.get("colorName", "#1F75D3")
 
         logger.info(
-            f"Creating status in OpenProject: {name} (Closed: {is_closed})",
+            "Creating status in OpenProject: %s (Closed: %s).",
+            name,
+            is_closed,
         )
 
         try:
             result = self.op_client.create_status(name=name, color=color, is_closed=is_closed)
 
             if result.get("success", False):
-                logger.info(f"Successfully created status: {name}")
-                return result.get("data")
-            logger.error(
-                f"Failed to create status: {name} - {result.get('message', 'Unknown error')}",
-            )
-            return None
-        except Exception as e:
-            logger.exception(f"Error creating status {name}: {e!s}")
-            return None
+                logger.info("Successfully created status: %s.", name)
+            else:
+                message = "Failed to create status: %s - %s." % (name, result.get("message", "Unknown error"))
+                logger.error(message)
+                raise Exception(message)
+        except Exception:
+            logger.exception("Error creating status %s.", name)
+            raise
+
+        return result.get("data")
 
     def migrate_statuses(self) -> dict[str, Any]:
         """Migrate statuses from Jira to OpenProject.

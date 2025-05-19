@@ -1,7 +1,9 @@
 """Test script for project hierarchy implementation.
+
 This verifies the proper organization of projects under their parent Tempo companies.
 """
 
+from pathlib import Path
 from typing import Any
 
 from src import config
@@ -32,8 +34,8 @@ def analyze_project_hierarchy() -> dict[str, Any]:
     company_migration = CompanyMigration(jira_client, op_client)
 
     # Load existing mapping data
-    project_mapping = project_migration._load_from_json("project_mapping.json") or {}
-    company_mapping = company_migration._load_from_json("company_mapping.json") or {}
+    project_mapping = project_migration._load_from_json(Path("project_mapping.json")) or {}
+    company_mapping = company_migration._load_from_json(Path("company_mapping.json")) or {}
 
     # Get all OpenProject projects
     op_projects = op_client.get_projects()
@@ -107,14 +109,14 @@ def analyze_project_hierarchy() -> dict[str, Any]:
     }
 
     # Save analysis to file
-    project_migration._save_to_json(analysis, "project_hierarchy_analysis.json")
+    project_migration._save_to_json(analysis, Path("project_hierarchy_analysis.json"))
 
     # Log summary
     logger.info("Project hierarchy analysis:")
-    logger.info(f"Total projects: {total_projects}")
-    logger.info(f"Projects with parent: {len(projects_with_parent)} ({hierarchy_percentage:.1f}%)")
-    logger.info(f"Projects without parent: {len(projects_without_parent)}")
-    logger.info(f"Missing parent relations: {len(missing_parent_relations)}")
+    logger.info("Total projects: %s", total_projects)
+    logger.info("Projects with parent: %s (%s%%)", len(projects_with_parent), hierarchy_percentage)
+    logger.info("Projects without parent: %s", len(projects_without_parent))
+    logger.info("Missing parent relations: %s", len(missing_parent_relations))
 
     return analysis
 
@@ -129,7 +131,8 @@ def run_hierarchy_test() -> Any:
         logger.success("✅ Project hierarchy test passed! All expected parent-child relationships are in place.")
     else:
         logger.error(
-            f"❌ Project hierarchy test failed! {analysis['missing_parent_relations']} projects are missing their parent relationship.",
+            "❌ Project hierarchy test failed! %s projects are missing their parent relationship.",
+            analysis["missing_parent_relations"],
         )
         logger.info("Review project_hierarchy_analysis.json for details on missing relationships.")
 

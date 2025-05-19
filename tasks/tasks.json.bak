@@ -639,6 +639,233 @@
       "description": "Refactor the client architecture to establish clear ownership relationships between JiraClient, OpenProjectClient, DockerClient, RailsConsoleClient, and SSHClient using the YOLO development approach, emphasizing exception-based error handling, proper dependency injection, and file-based imports to eliminate circular dependencies.",
       "details": "1. Audit existing client modules to map current ownership and identify circular dependencies.\n2. Define ownership boundaries: assign each client its primary responsibilities and dependencies (e.g., DockerClient for container operations, SSHClient for remote command execution).\n3. Introduce dependency injection: refactor constructors of each client to accept their required dependencies rather than instantiating them internally. Consider using a simple DI container or manual injection at the application entry point.\n4. Replace dynamic or inline requires with explicit file-based imports: restructure modules into a flat file hierarchy (e.g., src/clients/jira_client.rb, src/clients/ssh_client.rb) to prevent circular requires.\n5. Implement exception-based error handling: remove return-code checks or silenced errors, raising domain-specific exceptions in each client and document error hierarchies.\n6. Follow the YOLO approach: commit incremental changes, write minimal tests for each refactor step, and continuously integrate to detect and address issues quickly.\n7. Update module documentation and code comments to reflect new ownership and injection patterns.\n8. Coordinate with the team to merge dependent branches and resolve any conflicts early.",
       "testStrategy": "1. Unit tests: create isolated tests for each client, injecting mock dependencies to verify correct initialization, method calls, and exception raising on error conditions.\n2. Integration tests: set up end-to-end scenarios where multiple clients interact (e.g., JiraClient invoking DockerClient) and assert expected outcomes without circular require failures.\n3. Static analysis: run a dependency graph tool or linter to confirm no circular dependencies in the src/clients directory.\n4. Exception handling validation: simulate failure scenarios (network timeouts, invalid credentials) and assert that the appropriate custom exceptions are raised and propagated.\n5. Continuous Integration: ensure the build pipeline passes after each incremental commit, with coverage reports verifying that new code paths for dependency injection and error handling are exercised.",
+      "status": "done",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Define exception hierarchy and error handling patterns",
+          "description": "Create a cohesive exception hierarchy for client errors and define consistent error handling patterns across all client components.",
+          "details": "1. Create a base ClientException class that all client-specific exceptions inherit from.\\n2. Define specific exception types for different error categories (network, authentication, command execution, etc.).\\n3. Document when each exception type should be raised.\\n4. Establish patterns for exception propagation between client layers.\\n5. Remove all return-code based error handling and replace with proper exception raising.\n\n\nUpdated the SSHClient to replace dictionary-based status returns with exceptions.\nThe following changes were made:\n\n1. Refactored the `execute_command` method to return a tuple of (stdout, stderr, returncode)\n   and raise exceptions for errors\n2. Refactored the `copy_file_to_remote` method to return None on success and raise\n   appropriate exceptions for errors\n3. Refactored the `copy_file_from_remote` method to return the local file path on success\n   and raise exceptions for errors\n4. Refactored the `with_retry` utility method to work with the new exception-based approach\n5. Added a specific `SSHConnectionError` exception for connection failures\n6. Updated methods that used the result dictionaries to use the new return types\n\nThese changes implement a clean, exception-based error handling approach and remove all\nthe status dictionaries from the SSHClient class.\n",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 36
+        },
+        {
+          "id": 2,
+          "title": "Refactor SSHClient for YOLO compliance",
+          "description": "Refactor SSHClient to be exception-based, remove status dictionaries, and implement direct file-based imports.",
+          "details": "1. Refactor SSHClient constructor to accept clear parameters and validate them strictly\\n2. Replace all return-code and status dictionary patterns with appropriate exceptions\\n3. Implement file-based imports to eliminate any circular dependencies\\n4. Remove any OpenProject-specific code from this foundation layer\\n5. Add proper documentation for exception throwing scenarios\\n6. Ensure SSH operations handle authentication failures with specific exceptions\\n7. Simplify file transfer functions to use clean, consistent error handling\n\n\nCompleted the YOLO refactoring of SSHClient. The following improvements were made:\n\n1. Replaced all dictionary-based status returns with proper exceptions\n2. Created a hierarchy of SSH-specific exceptions:\n   - SSHConnectionError for connection issues\n   - SSHCommandError for command execution failures\n   - SSHFileTransferError for file transfer problems\n\n3. Updated method documentation to clearly indicate exception handling patterns\n4. Improved connection error handling with proper reconnection verification\n5. Enhanced error propagation in file transfer operations\n6. Simplified the API by returning direct values instead of dictionaries\n7. Added detailed error messages with relevant context\n\nThe refactored SSHClient now follows modern Python exception handling best practices, providing\na more reliable foundation for the client architecture and making error detection more robust.\n",
+          "status": "done",
+          "dependencies": [
+            "36.1"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 3,
+          "title": "Refactor DockerClient with dependency injection",
+          "description": "Refactor DockerClient to accept an SSHClient instance through constructor injection and implement exception-based error handling.",
+          "details": "1. Modify DockerClient constructor to require an SSHClient instance\\n2. Remove any code that creates SSHClient internally\\n3. Refactor all operations to propagate exceptions from SSHClient upward with proper context\\n4. Replace all status dictionary returns with exceptions\\n5. Remove any OpenProject-specific logic that doesn't belong in DockerClient\\n6. Simplify file transfer logic to rely on the injected SSHClient\\n7. Ensure consistent and clean error handling patterns across all methods\n\n\nCompleted the DockerClient refactoring with dependency injection and exception-based error handling. Changes made:\n\n1. Modified DockerClient constructor to require an SSHClient instance\n2. Removed all code that created SSHClient internally\n3. Updated all methods to work with SSHClient's new exception-based API\n4. Replaced status dictionary returns with proper return values and exceptions\n5. Improved error handling by properly propagating exceptions with appropriate context\n6. Added proper error reporting by being explicit about which exceptions can be thrown\n7. Simplified the file transfer code to work with the updated SSHClient interface\n\nThe refactored DockerClient now follows proper dependency injection patterns and propagates exceptions appropriately.\n",
+          "status": "done",
+          "dependencies": [
+            "36.2"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 4,
+          "title": "Refactor RailsConsoleClient for dependency injection",
+          "description": "Refactor RailsConsoleClient to properly accept a DockerClient through constructor injection, standardize command execution, and implement consistent error handling.",
+          "details": "1. Modify RailsConsoleClient constructor to accept a DockerClient instance\\n2. Refactor command execution to use exception-based error handling\\n3. Standardize output parsing with reliable marker-based approaches\\n4. Remove any dependencies on OpenProjectClient\\n5. Improve error detection and reporting with specific exception types\\n6. Ensure robust handling of tmux session interaction\\n7. Update documentation to reflect the new dependency pattern",
+          "status": "done",
+          "dependencies": [
+            "36.3"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 5,
+          "title": "Refactor OpenProjectClient as top-level coordinator",
+          "description": "Refactor OpenProjectClient to properly own and coordinate all other client components, following the hierarchical client architecture.",
+          "details": "1. Modify OpenProjectClient constructor to initialize components in the correct order\\n2. Own all client initialization while respecting dependency injection\\n3. Simplify client methods to use exception-based error handling consistently\\n4. Implement a standardized approach to parse Rails console responses\\n5. Add specific methods for large data operations\\n6. Implement caching mechanisms with configurable TTL\\n7. Update API methods to propagate appropriate exceptions\\n8. Ensure clean coordination of file transfers through the component hierarchy",
+          "status": "done",
+          "dependencies": [
+            "36.4"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 6,
+          "title": "Refactor JiraClient for consistency",
+          "description": "Refactor JiraClient to use consistent error handling patterns and file-based imports to match the refactored architecture.",
+          "details": "1. Update JiraClient to use the new exception hierarchy\\n2. Replace return-code and status dictionary patterns with exceptions\\n3. Implement file-based imports to avoid circular dependencies\\n4. Ensure consistent error propagation patterns\\n5. Add appropriate logging with contextual information\\n6. Maintain compatibility with the Jira API library while improving error handling\\n7. Update documentation to reflect the new error handling approach",
+          "status": "done",
+          "dependencies": [
+            "36.1"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 7,
+          "title": "Update tests for the refactored architecture",
+          "description": "Update existing tests and create new ones to verify the refactored client architecture with proper exception handling and dependency injection.",
+          "details": "1. Modify existing tests to account for exception-based error handling\\n2. Create unit tests for each client component with mocked dependencies\\n3. Implement integration tests that verify proper interaction between components\\n4. Add tests for exception propagation across client layers\\n5. Create tests for edge cases and error conditions\\n6. Ensure tests verify proper file-based imports\\n7. Update or create test fixtures as needed",
+          "status": "done",
+          "dependencies": [
+            "36.5",
+            "36.6"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 8,
+          "title": "Document the new client architecture",
+          "description": "Create comprehensive documentation for the refactored client architecture, including component relationships, dependency flow, and exception handling patterns.",
+          "details": "1. Create a detailed architecture document describing component relationships\\n2. Update the main README with the new architecture diagram\\n3. Document exception hierarchy and when each exception is raised\\n4. Create code examples for proper component initialization\\n5. Update docstrings in client classes to reflect new patterns\\n6. Document file transfer workflows through the component hierarchy\\n7. Create a migration guide for any code using the old architecture",
+          "status": "done",
+          "dependencies": [
+            "36.7"
+          ],
+          "parentTaskId": 36
+        }
+      ]
+    },
+    {
+      "id": 37,
+      "title": "Verify Component Compliance with Refactored Clients and Project Rules",
+      "description": "Ensure all migration components correctly use the refactored client architecture and adhere to project-specific rules (YOLO, exception handling, etc.) after the completion of Task #36.",
+      "details": "This task involves a component-by-component review and testing phase following the client architecture refactor (Task #36). Each component needs to be individually tested and reviewed to ensure it integrates correctly with the new client setup and follows all established development guidelines.",
+      "testStrategy": "For each component, run integration tests using the command: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components [COMPONENT_NAME]. Verify logs for correct client interaction, exception handling, and adherence to YOLO principles. Perform manual code review of each component to confirm compliance with project rules.",
+      "status": "done",
+      "dependencies": [
+        36
+      ],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Verify 'users' Component Compliance",
+          "description": "Verify the 'users' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'users' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components users. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 2,
+          "title": "Verify 'custom_fields' Component Compliance",
+          "description": "Verify the 'custom_fields' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'custom_fields' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components custom_fields. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 3,
+          "title": "Verify 'companies' Component Compliance",
+          "description": "Verify the 'companies' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'companies' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components companies. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 4,
+          "title": "Verify 'accounts' Component Compliance",
+          "description": "Verify the 'accounts' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'accounts' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components accounts. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 5,
+          "title": "Verify 'projects' Component Compliance",
+          "description": "Verify the 'projects' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'projects' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components projects. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 6,
+          "title": "Verify 'link_types' Component Compliance",
+          "description": "Verify the 'link_types' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'link_types' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components link_types. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 7,
+          "title": "Verify 'issue_types' Component Compliance",
+          "description": "Verify the 'issue_types' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'issue_types' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components issue_types. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 8,
+          "title": "Verify 'status_types' Component Compliance",
+          "description": "Verify the 'status_types' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'status_types' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components status_types. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 9,
+          "title": "Verify 'work_packages' Component Compliance",
+          "description": "Verify the 'work_packages' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'work_packages' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components work_packages. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "title": "Enforce exception-based error handling throughout the codebase",
+      "description": "Refactor code to use exception-based error handling instead of return codes or error objects, covering subprocess.run() and all other Python modules/methods that support similar options.",
+      "details": "This task aims to make the codebase consistently follow the exception-oriented programming rule, where functions should raise appropriate exceptions rather than returning error codes or status values. This includes:\n\n1. Update subprocess.run() calls to use check=True to properly raise exceptions when execution fails\n2. Review and update file operations to use context managers and proper exception handling\n3. Ensure JSON parsing uses proper exception handling\n4. Update network request code to use raise_for_status() or similar exception-raising methods\n5. Review database operations for proper exception handling\n6. Identify and update any other methods that have options to raise exceptions instead of returning error codes\n7. Refactor any code that checks return values to instead use try/except blocks\n8. Ensure all error handling follows our exception-oriented approach throughout the codebase",
+      "testStrategy": "1. Add unit tests that verify exceptions are properly raised and caught\n2. Test both success and failure paths to ensure correct behavior\n3. Verify special cases like _session_exists() properly follow the exception pattern\n4. Run the full test suite to ensure these changes don't break existing functionality\n5. Add specific tests for each category of change (file operations, subprocess calls, etc.)\n6. Manually test critical paths to verify proper exception handling\n7. Review code coverage of exception handling branches",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 39,
+      "title": "Refactor File Operations to Optimistic Execution Pattern",
+      "description": "Update all file operations—particularly copy routines—to perform the action first and defer detailed validation checks to the failure path, improving performance on success while still providing rich diagnostics on errors.",
+      "details": "1. Identify and catalog every file operation in the codebase (copy, move, delete) focusing on routines that perform pre- and post-validation (e.g., os.path.exists checks, size comparisons, target existence checks).  \n2. Refactor each operation to follow an optimistic execution approach:  \n   a. Attempt the file operation immediately without pre-checks.  \n   b. On successful completion, return or propagate the result with minimal overhead.  \n   c. On failure (caught exception or non-zero return), trigger detailed diagnostics:  \n      - Verify source path existence and readability.  \n      - Validate permissions on source and target directories.  \n      - Check disk space availability on target.  \n      - Ensure the target path is valid and not locked by another process.  \n      - Provide clear, context-rich error messages including file paths, expected vs. actual sizes, and system error codes.  \n3. Remove or disable redundant pre- and post-checks on the success path to minimize latency.  \n4. Ensure all refactored code adheres to the existing exception-based error handling standard (Task #38).  \n5. Update documentation and inline comments to explain the optimistic execution pattern and how to extend it for new file operations.",
+      "testStrategy": "1. Unit Tests:  \n   - Success Path: Copy/move/delete small and large files under normal conditions, measuring that no validation functions are called before the operation.  \n   - Failure Path Simulations:  \n     • Source missing: Attempt to copy non-existent file and verify the error message includes source existence diagnostic.  \n     • Permission denied: Mock filesystem permissions to trigger permission errors and verify diagnostic details.  \n     • Insufficient disk space: Simulate low-disk scenarios and check for disk-space diagnostics.  \n     • Target locked/in-use: Simulate file locks and verify the appropriate error is reported.  \n2. Integration Tests:  \n   - Perform batch file operations in a staging environment to measure end-to-end performance before and after refactor, ensuring a measurable reduction in latency on success paths.  \n   - Run file operations against NFS or network-mounted drives to validate diagnostics across different filesystems.  \n3. Performance Benchmarking:  \n   - Automate benchmarks that record operation times for large file sets, comparing pre-refactor and post-refactor runs to confirm at least a 20% improvement on average.  \n4. Code Review Checklist:  \n   - Verify no preemptive os.path.exists or similar checks on the success path.  \n   - Confirm exception handlers trigger only on failure, performing all diagnostic steps.  \n   - Ensure compliance with project-wide exception-based error-handling guidelines.",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 40,
+      "title": "Implement Robust Temporary File Handling for File Transfers",
+      "description": "Develop a portable, secure, and atomic temporary file handling utility for file transfers that prevents race conditions, collisions, and ensures proper cleanup and error handling across operating systems.",
+      "details": "• Secure Temporary File Creation: Use platform-native APIs (e.g., Python’s tempfile.NamedTemporaryFile with delete=False) or generate UUID-based file names in a well-known temporary directory. Ensure names are unpredictable and collision-resistant.  \n• File Locking: Implement advisory locks (fcntl on Unix, msvcrt on Windows) around all read/write operations to serialize access. Provide a cross-platform lock abstraction.  \n• Atomic Writes: Write data to the temporary file in a write-only mode, fsync after write completion, and perform an atomic rename or replace operation (os.replace) to move the temp file to its final location.  \n• Cleanup Mechanisms: Register cleanup handlers (atexit or context managers) and catch exceptions during transfer to remove orphaned temp files. Provide a background sweep utility to purge stale files older than a configurable threshold.  \n• Cross-Platform Considerations: Detect OS at runtime to choose correct lock and filesystem calls; handle path encoding differences; ensure atomic rename semantics across Windows and POSIX.  \n• Error Handling: Wrap all file operations in try/except blocks, categorize errors (IOError, PermissionError, etc.), log diagnostics, and rethrow exceptions with contextual metadata.  \n• Documentation: Write usage guidelines and code examples; define best practices for using the utility, including recommended error handling patterns and configuration options.",
+      "testStrategy": "• Unit Tests: Validate unique name generation with 10,000 iterations to assert no collisions; simulate permission or disk-full errors and verify temp file cleanup.  \n• Concurrency Tests: Spawn multiple processes/threads to read/write the same target path concurrently; assert that locks serialize operations and no data corruption occurs.  \n• Atomicity Tests: During write, interrupt the process and verify that no partial files appear in the final directory; confirm that final file is either complete or absent.  \n• Cross-Platform Validation: Execute integration tests on Windows, Linux, and macOS agents; verify lock behavior, rename semantics, and path handling.  \n• Cleanup Verification: Create orphaned temp files older than threshold; run sweep utility and assert removal; test atexit handlers by simulating abnormal shutdown.  \n• Documentation Review: Peer-review documentation for clarity, accuracy, and completeness; ensure code examples compile and run as expected.",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 41,
+      "title": "Comprehensive Verification of Migration Components for Refactored Client Architecture",
+      "description": "Perform a high-priority audit and testing of all migration components to ensure they integrate correctly with the refactored client architecture and comply with our YOLO development approach, exception-based error handling, optimistic execution patterns, and strict Python typing rules.",
+      "details": "• Identify all migration components and list their entry points, public APIs, and dependencies.\n• For each component:\n  – Conduct a detailed code review to confirm:\n    • YOLO compliance: no legacy support hooks, single-responsibility design, minimal configuration.\n    • Exception-based error handling: no return codes or status dictionaries; ensure all error paths raise appropriate exceptions.\n    • Optimistic execution: operations execute first, with validation deferred to exception handling; remove any redundant precondition checks.\n    • Python typing: full coverage of type annotations (PEP 484) including function signatures, class attributes, and third-party interfaces.\n• Document any deviations and refactor code in-line or open follow-up issues for non-compliant patterns.\n• Maintain a migration compliance checklist and attach to each pull request for peer review.",
+      "testStrategy": "• Develop and run dedicated pytest modules for each migration component using commands like:\n     pytest tests/test_migration_<component>.py::Test<componentClass> --log-level=DEBUG\n• Enable detailed logging in tests (DEBUG level) to capture execution flow, exception stack traces, and type warnings.\n• Integrate mypy checks in the CI pipeline:\n     mypy src/migration_components/<component>.py\n• Automate a compliance report that aggregates:\n    – Test pass/fail results\n    – Logged exceptions and execution traces\n    – Mypy type-check summaries\n• Conduct a manual code review session for each component, verifying the compliance checklist and sign-off in pull request comments.\n• Mark the task complete only when all components pass automated tests, static analysis, and manual review criteria.",
       "status": "pending",
       "dependencies": [],
       "priority": "high",

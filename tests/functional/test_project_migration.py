@@ -168,14 +168,14 @@ class TestProjectMigration(unittest.TestCase):
 
         # Create instance and patch the _save_to_json method to avoid serialization issues
         migration = ProjectMigration(mock_jira_instance, mock_op_instance)
-        migration._save_to_json = MagicMock()
+        with patch.object(migration, "_save_to_json") as mock_save_to_json:
+            # Call method
+            result = migration.extract_openproject_projects()
 
-        # Call method
-        result = migration.extract_openproject_projects()
-
-        # Assertions
-        assert result == self.op_projects
-        mock_op_instance.get_projects.assert_called_once()
+            # Assertions
+            assert result == self.op_projects
+            assert mock_op_instance.get_projects.call_count == 1
+            assert mock_save_to_json.call_count == 1
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
