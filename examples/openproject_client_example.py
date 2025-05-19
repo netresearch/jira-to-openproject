@@ -14,15 +14,13 @@ def main() -> None:
     """Example usage of OpenProjectClient."""
     print("Initializing OpenProjectClient...")
 
-    # Initialize the client - values can come from config or be specified directly
+    # Create client directly
     client = OpenProjectClient(
-        # If not specified, these values will be read from config.openproject_config
-        # container_name="openproject",
-        # ssh_host="your-server",
-        # ssh_user="your-username",
-        # ssh_key_file="/path/to/key",
-        # tmux_session_name="rails_console",
-        command_timeout=180,
+        container_name="openproject_web_1",
+        ssh_host="example.com",
+        ssh_user="username",
+        # ssh_key_file parameter is no longer needed - using system SSH configuration
+        tmux_session_name="rails_console"
     )
 
     print("Connected to OpenProject. Running examples...")

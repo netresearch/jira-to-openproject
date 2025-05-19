@@ -248,7 +248,13 @@ def run_migration(
 
         # 4. Finally, create the Jira client and OpenProject client (which uses the other clients)
         jira_client = JiraClient()
-        op_client = OpenProjectClient(ssh_client=ssh_client, docker_client=docker_client, rails_client=rails_client)
+        op_client = OpenProjectClient(
+            container_name=config.openproject_config.get("container", None),
+            ssh_host=config.openproject_config.get("server", None),
+            ssh_user=config.openproject_config.get("user", None),
+            tmux_session_name=config.openproject_config.get("tmux_session_name", None),
+            command_timeout=self.command_timeout,
+        )
 
         config.logger.success("All clients initialized successfully")
 
@@ -638,7 +644,13 @@ def main() -> None:
             )
 
             jira_client = JiraClient()
-            op_client = OpenProjectClient(ssh_client=ssh_client, docker_client=docker_client, rails_client=rails_client)
+            op_client = OpenProjectClient(
+                container_name=config.openproject_config.get("container", None),
+                ssh_host=config.openproject_config.get("server", None),
+                ssh_user=config.openproject_config.get("user", None),
+                tmux_session_name=config.openproject_config.get("tmux_session_name", None),
+                command_timeout=self.command_timeout,
+            )
 
             # List options to choose which mapping to update
             console.print("\nSelect mapping to update:")

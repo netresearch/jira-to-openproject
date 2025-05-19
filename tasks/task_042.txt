@@ -1,0 +1,188 @@
+# Task ID: 42
+# Title: Enhance and Standardize Testing Infrastructure
+# Status: pending
+# Dependencies: None
+# Priority: high
+# Description: Reorganize test directories, standardize test configurations, implement consistent mocking patterns, introduce test classification markers, set up coverage reporting, add missing tests, develop an end-to-end suite, and streamline the developer testing experience.
+# Details:
+1. Directory Reorganization:
+   • Restructure the tests/ folder into subdirectories: tests/unit, tests/integration, tests/e2e.
+   • Ensure each module’s tests live alongside or mirror production code hierarchy.
+
+2. Configuration Standardization:
+   • Introduce a central pytest.ini or setup.cfg with global settings:
+     – test paths, python_files pattern, markers definition (unit, integration, e2e).
+     – default command-line options (e.g., -ra, --disable-warnings).
+   • Document custom ini options and enforce via CI lint.
+
+3. Consistent Mocking Strategy:
+   • Adopt a unified mocking approach using pytest fixtures and monkeypatch.
+   • Create shared fixtures in tests/conftest.py for common dependencies (database, HTTP, file I/O).
+   • Prohibit ad hoc patching in individual tests; document patterns for external service stubs.
+
+4. Test Classification with Markers:
+   • Define and register markers in pytest.ini: @pytest.mark.unit, @pytest.mark.integration, @pytest.mark.e2e.
+   • Update existing tests with appropriate markers; fail the build if tests are unmarked.
+   • Configure CI pipelines to run marker groups selectively (fast unit suite vs. full suite).
+
+5. Coverage Reporting:
+   • Integrate pytest-cov to generate HTML and XML coverage reports.
+   • Enforce minimum coverage thresholds per directory (e.g., unit ≥90%, integration ≥80%).
+   • Publish reports to CI artifact storage and fail on regression.
+
+6. Adding Missing Tests:
+   • Audit codebase to identify uncovered modules, prioritize critical paths.
+   • Write targeted unit tests for utility functions, business logic, and error paths.
+   • Add integration tests to validate interactions with external resources (databases, APIs).
+
+7. End-to-End Test Suite:
+   • Develop an E2E suite under tests/e2e using a real-like environment (e.g., Docker, local services).
+   • Automate user-flow scenarios via HTTP clients or Selenium/WebDriver for UI components.
+   • Parameterize endpoints and credentials via environment variables or fixtures.
+
+8. Developer Experience Improvements:
+   • Provide a Makefile or npm scripts: make test:unit, make test:integration, make test:e2e, make coverage.
+   • Add pre-commit hooks for running linters, black, and quick unit tests.
+   • Update CONTRIBUTING.md with testing guidelines and examples.
+
+
+# Test Strategy:
+1. Directory and Config Validation:
+   • CI job checks that tests/ contains subdirectories unit, integration, e2e.
+   • Lint pytest.ini for required settings and marker registrations.
+
+2. Marker Coverage and Enforcement:
+   • Run pytest with --strict-markers to ensure no unregistered markers.
+   • Fail if any test lacks a marker or is misclassified.
+
+3. Mocking Consistency:
+   • Review tests to confirm usage of shared fixtures vs. ad hoc patches.
+   • Automated code scan (grep or AST script) to detect direct use of mock.patch without fixture.
+
+4. Coverage Thresholds:
+   • Execute pytest-cov; assert coverage percentages meet thresholds.
+   • Verify HTML and XML reports are generated and stored.
+
+5. Functional Test Runs:
+   • Run make test:unit, test:integration, test:e2e locally and in CI; all must pass.
+   • E2E suite must complete full user-flow scenarios against a staging environment.
+
+6. New Test Verification:
+   • Use coverage analysis to confirm that previously uncovered code paths are now covered.
+   • Peer review of added tests to ensure quality and adherence to patterns.
+
+7. Developer Onboarding:
+   • Fresh clone to a dev machine; follow CONTRIBUTING.md steps to run full test matrix.
+   • Confirm pre-commit hooks trigger expected linters and unit tests before commit.
+
+8. CI Integration:
+   • Ensure subdivided CI stages (unit/integration/e2e) run in the correct order and gate promotions.
+   • Introduce fail-fast for unit stage to speed feedback.
+
+
+# Subtasks:
+## 1. Reorganize Test Directory Structure [in-progress]
+### Dependencies: None
+### Description: Create a clear separation between test types by reorganizing the test directory.
+### Details:
+- Create separate directories for unit, functional, integration, and end-to-end tests
+- Move existing tests to appropriate directories
+- Add README.md files explaining each test category's purpose
+- Create utils directory for shared test helpers
+
+## 2. Implement Standard Test Configuration [done]
+### Dependencies: None
+### Description: Create standardized test configuration files and fixtures for all test types.
+### Details:
+- Create top-level conftest.py with shared fixtures
+- Add pytest configuration in pyproject.toml or pytest.ini
+- Create standardized test environment setup
+- Document testing environment variables
+
+## 3. Develop Consistent Mocking Strategy [done]
+### Dependencies: None
+### Description: Create and implement standard mocking patterns across all tests.
+### Details:
+- Create mock factories for common components (clients, etc.)
+- Implement helper functions for standard mocking patterns
+- Refactor existing tests to use consistent mocking
+- Add documentation for mocking best practices
+
+## 4. Add Test Classification with Pytest Markers [done]
+### Dependencies: None
+### Description: Implement pytest markers to categorize and organize tests by type and requirements.
+### Details:
+- Define standard markers (unit, integration, slow, etc.)
+- Apply markers to all existing tests
+- Add custom marker for tests requiring Docker
+- Update documentation with marker usage guidelines
+
+## 5. Implement Coverage Reporting [done]
+### Dependencies: None
+### Description: Add test coverage metrics and reporting to identify gaps in test coverage.
+### Details:
+- Set up pytest-cov in development dependencies
+- Configure coverage thresholds and exclusions
+- Add coverage reporting to test scripts
+- Integrate coverage reporting into CI pipeline
+
+## 6. Add Missing Critical Tests [pending]
+### Dependencies: None
+### Description: Identify and implement missing tests for critical paths, error handling, and edge cases.
+### Details:
+- Identify gaps in current test coverage
+- Add tests for error handling paths
+- Create tests for edge cases and boundary conditions
+- Implement tests for concurrent operations
+
+## 7. Create End-to-End Test Suite [pending]
+### Dependencies: None
+### Description: Develop comprehensive end-to-end tests to validate complete migration workflows.
+### Details:
+- Design end-to-end test scenarios covering full migrations
+- Implement reusable test fixtures for end-to-end tests
+- Create dockerized test environment for consistent testing
+- Add scripts to run end-to-end tests in isolation
+
+## 8. Improve Developer Testing Experience [pending]
+### Dependencies: None
+### Description: Enhance developer workflow with better testing tools, documentation, and automation.
+### Details:
+- Create helper scripts for running specific test types
+- Add pre-commit hooks for running tests
+- Create detailed test documentation
+- Implement test data generators for common test cases
+
+## 9. Use Monkeypatch Instead of Direct Mock Assignment [pending]
+### Dependencies: None
+### Description: Refactor test fixtures to use pytest's monkeypatch fixture instead of direct mock assignments for better isolation and cleanup.
+### Details:
+- Replace direct mock assignments in fixtures with monkeypatch.setattr
+- Create helper functions to standardize monkeypatch patterns
+- Update existing tests to work with monkeypatched dependencies
+- Add examples and documentation for proper monkeypatching
+- Ensure proper teardown/cleanup of mocks between tests
+
+## 10. Refine Environment Configuration Loading During Test Execution [done]
+### Dependencies: None
+### Description: Ensure the test framework properly controls environment configuration loading during test execution, including proper handling of .env, .env.local, .env.test, and .env.test.local files.
+### Details:
+1. Verify and refine the existing environment loading system to:
+   - Detect when tests are running (via pytest environment or explicit flags)
+   - Properly load `.env.test` and `.env.test.local` during test execution in addition to base configs
+   - Maintain proper precedence in the existing hierarchy
+
+2. Add a pytest fixture that:
+   - Controls whether tests run with test-specific environment variables
+   - Allows tests to temporarily override specific environment variables
+   - Resets environment after each test to ensure test isolation
+
+3. Update environment-dependent tests to use this fixture
+   - Ensure tests aren't affected by developer's local environment
+   - Allow specific tests to opt-out of test environment if needed
+
+**Test Strategy**:
+- Verify environment detection works correctly in pytest context
+- Confirm test configuration takes precedence during test runs
+- Test that isolation between test cases is maintained
+

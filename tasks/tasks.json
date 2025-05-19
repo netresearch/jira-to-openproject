@@ -859,6 +859,219 @@
       "dependencies": [],
       "priority": "medium",
       "subtasks": []
+    },
+    {
+      "id": 41,
+      "title": "Comprehensive Verification of Migration Components for Refactored Client Architecture",
+      "description": "Perform a high-priority audit and testing of all migration components to ensure they integrate correctly with the refactored client architecture and comply with our YOLO development approach, exception-based error handling, optimistic execution patterns, and strict Python typing rules.",
+      "details": "• Identify all migration components and list their entry points, public APIs, and dependencies.\n• For each component:\n  – Conduct a detailed code review to confirm:\n    • YOLO compliance: no legacy support hooks, single-responsibility design, minimal configuration.\n    • Exception-based error handling: no return codes or status dictionaries; ensure all error paths raise appropriate exceptions.\n    • Optimistic execution: operations execute first, with validation deferred to exception handling; remove any redundant precondition checks.\n    • Python typing: full coverage of type annotations (PEP 484) including function signatures, class attributes, and third-party interfaces.\n• Document any deviations and refactor code in-line or open follow-up issues for non-compliant patterns.\n• Maintain a migration compliance checklist and attach to each pull request for peer review.",
+      "testStrategy": "• Develop and run dedicated pytest modules for each migration component using commands like:\n     pytest tests/test_migration_<component>.py::Test<componentClass> --log-level=DEBUG\n• Enable detailed logging in tests (DEBUG level) to capture execution flow, exception stack traces, and type warnings.\n• Integrate mypy checks in the CI pipeline:\n     mypy src/migration_components/<component>.py\n• Automate a compliance report that aggregates:\n    – Test pass/fail results\n    – Logged exceptions and execution traces\n    – Mypy type-check summaries\n• Conduct a manual code review session for each component, verifying the compliance checklist and sign-off in pull request comments.\n• Mark the task complete only when all components pass automated tests, static analysis, and manual review criteria.",
+      "status": "in-progress",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Verify 'user_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the user_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_user_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 2,
+          "title": "Verify 'custom_field_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the custom_field_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_custom_field_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 3,
+          "title": "Verify 'company_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the company_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_company_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 4,
+          "title": "Verify 'account_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the account_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_account_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 5,
+          "title": "Verify 'project_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the project_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_project_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 6,
+          "title": "Verify 'link_type_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the link_type_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_link_type_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 7,
+          "title": "Verify 'issue_type_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the issue_type_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_issue_type_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 8,
+          "title": "Verify 'status_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the status_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_status_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 9,
+          "title": "Verify 'work_package_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the work_package_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_work_package_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 10,
+          "title": "Verify 'workflow_migration' Component Compliance",
+          "description": "Perform a comprehensive audit of the workflow_migration component to ensure it correctly works with the refactored client architecture and strictly follows our development rules (YOLO approach, exception handling, optimistic execution, typing).",
+          "details": "1. Run targeted tests with detailed logging: `pytest tests/test_workflow_migration.py --log-level=DEBUG`\n2. Perform code review to verify:\n   - Exception-based error handling (no return codes or status dictionaries)\n   - YOLO compliance (no legacy code or backward compatibility)\n   - Optimistic execution (operations first, validation in exception handling)\n   - Proper Python typing throughout the codebase\n3. Check client usage patterns to ensure proper initialization and dependency injection\n4. Verify error propagation from clients to the migration component\n5. Document any non-compliant patterns and refactor inline",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        },
+        {
+          "id": 11,
+          "title": "Create Compliance Checklist and Standardize Verification Process",
+          "description": "Create a standardized compliance checklist and verification process to ensure consistent evaluation across all migration components.",
+          "details": "1. Develop a formal compliance checklist covering all project rules:\n   - YOLO development approach criteria\n   - Exception-based error handling requirements\n   - Optimistic execution pattern guidelines\n   - Python typing standards\n   - Client usage and initialization patterns\n2. Create a template for reporting compliance issues\n3. Establish a process for verifying fixes and marking components as compliant\n4. Document the verification workflow for team members\n5. Create a central tracking dashboard for component compliance status",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 41
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "title": "Enhance and Standardize Testing Infrastructure",
+      "description": "Reorganize test directories, standardize test configurations, implement consistent mocking patterns, introduce test classification markers, set up coverage reporting, add missing tests, develop an end-to-end suite, and streamline the developer testing experience.",
+      "details": "1. Directory Reorganization:\n   • Restructure the tests/ folder into subdirectories: tests/unit, tests/integration, tests/e2e.\n   • Ensure each module’s tests live alongside or mirror production code hierarchy.\n\n2. Configuration Standardization:\n   • Introduce a central pytest.ini or setup.cfg with global settings:\n     – test paths, python_files pattern, markers definition (unit, integration, e2e).\n     – default command-line options (e.g., -ra, --disable-warnings).\n   • Document custom ini options and enforce via CI lint.\n\n3. Consistent Mocking Strategy:\n   • Adopt a unified mocking approach using pytest fixtures and monkeypatch.\n   • Create shared fixtures in tests/conftest.py for common dependencies (database, HTTP, file I/O).\n   • Prohibit ad hoc patching in individual tests; document patterns for external service stubs.\n\n4. Test Classification with Markers:\n   • Define and register markers in pytest.ini: @pytest.mark.unit, @pytest.mark.integration, @pytest.mark.e2e.\n   • Update existing tests with appropriate markers; fail the build if tests are unmarked.\n   • Configure CI pipelines to run marker groups selectively (fast unit suite vs. full suite).\n\n5. Coverage Reporting:\n   • Integrate pytest-cov to generate HTML and XML coverage reports.\n   • Enforce minimum coverage thresholds per directory (e.g., unit ≥90%, integration ≥80%).\n   • Publish reports to CI artifact storage and fail on regression.\n\n6. Adding Missing Tests:\n   • Audit codebase to identify uncovered modules, prioritize critical paths.\n   • Write targeted unit tests for utility functions, business logic, and error paths.\n   • Add integration tests to validate interactions with external resources (databases, APIs).\n\n7. End-to-End Test Suite:\n   • Develop an E2E suite under tests/e2e using a real-like environment (e.g., Docker, local services).\n   • Automate user-flow scenarios via HTTP clients or Selenium/WebDriver for UI components.\n   • Parameterize endpoints and credentials via environment variables or fixtures.\n\n8. Developer Experience Improvements:\n   • Provide a Makefile or npm scripts: make test:unit, make test:integration, make test:e2e, make coverage.\n   • Add pre-commit hooks for running linters, black, and quick unit tests.\n   • Update CONTRIBUTING.md with testing guidelines and examples.\n",
+      "testStrategy": "1. Directory and Config Validation:\n   • CI job checks that tests/ contains subdirectories unit, integration, e2e.\n   • Lint pytest.ini for required settings and marker registrations.\n\n2. Marker Coverage and Enforcement:\n   • Run pytest with --strict-markers to ensure no unregistered markers.\n   • Fail if any test lacks a marker or is misclassified.\n\n3. Mocking Consistency:\n   • Review tests to confirm usage of shared fixtures vs. ad hoc patches.\n   • Automated code scan (grep or AST script) to detect direct use of mock.patch without fixture.\n\n4. Coverage Thresholds:\n   • Execute pytest-cov; assert coverage percentages meet thresholds.\n   • Verify HTML and XML reports are generated and stored.\n\n5. Functional Test Runs:\n   • Run make test:unit, test:integration, test:e2e locally and in CI; all must pass.\n   • E2E suite must complete full user-flow scenarios against a staging environment.\n\n6. New Test Verification:\n   • Use coverage analysis to confirm that previously uncovered code paths are now covered.\n   • Peer review of added tests to ensure quality and adherence to patterns.\n\n7. Developer Onboarding:\n   • Fresh clone to a dev machine; follow CONTRIBUTING.md steps to run full test matrix.\n   • Confirm pre-commit hooks trigger expected linters and unit tests before commit.\n\n8. CI Integration:\n   • Ensure subdivided CI stages (unit/integration/e2e) run in the correct order and gate promotions.\n   • Introduce fail-fast for unit stage to speed feedback.\n",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Reorganize Test Directory Structure",
+          "description": "Create a clear separation between test types by reorganizing the test directory.",
+          "details": "- Create separate directories for unit, functional, integration, and end-to-end tests\n- Move existing tests to appropriate directories\n- Add README.md files explaining each test category's purpose\n- Create utils directory for shared test helpers",
+          "status": "in-progress",
+          "dependencies": [],
+          "parentTaskId": 42
+        },
+        {
+          "id": 2,
+          "title": "Implement Standard Test Configuration",
+          "description": "Create standardized test configuration files and fixtures for all test types.",
+          "details": "- Create top-level conftest.py with shared fixtures\n- Add pytest configuration in pyproject.toml or pytest.ini\n- Create standardized test environment setup\n- Document testing environment variables",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 42
+        },
+        {
+          "id": 3,
+          "title": "Develop Consistent Mocking Strategy",
+          "description": "Create and implement standard mocking patterns across all tests.",
+          "details": "- Create mock factories for common components (clients, etc.)\n- Implement helper functions for standard mocking patterns\n- Refactor existing tests to use consistent mocking\n- Add documentation for mocking best practices",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 42
+        },
+        {
+          "id": 4,
+          "title": "Add Test Classification with Pytest Markers",
+          "description": "Implement pytest markers to categorize and organize tests by type and requirements.",
+          "details": "- Define standard markers (unit, integration, slow, etc.)\n- Apply markers to all existing tests\n- Add custom marker for tests requiring Docker\n- Update documentation with marker usage guidelines",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 42
+        },
+        {
+          "id": 5,
+          "title": "Implement Coverage Reporting",
+          "description": "Add test coverage metrics and reporting to identify gaps in test coverage.",
+          "details": "- Set up pytest-cov in development dependencies\n- Configure coverage thresholds and exclusions\n- Add coverage reporting to test scripts\n- Integrate coverage reporting into CI pipeline",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 42
+        },
+        {
+          "id": 6,
+          "title": "Add Missing Critical Tests",
+          "description": "Identify and implement missing tests for critical paths, error handling, and edge cases.",
+          "details": "- Identify gaps in current test coverage\n- Add tests for error handling paths\n- Create tests for edge cases and boundary conditions\n- Implement tests for concurrent operations",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 42
+        },
+        {
+          "id": 7,
+          "title": "Create End-to-End Test Suite",
+          "description": "Develop comprehensive end-to-end tests to validate complete migration workflows.",
+          "details": "- Design end-to-end test scenarios covering full migrations\n- Implement reusable test fixtures for end-to-end tests\n- Create dockerized test environment for consistent testing\n- Add scripts to run end-to-end tests in isolation",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 42
+        },
+        {
+          "id": 8,
+          "title": "Improve Developer Testing Experience",
+          "description": "Enhance developer workflow with better testing tools, documentation, and automation.",
+          "details": "- Create helper scripts for running specific test types\n- Add pre-commit hooks for running tests\n- Create detailed test documentation\n- Implement test data generators for common test cases",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 42
+        },
+        {
+          "id": 9,
+          "title": "Use Monkeypatch Instead of Direct Mock Assignment",
+          "description": "Refactor test fixtures to use pytest's monkeypatch fixture instead of direct mock assignments for better isolation and cleanup.",
+          "details": "- Replace direct mock assignments in fixtures with monkeypatch.setattr\n- Create helper functions to standardize monkeypatch patterns\n- Update existing tests to work with monkeypatched dependencies\n- Add examples and documentation for proper monkeypatching\n- Ensure proper teardown/cleanup of mocks between tests",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 42
+        },
+        {
+          "id": 10,
+          "title": "Refine Environment Configuration Loading During Test Execution",
+          "description": "Ensure the test framework properly controls environment configuration loading during test execution, including proper handling of .env, .env.local, .env.test, and .env.test.local files.",
+          "details": "1. Verify and refine the existing environment loading system to:\n   - Detect when tests are running (via pytest environment or explicit flags)\n   - Properly load `.env.test` and `.env.test.local` during test execution in addition to base configs\n   - Maintain proper precedence in the existing hierarchy\n\n2. Add a pytest fixture that:\n   - Controls whether tests run with test-specific environment variables\n   - Allows tests to temporarily override specific environment variables\n   - Resets environment after each test to ensure test isolation\n\n3. Update environment-dependent tests to use this fixture\n   - Ensure tests aren't affected by developer's local environment\n   - Allow specific tests to opt-out of test environment if needed\n\n**Test Strategy**:\n- Verify environment detection works correctly in pytest context\n- Confirm test configuration takes precedence during test runs\n- Test that isolation between test cases is maintained",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 42
+        }
+      ]
     }
   ],
   "metadata": {

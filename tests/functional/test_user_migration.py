@@ -236,17 +236,13 @@ class TestUserMigration(unittest.TestCase):
         with (
             patch.object(UserMigration, "_save_to_json"),
             patch.object(UserMigration, "_load_from_json", return_value=None),
+            patch.object(UserMigration, "extract_jira_users", return_value=jira_users),
+            patch.object(UserMigration, "extract_openproject_users", return_value=[]),
         ):
-
             migration = UserMigration(
                 jira_client=mock_jira_instance,
                 op_client=mock_op_instance,
             )
-
-            # Add mocks to avoid file operations that cause serialization errors
-            migration._save_to_json = MagicMock()
-            migration.extract_jira_users = MagicMock(return_value=jira_users)
-            migration.extract_openproject_users = MagicMock(return_value=[])
 
             # Mock the create_user_mapping method to return unmatched users
             user_mapping = {
@@ -271,31 +267,30 @@ class TestUserMigration(unittest.TestCase):
                     "matched_by": "none",
                 },
             }
-            migration.create_user_mapping = MagicMock(return_value=user_mapping)
-            migration.user_mapping = user_mapping
+            with patch.object(migration, "create_user_mapping", return_value=user_mapping):
+                migration.user_mapping = user_mapping
 
-            # Configure op_client to succeed when creating users
-            mock_op_instance.create_users_in_bulk.return_value = json.dumps(
-                {
-                    "created_count": 2,
-                    "failed_count": 0,
-                    "created_users": [
-                        {"id": 101, "login": "test_user1", "email": "test1@example.com"},
-                        {"id": 102, "login": "test_user2", "email": "test2@example.com"},
-                    ],
-                    "failed_users": [],
-                },
-            )
+                # Configure op_client to succeed when creating users
+                mock_op_instance.create_users_in_bulk.return_value = json.dumps(
+                    {
+                        "created_count": 2,
+                        "failed_count": 0,
+                        "created_users": [
+                            {"id": 101, "login": "test_user1", "email": "test1@example.com"},
+                            {"id": 102, "login": "test_user2", "email": "test2@example.com"},
+                        ],
+                        "failed_users": [],
+                    },
+                )
 
-            # Test create_missing_users method
-            result = migration.create_missing_users()
+                # Test create_missing_users method
+                result = migration.create_missing_users()
 
-            # Verify clients were called correctly
-            migration.create_user_mapping.assert_called_once()
-            mock_op_instance.create_users_in_bulk.assert_called_once()
+                # Verify clients were called correctly
+                assert mock_op_instance.create_users_in_bulk.call_count == 1
 
-            # Verify result
-            assert result["created_count"] == 2
+                # Verify result
+                assert result["created_count"] == 2
 
         # Clean up
         shutil.rmtree(data_dir)

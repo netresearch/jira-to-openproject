@@ -82,7 +82,6 @@ class OpenProjectClient:
         container_name: str | None = None,
         ssh_host: str | None = None,
         ssh_user: str | None = None,
-        ssh_key_file: str | None = None,
         tmux_session_name: str | None = None,
         command_timeout: int = 180,
         retry_count: int = 3,
@@ -97,7 +96,6 @@ class OpenProjectClient:
             container_name: Docker container name (default: from config)
             ssh_host: SSH host (default: from config)
             ssh_user: SSH username (default: from config)
-            ssh_key_file: SSH key file (default: from config)
             tmux_session_name: tmux session name (default: from config)
             command_timeout: Command timeout in seconds (default: 180)
             retry_count: Number of retries (default: 3)
@@ -125,7 +123,6 @@ class OpenProjectClient:
         self.container_name = container_name or op_config.get("container")
         self.ssh_host = ssh_host or op_config.get("server")
         self.ssh_user = ssh_user or op_config.get("user")
-        self.ssh_key_file = ssh_key_file or op_config.get("key_file")
         self.tmux_session_name = tmux_session_name or op_config.get("tmux_session_name", "rails_console")
         self.command_timeout = command_timeout
         self.retry_count = retry_count
@@ -147,7 +144,6 @@ class OpenProjectClient:
         self.ssh_client = ssh_client or SSHClient(
             host=str(self.ssh_host),
             user=self.ssh_user,
-            key_file=cast("str | None", self.ssh_key_file),
             operation_timeout=self.command_timeout,
             retry_count=self.retry_count,
             retry_delay=self.retry_delay,

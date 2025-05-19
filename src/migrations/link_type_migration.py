@@ -4,8 +4,8 @@ Handles the migration of issue link types from Jira to OpenProject.
 
 import json
 import time
-from typing import Any
 from pathlib import Path
+from typing import Any
 
 from src import config
 from src.clients.jira_client import JiraClient

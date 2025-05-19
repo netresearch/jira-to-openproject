@@ -1,23 +1,36 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "j2o"
+name = "jira-to-openproject"
+description = "Migration tool from Jira to OpenProject"
 version = "0.1.0"
-description = "Jira to OpenProject migration tool"
 authors = [
-    {name = "Sebastian Mendel", email = "sebastian.mendel@netresearch.de"}
+    {name = "Jira to OpenProject team", email = "test@example.com"},
 ]
+requires-python = ">=3.9"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.12,<4.0"
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: System Administrators",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+dependencies = [
+    "requests>=2.28.2",
+    "paramiko>=3.0.0",
+    "colorlog>=6.7.0",
+    "docker>=6.1.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.3.1",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.10.0",
+    "pytest-xdist>=3.3.1",
+]
+dev = [
+    "black>=23.3.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "pre-commit>=3.3.1",
 ]
 
 [project.scripts]
@@ -26,21 +39,27 @@ j2o = "src.main:main"
 [tool.setuptools]
 packages = ["src"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+python_files = ["test_*.py"]
+markers = [
+    "unit: mark a test as a unit test",
+    "functional: mark a test as a functional test",
+    "integration: mark a test as an integration test",
+    "end_to_end: mark a test as an end-to-end test",
+    "slow: mark a test as slow-running",
+    "requires_docker: test requires Docker to be available",
+    "requires_ssh: test requires SSH connection to be available",
+    "requires_rails: test requires Rails console to be available",
+]
+addopts = "-v --strict-markers"
+
 [tool.black]
-line-length = 120
-target-version = ["py312", "py313"]
-skip-string-normalization = false
-exclude = '''
-/(
-    \.git
-  | \.venv
-  | \.mypy_cache
-  | \.pytest_cache
-  | \.tox
-  | build
-  | dist
-)/
-'''
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
 
 [tool.mypy]
 python_version = "3.12"
@@ -56,7 +75,8 @@ exclude = ['^build/', '^dist/', '^\\.venv/']
 
 [tool.isort]
 profile = "black"
-line_length = 120
+line_length = 88
+multi_line_output = 3
 
 [tool.ruff]
 target-version = "py312"

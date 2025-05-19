@@ -1,8 +1,8 @@
 """Tests for the data_handler utility module."""
 
-import os
 import tempfile
 import unittest
+from pathlib import Path
 
 from src.models import ComponentResult
 from src.utils import data_handler
@@ -14,16 +14,17 @@ class TestDataHandler(unittest.TestCase):
     def setUp(self) -> None:
         """Set up test fixtures."""
         # Create a temporary directory for test files
-        self.temp_dir = tempfile.mkdtemp()
-        self.test_filename = "test_data.json"
-        self.test_filepath = os.path.join(self.temp_dir, self.test_filename)
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.test_filename = Path("test_data.json")
+        self.test_filepath = self.temp_dir / self.test_filename
 
     def tearDown(self) -> None:
         """Clean up after tests."""
         # Remove test files
-        if os.path.exists(self.test_filepath):
-            os.remove(self.test_filepath)
-        os.rmdir(self.temp_dir)
+        if self.test_filepath.exists():
+            self.test_filepath.unlink()
+        if self.temp_dir.exists():
+            self.temp_dir.rmdir()
 
     def test_save_and_load_pydantic_model(self) -> None:
         """Test saving and loading a Pydantic model."""
@@ -37,7 +38,7 @@ class TestDataHandler(unittest.TestCase):
         # Save the model
         success = data_handler.save(test_result, self.test_filename, directory=self.temp_dir)
         assert success
-        assert os.path.exists(self.test_filepath)
+        assert self.test_filepath.exists()
 
         # Load the model
         loaded_result = data_handler.load(ComponentResult, self.test_filename, directory=self.temp_dir)
@@ -108,7 +109,7 @@ class TestDataHandler(unittest.TestCase):
     def test_handling_invalid_json(self) -> None:
         """Test handling invalid JSON data."""
         # Create an invalid JSON file
-        with open(self.test_filepath, "w") as f:
+        with self.test_filepath.open("w") as f:
             f.write("{invalid json")
 
         # Try to load the invalid file

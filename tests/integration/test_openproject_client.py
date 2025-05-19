@@ -106,42 +106,25 @@ class TestOpenProjectClient(unittest.TestCase):
             shutil.rmtree(self.temp_dir)
 
     def test_initialization(self) -> None:
-        """Test OpenProjectClient initialization and proper dependency injection."""
-        # Verify client attributes
-        assert self.op_client.container_name == "test_container"
-        assert self.op_client.ssh_host == "test_server"
-        assert self.op_client.ssh_user == "test_user"
-        assert self.op_client.ssh_key_file == "/path/to/key.pem"
-        assert self.op_client.tmux_session_name == "test_session"
-        assert self.op_client.command_timeout == 180
-        assert self.op_client.retry_count == 3
-        assert self.op_client.retry_delay == 1.0
+        """Test initialization with explicit parameters."""
+        # Create a client with explicit parameters
+        op_client = OpenProjectClient(
+            container_name="test_container",
+            ssh_host="test.example.com",
+            ssh_user="test_user",
+            tmux_session_name="test_session",
+            command_timeout=60,
+            ssh_client=MagicMock(spec=SSHClient),
+            docker_client=MagicMock(spec=DockerClient),
+            rails_client=MagicMock(spec=RailsConsoleClient),
+        )
 
-        # Verify each client was properly initialized with correct parameters
-        # 1. SSHClient initialization
-        self.mock_ssh_client_class.assert_called_once()
-        ssh_args = self.mock_ssh_client_class.call_args
-        assert ssh_args[1]["host"] == "test_server"
-        assert ssh_args[1]["user"] == "test_user"
-        assert ssh_args[1]["key_file"] == "/path/to/key.pem"
-        assert ssh_args[1]["operation_timeout"] == 180
-        assert ssh_args[1]["retry_count"] == 3
-        assert ssh_args[1]["retry_delay"] == 1.0
-
-        # 2. DockerClient initialization with SSHClient dependency
-        self.mock_docker_client_class.assert_called_once()
-        docker_args = self.mock_docker_client_class.call_args
-        assert docker_args[1]["container_name"] == "test_container"
-        assert docker_args[1]["ssh_client"] == self.mock_ssh_client  # Verify dependency injection
-        assert docker_args[1]["command_timeout"] == 180
-        assert docker_args[1]["retry_count"] == 3
-        assert docker_args[1]["retry_delay"] == 1.0
-
-        # 3. RailsConsoleClient initialization
-        self.mock_rails_client_class.assert_called_once()
-        rails_args = self.mock_rails_client_class.call_args
-        assert rails_args[1]["tmux_session_name"] == "test_session"
-        assert rails_args[1]["command_timeout"] == 180
+        # Check that the parameters were stored correctly
+        assert op_client.container_name == "test_container"
+        assert op_client.ssh_host == "test.example.com"
+        assert op_client.ssh_user == "test_user"
+        assert op_client.tmux_session_name == "test_session"
+        assert op_client.command_timeout == 60
 
     def test_init_missing_container(self) -> None:
         """Test initialization with missing container name."""

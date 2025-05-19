@@ -5,11 +5,10 @@ This module contains test cases for validating the issue type migration from Jir
 """
 
 import json
-import os
 import unittest
 from pathlib import Path
-from typing import Any, cast
-from unittest.mock import MagicMock, call, mock_open, patch
+from typing import Any
+from unittest.mock import MagicMock, mock_open, patch
 
 from src.migrations.issue_type_migration import IssueTypeMigration
 
@@ -234,7 +233,7 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Create the migration instance with mocked components
         with patch.object(Path, "open", mock_open(read_data=json.dumps({
                 "created": [{"id": 3, "name": "Epic", "color": "#9B59B6", "jira_type_name": "Epic"}],
-                "errors": []
+                "errors": [],
             }))):
 
             migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
@@ -249,7 +248,7 @@ class TestIssueTypeMigration(unittest.TestCase):
                     "color": "#9B59B6",
                     "is_milestone": False,
                     "matched_by": "default_mapping_to_create",
-                }
+                },
             }
 
             # Call the method
@@ -305,7 +304,7 @@ class TestIssueTypeMigration(unittest.TestCase):
                 "matched_ids": ["10000", "10001"],
                 "message": "Action required: 2 work package types need creation",
                 "issue_types": self.expected_mapping,
-            }
+            },
         ):
             # Call the method
             result = migration.analyze_issue_type_mapping()
