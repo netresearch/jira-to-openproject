@@ -8,8 +8,8 @@ from src.config_loader import ConfigLoader, is_test_environment
 from src.types import Config
 
 
-# Create a test subclass of ConfigLoader for easier testing
-class TestConfigLoader(ConfigLoader):
+# Create a test helper subclass of ConfigLoader for easier testing
+class ConfigLoaderTestHelper(ConfigLoader):
     """Test version of ConfigLoader that doesn't load from env files."""
 
     def __init__(self, test_config: Config) -> None:
@@ -56,7 +56,7 @@ def test_config_loader_initialization() -> None:
     }
 
     # Create a ConfigLoader with our test config
-    config = TestConfigLoader(test_config)
+    config = ConfigLoaderTestHelper(test_config)
 
     # Verify config has required sections
     assert "jira" in config.config
@@ -84,7 +84,7 @@ def test_section_accessor_methods() -> None:
     }
 
     # Create a ConfigLoader with our test config
-    config = TestConfigLoader(test_config)
+    config = ConfigLoaderTestHelper(test_config)
 
     # Test the section getter methods
     jira_config = config.get_jira_config()
@@ -111,7 +111,7 @@ def test_get_value_method() -> None:
     }
 
     # Create a ConfigLoader with our test config
-    config = TestConfigLoader(test_config)
+    config = ConfigLoaderTestHelper(test_config)
 
     # Test getting a specific value
     assert config.get_value("jira", "url") == "https://test-jira.example.com"
@@ -132,7 +132,7 @@ def test_convert_value() -> None:
     }
 
     # Create a ConfigLoader with our test config
-    config = TestConfigLoader(test_config)
+    config = ConfigLoaderTestHelper(test_config)
 
     # Test various types of values
     assert config._convert_value("42") == 42
