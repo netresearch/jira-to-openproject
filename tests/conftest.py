@@ -3,8 +3,9 @@
 import os
 import shutil
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Dict, Generator, cast
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -58,12 +59,12 @@ def setup_test_environment() -> Generator[None, None, None]:
     # Load configuration files in correct precedence order
     load_dotenv(".env", override=True)  # Base configuration
 
-    if os.path.exists(".env.local"):
+    if Path(".env.local").exists():
         load_dotenv(".env.local", override=True)  # Local development overrides
 
     load_dotenv(".env.test", override=True)  # Default test configuration
 
-    if os.path.exists(".env.test.local"):
+    if Path(".env.test.local").exists():
         load_dotenv(".env.test.local", override=True)  # Local test overrides
 
     # Yield control back to tests
@@ -75,15 +76,16 @@ def setup_test_environment() -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def test_env() -> Generator[Dict[str, str], None, None]:
+def test_env() -> Generator[dict[str, str], None, None]:
     """Fixture to control environment variables during a test.
 
     This fixture allows tests to temporarily override environment variables
     for their duration, restoring the original values afterward.
 
     Yields:
-        Dict[str, str]: A dictionary of current environment variables that
+        dict[str, str]: A dictionary of current environment variables that
                        the test can modify to set temporary overrides.
+
     """
     # Store original environment to restore later
     original_env = os.environ.copy()
@@ -94,7 +96,7 @@ def test_env() -> Generator[Dict[str, str], None, None]:
 
     try:
         # Let the test modify the environment as needed
-        yield cast(Dict[str, str], env_dict)
+        yield cast("dict[str, str]", env_dict)
     finally:
         # Clean up: restore original environment
         os.environ.clear()
@@ -109,6 +111,7 @@ def temp_dir() -> Generator[Path, None, None]:
 
     Returns:
         Path: Path to the temporary directory
+
     """
     dir_path = Path(tempfile.mkdtemp())
     try:
@@ -124,8 +127,9 @@ def mock_jira_client() -> JiraClient:
 
     Returns:
         JiraClient: A mocked JiraClient instance
+
     """
-    return cast(JiraClient, MagicMock(spec=JiraClient))
+    return cast("JiraClient", MagicMock(spec=JiraClient))
 
 
 @pytest.fixture
@@ -134,8 +138,9 @@ def mock_ssh_client() -> SSHClient:
 
     Returns:
         SSHClient: A mocked SSHClient instance
+
     """
-    return cast(SSHClient, MagicMock(spec=SSHClient))
+    return cast("SSHClient", MagicMock(spec=SSHClient))
 
 
 @pytest.fixture
@@ -144,8 +149,9 @@ def mock_docker_client() -> DockerClient:
 
     Returns:
         DockerClient: A mocked DockerClient instance
+
     """
-    return cast(DockerClient, MagicMock(spec=DockerClient))
+    return cast("DockerClient", MagicMock(spec=DockerClient))
 
 
 @pytest.fixture
@@ -154,8 +160,9 @@ def mock_rails_client() -> RailsConsoleClient:
 
     Returns:
         RailsConsoleClient: A mocked RailsConsoleClient instance
+
     """
-    return cast(RailsConsoleClient, MagicMock(spec=RailsConsoleClient))
+    return cast("RailsConsoleClient", MagicMock(spec=RailsConsoleClient))
 
 
 @pytest.fixture
@@ -164,8 +171,9 @@ def mock_op_client() -> OpenProjectClient:
 
     Returns:
         OpenProjectClient: A mocked OpenProjectClient instance
+
     """
-    return cast(OpenProjectClient, MagicMock(spec=OpenProjectClient))
+    return cast("OpenProjectClient", MagicMock(spec=OpenProjectClient))
 
 
 # Fixtures for integration tests directly using the clients
