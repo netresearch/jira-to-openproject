@@ -30,6 +30,11 @@ from src.clients.ssh_client import SSHClient
 # Check if we should run the integration tests
 def should_skip_tests() -> bool:
     """Check if tests should be skipped due to missing configuration."""
+    # Check if we're in mock mode
+    if os.environ.get("J2O_TEST_MOCK_MODE") == "true":
+        # Don't skip tests in mock mode
+        return False
+
     # Check for required SSH environment variables
     if not os.environ.get("J2O_OPENPROJECT_SERVER") or not os.environ.get("J2O_OPENPROJECT_USER"):
         return True
@@ -53,19 +58,23 @@ class MockSSHClient:
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize a mock SSH client."""
-        self.connected = False
+        self.connected = os.environ.get("J2O_TEST_MOCK_MODE") == "true"
 
     def is_connected(self) -> bool:
         """Check if connected."""
-        return False
+        return self.connected
 
     def execute_command(self, *args: Any, **kwargs: Any) -> tuple[str, str, int]:
         """Mock executing a command."""
+        if self.connected:
+            # Simulate successful command execution
+            return "Command executed successfully", "", 0
         return "", "Not connected", 1
 
     def copy_file_to_remote(self, *args: Any, **kwargs: Any) -> None:
         """Mock copying a file to remote."""
-        pass
+        if not self.connected:
+            raise ValueError("Not connected")
 
 
 class MockDockerClient:
@@ -73,23 +82,50 @@ class MockDockerClient:
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize a mock Docker client."""
-        pass
+        self.connected = os.environ.get("J2O_TEST_MOCK_MODE") == "true"
 
     def check_container_exists(self) -> bool:
         """Mock checking if container exists."""
-        return False
+        return self.connected
 
     def execute_command(self, *args: Any, **kwargs: Any) -> tuple[str, str, int]:
         """Mock executing a command."""
+        if self.connected:
+            # Simulate successful command execution
+            return "Command executed successfully", "", 0
         return "", "Not connected", 1
 
     def copy_file_to_container(self, *args: Any, **kwargs: Any) -> None:
         """Mock copying a file to container."""
-        pass
+        if not self.connected:
+            raise ValueError("Not connected")
 
     def check_file_exists_in_container(self, *args: Any, **kwargs: Any) -> bool:
         """Mock checking if file exists in container."""
-        return False
+        return self.connected
+
+
+class MockRailsConsoleClient(RailsConsoleClient):
+    """Mock Rails console client for use when real connections fail."""
+
+    def __init__(self, tmux_session_name: str = "rails_console", **kwargs: Any) -> None:
+        """Initialize a mock Rails console client."""
+        self.tmux_session_name = tmux_session_name
+        self.connected = os.environ.get("J2O_TEST_MOCK_MODE") == "true"
+        # Skip parent initialization to avoid actual connection
+
+    def execute(self, command: str, timeout: int | None = None) -> str:
+        """Mock executing a Rails command."""
+        if self.connected:
+            # Simulate successful command execution with command reflection
+            return f"Rails console output for: {command}"
+        return "Not connected to Rails console"
+
+    def _send_command_to_tmux(self, command: str, timeout: int) -> str:
+        """Mock sending a command to tmux."""
+        if self.connected:
+            return f"Mock tmux output for: {command}"
+        return "Not connected to tmux"
 
 
 class FileTransferChainTest(unittest.TestCase):
@@ -98,7 +134,7 @@ class FileTransferChainTest(unittest.TestCase):
     # Class-level variables for shared resources
     ssh_client: ClassVar[SSHClient | MockSSHClient]
     docker_client: ClassVar[DockerClient | MockDockerClient]
-    rails_client: ClassVar[RailsConsoleClient | None]
+    rails_client: ClassVar[RailsConsoleClient | MockRailsConsoleClient | None]
     op_client: ClassVar[OpenProjectClient | None]
     temp_dir: ClassVar[Path | None]
     remote_temp_dir: ClassVar[str]
@@ -127,6 +163,11 @@ class FileTransferChainTest(unittest.TestCase):
         user = os.environ.get("J2O_OPENPROJECT_USER")
         container = os.environ.get("J2O_OPENPROJECT_CONTAINER")
         tmux_session_name = os.environ.get("J2O_OPENPROJECT_TMUX_SESSION_NAME")
+
+        # Check if we're in mock mode
+        mock_mode = os.environ.get("J2O_TEST_MOCK_MODE") == "true"
+        if mock_mode:
+            print("\n=== Running in Mock Mode ===")
 
         # Display configuration values (without sensitive info)
         print("\n=== Test Configuration ===")
@@ -159,10 +200,14 @@ class FileTransferChainTest(unittest.TestCase):
                     print(f"Warning: SSH connection failed: {e!s}")
                     cls.skip_messages.append(f"SSH connection failed: {e!s}")
                     cls.ssh_client = MockSSHClient()
-                    cls.ssh_connected = False
+                    cls.ssh_connected = cls.ssh_client.is_connected()
+                    if cls.ssh_connected:
+                        print("Using mock SSH connection")
             else:
                 cls.ssh_client = MockSSHClient()
-                cls.ssh_connected = False
+                cls.ssh_connected = cls.ssh_client.is_connected()
+                if cls.ssh_connected:
+                    print("Using mock SSH connection")
 
             # Initialize Docker client if SSH is connected
             if cls.ssh_connected and container:
@@ -182,73 +227,93 @@ class FileTransferChainTest(unittest.TestCase):
                     else:
                         print(f"Warning: Docker container '{container}' not found")
                         cls.skip_messages.append(f"Docker container '{container}' not found")
-                        cls.docker_connected = False
                         cls.docker_client = MockDockerClient()
+                        cls.docker_connected = cls.docker_client.check_container_exists()
+                        if cls.docker_connected:
+                            print("Using mock Docker connection")
                 except Exception as e:
                     print(f"Warning: Docker connection failed: {e!s}")
                     cls.skip_messages.append(f"Docker connection failed: {e!s}")
                     cls.docker_client = MockDockerClient()
-                    cls.docker_connected = False
+                    cls.docker_connected = cls.docker_client.check_container_exists()
+                    if cls.docker_connected:
+                        print("Using mock Docker connection")
             else:
                 cls.docker_client = MockDockerClient()
-                cls.docker_connected = False
+                cls.docker_connected = cls.docker_client.check_container_exists()
+                if cls.docker_connected:
+                    print("Using mock Docker connection")
 
             # Initialize Rails Console client if Docker is connected
             if cls.docker_connected and tmux_session_name:
                 try:
-                    cls.rails_client = RailsConsoleClient(
-                        tmux_session_name=str(tmux_session_name),
-                        command_timeout=20,
-                    )
-                    # Test Rails console with a simple command
-                    result = cls.rails_client.execute("puts 'Test'")
-                    if "Test" in result:
-                        cls.rails_connected = True
-                        print("Rails console connection successful")
+                    if mock_mode:
+                        cls.rails_client = MockRailsConsoleClient(
+                            tmux_session_name=str(tmux_session_name),
+                        )
+                        cls.rails_connected = cls.rails_client.connected
+                        if cls.rails_connected:
+                            print("Using mock Rails console connection")
                     else:
-                        print("Warning: Rails console test command didn't return expected output")
-                        cls.skip_messages.append("Rails console test failed")
-                        cls.rails_connected = False
-                        cls.rails_client = None
+                        cls.rails_client = RailsConsoleClient(
+                            tmux_session_name=str(tmux_session_name),
+                            command_timeout=20,
+                        )
+                        # Test Rails console with a simple command
+                        result = cls.rails_client.execute("puts 'Test'")
+                        if "Test" in result:
+                            cls.rails_connected = True
+                            print("Rails console connection successful")
+                        else:
+                            print("Warning: Rails console test command didn't return expected output")
+                            cls.skip_messages.append("Rails console test failed")
+                            cls.rails_connected = False
+                            cls.rails_client = MockRailsConsoleClient()
                 except Exception as e:
                     print(f"Warning: Rails console connection failed: {e!s}")
                     cls.skip_messages.append(f"Rails console connection failed: {e!s}")
-                    cls.rails_client = None
-                    cls.rails_connected = False
+                    cls.rails_client = MockRailsConsoleClient()
+                    cls.rails_connected = cls.rails_client.connected
+                    if cls.rails_connected:
+                        print("Using mock Rails console connection")
             else:
-                cls.rails_client = None
-                cls.rails_connected = False
+                cls.rails_client = MockRailsConsoleClient()
+                cls.rails_connected = cls.rails_client.connected
+                if cls.rails_connected:
+                    print("Using mock Rails console connection")
 
             # Initialize OpenProject Client if all other clients are connected
             has_required_connections = (
                 cls.ssh_connected and
                 cls.docker_connected and
                 cls.rails_connected and
-                cls.rails_client is not None and
+                (cls.rails_client is not None) and
                 server and user and
                 container and tmux_session_name
             )
 
             if has_required_connections:
                 try:
-                    # Add type assertions to ensure correct types
-                    assert isinstance(cls.ssh_client, SSHClient), "Expected SSHClient instance"
-                    assert isinstance(cls.docker_client, DockerClient), "Expected DockerClient instance"
-                    assert cls.rails_client is not None, "Expected RailsConsoleClient instance"
-
-                    cls.op_client = OpenProjectClient(
-                        container_name=str(container),
-                        ssh_host=str(server),
-                        ssh_user=str(user),
-                        tmux_session_name=str(tmux_session_name),
-                        command_timeout=20,
-                        retry_count=3,
-                        retry_delay=0.5,
-                        ssh_client=cls.ssh_client,
-                        docker_client=cls.docker_client,
-                        rails_client=cls.rails_client,
-                    )
-                    print("OpenProject client initialized")
+                    # Initialize clients based on their types
+                    if (isinstance(cls.ssh_client, SSHClient) and
+                        isinstance(cls.docker_client, DockerClient) and
+                        cls.rails_client is not None):
+                        cls.op_client = OpenProjectClient(
+                            container_name=str(container),
+                            ssh_host=str(server),
+                            ssh_user=str(user),
+                            tmux_session_name=str(tmux_session_name),
+                            command_timeout=20,
+                            retry_count=3,
+                            retry_delay=0.5,
+                            ssh_client=cls.ssh_client,
+                            docker_client=cls.docker_client,
+                            rails_client=cls.rails_client,
+                        )
+                        print("OpenProject client initialized")
+                    else:
+                        cls.op_client = None
+                        print("Warning: Could not initialize OpenProject client (required clients not available)")
                 except Exception as e:
                     print(f"Warning: OpenProject client initialization failed: {e!s}")
                     cls.skip_messages.append(f"OpenProject client initialization failed: {e!s}")
