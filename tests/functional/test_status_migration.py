@@ -40,9 +40,21 @@ class TestStatusMigration(unittest.TestCase):
 
         # Setup sample data
         self.sample_jira_statuses = [
-            {"id": "1", "name": "To Do", "statusCategory": {"id": "2", "name": "To Do"}},
-            {"id": "2", "name": "In Progress", "statusCategory": {"id": "4", "name": "In Progress"}},
-            {"id": "3", "name": "Done", "statusCategory": {"id": "3", "name": "Done"}},
+            {
+                "id": "1",
+                "name": "To Do",
+                "statusCategory": {"id": "2", "name": "To Do"},
+            },
+            {
+                "id": "2",
+                "name": "In Progress",
+                "statusCategory": {"id": "4", "name": "In Progress"},
+            },
+            {
+                "id": "3",
+                "name": "Done",
+                "statusCategory": {"id": "3", "name": "Done"},
+            },
         ]
 
         self.sample_op_statuses = [
@@ -69,13 +81,12 @@ class TestStatusMigration(unittest.TestCase):
         """Clean up after each test."""
         # Remove test data files if the directory exists
         if self.test_data_dir.exists():
-            for filename in os.listdir(self.test_data_dir):
+            for filename in Path(self.test_data_dir).iterdir():
                 try:
-                    file_path = os.path.join(self.test_data_dir, filename)
-                    if os.path.isfile(file_path):
-                        os.unlink(file_path)
+                    if filename.is_file():
+                        filename.unlink()
                 except Exception as e:
-                    print(f"Error removing {file_path}: {e}")
+                    print(f"Error removing {filename}: {e}")
 
     def test_extract_jira_statuses(self) -> None:
         """Test extracting statuses from Jira."""

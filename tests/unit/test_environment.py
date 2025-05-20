@@ -1,5 +1,9 @@
+"""Tests for the Python environment and test fixtures."""
+
 import os
 import sys
+
+import pytest
 
 
 def test_python_version() -> None:
@@ -8,17 +12,23 @@ def test_python_version() -> None:
     assert sys.version_info.minor == 12
 
 
-def test_environment_setup() -> None:
-    """Test environment variables are properly loaded by the conftest fixture."""
-    # Check for prefixed environment variables
-    # These should be loaded automatically by the test fixtures in conftest.py
-    jira_url = os.getenv("J2O_JIRA_URL")
-    jira_token = os.getenv("J2O_JIRA_API_TOKEN")
-
-    # We should have these variables loaded from .env or .env.test in test mode
-    assert jira_url is not None, "J2O_JIRA_URL not found in environment"
-    assert jira_token is not None, "J2O_JIRA_API_TOKEN not found in environment"
-
-    # Previous test may have set J2O_TEST_MODE to false, so let's not check that
-    # Instead, ensure test fixture works
+@pytest.mark.unit
+def test_pytest_environment() -> None:
+    """Test that we're running in a pytest environment."""
     assert "PYTEST_CURRENT_TEST" in os.environ, "Not in pytest test context"
+
+
+@pytest.mark.unit
+def test_environment_fixture(test_env: dict[str, str]) -> None:
+    """Test that the environment fixture works correctly."""
+    # Create a unique test variable
+    var_name = "J2O_TEST_ENV_FIXTURE_VAR"
+    var_value = "test_value_123"
+
+    # Set the variable using the fixture
+    test_env[var_name] = var_value
+
+    # Verify it's set in the environment
+    assert os.getenv(var_name) == var_value
+
+    # Clean up is handled by the fixture automatically

@@ -19,46 +19,43 @@ The application uses a hierarchical environment configuration system:
 
 ### Environment Files
 
-- `.env`: Base configuration for all environments (committed to git)
-- `.env.local`: Local development overrides (git-ignored)
-- `.env.test`: Default test configuration (committed to git)
-- `.env.test.local`: Local test overrides (git-ignored)
+- `.env`: Base configuration for all environments
+- `.env.local`: Local development overrides (not committed to version control)
+- `.env.test`: Test-specific configuration
+- `.env.test.local`: Local test-specific overrides (not committed to version control)
 
-### Loading Order
+In test mode, both `.env` and `.env.test` files are loaded, with `.env.test` taking precedence. This allows for test-specific configuration without modifying the base configuration.
 
-The environment files are loaded in order of increasing specificity, with later files overriding values from earlier files:
+### Test Environment Fixture
 
-**In Development Mode:**
+The `test_env` fixture in `conftest.py` provides a mechanism to:
 
-1. `.env` (base configuration)
-2. `.env.local` (if present)
+1. Set environment variables specifically for a test
+2. Automatically clean up changes to the environment after each test
+3. Ensure environment isolation between tests
 
-**In Test Mode:**
-
-1. `.env` (base configuration)
-2. `.env.local` (if present)
-3. `.env.test` (test-specific configuration)
-4. `.env.test.local` (if present)
-
-Test mode is automatically detected when running under pytest.
-
-### Using Environment Variables in Tests
-
-The `test_env` fixture provides a way to override environment variables during tests:
+Example usage:
 
 ```python
-@pytest.mark.unit
-def test_example(test_env: dict) -> None:
-    # Override environment variables for this test only
-    test_env["J2O_JIRA_URL"] = "https://test-jira.example.com"
+def test_example(test_env: dict[str, str]) -> None:
+    # Set a test-specific environment variable
+    test_env["J2O_CUSTOM_SETTING"] = "test_value"
 
-    # Use the API that reads from environment
+    # Use the configured application
     # ...
 
-    # Original environment is automatically restored after the test
+    # The environment will be restored after the test
 ```
 
-For a complete example, see `examples/test_env_fixture_example.py`.
+## Testing Configuration
+
+The `test_config_loader.py` file contains tests for the ConfigLoader class that handles environment configuration. The test approach:
+
+1. Uses a test-specific subclass of ConfigLoader that allows direct testing without depending on actual environment variables or files
+2. Directly tests the individual methods of the ConfigLoader for proper functionality
+3. Validates type conversion, default values, and the configuration hierarchy
+
+This approach ensures that tests are reliable, deterministic, and not affected by the developer's local environment.
 
 ## Test Configuration
 

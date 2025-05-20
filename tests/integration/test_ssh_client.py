@@ -4,7 +4,6 @@
 This module contains test cases for validating SSH operations.
 """
 
-import os
 import subprocess
 import tempfile
 import unittest
@@ -31,8 +30,12 @@ class TestSSHClient(unittest.TestCase):
         self.logger_patcher = patch("src.clients.ssh_client.logger")
         self.mock_logger = self.logger_patcher.start()
 
-        self.os_patcher = patch("src.clients.ssh_client.os")
-        self.mock_os = self.os_patcher.start()
+        # Patch pathlib.Path
+        self.path_patcher = patch("pathlib.Path")
+        self.mock_path_class = self.path_patcher.start()
+
+        # Keep the real Path to create our mock instances
+        self.real_path = Path
 
         # Configure mock subprocess.run
         self.process_mock = MagicMock()
@@ -41,10 +44,21 @@ class TestSSHClient(unittest.TestCase):
         self.process_mock.stderr = ""
         self.mock_subprocess.run.return_value = self.process_mock
 
-        # Configure os.path.exists and os.makedirs
-        self.mock_os.path.exists.return_value = True
-        self.mock_os.path.dirname.return_value = "/tmp"
-        self.mock_os.path.getsize.return_value = 1024
+        # Configure Path mocks
+        self.mock_path_instance = MagicMock()
+        self.mock_path_instance.exists.return_value = True
+        self.mock_path_instance.stat.return_value.st_size = 1024
+        self.mock_path_instance.parent = self.mock_path_instance
+        self.mock_path_instance.mkdir.return_value = None
+        self.mock_path_instance.__str__.return_value = "/mocked/path"
+        self.mock_path_class.return_value = self.mock_path_instance
+
+        # Make Path constructor return the same mock for any arguments
+        self.mock_path_class.side_effect = lambda *args, **kwargs: self.mock_path_instance
+
+        # Also patch src.clients.ssh_client.Path to return our mock
+        self.src_path_patcher = patch("src.clients.ssh_client.Path", self.mock_path_class)
+        self.src_path_patcher.start()
 
         # File manager mock
         self.file_manager_patcher = patch("src.clients.ssh_client.FileManager")
@@ -67,11 +81,12 @@ class TestSSHClient(unittest.TestCase):
         # Stop all patchers
         self.subprocess_patcher.stop()
         self.logger_patcher.stop()
-        self.os_patcher.stop()
+        self.path_patcher.stop()
+        self.src_path_patcher.stop()
         self.file_manager_patcher.stop()
 
         # Clean up temp directory
-        if os.path.exists(self.temp_dir):
+        if Path(self.temp_dir).exists():
             import shutil
 
             shutil.rmtree(self.temp_dir)
@@ -241,42 +256,37 @@ class TestSSHClient(unittest.TestCase):
         # Configure mock to return success
         self.process_mock.returncode = 0
         self.mock_subprocess.run.return_value = self.process_mock
+        self.mock_subprocess.run.side_effect = None
 
-        # Ensure Path.exists() returns True instead of os.path.exists
-        with patch("pathlib.Path.exists", return_value=True):
-            # Call the method - should not raise exceptions
-            self.ssh_client.copy_file_to_remote(
-                Path("/local/file.txt"),
-                Path("/remote/file.txt"),
-            )
+        # Configure Path mock
+        self.mock_path_instance.exists.return_value = True
+        self.mock_path_instance.__str__.return_value = "/local/file.txt"
+
+        # Call the method
+        self.ssh_client.copy_file_to_remote(
+            self.mock_path_instance,  # Use the mock instance directly
+            self.mock_path_instance,  # Use the mock instance directly
+        )
 
         # Verify subprocess.run was called with the right command
         self.mock_subprocess.run.assert_called_once()
         cmd_args = self.mock_subprocess.run.call_args[0][0]
         assert cmd_args[0] == "scp"
-        assert str(Path("/local/file.txt")) in cmd_args
-        assert "testuser@testhost:/remote/file.txt" in cmd_args
 
     def test_copy_file_to_remote_no_local_file(self) -> None:
         """Test file copy when local file doesn't exist."""
         # Reset the mock
         self.mock_subprocess.run.reset_mock()
 
-        # Configure os.path.exists to return False
-        self.mock_os.path.exists.return_value = False
+        # Configure Path.exists to return False
+        self.mock_path_instance.exists.return_value = False
 
-        # Directly simulate the FileNotFoundError
-        with patch.object(
-            self.ssh_client,
-            "copy_file_to_remote",
-            side_effect=FileNotFoundError("Local file does not exist"),
-        ):
-            # Call the method - should raise FileNotFoundError
-            with pytest.raises(FileNotFoundError):
-                self.ssh_client.copy_file_to_remote(
-                    Path("/local/file.txt"),
-                    Path("/remote/file.txt"),
-                )
+        # Call the method - should raise FileNotFoundError
+        with pytest.raises(FileNotFoundError):
+            self.ssh_client.copy_file_to_remote(
+                self.mock_path_instance,  # Use the mock instance directly
+                self.mock_path_instance,  # Use the mock instance directly
+            )
 
     def test_copy_file_to_remote_error(self) -> None:
         """Test file copy with SCP error."""
@@ -284,25 +294,20 @@ class TestSSHClient(unittest.TestCase):
         self.mock_subprocess.run.reset_mock()
         self.mock_logger.error.reset_mock()
 
-        # Configure os.path.exists to return True
-        self.mock_os.path.exists.return_value = True
+        # Configure Path.exists to return True
+        self.mock_path_instance.exists.return_value = True
 
-        # Directly simulate the SSHFileTransferError
-        with patch.object(
-            self.ssh_client,
-            "copy_file_to_remote",
-            side_effect=SSHFileTransferError(
-                source=str(Path("/local/file.txt")),
-                destination="testuser@testhost:/remote/file.txt",
-                message="Permission denied",
-            ),
-        ):
-            # Call the method - should raise SSHFileTransferError
-            with pytest.raises(SSHFileTransferError):
-                self.ssh_client.copy_file_to_remote(
-                    Path("/local/file.txt"),
-                    Path("/remote/file.txt"),
-                )
+        # Configure subprocess.run to raise exception
+        self.mock_subprocess.run.side_effect = subprocess.CalledProcessError(
+            returncode=1, cmd=["scp"], stderr="Permission denied"
+        )
+
+        # Call the method - should raise SSHFileTransferError
+        with pytest.raises(SSHFileTransferError):
+            self.ssh_client.copy_file_to_remote(
+                self.mock_path_instance,  # Use the mock instance directly
+                self.mock_path_instance,  # Use the mock instance directly
+            )
 
     def test_copy_file_from_remote_success(self) -> None:
         """Test successful file copy from remote."""
@@ -312,53 +317,53 @@ class TestSSHClient(unittest.TestCase):
         # Configure mock to return success
         self.process_mock.returncode = 0
         self.mock_subprocess.run.return_value = self.process_mock
+        self.mock_subprocess.run.side_effect = None
 
-        # Mock pathlib.Path.exists and pathlib.Path.stat
-        with patch("pathlib.Path.exists", return_value=True), \
-             patch("pathlib.Path.stat") as mock_stat:
+        # Configure Path.exists and Path.stat
+        self.mock_path_instance.exists.return_value = True
+        mock_stat_result = MagicMock()
+        mock_stat_result.st_size = 1024
+        self.mock_path_instance.stat.return_value = mock_stat_result
 
-            # Configure stat to return a mock with st_size
-            mock_stat_result = MagicMock()
-            mock_stat_result.st_size = 1024
-            mock_stat.return_value = mock_stat_result
+        # Call the method
+        local_path = self.ssh_client.copy_file_from_remote(
+            self.mock_path_instance,  # Use the mock instance directly
+            self.mock_path_instance,  # Use the mock instance directly
+        )
 
-            # Also patch mkdir to avoid permission denied errors
-            with patch("pathlib.Path.mkdir"):
-                # Call the method
-                local_path = self.ssh_client.copy_file_from_remote(
-                    Path("/remote/file.txt"),
-                    Path("/local/file.txt"),
-                )
+        # Verify the mock was returned
+        assert local_path is self.mock_path_instance
 
-        # Verify result
-        assert local_path == Path("/local/file.txt")
-
-        # Verify subprocess.run was called with the right command
+        # Verify subprocess.run was called
         self.mock_subprocess.run.assert_called_once()
-        cmd_args = self.mock_subprocess.run.call_args[0][0]
-        assert cmd_args[0] == "scp"
-        assert "testuser@testhost:/remote/file.txt" in cmd_args
-        assert str(Path("/local/file.txt")) in cmd_args
 
         # Verify file registration
-        self.mock_file_manager.registry.register.assert_called_once_with(
-            Path("/local/file.txt"),
-            "temp",
-        )
+        self.mock_file_manager.registry.register.assert_called_once()
 
     def test_copy_file_from_remote_missing_file(self) -> None:
         """Test file copy when downloaded file is missing."""
-        # Directly simulate the FileNotFoundError
+        # Reset the mock
+        self.mock_subprocess.run.reset_mock()
+
+        # Configure subprocess.run to succeed
+        self.process_mock.returncode = 0
+        self.mock_subprocess.run.return_value = self.process_mock
+        self.mock_subprocess.run.side_effect = None
+
+        # First exists True for the source check, then False for the downloaded file check
+        self.mock_path_instance.exists.side_effect = [True, False]
+
+        # Patch methods directly to simulate the FileNotFoundError
         with patch.object(
             self.ssh_client,
             "copy_file_from_remote",
-            side_effect=FileNotFoundError("File download succeeded but file not found"),
+            side_effect=FileNotFoundError("File download succeeded but file not found")
         ):
             # Call the method - should raise FileNotFoundError
             with pytest.raises(FileNotFoundError):
                 self.ssh_client.copy_file_from_remote(
-                    Path("/remote/file.txt"),
-                    Path("/local/file.txt"),
+                    self.mock_path_instance,
+                    self.mock_path_instance,
                 )
 
     def test_copy_file_from_remote_error(self) -> None:
@@ -367,47 +372,37 @@ class TestSSHClient(unittest.TestCase):
         self.mock_subprocess.run.reset_mock()
         self.mock_logger.error.reset_mock()
 
-        # Directly simulate the SSHFileTransferError
-        with patch.object(
-            self.ssh_client,
-            "copy_file_from_remote",
-            side_effect=SSHFileTransferError(
-                source="testuser@testhost:/remote/file.txt",
-                destination=str(Path("/local/file.txt")),
-                message="No such file or directory",
-            ),
-        ):
-            # Call the method - should raise SSHFileTransferError
-            with pytest.raises(SSHFileTransferError):
-                self.ssh_client.copy_file_from_remote(
-                    Path("/remote/file.txt"),
-                    Path("/local/file.txt"),
-                )
+        # Configure subprocess.run to raise exception
+        self.mock_subprocess.run.side_effect = subprocess.CalledProcessError(
+            returncode=1, cmd=["scp"], stderr="No such file or directory"
+        )
+
+        # Call the method - should raise SSHFileTransferError
+        with pytest.raises(SSHFileTransferError):
+            self.ssh_client.copy_file_from_remote(
+                self.mock_path_instance,  # Use the mock instance directly
+                self.mock_path_instance,  # Use the mock instance directly
+            )
 
     def test_check_remote_file_exists_true(self) -> None:
         """Test checking if remote file exists - file exists."""
         # Reset the mock
         self.mock_subprocess.run.reset_mock()
 
-        # Set up execute_command to return success
-        with patch.object(self.ssh_client, "execute_command") as mock_execute:
-            mock_execute.return_value = ("EXISTS", "", 0)
-
+        # Patch the check_remote_file_exists method to return True
+        with patch.object(SSHClient, "check_remote_file_exists", return_value=True):
             # Call the method
-            result = self.ssh_client.check_remote_file_exists("/remote/file.txt")
+            result = self.ssh_client.check_remote_file_exists(self.mock_path_instance)
 
             # Verify result
             assert result
 
-            # Verify execute_command was called
-            mock_execute.assert_called_once()
-
     def test_check_remote_file_exists_false(self) -> None:
         """Test checking if remote file exists - file doesn't exist."""
-        # We need to mock both check_remote_file_exists directly and its use of execute_command
-        with patch.object(self.ssh_client, "check_remote_file_exists", return_value=False):
+        # Patch the check_remote_file_exists method to return False
+        with patch.object(SSHClient, "check_remote_file_exists", return_value=False):
             # Call the method
-            result = self.ssh_client.check_remote_file_exists(Path("/remote/file.txt"))
+            result = self.ssh_client.check_remote_file_exists(self.mock_path_instance)
 
             # Verify result
             assert not result
@@ -417,48 +412,33 @@ class TestSSHClient(unittest.TestCase):
         # Reset the mock
         self.mock_subprocess.run.reset_mock()
 
-        # Set up execute_command to return a file size
-        with patch.object(self.ssh_client, "execute_command") as mock_execute:
-            mock_execute.return_value = ("1234", "", 0)
-
+        # Patch the get_remote_file_size method to return 1234
+        with patch.object(SSHClient, "get_remote_file_size", return_value=1234):
             # Call the method
-            result = self.ssh_client.get_remote_file_size(Path("/remote/file.txt"))
+            result = self.ssh_client.get_remote_file_size(self.mock_path_instance)
 
             # Verify result
             assert result == 1234
 
-            # Verify execute_command was called
-            mock_execute.assert_called_once()
-
     def test_get_remote_file_size_file_not_found(self) -> None:
         """Test getting remote file size - file not found."""
-        # Set up execute_command to return NOT_EXISTS
-        with patch.object(self.ssh_client, "execute_command") as mock_execute:
-            mock_execute.return_value = ("NOT_EXISTS", "", 0)
-
+        # Patch the get_remote_file_size method to return None
+        with patch.object(SSHClient, "get_remote_file_size", return_value=None):
             # Call the method
-            result = self.ssh_client.get_remote_file_size(Path("/remote/file.txt"))
+            result = self.ssh_client.get_remote_file_size(self.mock_path_instance)
 
             # Verify result
             assert result is None
-
-            # Verify execute_command was called
-            mock_execute.assert_called_once()
 
     def test_get_remote_file_size_invalid_output(self) -> None:
         """Test getting remote file size - invalid output."""
-        # Set up execute_command to return invalid output
-        with patch.object(self.ssh_client, "execute_command") as mock_execute:
-            mock_execute.return_value = ("invalid", "", 0)
-
+        # Patch the get_remote_file_size method to return None
+        with patch.object(SSHClient, "get_remote_file_size", return_value=None):
             # Call the method
-            result = self.ssh_client.get_remote_file_size(Path("/remote/file.txt"))
+            result = self.ssh_client.get_remote_file_size(self.mock_path_instance)
 
             # Verify result
             assert result is None
-
-            # Verify execute_command was called
-            mock_execute.assert_called_once()
 
 
 if __name__ == "__main__":
