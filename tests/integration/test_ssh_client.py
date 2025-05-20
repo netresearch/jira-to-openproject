@@ -232,9 +232,8 @@ class TestSSHClient(unittest.TestCase):
             self.ssh_client,
             "execute_command",
             side_effect=SSHCommandError(command="invalid_command", returncode=1, stdout="", stderr="Command failed"),
-        ):
-            with pytest.raises(SSHCommandError):
-                self.ssh_client.execute_command("invalid_command")
+        ), pytest.raises(SSHCommandError):
+            self.ssh_client.execute_command("invalid_command")
 
     def test_execute_command_timeout(self) -> None:
         """Test command execution timeout."""
@@ -299,7 +298,7 @@ class TestSSHClient(unittest.TestCase):
 
         # Configure subprocess.run to raise exception
         self.mock_subprocess.run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd=["scp"], stderr="Permission denied"
+            returncode=1, cmd=["scp"], stderr="Permission denied",
         )
 
         # Call the method - should raise SSHFileTransferError
@@ -354,17 +353,18 @@ class TestSSHClient(unittest.TestCase):
         self.mock_path_instance.exists.side_effect = [True, False]
 
         # Patch methods directly to simulate the FileNotFoundError
+        # Call the method - should raise FileNotFoundError
         with patch.object(
             self.ssh_client,
             "copy_file_from_remote",
-            side_effect=FileNotFoundError("File download succeeded but file not found")
-        ):
-            # Call the method - should raise FileNotFoundError
-            with pytest.raises(FileNotFoundError):
-                self.ssh_client.copy_file_from_remote(
-                    self.mock_path_instance,
-                    self.mock_path_instance,
-                )
+            side_effect=FileNotFoundError(
+                "File download succeeded but file not found",
+            ),
+        ), pytest.raises(FileNotFoundError):
+            self.ssh_client.copy_file_from_remote(
+                self.mock_path_instance,
+                self.mock_path_instance,
+            )
 
     def test_copy_file_from_remote_error(self) -> None:
         """Test file copy from remote with SCP error."""
@@ -374,7 +374,7 @@ class TestSSHClient(unittest.TestCase):
 
         # Configure subprocess.run to raise exception
         self.mock_subprocess.run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd=["scp"], stderr="No such file or directory"
+            returncode=1, cmd=["scp"], stderr="No such file or directory",
         )
 
         # Call the method - should raise SSHFileTransferError
