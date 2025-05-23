@@ -3,8 +3,10 @@
 Handles the migration of users and their accounts from Jira to OpenProject.
 """
 
-import os
+import json
+import re
 from pathlib import Path
+from typing import Any
 
 from src import config
 from src.clients.jira_client import JiraClient
@@ -58,11 +60,11 @@ class UserMigration(BaseMigration):
         self.logger.debug(f"UserMigration initialized with data dir: {self.data_dir}")
 
         # Load existing data if available
-        self.jira_users = self._load_from_json("jira_users.json") or []
-        self.op_users = self._load_from_json("op_users.json") or []
-        self.user_mapping = self._load_from_json("user_mapping.json") or {}
+        self.jira_users = self._load_from_json(Path("jira_users.json")) or []
+        self.op_users = self._load_from_json(Path("op_users.json")) or []
+        self.user_mapping = self._load_from_json(Path("user_mapping.json")) or {}
 
-    def extract_jira_users(self) -> list:
+    def extract_jira_users(self) -> list[dict[str, Any]]:
         """Extract users from Jira.
 
         Returns:
@@ -82,11 +84,11 @@ class UserMigration(BaseMigration):
 
         self.logger.info(f"Extracted {len(self.jira_users)} users from Jira")
 
-        self._save_to_json(self.jira_users, "jira_users.json")
+        self._save_to_json(self.jira_users, Path("jira_users.json"))
 
         return self.jira_users
 
-    def extract_openproject_users(self) -> list:
+    def extract_openproject_users(self) -> list[dict[str, Any]]:
         """Extract users from OpenProject.
 
         Returns:
@@ -109,11 +111,11 @@ class UserMigration(BaseMigration):
             f"Extracted {len(self.op_users)} users from OpenProject",
         )
 
-        self._save_to_json(self.op_users, "op_users.json")
+        self._save_to_json(self.op_users, Path("op_users.json"))
 
         return self.op_users
 
-    def create_user_mapping(self) -> dict:
+    def create_user_mapping(self) -> dict[str, Any]:
         """Create a mapping between Jira and OpenProject users.
 
         Returns:
@@ -134,11 +136,15 @@ class UserMigration(BaseMigration):
         op_users_by_username = {user.get("login", "").lower(): user for user in self.op_users}
         op_users_by_email = {user.get("email", "").lower(): user for user in self.op_users if user.get("email")}
 
-        mapping = {}
+        mapping: dict[str, Any] = {}
 
         with ProgressTracker("Mapping users", len(self.jira_users), "Recent User Mappings") as tracker:
             for jira_user in self.jira_users:
-                jira_key = jira_user.get("key")
+                jira_key = jira_user.get("key", "")  # Ensure non-None value
+                if not jira_key:
+                    self.logger.warning("Found Jira user without key, skipping")
+                    continue
+
                 jira_name = jira_user.get("name", "").lower()
                 jira_email = jira_user.get("emailAddress", "").lower()
                 jira_display_name = jira_user.get("displayName", "")
@@ -191,12 +197,12 @@ class UserMigration(BaseMigration):
                 tracker.increment()
 
         # Save the mapping
-        self._save_to_json(mapping, "user_mapping.json")
+        self._save_to_json(mapping, Path("user_mapping.json"))
         self.user_mapping = mapping
 
         return mapping
 
-    def create_missing_users(self, batch_size: int = 10) -> dict:
+    def create_missing_users(self, batch_size: int = 10) -> dict[str, Any]:
         """Create missing users in OpenProject using the LDAP synchronization.
 
         Args:
@@ -226,7 +232,7 @@ class UserMigration(BaseMigration):
 
         created = 0
         failed = 0
-        created_users = []
+        created_users: list[dict[str, Any]] = []
 
         with ProgressTracker("Creating users", len(missing_users), "Recent User Creations") as tracker:
             for i in range(0, len(missing_users), batch_size):
@@ -255,50 +261,40 @@ class UserMigration(BaseMigration):
                 tracker.update_description(f"Creating users: {', '.join(batch_users)}")
 
                 try:
-                    # Create users in bulk - response is now a string instead of a dict
+                    # Create users in bulk and process the response
                     result_str = self.op_client.create_users_in_bulk(users_to_create)
 
-                    # Parse the JSON string to extract the needed information
-                    # If string parsing fails, use a reasonable default
+                    # Process result with optimistic execution
                     try:
-                        import json
-                        import re
-
                         # First try standard JSON parsing
-                        try:
-                            result = json.loads(result_str)
-                        except json.JSONDecodeError:
-                            # Fall back to regex extraction if there are Ruby hash markers
-                            # Extract data between curly braces
-                            match = re.search(r"\{.*\}", result_str, re.DOTALL)
-                            if match:
-                                # Convert Ruby hash string to JSON format
-                                json_str = match.group(0)
-                                json_str = re.sub(r":(\w+)\s*=>", r'"\1":', json_str)
-                                json_str = json_str.replace("=>", ":")
-                                try:
-                                    result = json.loads(json_str)
-                                except:
-                                    # If everything fails, rely on string counts for basic success metrics
-                                    self.logger.warning("Could not parse JSON, using basic string parsing")
-                                    batch_created = result_str.count('"status": "success"') or result_str.count(
-                                        '"status" => "success"',
-                                    )
-                                    batch_failed = len(batch) - batch_created
-                                    result = {"created_count": batch_created, "created_users": [], "failed_users": []}
-                            else:
-                                # No JSON-like structure found
-                                batch_created = 0
-                                batch_failed = len(batch)
-                                result = {"created_count": 0, "created_users": [], "failed_users": []}
-                    except ImportError:
-                        # If somehow json module is not available
-                        self.logger.warning("JSON module not available, using basic string parsing")
-                        batch_created = result_str.count('"status": "success"') or result_str.count(
-                            '"status" => "success"',
-                        )
-                        batch_failed = len(batch) - batch_created
-                        result = {"created_count": batch_created, "created_users": [], "failed_users": []}
+                        result = json.loads(result_str)
+                    except json.JSONDecodeError:
+                        # If standard parsing fails, attempt to extract a JSON-like structure
+                        if not isinstance(result_str, str):
+                            result_str_safe = str(result_str)  # Ensure it's a string
+                        else:
+                            result_str_safe = result_str
+
+                        match = re.search(r"\{.*\}", result_str_safe, re.DOTALL)
+                        if match:
+                            # Convert Ruby hash string to JSON format
+                            json_str = match.group(0)
+                            json_str = re.sub(r":(\w+)\s*=>", r'"\1":', json_str)
+                            json_str = json_str.replace("=>", ":")
+                            result = json.loads(json_str)
+                        else:
+                            # Fall back to basic success count logic
+                            success_count_1 = 0
+                            success_count_2 = 0
+                            if isinstance(result_str, str):
+                                success_count_1 = result_str.count('"status": "success"')
+                                success_count_2 = result_str.count('"status" => "success"')
+                            success_count = success_count_1 + success_count_2
+                            result = {
+                                "created_count": success_count,
+                                "created_users": [],
+                                "failed_users": []
+                            }
 
                     # Extract result stats
                     batch_created = result.get("created_count", 0)
@@ -333,7 +329,7 @@ class UserMigration(BaseMigration):
             "created_users": created_users,
         }
 
-    def analyze_user_mapping(self) -> dict:
+    def analyze_user_mapping(self) -> dict[str, Any]:
         """Analyze the user mapping for statistics and potential issues.
 
         Returns:
@@ -404,7 +400,7 @@ class UserMigration(BaseMigration):
 
             # Create missing users if configured
             create_missing = config.get_value("migration", "create_missing_users", False)
-            creation_results = {}
+            creation_results: dict[str, Any] = {}
             if create_missing:
                 creation_results = self.create_missing_users()
                 self.logger.info(
@@ -416,7 +412,8 @@ class UserMigration(BaseMigration):
                 )
 
             # Update mappings with new data
-            config.mappings.set_mapping("users", self.user_mapping)
+            if config.mappings is not None:
+                config.mappings.set_mapping("users", self.user_mapping)
 
             return ComponentResult(
                 success=True,
