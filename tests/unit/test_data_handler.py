@@ -77,24 +77,6 @@ class TestDataHandler(unittest.TestCase):
         # Verify loaded data matches original
         assert loaded_data == test_data
 
-    def test_save_and_load_with_path(self) -> None:
-        """Test saving and loading using direct file paths."""
-        # Create a test model
-        test_result = ComponentResult(success=False, message="Path test", errors=["Error 1", "Error 2"])
-
-        # Save using path
-        success = data_handler.save_to_path(test_result, self.test_filepath)
-        assert success
-
-        # Load using path
-        loaded_result = data_handler.load_from_path(ComponentResult, self.test_filepath)
-
-        # Verify loaded model matches original
-        assert loaded_result is not None
-        assert loaded_result.success == test_result.success
-        assert loaded_result.message == test_result.message
-        assert loaded_result.errors == test_result.errors
-
     def test_load_nonexistent_file(self) -> None:
         """Test loading a file that doesn't exist."""
         # Try to load a nonexistent file

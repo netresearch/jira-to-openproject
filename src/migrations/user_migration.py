@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """User migration module for Jira to OpenProject migration.
+
 Handles the migration of users and their accounts from Jira to OpenProject.
 """
 
@@ -57,7 +58,7 @@ class UserMigration(BaseMigration):
         self.user_mapping_file = self.data_dir / "user_mapping.json"
 
         # Logging
-        self.logger.debug(f"UserMigration initialized with data dir: {self.data_dir}")
+        self.logger.debug("UserMigration initialized with data dir: %s", self.data_dir)
 
         # Load existing data if available
         self.jira_users = self._load_from_json(Path("jira_users.json")) or []
@@ -82,7 +83,7 @@ class UserMigration(BaseMigration):
             msg = "Failed to extract users from Jira"
             raise MigrationError(msg)
 
-        self.logger.info(f"Extracted {len(self.jira_users)} users from Jira")
+        self.logger.info("Extracted %s users from Jira", len(self.jira_users))
 
         self._save_to_json(self.jira_users, Path("jira_users.json"))
 
@@ -108,7 +109,7 @@ class UserMigration(BaseMigration):
             raise MigrationError(msg)
 
         self.logger.info(
-            f"Extracted {len(self.op_users)} users from OpenProject",
+            "Extracted %s users from OpenProject", len(self.op_users),
         )
 
         self._save_to_json(self.op_users, Path("op_users.json"))
@@ -133,12 +134,23 @@ class UserMigration(BaseMigration):
         if not self.op_users:
             self.extract_openproject_users()
 
-        op_users_by_username = {user.get("login", "").lower(): user for user in self.op_users}
-        op_users_by_email = {user.get("email", "").lower(): user for user in self.op_users if user.get("email")}
+        op_users_by_username = {
+            user.get("login", "").lower(): user
+            for user in self.op_users
+        }
+        op_users_by_email = {
+            user.get("email", "").lower(): user
+            for user in self.op_users
+            if user.get("email")
+        }
 
         mapping: dict[str, Any] = {}
 
-        with ProgressTracker("Mapping users", len(self.jira_users), "Recent User Mappings") as tracker:
+        with ProgressTracker(
+            "Mapping users",
+            len(self.jira_users),
+            "Recent User Mappings",
+        ) as tracker:
             for jira_user in self.jira_users:
                 jira_key = jira_user.get("key", "")  # Ensure non-None value
                 if not jira_key:
@@ -163,7 +175,9 @@ class UserMigration(BaseMigration):
                         "openproject_email": op_user.get("email"),
                         "matched_by": "username",
                     }
-                    tracker.add_log_item(f"Matched by username: {jira_display_name} → {op_user.get('login')}")
+                    tracker.add_log_item(
+                        f"Matched by username: {jira_display_name} → {op_user.get('login')}"
+                    )
                     tracker.increment()
                     continue
 
@@ -179,7 +193,9 @@ class UserMigration(BaseMigration):
                         "openproject_email": op_user.get("email"),
                         "matched_by": "email",
                     }
-                    tracker.add_log_item(f"Matched by email: {jira_display_name} → {op_user.get('login')}")
+                    tracker.add_log_item(
+                        f"Matched by email: {jira_display_name} → {op_user.get('login')}"
+                    )
                     tracker.increment()
                     continue
 
@@ -220,21 +236,25 @@ class UserMigration(BaseMigration):
         if not self.user_mapping:
             self.create_user_mapping()
 
-        missing_users = [user for user in self.user_mapping.values() if user["matched_by"] == "none"]
+        missing_users = [
+            user for user in self.user_mapping.values() if user["matched_by"] == "none"
+        ]
 
         if not missing_users:
             self.logger.info("No missing users to create")
             return {"created": 0, "failed": 0, "total": 0}
 
         self.logger.info(
-            f"Found {len(missing_users)} users missing in OpenProject",
+            "Found %s users missing in OpenProject", len(missing_users),
         )
 
         created = 0
         failed = 0
         created_users: list[dict[str, Any]] = []
 
-        with ProgressTracker("Creating users", len(missing_users), "Recent User Creations") as tracker:
+        with ProgressTracker(
+            "Creating users", len(missing_users), "Recent User Creations",
+        ) as tracker:
             for i in range(0, len(missing_users), batch_size):
                 batch = missing_users[i : i + batch_size]
 
@@ -267,7 +287,7 @@ class UserMigration(BaseMigration):
                     # Process result with optimistic execution
                     try:
                         # First try standard JSON parsing
-                        result = json.loads(result_str)
+                        result = json.loads(result_str[0])
                     except json.JSONDecodeError:
                         # If standard parsing fails, attempt to extract a JSON-like structure
                         if not isinstance(result_str, str):
@@ -362,18 +382,18 @@ class UserMigration(BaseMigration):
 
         # Display the analysis
         self.logger.info("User mapping analysis:")
-        self.logger.info(f"Total users: {total_users}")
+        self.logger.info("Total users: %s", total_users)
         self.logger.info(
-            f"Matched by username: {matched_by_username} ({analysis['username_match_percentage']:.2f}%)",
+            "Matched by username: %s (%s%%)", matched_by_username, analysis["username_match_percentage"]
         )
         self.logger.info(
-            f"Matched by email: {matched_by_email} ({analysis['email_match_percentage']:.2f}%)",
+            "Matched by email: %s (%s%%)", matched_by_email, analysis["email_match_percentage"]
         )
         self.logger.info(
-            f"Total matched: {matched_by_username + matched_by_email} ({analysis['total_match_percentage']:.2f}%)",
+            "Total matched: %s (%s%%)", matched_by_username + matched_by_email, analysis["total_match_percentage"]
         )
         self.logger.info(
-            f"Not matched: {not_matched} ({analysis['not_matched_percentage']:.2f}%)",
+            "Not matched: %s (%s%%)", not_matched, analysis["not_matched_percentage"]
         )
 
         return analysis
@@ -404,7 +424,7 @@ class UserMigration(BaseMigration):
             if create_missing:
                 creation_results = self.create_missing_users()
                 self.logger.info(
-                    f"Created {creation_results['created']} users, {creation_results['failed']} failed",
+                    "Created %s users, %s failed", creation_results["created"], creation_results["failed"]
                 )
             else:
                 self.logger.info(
@@ -429,7 +449,7 @@ class UserMigration(BaseMigration):
                 total_count=analysis["total_users"],
             )
         except Exception as e:
-            self.logger.exception(f"Error in user migration: {e!s}")
+            self.logger.exception("Error in user migration: %s", e)
             return ComponentResult(
                 success=False,
                 errors=[f"Error in user migration: {e!s}"],

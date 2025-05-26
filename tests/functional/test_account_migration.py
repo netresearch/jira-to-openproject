@@ -114,19 +114,31 @@ class TestAccountMigration(unittest.TestCase):
 
         # Mock _save_to_json to avoid actually writing to file
         with patch("src.migrations.account_migration.BaseMigration._save_to_json") as mock_save:
-            # Initialize migration
-            migration = AccountMigration(mock_jira_instance, mock_op_instance)
+            # Mock _load_from_json to return empty list initially
+            with patch("src.migrations.account_migration.BaseMigration._load_from_json") as mock_load:
+                # Return empty list for tempo_accounts.json, empty dict for others
+                def load_side_effect(filename, default=None):
+                    if "tempo_accounts" in str(filename):
+                        return []
+                    elif "account_mapping" in str(filename):
+                        return {}
+                    return default if default is not None else {}
 
-            # Call extract_tempo_accounts
-            result = migration.extract_tempo_accounts()
+                mock_load.side_effect = load_side_effect
 
-            # Verify API was called and data was saved
-            mock_jira_instance.get_tempo_accounts.assert_called_once_with(expand=True)
-            mock_save.assert_called_once()
+                # Initialize migration
+                migration = AccountMigration(mock_jira_instance, mock_op_instance)
 
-            # Verify data was extracted
-            assert len(result) == 2
-            assert migration.tempo_accounts == self.tempo_accounts
+                # Call extract_tempo_accounts
+                result = migration.extract_tempo_accounts()
+
+                # Verify API was called and data was saved
+                mock_jira_instance.get_tempo_accounts.assert_called_once_with(expand=True)
+                mock_save.assert_called_once()
+
+                # Verify data was extracted
+                assert len(result) == 2
+                assert migration.tempo_accounts == self.tempo_accounts
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")

@@ -174,10 +174,7 @@ def load_dict(
     file_path = directory / filename
 
     try:
-        if not file_path.exists():
-            config.logger.debug("File does not exist: %s", file_path)
-            return default
-
+        # Optimistic execution: attempt to load directly
         with file_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -187,8 +184,15 @@ def load_dict(
 
         config.logger.info("Loaded dictionary data from %s", file_path)
         return data
-    except json.JSONDecodeError:
-        config.logger.exception("Error parsing JSON from %s", file_path)
+    except FileNotFoundError:
+        config.logger.debug("File does not exist: %s", file_path)
+        return default
+    except json.JSONDecodeError as e:
+        # Only check file size after JSON parsing fails
+        if file_path.stat().st_size == 0:
+            config.logger.debug("File is empty: %s", file_path)
+        else:
+            config.logger.exception("Error parsing JSON from %s", file_path)
         return default
     except Exception:
         config.logger.exception("Error reading JSON file %s", file_path)
@@ -225,10 +229,7 @@ def load_list(
     file_path = directory / filename
 
     try:
-        if not file_path.exists():
-            config.logger.debug("File does not exist: %s", file_path)
-            return default
-
+        # Optimistic execution: attempt to load directly
         with file_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -238,8 +239,15 @@ def load_list(
 
         config.logger.info("Loaded list data from %s", file_path)
         return data
+    except FileNotFoundError:
+        config.logger.debug("File does not exist: %s", file_path)
+        return default
     except json.JSONDecodeError:
-        config.logger.exception("Error parsing JSON from %s", file_path)
+        # Only check file size after JSON parsing fails
+        if file_path.stat().st_size == 0:
+            config.logger.debug("File is empty: %s", file_path)
+        else:
+            config.logger.exception("Error parsing JSON from %s", file_path)
         return default
     except Exception:
         config.logger.exception("Error reading JSON file %s", file_path)
@@ -298,50 +306,6 @@ def save_to_path(
     except Exception as e:
         config.logger.exception(f"Failed to save data to {filepath}: {e}")
         return False
-
-
-def load_from_path(
-    model_class: type[T],
-    filepath: Path | str,
-    default: Any | None = None
-) -> T | None:
-    """Load data from a JSON file at a specific path.
-
-    Args:
-        model_class: Pydantic model class to load into
-        filepath: Full file path to load from
-        default: Default value if file doesn't exist or load fails
-
-    Returns:
-        Instance of model_class or default value if loading fails
-
-    """
-    # Convert to Path object
-    filepath = Path(filepath)
-
-    if not filepath.exists():
-        config.logger.info(f"File not found: {filepath}, returning default")
-        return default
-
-    try:
-        with filepath.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        # Convert dict to model instance
-        if hasattr(model_class, "model_validate"):
-            result = model_class.model_validate(data)
-        elif hasattr(model_class, "parse_obj"):
-            # Legacy Pydantic v1 support
-            result = model_class.parse_obj(data)
-        else:
-            # Fallback to normal constructor
-            result = model_class(**data)
-
-        config.logger.info(f"Loaded data from {filepath}")
-        return result
-    except Exception:
-        config.logger.exception(f"Failed to load data from {filepath}")
-        return default
 
 
 def save_dict(data: dict[str, Any], filepath: Path, indent: int = 2, ensure_ascii: bool = False) -> bool:

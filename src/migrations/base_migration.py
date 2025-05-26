@@ -59,14 +59,25 @@ class BaseMigration:
 
         """
         filepath = self.data_dir / filename
-        if filepath.exists():
-            try:
-                with filepath.open("r") as f:
-                    return json.load(f)
-            except Exception:
-                self.logger.exception("Failed to load %s", filepath)
-                return default
-        return default
+        try:
+            # Optimistic execution: attempt to load directly
+            with filepath.open("r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            # File doesn't exist - this is expected, return default
+            self.logger.debug("File does not exist: %s", filepath)
+            return default
+        except json.JSONDecodeError as e:
+            # Only perform diagnostics after JSON parsing fails
+            if filepath.stat().st_size == 0:
+                self.logger.debug("File is empty: %s", filepath)
+            else:
+                self.logger.exception("JSON decode error in %s: %s", filepath, e)
+            return default
+        except Exception as e:
+            # Unexpected error - log it
+            self.logger.exception("Unexpected error loading %s: %s", filepath, e)
+            return default
 
     def _save_to_json(self, data: Any, filename: Path) -> Path:
         """Save data to a JSON file in the data directory.
