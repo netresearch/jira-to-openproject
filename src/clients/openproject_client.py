@@ -934,6 +934,70 @@ end
             msg = "Error getting custom field ID."
             raise QueryExecutionError(msg) from e
 
+    def get_custom_fields(self, force_refresh: bool = False) -> list[dict[str, Any]]:
+        """Get all custom fields from OpenProject.
+
+        Args:
+            force_refresh: If True, bypass cache and fetch fresh data
+
+        Returns:
+            List of custom field objects with their properties
+
+        Raises:
+            QueryExecutionError: If query fails
+
+        """
+        # Check cache first (5 minutes validity) unless force_refresh is True
+        current_time = time()
+        cache_valid = (
+            not force_refresh
+            and hasattr(self, "_custom_fields_cache")
+            and hasattr(self, "_custom_fields_cache_time")
+            and self._custom_fields_cache is not None
+            and self._custom_fields_cache_time is not None
+            and current_time - self._custom_fields_cache_time < 300
+        )
+
+        if cache_valid:
+            logger.debug("Using cached custom fields data (%d fields)", len(self._custom_fields_cache))
+            return self._custom_fields_cache
+
+        try:
+            # Query to get all custom fields with their properties
+            query = """
+            CustomField.all.map do |cf|
+              {
+                id: cf.id,
+                name: cf.name,
+                field_format: cf.field_format,
+                is_required: cf.is_required,
+                is_for_all: cf.is_for_all,
+                type: cf.type,
+                possible_values: cf.possible_values,
+                default_value: cf.default_value,
+                min_length: cf.min_length,
+                max_length: cf.max_length,
+                regexp: cf.regexp,
+                is_filter: cf.is_filter,
+                searchable: cf.searchable,
+                editable: cf.editable
+              }
+            end
+            """
+
+            custom_fields = self.execute_json_query(query)
+
+            # Update cache
+            self._custom_fields_cache = custom_fields or []
+            self._custom_fields_cache_time = current_time
+
+            logger.debug("Retrieved %d custom fields from OpenProject", len(self._custom_fields_cache))
+            return self._custom_fields_cache
+
+        except Exception as e:
+            msg = "Failed to get custom fields."
+            raise QueryExecutionError(msg) from e
+
     def get_statuses(self) -> list[dict[str, Any]]:
         """Get all statuses from OpenProject.
 

@@ -227,7 +227,7 @@ class JiraClient:
             try:
                 logger.debug(f"Fetching issues for {project_key}: startAt={start_at}, maxResults={max_results}")
 
-                issues_page: Resultlist[Issue] = self.jira.search_issues(
+                issues_page = self.jira.search_issues(
                     jql,
                     startAt=start_at,
                     maxResults=max_results,
@@ -692,6 +692,7 @@ class JiraClient:
 
     def get_field_metadata(self, field_id: str) -> dict[str, Any]:
         """Get metadata for a specific custom field, including allowed values.
+
         Automatically uses ScriptRunner when available for better performance.
 
         Args:
@@ -707,6 +708,7 @@ class JiraClient:
         """
         # Check if we already have this field in cache
         if field_id in self.field_options_cache:
+            logger.debug(f"Returning cached metadata for field {field_id}")
             return self.field_options_cache[field_id]
 
         # Try ScriptRunner first if enabled
@@ -715,13 +717,23 @@ class JiraClient:
 
             # If we don't have the full ScriptRunner data cached yet, fetch it
             if scriptrunner_cache_key not in self.field_options_cache:
+                logger.info("Fetching all custom field options via ScriptRunner...")
                 try:
                     response = self._make_request(self.scriptrunner_custom_field_options_endpoint)
                     if response and response.status_code == 200:
                         # Cache all fields data
-                        self.field_options_cache[scriptrunner_cache_key] = response.json()
+                        all_fields_data = response.json()
+                        self.field_options_cache[scriptrunner_cache_key] = all_fields_data
+                        logger.info(
+                            f"Successfully cached ScriptRunner data for {len(all_fields_data)} fields"
+                        )
+                    else:
+                        logger.warning(
+                            f"ScriptRunner request failed with status "
+                            f"{response.status_code if response else 'None'}"
+                        )
                 except Exception as e:
-                    logger.exception(f"Error fetching ScriptRunner data: {e}")
+                    logger.warning(f"Error fetching ScriptRunner data: {e}")
                     # Fall through to standard method - don't raise here
 
             # Try to get the specific field from the cached ScriptRunner data
@@ -735,9 +747,13 @@ class JiraClient:
 
                     # Cache the result
                     self.field_options_cache[field_id] = result
+                    logger.debug(f"Returning ScriptRunner data for field {field_id} with {len(options)} options")
                     return result
+                else:
+                    logger.debug(f"Field {field_id} not found in ScriptRunner data or has no options")
 
         # If ScriptRunner method didn't work, use the standard method
+        logger.debug(f"Falling back to standard method for field {field_id}")
         try:
             result = self._get_field_metadata_via_createmeta(field_id)
 
