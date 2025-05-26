@@ -14,6 +14,7 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 
 # Import RailsConsolePexpect to handle direct Rails console execution
+from src.clients.rails_console_client import RailsConsoleClient
 from src.display import ProgressTracker, console
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult, MigrationError
@@ -34,7 +35,7 @@ class CustomFieldMigration(BaseMigration):
         self,
         jira_client: JiraClient,
         op_client: OpenProjectClient,
-        rails_console = None,
+        rails_console: RailsConsoleClient | None = None,
     ) -> None:
         """Initialize the custom field migration process.
 
@@ -106,8 +107,30 @@ class CustomFieldMigration(BaseMigration):
             # Get all fields from Jira
             jira_fields = self.jira_client.jira.fields()
 
+            # Try to get all field options from ScriptRunner in one call if available
+            scriptrunner_data = {}
+            if self.jira_client.scriptrunner_enabled and self.jira_client.scriptrunner_custom_field_options_endpoint:
+                self.logger.info("Fetching all custom field options via ScriptRunner...")
+                try:
+                    response = self.jira_client._make_request(
+                        self.jira_client.scriptrunner_custom_field_options_endpoint,
+                    )
+                    if response and response.status_code == 200:
+                        scriptrunner_data = response.json()
+                        self.logger.info(
+                            "Successfully fetched ScriptRunner data for %d fields",
+                            len(scriptrunner_data),
+                        )
+                except Exception as e:
+                    self.logger.warning(
+                        "Failed to fetch ScriptRunner data: %s. Will fall back to individual calls.",
+                        str(e),
+                    )
+
             # Filter to only include custom fields
             custom_fields = []
+            fields_needing_metadata = []
+
             for field in jira_fields:
                 if field.get("custom", False):
                     custom_field_data = {
@@ -117,31 +140,57 @@ class CustomFieldMigration(BaseMigration):
                         "custom_type": field.get("schema", {}).get("custom", "unknown"),
                     }
 
-                    # Special handling for fields with allowedValues (select fields)
+                    # Check if this field needs options (select/option/array types)
+                    field_id = field.get("id")
                     if "schema" in field and field["schema"].get("type") in ["option", "array"]:
-                        try:
-                            # Note: This makes an additional API call for each select field
-                            # For large Jira instances this could be optimized
-                            field_metadata = self.jira_client.get_field_metadata(field.get("id"))
-                            if "allowedValues" in field_metadata:
-                                allowed_values = []
-                                for value in field_metadata["allowedValues"]:
-                                    # Different fields might structure their values differently
-                                    if "value" in value:
-                                        allowed_values.append(value["value"])
-                                    elif "name" in value:
-                                        allowed_values.append(value["name"])
-                                    else:
-                                        allowed_values.append(str(value))
-                                custom_field_data["allowed_values"] = allowed_values
-                        except Exception as e:
-                            self.logger.warning(
-                                "Failed to get metadata for field %s: %s",
-                                field.get("name"),
-                                str(e),
-                            )
+                        # First check ScriptRunner data
+                        if field_id in scriptrunner_data:
+                            sr_field = scriptrunner_data[field_id]
+                            if sr_field.get("options"):
+                                custom_field_data["allowed_values"] = sr_field["options"]
+                                self.logger.debug(
+                                    "Using ScriptRunner data for field %s: %d options",
+                                    field.get("name"),
+                                    len(sr_field["options"]),
+                                )
+                            else:
+                                # Field exists in ScriptRunner but has no options
+                                self.logger.debug(
+                                    "Field %s has no options in ScriptRunner data",
+                                    field.get("name"),
+                                )
+                        else:
+                            # Field not in ScriptRunner data, need to fetch individually
+                            fields_needing_metadata.append((field_id, field.get("name"), custom_field_data))
 
                     custom_fields.append(custom_field_data)
+
+            # Fetch metadata for fields that weren't in ScriptRunner data
+            if fields_needing_metadata:
+                self.logger.info(
+                    "Fetching metadata for %d fields not found in ScriptRunner data",
+                    len(fields_needing_metadata),
+                )
+                for field_id, field_name, custom_field_data in fields_needing_metadata:
+                    try:
+                        field_metadata = self.jira_client.get_field_metadata(field_id)
+                        if "allowedValues" in field_metadata:
+                            allowed_values = []
+                            for value in field_metadata["allowedValues"]:
+                                # Different fields might structure their values differently
+                                if "value" in value:
+                                    allowed_values.append(value["value"])
+                                elif "name" in value:
+                                    allowed_values.append(value["name"])
+                                else:
+                                    allowed_values.append(str(value))
+                            custom_field_data["allowed_values"] = allowed_values
+                    except Exception as e:
+                        self.logger.warning(
+                            "Failed to get metadata for field %s: %s",
+                            field_name,
+                            str(e),
+                        )
 
             # Save to file
             if not custom_fields_file.parent.exists():
@@ -156,7 +205,7 @@ class CustomFieldMigration(BaseMigration):
 
         except Exception as e:
             self.logger.exception("Failed to extract Jira custom fields")
-            error = f"Failed to extract Jira custom fields: {str(e)}"
+            error = f"Failed to extract Jira custom fields: {e!s}"
             raise MigrationError(error) from e
 
     def extract_openproject_custom_fields(self) -> list[dict[str, Any]]:
@@ -193,9 +242,13 @@ class CustomFieldMigration(BaseMigration):
             # Use the op_client's get_custom_fields method which uses Rails console
             all_fields = self.op_client.get_custom_fields(force_refresh=True)
 
-            if not all_fields:
-                msg = "Failed to retrieve custom fields from OpenProject"
-                raise MigrationError(msg)
+            # It's OK if there are no custom fields yet
+            if all_fields is None:
+                self.logger.warning("Failed to retrieve custom fields from OpenProject")
+                all_fields = []
+            elif not all_fields:
+                self.logger.info("No custom fields found in OpenProject (this is normal for a fresh installation)")
+                all_fields = []
 
             # Process and save the fields
             self.op_custom_fields = all_fields
@@ -549,183 +602,171 @@ class CustomFieldMigration(BaseMigration):
         self.logger.info("Writing %d custom fields to %s", len(custom_fields_data), data_file_path)
 
         # Transfer the file to the container
-        container_data_path = f"/tmp/custom_fields_batch_{timestamp}.json"
+        container_data_path = Path(f"/tmp/custom_fields_batch_{timestamp}.json")
 
-        # Use rails_client for file transfers
-        if hasattr(self.rails_client, "transfer_file_to_container"):
-            success = self.rails_client.transfer_file_to_container(data_file_path, container_data_path)
-            if not success:
-                self.logger.error("Failed to transfer custom fields data to container")
-                return False
-        else:
-            self.logger.error("Rails client does not support file transfers")
+        # Use op_client for file transfers
+        try:
+            self.op_client.transfer_file_to_container(data_file_path, container_data_path)
+        except Exception as e:
+            self.logger.error("Failed to transfer custom fields data to container: %s", str(e))
             return False
 
-        # Ruby script to create custom fields from the JSON file
-        ruby_script = f"""
-        # Ruby variables from Python
-        data_file_path = "{container_data_path}"
+        # Ruby query to create custom fields from the JSON file
+        # This will be executed via execute_query_to_json_file which handles file-based execution
+        ruby_query = f"""
+# Load the JSON data
+require 'json'
+json_data = File.read('{container_data_path}')
+custom_fields_data = JSON.parse(json_data)
 
-        begin
-          # Load the JSON data
-          require 'json'
-          json_data = File.read(data_file_path)
-          custom_fields_data = JSON.parse(json_data)
+puts "Loading #{{custom_fields_data.length}} custom fields from {container_data_path}"
 
-          puts "Loading #{{custom_fields_data.length}} custom fields from #{{data_file_path}}"
+# Initialize counters
+created_fields = []
+existing_fields = []
+error_fields = []
 
-          # Initialize counters
-          created_fields = []
-          existing_fields = []
-          error_fields = []
+# Process each custom field
+custom_fields_data.each do |field_data|
+  begin
+    field_name = field_data['name']
+    field_format = field_data['field_format']
+    jira_id = field_data['jira_id']
 
-          # Process each custom field
-          custom_fields_data.each do |field_data|
-            begin
-              field_name = field_data['name']
-              field_format = field_data['field_format']
-              jira_id = field_data['jira_id']
+    puts "Processing field: #{{field_name}} (#{{field_format}})"
 
-              puts "Processing field: #{{field_name}} (#{{field_format}})"
+    # Check if field already exists
+    existing_field = CustomField.find_by(name: field_name)
 
-              # Check if field already exists
-              existing_field = CustomField.find_by(name: field_name)
+    if existing_field
+      puts "  Custom field '#{{field_name}}' already exists with ID: #{{existing_field.id}}"
+      existing_fields << {{
+        name: field_name,
+        id: existing_field.id,
+        jira_id: jira_id,
+        status: 'existing'
+      }}
+      next
+    end
 
-              if existing_field
-                puts "  Custom field '#{{field_name}}' already exists with ID: #{{existing_field.id}}"
-                existing_fields << {{
-                  name: field_name,
-                  id: existing_field.id,
-                  jira_id: jira_id,
-                  status: 'existing'
-                }}
-                next
-              end
+    # Create new custom field
+    cf = CustomField.new(
+      name: field_name,
+      field_format: field_format,
+      is_required: field_data['is_required'] || false,
+      is_for_all: field_data['is_for_all'] || true,
+      type: field_data['type'] || 'WorkPackageCustomField'
+    )
 
-              # Create new custom field
-              cf = CustomField.new(
-                name: field_name,
-                field_format: field_format,
-                is_required: field_data['is_required'] || false,
-                is_for_all: field_data['is_for_all'] || true,
-                type: field_data['type'] || 'WorkPackageCustomField'
-              )
+    # Set possible values for list fields
+    if field_format == 'list'
+      if field_data['possible_values'] && !field_data['possible_values'].empty?
+        values = field_data['possible_values']
+        cf.possible_values = values.map {{ |value| value.to_s.strip }}
+      else
+        cf.possible_values = ['Default option']
+      end
 
-              # Set possible values for list fields
-              if field_format == 'list'
-                if field_data['possible_values'] && !field_data['possible_values'].empty?
-                  values = field_data['possible_values']
-                  cf.possible_values = values.map {{ |value| value.to_s.strip }}
-                else
-                  cf.possible_values = ['Default option']
-                end
+      # Ensure field has at least one value
+      if cf.possible_values.nil? || cf.possible_values.empty?
+        cf.possible_values = ['Default option']
+      end
+    end
 
-                # Ensure field has at least one value
-                if cf.possible_values.nil? || cf.possible_values.empty?
-                  cf.possible_values = ['Default option']
-                end
-              end
+    # Save the custom field
+    if cf.save
+      puts "  Created custom field '#{{field_name}}' with ID: #{{cf.id}}"
 
-              # Save the custom field
-              if cf.save
-                puts "  Created custom field '#{{field_name}}' with ID: #{{cf.id}}"
-
-                # Make it available for all work package types if is_for_all
-                if cf.is_for_all?
-                  puts "  Activating for all work package types..."
-                  Type.all.each do |type|
-                    type.custom_fields << cf unless type.custom_fields.include?(cf)
-                    type.save!
-                  end
-                end
-
-                created_fields << {{
-                  name: field_name,
-                  id: cf.id,
-                  jira_id: jira_id,
-                  status: 'created'
-                }}
-              else
-                puts "  Error creating custom field '#{{field_name}}': #{{cf.errors.full_messages.join(', ')}}"
-                error_fields << {{
-                  name: field_name,
-                  jira_id: jira_id,
-                  status: 'error',
-                  errors: cf.errors.full_messages
-                }}
-              end
-            rescue => e
-              puts "  Error processing field '#{{field_data['name']}}': #{{e.message}}"
-              error_fields << {{
-                name: field_data['name'],
-                jira_id: field_data['jira_id'],
-                status: 'error',
-                errors: [e.message]
-              }}
-            end
-          end
-
-          # Output the results
-          result = {{
-            status: 'success',
-            created: created_fields,
-            existing: existing_fields,
-            errors: error_fields,
-            created_count: created_fields.length,
-            existing_count: existing_fields.length,
-            error_count: error_fields.length
-          }}
-
-          puts "Results: Created #{{created_fields.length}}, Already existed: #{{existing_fields.length}}, Errors: #{{error_fields.length}}"
-
-          # Write results to file for later processing if needed
-          result_file = "/tmp/custom_fields_result_#{{Time.now.to_i}}.json"
-          File.write(result_file, JSON.pretty_generate(result))
-          puts "Results written to #{{result_file}}"
-
-          # Return the result object
-          result
-
-        rescue Exception => e
-          error_result = {{
-            status: 'error',
-            message: e.message,
-            backtrace: e.backtrace,
-            data_file: data_file_path
-          }}
-
-          puts "Critical error: #{{e.message}}"
-          error_result
+      # Make it available for all work package types if is_for_all
+      if cf.is_for_all?
+        puts "  Activating for all work package types..."
+        Type.all.each do |type|
+          type.custom_fields << cf unless type.custom_fields.include?(cf)
+          type.save!
         end
-        """
+      end
 
-        # Execute the Ruby script
-        self.logger.info("Executing Ruby script with custom field data")
-        result = self.rails_client.execute(ruby_script)
+      created_fields << {{
+        name: field_name,
+        id: cf.id,
+        jira_id: jira_id,
+        status: 'created'
+      }}
+    else
+      puts "  Error creating custom field '#{{field_name}}': #{{cf.errors.full_messages.join(', ')}}"
+      error_fields << {{
+        name: field_name,
+        jira_id: jira_id,
+        status: 'error',
+        errors: cf.errors.full_messages
+      }}
+    end
+  rescue => e
+    puts "  Error processing field '#{{field_data['name']}}': #{{e.message}}"
+    error_fields << {{
+      name: field_data['name'],
+      jira_id: field_data['jira_id'],
+      status: 'error',
+      errors: [e.message]
+    }}
+  end
+end
 
-        if result.get("status") == "error":
-            self.logger.error("Error executing Ruby script: %s", result.get("error", "Unknown error"))
+# Output the results
+result = {{
+  status: 'success',
+  created: created_fields,
+  existing: existing_fields,
+  errors: error_fields,
+  created_count: created_fields.length,
+  existing_count: existing_fields.length,
+  error_count: error_fields.length
+}}
+
+puts "Results: Created #{{created_fields.length}}, " +
+     "Already existed: #{{existing_fields.length}}, Errors: #{{error_fields.length}}"
+
+# Return the result object
+result
+"""
+
+        # Execute the Ruby query using execute_query_to_json_file
+        self.logger.info("Executing Ruby script for custom field creation")
+        try:
+            # Use execute_query_to_json_file which handles file-based execution properly
+            result = self.op_client.execute_query_to_json_file(ruby_query, timeout=300)
+
+            if isinstance(result, dict):
+                created_count = result.get("created_count", 0)
+                existing_count = result.get("existing_count", 0)
+                error_count = result.get("error_count", 0)
+
+                self.logger.info(
+                    "Custom field migration completed: Created %d, Existing %d, Errors %d",
+                    created_count,
+                    existing_count,
+                    error_count,
+                )
+
+                if created_count > 0:
+                    # Update the mapping file with the newly created fields
+                    self.logger.info("Updating mapping with newly created fields")
+                    self.update_mapping_file()
+
+                return error_count == 0
+            self.logger.error("Unexpected result type: %s", type(result))
             return False
 
-        # Check the result status from the Ruby output
-        output = result.get("output", {})
-        created_count = output.get("created_count", 0)
-        existing_count = output.get("existing_count", 0)
-        error_count = output.get("error_count", 0)
-
-        self.logger.info(
-            "Custom field migration completed: Created %d, Existing %d, Errors %d",
-            created_count,
-            existing_count,
-            error_count,
-        )
-
-        if created_count > 0:
-            # Update the mapping file with the newly created fields
-            self.logger.info("Updating mapping with newly created fields")
-            self.update_mapping_file()
-
-        return True
+        except Exception as e:
+            self.logger.error("Error executing Ruby script: %s", str(e))
+            return False
+        finally:
+            # Clean up temporary files
+            try:
+                if data_file_path.exists():
+                    data_file_path.unlink()
+            except Exception as e:
+                self.logger.warning("Failed to clean up temporary files: %s", str(e))
 
     def migrate_custom_fields(self) -> bool:
         """Migrate custom fields from Jira to OpenProject.
@@ -745,9 +786,6 @@ class CustomFieldMigration(BaseMigration):
             "Starting custom field migration with %d fields in mapping",
             len(self.mapping),
         )
-
-        self.extract_openproject_custom_fields()
-        self.create_custom_field_mapping()
 
         # Check if we have fields that need to be created
         fields_to_create = [f for f in self.mapping.values() if f.get("matched_by") == "create"]

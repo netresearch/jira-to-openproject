@@ -25,6 +25,11 @@ class TestCustomFieldMigration(unittest.TestCase):
         # Explicitly mock the get_custom_fields method
         self.mock_op_client.get_custom_fields = Mock()
 
+        # Add ScriptRunner attributes to the mock JiraClient
+        self.mock_jira_client.scriptrunner_enabled = False
+        self.mock_jira_client.scriptrunner_custom_field_options_endpoint = None
+        self.mock_jira_client._make_request = Mock()
+
         # Add methods for the new client
         self.mock_rails_client.execute_query = Mock()
         self.mock_rails_client.transfer_file_from_container = Mock()
@@ -41,6 +46,21 @@ class TestCustomFieldMigration(unittest.TestCase):
             }
         })
         self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
+
+        # Add execute and transfer_file_to_container methods to op_client
+        self.mock_op_client.execute = Mock(return_value={
+            "status": "success",
+            "output": {
+                "status": "success",
+                "created": [],
+                "existing": [],
+                "error": [],
+                "created_count": 0,
+                "existing_count": 0,
+                "error_count": 0
+            }
+        })
+        self.mock_op_client.transfer_file_to_container = Mock()
 
         # Create a mock JIRA instance to mock the jira attribute
         self.mock_jira = Mock()
@@ -299,25 +319,22 @@ class TestCustomFieldMigration(unittest.TestCase):
         }]
 
         # Mock the file transfer and execute methods directly
-        self.mock_rails_client.transfer_file_to_container.return_value = True
+        self.mock_op_client.transfer_file_to_container = Mock()
 
-        # Mock the execute method to return success
-        self.mock_rails_client.execute.return_value = {
+        # Mock the execute_query_to_json_file method to return success
+        self.mock_op_client.execute_query_to_json_file.return_value = {
             "status": "success",
-            "output": {
-                "status": "success",
-                "created": [
-                    {
-                        "name": "Test Text Field",
-                        "status": "created",
-                        "id": 3,
-                        "jira_id": "customfield_10001",
-                    },
-                ],
-                "created_count": 1,
-                "existing_count": 0,
-                "error_count": 0,
-            },
+            "created": [
+                {
+                    "name": "Test Text Field",
+                    "status": "created",
+                    "id": 3,
+                    "jira_id": "customfield_10001",
+                },
+            ],
+            "created_count": 1,
+            "existing_count": 0,
+            "error_count": 0,
         }
 
         # Call migrate_custom_fields_via_json directly
@@ -327,8 +344,8 @@ class TestCustomFieldMigration(unittest.TestCase):
         assert result
 
         # Verify that file transfer and execute were called
-        self.mock_rails_client.transfer_file_to_container.assert_called_once()
-        self.mock_rails_client.execute.assert_called_once()
+        self.mock_op_client.transfer_file_to_container.assert_called_once()
+        self.mock_op_client.execute_query_to_json_file.assert_called_once()
 
     def test_migrate_custom_fields_with_error(self) -> None:
         """Test migrating custom fields when an error occurs."""
@@ -342,10 +359,10 @@ class TestCustomFieldMigration(unittest.TestCase):
         }]
 
         # Ensure file transfer succeeds but execution fails
-        self.mock_rails_client.transfer_file_to_container.return_value = True
+        self.mock_op_client.transfer_file_to_container = Mock()
 
-        # Mock the execute method to return an error
-        self.mock_rails_client.execute.return_value = {"status": "error", "error": "Test error message"}
+        # Mock the execute_query_to_json_file method to raise an exception
+        self.mock_op_client.execute_query_to_json_file.side_effect = Exception("Test error message")
 
         # Call migrate_custom_fields_via_json directly
         result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
@@ -354,8 +371,8 @@ class TestCustomFieldMigration(unittest.TestCase):
         assert not result
 
         # Verify that transfer and execute were called
-        self.mock_rails_client.transfer_file_to_container.assert_called_once()
-        self.mock_rails_client.execute.assert_called_once()
+        self.mock_op_client.transfer_file_to_container.assert_called_once()
+        self.mock_op_client.execute_query_to_json_file.assert_called_once()
 
     def test_container_file_transfer_failure(self) -> None:
         """Test handling of container file transfer failures."""
@@ -369,7 +386,7 @@ class TestCustomFieldMigration(unittest.TestCase):
         }]
 
         # Mock the transfer_file_to_container to simulate failure
-        self.mock_rails_client.transfer_file_to_container.return_value = False
+        self.mock_op_client.transfer_file_to_container.side_effect = Exception("Failed to transfer file")
 
         # Call the method directly with fields to migrate
         result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
@@ -378,10 +395,10 @@ class TestCustomFieldMigration(unittest.TestCase):
         assert not result
 
         # Verify transfer was attempted
-        self.mock_rails_client.transfer_file_to_container.assert_called_once()
+        self.mock_op_client.transfer_file_to_container.assert_called_once()
 
         # Verify execute was not called (since transfer failed)
-        self.mock_rails_client.execute.assert_not_called()
+        self.mock_op_client.execute_query_to_json_file.assert_not_called()
 
     def test_json_file_handling(self) -> None:
         """Test the handling of JSON files for custom field migration."""
@@ -403,16 +420,21 @@ class TestCustomFieldMigration(unittest.TestCase):
 
             with patch("tempfile.NamedTemporaryFile", return_value=temp_file_mock):
                 # Mock the file transfer and execute methods
-                self.mock_rails_client.transfer_file_to_container.return_value = True
+                self.mock_op_client.transfer_file_to_container = Mock()
 
-                # Mock successful return for execute method
-                self.mock_rails_client.execute.return_value = {"status": "success"}
+                # Mock successful return for execute_query_to_json_file method
+                self.mock_op_client.execute_query_to_json_file.return_value = {
+                    "status": "success",
+                    "created_count": 1,
+                    "existing_count": 0,
+                    "error_count": 0
+                }
 
                 # Call migrate_custom_fields_via_json directly
                 self.migration.migrate_custom_fields_via_json(fields_to_migrate)
 
-                # Verify json.dump was called - expect 1 call based on implementation
-                assert json_dump_mock.call_count == 1
+                # Verify json.dump was called - multiple calls are expected due to update_mapping_file
+                assert json_dump_mock.call_count >= 1
 
                 # Check that data contains the expected fields
                 calls = json_dump_mock.call_args_list
@@ -424,9 +446,9 @@ class TestCustomFieldMigration(unittest.TestCase):
                         assert len(args[0]) > 0, "Expected at least one field in the data"
 
                 # Verify that transfer_file_to_container was called at least once
-                self.mock_rails_client.transfer_file_to_container.assert_called_once()
-                # Verify the execute method was called
-                self.mock_rails_client.execute.assert_called_once()
+                self.mock_op_client.transfer_file_to_container.assert_called_once()
+                # Verify the execute_query_to_json_file method was called
+                self.mock_op_client.execute_query_to_json_file.assert_called_once()
 
     def test_ruby_script_generation(self) -> None:
         """Test the generation of Ruby script with proper structure."""
