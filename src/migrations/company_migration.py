@@ -53,7 +53,7 @@ class CompanyMigration(BaseMigration):
 
         # Data storage
         self.tempo_companies: dict[str, Any] = {}
-        self.op_projects: dict[str, Any] = {}
+        self.op_projects: list[dict[str, Any]] = []
         self.company_mapping: dict[str, Any] = {}
         self._created_companies: int = 0  # Initialize counter for created companies
 
@@ -64,8 +64,22 @@ class CompanyMigration(BaseMigration):
         )
 
         # Load existing data if available
-        self.tempo_companies = self._load_from_json(Mappings.TEMPO_COMPANIES_FILE) or {}
-        self.op_projects = self._load_from_json(Mappings.OP_PROJECTS_FILE) or {}
+        loaded_companies = self._load_from_json(Mappings.TEMPO_COMPANIES_FILE)
+        if loaded_companies:
+            # If loaded data is a list, convert to dictionary with id as key
+            if isinstance(loaded_companies, list):
+                self.tempo_companies = {}
+                for company in loaded_companies:
+                    if isinstance(company, dict) and "id" in company:
+                        self.tempo_companies[str(company["id"])] = company
+            elif isinstance(loaded_companies, dict):
+                self.tempo_companies = loaded_companies
+            else:
+                self.tempo_companies = {}
+        else:
+            self.tempo_companies = {}
+
+        self.op_projects = self._load_from_json(Mappings.OP_PROJECTS_FILE) or []
         self.company_mapping = self._load_from_json(Mappings.COMPANY_MAPPING_FILE) or {}
 
     def _extract_tempo_companies(self) -> dict[str, Any]:
@@ -78,9 +92,14 @@ class CompanyMigration(BaseMigration):
             MigrationError: If companies cannot be extracted from Tempo
 
         """
-        if data_handler.load_dict(self.tempo_companies_file):
-            loaded_data = data_handler.load_dict(self.tempo_companies_file)
+        # Check if we already have companies loaded
+        if self.tempo_companies:
+            self.logger.info("Using %d companies from memory", len(self.tempo_companies))
+            return self.tempo_companies
 
+        # Try to load from file
+        loaded_data = data_handler.load_dict(self.tempo_companies_file)
+        if loaded_data:
             # If loaded data is a dictionary, use it directly
             if isinstance(loaded_data, dict):
                 self.tempo_companies = loaded_data
@@ -128,7 +147,8 @@ class CompanyMigration(BaseMigration):
 
         self.logger.info("Found %d companies in Tempo", len(companies))
 
-        # Process companies
+        # Process companies into dictionary
+        self.tempo_companies = {}
         for company in companies:
             company_id = str(company.get("id"))
             self.tempo_companies[company_id] = {
@@ -168,9 +188,9 @@ class CompanyMigration(BaseMigration):
         try:
             self.op_projects = self.op_client.get_projects()
 
-            if not self.op_projects:
-                msg = "Failed to get projects from OpenProject"
-                raise MigrationError(msg)
+            # It's OK if there are no projects yet - this might be the initial migration
+            if self.op_projects is None:
+                self.op_projects = []
 
             self.logger.info(
                 "Extracted %d projects from OpenProject",
@@ -382,6 +402,8 @@ class CompanyMigration(BaseMigration):
 
         # Prepare company data for bulk creation
         companies_data = []
+        identifier_to_tempo_id = {}  # Map identifiers to tempo IDs for later lookup
+
         for company in companies_to_migrate:
             # Get company ID from either field
             tempo_id = company.get("id")
@@ -415,20 +437,7 @@ class CompanyMigration(BaseMigration):
                 base_identifier += sanitized_id
 
             identifier = base_identifier[:100]
-
-            # Check if project with this identifier already exists
-            existing = self.op_client.get_project_by_identifier(identifier)
-            if existing:
-                self.company_mapping[tempo_id] = {
-                    "tempo_id": tempo_id,
-                    "tempo_key": tempo_key,
-                    "tempo_name": tempo_name,
-                    "openproject_id": existing.get("id"),
-                    "openproject_identifier": existing.get("identifier"),
-                    "openproject_name": existing.get("name"),
-                    "matched_by": "existing",
-                }
-                continue
+            identifier_to_tempo_id[identifier] = tempo_id
 
             # Add to the companies data for bulk creation
             companies_data.append(
@@ -449,12 +458,56 @@ class CompanyMigration(BaseMigration):
             self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
             return self.company_mapping
 
+        # Now do a bulk check for existing projects with these identifiers
+        self.logger.info("Checking for existing projects with %d identifiers...", len(identifier_to_tempo_id))
+
+        # Create a Ruby script to check all identifiers at once
+        identifiers_list = list(identifier_to_tempo_id.keys())
+        check_script = f"""
+        identifiers = {json.dumps(identifiers_list)}
+        existing_projects = Project.where(identifier: identifiers).pluck(:identifier, :id, :name)
+        existing_map = {{}}
+        existing_projects.each do |identifier, id, name|
+          existing_map[identifier] = {{'id' => id, 'name' => name}}
+        end
+        existing_map
+        """
+
+        existing_projects_map = self.op_client.execute_json_query(check_script) or {}
+
+        # Filter out companies that already exist
+        companies_to_create = []
+        for company_data in companies_data:
+            identifier = company_data["identifier"]
+            tempo_id = company_data["tempo_id"]
+
+            if identifier in existing_projects_map:
+                # Project already exists, update mapping
+                existing = existing_projects_map[identifier]
+                self.company_mapping[tempo_id] = {
+                    "tempo_id": tempo_id,
+                    "tempo_key": company_data["tempo_key"],
+                    "tempo_name": company_data["tempo_name"],
+                    "openproject_id": existing.get("id"),
+                    "openproject_identifier": identifier,
+                    "openproject_name": existing.get("name"),
+                    "matched_by": "existing",
+                }
+            else:
+                # Project doesn't exist, add to creation list
+                companies_to_create.append(company_data)
+
+        if not companies_to_create:
+            self.logger.info("No companies need to be created, all already exist")
+            self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
+            return self.company_mapping
+
         if config.migration_config.get("dry_run"):
             self.logger.info(
                 "DRY RUN: Would create %d company projects",
-                len(companies_data),
+                len(companies_to_create),
             )
-            for company_data in companies_data:
+            for company_data in companies_to_create:
                 tempo_id = company_data["tempo_id"]
                 self.company_mapping[tempo_id] = {
                     "tempo_id": tempo_id,
@@ -469,28 +522,27 @@ class CompanyMigration(BaseMigration):
             return self.company_mapping
 
         # First, write the companies data to a JSON file that Rails can read
-        temp_file_path = Path(self.data_dir).joinpath(Mappings.TEMPO_COMPANIES_FILE)
+        temp_file_path = Path(self.data_dir).joinpath("tempo_companies_to_create.json")
         self.logger.info(
             "Writing %d companies to %s",
-            len(companies_data),
+            len(companies_to_create),
             temp_file_path,
         )
 
         try:
             # Write the JSON file
             with temp_file_path.open("w") as f:
-                json.dump(companies_data, f, indent=2)
+                json.dump(companies_to_create, f, indent=2)
 
             # Define the path for the file inside the container
             container_temp_path = Path("/tmp/tempo_companies.json")
-            result_file_local = Path(self.data_dir).joinpath("company_creation_result.json")
 
             # Copy the file to the container
             self.op_client.transfer_file_to_container(temp_file_path, container_temp_path)
 
             # Prepare and execute the Ruby script
             self.logger.info(
-                "Executing Rails script to create %d companies", len(companies_data),
+                "Executing Rails script to create %d companies", len(companies_to_create),
             )
 
             # Ruby script to create companies
@@ -626,6 +678,9 @@ class CompanyMigration(BaseMigration):
               'error_count' => errors.size,
               'total' => companies_count
             }
+
+            # Write the result to the expected file
+            File.write('/tmp/result.json', result.to_json)
             """
 
             output = self.op_client.execute_query_to_json_file(ruby_script)
@@ -774,7 +829,7 @@ class CompanyMigration(BaseMigration):
             json.dump(companies_to_update, f, indent=2)
 
         # Transfer file to container
-        container_temp_path = Path(f"/tmp/company_metadata.json")
+        container_temp_path = Path("/tmp/company_metadata.json")
         result_file_local = Path(self.data_dir).joinpath("company_metadata_result.json")
 
         self.op_client.transfer_file_to_container(temp_file_path, container_temp_path)
@@ -809,13 +864,15 @@ class CompanyMigration(BaseMigration):
           # Create custom fields if needed
           if has_custom_fields
             # Create contact custom fields if they don't exist
-            contact_cf = CustomField.where(type: 'ProjectCustomField', name: 'Customer Contact').first_or_create do |cf|
+            contact_cf = CustomField.where(type: 'ProjectCustomField', name: 'Customer Contact')
+              .first_or_create do |cf|
               cf.field_format = 'text'
               cf.is_required = false
               puts "Created 'Customer Contact' custom field"
             end
 
-            address_cf = CustomField.where(type: 'ProjectCustomField', name: 'Customer Address').first_or_create do |cf|
+            address_cf = CustomField.where(type: 'ProjectCustomField', name: 'Customer Address')
+              .first_or_create do |cf|
               cf.field_format = 'text'
               cf.is_required = false
               puts "Created 'Customer Address' custom field"
@@ -862,7 +919,9 @@ class CompanyMigration(BaseMigration):
 
             # Add contact information
             contact_info = []
-            contact_info << "Lead: #{metadata['lead_display_name']} (#{metadata['lead_key']})" if metadata['lead_display_name']
+            if metadata['lead_display_name']
+              contact_info << "Lead: #{metadata['lead_display_name']} (#{metadata['lead_key']})"
+            end
             contact_info << "Email: #{metadata['email']}" if metadata['email']
             contact_info << "Phone: #{metadata['phoneNumber']}" if metadata['phoneNumber']
             contact_info << "Fax: #{metadata['faxNumber']}" if metadata['faxNumber']
@@ -871,7 +930,9 @@ class CompanyMigration(BaseMigration):
             address_info = []
             address_info << metadata['addressLine1'] if metadata['addressLine1']
             address_info << metadata['addressLine2'] if metadata['addressLine2']
-            address_info << "#{metadata['city']}, #{metadata['state']} #{metadata['zipCode']}" if metadata['city'] || metadata['state'] || metadata['zipCode']
+            if metadata['city'] || metadata['state'] || metadata['zipCode']
+              address_info << "#{metadata['city']}, #{metadata['state']} #{metadata['zipCode']}"
+            end
             address_info << metadata['country'] if metadata['country']
 
             # Build enhanced description
@@ -1003,7 +1064,7 @@ class CompanyMigration(BaseMigration):
         """
 
         # Execute the Ruby script using file-based method to avoid IOError
-        output = self.op_client.execute_json_query(ruby_script)
+        self.op_client.execute_json_query(ruby_script)
 
         # Get the result data
         updated_companies = []
