@@ -24,6 +24,8 @@
     "debug": false,
     "defaultSubtasks": 5,
     "defaultPriority": "medium",
-    "projectName": "Jira to OpenProject Migration Tool"
+    "projectName": "Jira to OpenProject Migration Tool",
+    "ollamaBaseUrl": "http://localhost:11434/api",
+    "userId": "1234567890"
   }
 }

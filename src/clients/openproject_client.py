@@ -23,6 +23,7 @@ import os
 import random
 from pathlib import Path
 from shlex import quote
+from time import time
 from typing import Any, cast
 
 from src import config
@@ -113,7 +114,7 @@ class OpenProjectClient:
 
         # Initialize caches
         self._users_cache: list[dict[str, Any]] | None = None
-        self._users_cache_time: int | None = None
+        self._users_cache_time: float | None = None
         self._users_by_email_cache: dict[str, dict[str, Any]] = {}
 
         # Get config values
@@ -381,6 +382,8 @@ class OpenProjectClient:
         # Generate filenames
         uid = self.file_manager.generate_unique_id()
         container_result_file = Path("/tmp") / f"query_result_{uid}.json"
+        # Use remote temp path instead of local temp path for docker_client.copy_file_from_container
+        remote_result_file = Path("/tmp") / f"query_result_{uid}.json"
         local_result_file = self.file_manager.temp_dir / f"query_result_{uid}.json"
 
         # Create a simplified script that avoids variable name conflicts
@@ -414,10 +417,14 @@ end
                 timeout=timeout or self.command_timeout,
             )
 
+            # First copy from container to remote server
             self.docker_client.copy_file_from_container(
                 container_result_file,
-                local_result_file,
+                remote_result_file,
             )
+
+            # Then copy from remote server to local machine
+            self.ssh_client.copy_file_from_remote(remote_result_file, local_result_file)
 
             # Clean up script file
             if local_script_file.exists():
@@ -426,6 +433,9 @@ end
             # Clean up container file
             rm_command = ["rm", "-f", quote(container_result_file.as_posix())]
             self.docker_client.execute_command(" ".join(rm_command))
+
+            # Clean up remote file
+            self.ssh_client.execute_command(f"rm -f {quote(str(remote_result_file))}")
 
             # Parse and return
             try:
@@ -781,7 +791,7 @@ end
 
         """
         # Check cache first (5 minutes validity)
-        current_time = time.time()
+        current_time = time()
         cache_valid = (
             hasattr(self, "_users_cache")
             and hasattr(self, "_users_cache_time")
@@ -1106,7 +1116,7 @@ end
     def create_users_in_bulk(
         self,
         users_data: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+    ) -> str:
         """Create multiple users in OpenProject with a single API call.
 
         Args:
@@ -1120,7 +1130,7 @@ end
 
         """
         if not users_data:
-            return []
+            return ""
 
         # Format the user data for Ruby
         ruby_user_data = json.dumps(users_data)

@@ -253,7 +253,6 @@ def run_migration(
             ssh_host=config.openproject_config.get("server", None),
             ssh_user=config.openproject_config.get("user", None),
             tmux_session_name=config.openproject_config.get("tmux_session_name", None),
-            command_timeout=self.command_timeout,
         )
 
         config.logger.success("All clients initialized successfully")
@@ -649,7 +648,6 @@ def main() -> None:
                 ssh_host=config.openproject_config.get("server", None),
                 ssh_user=config.openproject_config.get("user", None),
                 tmux_session_name=config.openproject_config.get("tmux_session_name", None),
-                command_timeout=self.command_timeout,
             )
 
             # List options to choose which mapping to update
