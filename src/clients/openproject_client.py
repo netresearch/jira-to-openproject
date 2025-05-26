@@ -24,7 +24,7 @@ import random
 from pathlib import Path
 from shlex import quote
 from time import time
-from typing import Any, cast
+from typing import Any
 
 from src import config
 from src.clients.docker_client import DockerClient
@@ -246,14 +246,15 @@ class OpenProjectClient:
             logger.debug("Successfully transferred file to container at %s", container_path)
 
         except Exception as e:
-            # Verify the local file exists and is readable before attempting to transfer
-            if not local_path.is_file():
-                msg = f"Local file does not exist: {local_path}"
-                raise FileTransferError(msg)
+            # Verify the local file exists and is readable only after failure
+            if isinstance(local_path, Path):
+                if not local_path.is_file():
+                    msg = f"Local file does not exist: {local_path}"
+                    raise FileTransferError(msg) from e
 
-            if not os.access(local_path, os.R_OK):
-                msg = f"Local file is not readable: {local_path}"
-                raise FileTransferError(msg)
+                if not os.access(local_path, os.R_OK):
+                    msg = f"Local file is not readable: {local_path}"
+                    raise FileTransferError(msg) from e
 
             msg = "Failed to transfer script."
             raise FileTransferError(msg) from e
@@ -301,7 +302,12 @@ class OpenProjectClient:
             QueryExecutionError: If script execution fails
 
         """
-        return self.execute_query(script_content)
+        result = self.execute_query(script_content)
+        # Try to parse as JSON if possible, otherwise return as dict with result key
+        try:
+            return json.loads(result)
+        except (json.JSONDecodeError, TypeError):
+            return {"result": result}
 
     def transfer_file_to_container(self, local_path: Path, container_path: Path) -> None:
         """Transfer a file from local to the OpenProject container.

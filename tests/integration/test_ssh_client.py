@@ -277,8 +277,13 @@ class TestSSHClient(unittest.TestCase):
         # Reset the mock
         self.mock_subprocess.run.reset_mock()
 
-        # Configure Path.exists to return False
+        # Configure Path.exists to return False (for the check in exception handler)
         self.mock_path_instance.exists.return_value = False
+
+        # Configure subprocess.run to raise CalledProcessError as would happen with a missing file
+        self.mock_subprocess.run.side_effect = subprocess.CalledProcessError(
+            returncode=1, cmd=["scp"], stderr="No such file or directory",
+        )
 
         # Call the method - should raise FileNotFoundError
         with pytest.raises(FileNotFoundError):

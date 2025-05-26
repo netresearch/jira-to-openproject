@@ -217,7 +217,7 @@ class SSHClient:
 
         # Retry logic
         max_attempts = self.retry_count if retry else 1
-        last_exception = None
+        last_exception: Exception | None = None
 
         for attempt in range(max_attempts):
             if attempt > 0:
@@ -302,7 +302,7 @@ class SSHClient:
 
         # Retry logic
         max_attempts = self.retry_count if retry else 1
-        last_exception = None
+        last_exception: Exception | None = None
 
         for attempt in range(max_attempts):
             if attempt > 0:
@@ -316,11 +316,6 @@ class SSHClient:
                 time.sleep(self.retry_delay * attempt)
 
             try:
-                # Validate local file exists
-                if not local_path.exists():
-                    msg = f"Local file does not exist: {local_path}"
-                    raise FileNotFoundError(msg)
-
                 # Build scp command
                 cmd = self.get_scp_base_command()
 
@@ -350,6 +345,9 @@ class SSHClient:
 
             except subprocess.CalledProcessError as e:
                 logger.exception("SCP command failed: %s", e.stderr)
+                # Check if the error was due to missing local file
+                if not local_path.exists():
+                    raise FileNotFoundError(f"Local file does not exist: {local_path}") from e
                 last_exception = SSHFileTransferError(
                     source=str(local_path),
                     destination=f"{self.host}:{remote_path}",
@@ -410,7 +408,7 @@ class SSHClient:
 
         # Retry logic
         max_attempts = self.retry_count if retry else 1
-        last_exception = None
+        last_exception: Exception | None = None
 
         for attempt in range(max_attempts):
             if attempt > 0:
@@ -568,7 +566,7 @@ class SSHClient:
 
         """
         max_attempts = self.retry_count
-        last_exception = None
+        last_exception: Exception | None = None
 
         for attempt in range(max_attempts):
             if attempt > 0:

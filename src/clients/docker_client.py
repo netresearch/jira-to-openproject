@@ -10,9 +10,6 @@ Part of the layered client architecture where:
 4. OpenProjectClient coordinates all clients and operations
 """
 
-import os
-import random
-from datetime import datetime, timezone
 from pathlib import Path
 from shlex import quote
 
@@ -180,14 +177,6 @@ class DockerClient:
         container_path = Path(container_path) if isinstance(container_path, str) else container_path
 
         try:
-            # Check if local file exists via SSH
-            logger.debug(f"Checking if local file exists: {local_path}")
-            local_file_exists = self.ssh_client.check_remote_file_exists(local_path)
-
-            if not local_file_exists:
-                logger.error(f"Local file not found: {local_path}")
-                raise FileNotFoundError(f"Local file does not exist: {local_path}")
-
             # Build docker cp command on remote
             cmd = f"docker cp {quote(str(local_path))} {self.container_name}:{quote(str(container_path))}"
 
@@ -205,7 +194,10 @@ class DockerClient:
 
                 # Get file size in container
                 size = self.get_file_size_in_container(container_path)
-                logger.debug(f"Successfully copied file to container: {local_path} -> {container_path} (size: {size} bytes)")
+                logger.debug(
+                    f"Successfully copied file to container: "
+                    f"{local_path} -> {container_path} (size: {size} bytes)"
+                )
             else:
                 logger.error(f"Failed to copy file to container: {stderr}")
                 raise ValueError(f"Failed to copy file to container: {stderr}")
@@ -214,6 +206,12 @@ class DockerClient:
             # Re-raise file not found errors
             raise
         except Exception as e:
+            # Check if the error was due to missing local file
+            local_file_exists = self.ssh_client.check_remote_file_exists(local_path)
+            if not local_file_exists:
+                logger.error(f"Local file not found: {local_path}")
+                raise FileNotFoundError(f"Local file does not exist: {local_path}") from e
+
             logger.exception(f"Error copying file to container: {e}")
             msg = f"Failed to copy file to container: {e}"
             raise ValueError(msg) from e
@@ -239,11 +237,6 @@ class DockerClient:
         local_path = Path(local_path) if isinstance(local_path, str) else local_path
 
         try:
-            # Check if file exists in container
-            if not self.check_file_exists_in_container(container_path):
-                logger.error(f"File not found in container: {container_path}")
-                raise FileNotFoundError(f"File not found in container: {container_path}")
-
             # Ensure local directory exists
             local_dir = local_path.parent
             mkdir_cmd = f"mkdir -p {quote(str(local_dir))}"
@@ -266,7 +259,10 @@ class DockerClient:
 
                 # Get file size
                 size = self.ssh_client.get_remote_file_size(local_path)
-                logger.debug(f"Successfully copied file from container: {container_path} -> {local_path} (size: {size} bytes)")
+                logger.debug(
+                    f"Successfully copied file from container: "
+                    f"{container_path} -> {local_path} (size: {size} bytes)"
+                )
 
                 return local_path
             else:
@@ -277,6 +273,11 @@ class DockerClient:
             # Re-raise file not found errors
             raise
         except Exception as e:
+            # Check if file exists in container only after failure
+            if not self.check_file_exists_in_container(container_path):
+                logger.error(f"File not found in container: {container_path}")
+                raise FileNotFoundError(f"File not found in container: {container_path}") from e
+
             logger.exception(f"Error copying file from container: {e}")
             msg = f"Failed to copy file from container: {e}"
             raise ValueError(msg) from e
@@ -295,7 +296,10 @@ class DockerClient:
 
         try:
             # Use stat to check if file exists
-            cmd = f"docker exec {self.container_name} bash -c 'test -e {quote(container_path_str)} && echo \"EXISTS\" || echo \"NOT_EXISTS\"'"
+            cmd = (
+                f"docker exec {self.container_name} bash -c "
+                f"'test -e {quote(container_path_str)} && echo \"EXISTS\" || echo \"NOT_EXISTS\"'"
+            )
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
 
             return "EXISTS" in stdout and returncode == 0
@@ -317,7 +321,10 @@ class DockerClient:
 
         try:
             # Use stat to get file size
-            cmd = f"docker exec {self.container_name} bash -c 'stat -c %s {quote(container_path_str)} 2>/dev/null || echo \"NOT_EXISTS\"'"
+            cmd = (
+                f"docker exec {self.container_name} bash -c "
+                f"'stat -c %s {quote(container_path_str)} 2>/dev/null || echo \"NOT_EXISTS\"'"
+            )
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
 
             if "NOT_EXISTS" in stdout or returncode != 0:

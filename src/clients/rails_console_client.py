@@ -5,9 +5,9 @@ Client for executing commands on a Rails console running in a tmux session.
 Uses exception-based error handling for all operations.
 """
 
-import os
 import subprocess
 import time
+from typing import Any
 
 from src import config
 from src.utils.file_manager import FileManager
@@ -361,7 +361,7 @@ class RailsConsoleClient:
 
         return command_output
 
-    def _get_console_state(self, output: str) -> dict:
+    def _get_console_state(self, output: str) -> dict[str, Any]:
         """Check if the Rails console is ready for input by looking for the prompt.
 
         Args:
@@ -375,7 +375,7 @@ class RailsConsoleClient:
         awaiting_patterns = ["*"]
         string_patterns = ['"', "'"]
 
-        result = {"ready": False, "state": "unknown", "prompt": None}
+        result: dict[str, Any] = {"ready": False, "state": "unknown", "prompt": None}
 
         lines = [line.strip() for line in output.strip().split("\n")]
         non_empty_lines = [line for line in lines if line]
