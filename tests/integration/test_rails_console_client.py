@@ -52,14 +52,6 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.mock_time.time.side_effect = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         self.mock_time.sleep = MagicMock()  # Mock sleep to do nothing
 
-        # Mock file operations
-        self.os_patcher = patch("src.clients.rails_console_client.os")
-        self.mock_os = self.os_patcher.start()
-        self.mock_os.path.join = os.path.join  # Use real path join
-
-        # Mock os.path.exists to return True
-        self.mock_os.path.exists.return_value = True
-
         # Mock open file operations
         self.mock_file = MagicMock()
         self.mock_open_patcher = patch("builtins.open", return_value=self.mock_file)
@@ -71,6 +63,7 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.mock_file_manager = MagicMock()
         self.mock_file_manager.generate_unique_id.return_value = "test_unique_id"
         self.mock_file_manager.create_debug_session.return_value = "/path/to/debug/session"
+        self.mock_file_manager.join = MagicMock(return_value=MagicMock(open=MagicMock()))
         self.mock_file_manager_class.return_value = self.mock_file_manager
 
         # Mock _send_command_to_tmux method
@@ -89,7 +82,6 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.subprocess_patcher.stop()
         self.logger_patcher.stop()
         self.time_patcher.stop()
-        self.os_patcher.stop()
         self.file_manager_patcher.stop()
         self.mock_open_patcher.stop()
         self.send_command_patcher.stop()

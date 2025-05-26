@@ -32,9 +32,6 @@ class TestDockerClient(unittest.TestCase):
         self.logger_patcher = patch("src.clients.docker_client.logger")
         self.mock_logger = self.logger_patcher.start()
 
-        self.os_patcher = patch("src.clients.docker_client.os")
-        self.mock_os = self.os_patcher.start()
-
         # File manager mock
         self.file_manager_patcher = patch("src.clients.docker_client.FileManager")
         self.mock_file_manager_class = self.file_manager_patcher.start()
@@ -45,12 +42,6 @@ class TestDockerClient(unittest.TestCase):
         # Configure mocks for successful container existence check
         self.mock_ssh_client.execute_command.return_value = ("test_container\n", "", 0)
 
-        # Configure os.path.exists and os.makedirs
-        self.mock_os.path.exists.return_value = True
-        self.mock_os.path.basename.return_value = "test_file.txt"
-        self.mock_os.path.dirname.return_value = "/tmp"
-        self.mock_os.path.getsize.return_value = 1024
-
         # Initialize DockerClient after all mocks are set up
         self.docker_client = DockerClient(container_name="test_container", ssh_client=self.mock_ssh_client)
 
@@ -59,7 +50,6 @@ class TestDockerClient(unittest.TestCase):
         # Stop all patchers
         self.ssh_client_patcher.stop()
         self.logger_patcher.stop()
-        self.os_patcher.stop()
         self.file_manager_patcher.stop()
 
         # Clean up temp directory
@@ -241,9 +231,6 @@ class TestDockerClient(unittest.TestCase):
         self.mock_ssh_client.copy_file_to_remote.reset_mock()
         self.mock_ssh_client.execute_command.reset_mock()
 
-        # Configure os.path.exists to return True
-        self.mock_os.path.exists.return_value = True
-
         # Configure mocks for successful file existence check
         # First call sets the docker cp return value, second call sets the file exists check return value
         self.mock_ssh_client.execute_command.side_effect = [
@@ -287,29 +274,30 @@ class TestDockerClient(unittest.TestCase):
 
     def test_copy_file_from_container_success(self) -> None:
         """Test copying a file from the container."""
-        # Setup mock for check_file_exists_in_container
-        with patch.object(self.docker_client, "check_file_exists_in_container", return_value=True) as mock_check:
-            # Setup mock for ssh_client execute_command and check_remote_file_exists
-            self.mock_ssh_client.execute_command.return_value = ("", "", 0)
-            self.mock_ssh_client.check_remote_file_exists.return_value = True
-            self.mock_ssh_client.get_remote_file_size.return_value = 1024
+        # Setup mock for ssh_client execute_command and check_remote_file_exists
+        self.mock_ssh_client.execute_command.return_value = ("", "", 0)
+        self.mock_ssh_client.check_remote_file_exists.return_value = True
+        self.mock_ssh_client.get_remote_file_size.return_value = 1024
 
-            # Execute
-            result = self.docker_client.copy_file_from_container(
-                Path("/container/path"),
-                Path("/local/path"),
-            )
+        # Execute
+        result = self.docker_client.copy_file_from_container(
+            Path("/container/path"),
+            Path("/local/path"),
+        )
 
-            # Assert
-            assert result == Path("/local/path")  # Should return the path
-            mock_check.assert_called_once_with(Path("/container/path"))
-            assert self.mock_ssh_client.execute_command.call_count >= 2  # mkdir and docker cp commands
-            self.mock_ssh_client.check_remote_file_exists.assert_called_once()  # Check if local file exists
-            self.mock_ssh_client.get_remote_file_size.assert_called_once()  # Get file size
+        # Assert
+        assert result == Path("/local/path")  # Should return the path
+        # With optimistic execution, check_file_exists_in_container is not called on success
+        assert self.mock_ssh_client.execute_command.call_count >= 2  # mkdir and docker cp commands
+        self.mock_ssh_client.check_remote_file_exists.assert_called_once()  # Check if local file exists
+        self.mock_ssh_client.get_remote_file_size.assert_called_once()  # Get file size
 
     def test_copy_file_from_container_not_found(self) -> None:
         """Test copying a file that doesn't exist in the container."""
-        # Need to patch the method to directly use our implementation
+        # Configure the execute_command to fail as would happen with a missing file
+        self.mock_ssh_client.execute_command.side_effect = Exception("docker cp failed")
+
+        # Need to patch the method to return False when checking if file exists
         with patch.object(self.docker_client, "check_file_exists_in_container", return_value=False):
             # Call the method - should raise FileNotFoundError
             with pytest.raises(FileNotFoundError):

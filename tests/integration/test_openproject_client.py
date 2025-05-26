@@ -259,15 +259,17 @@ class TestOpenProjectClient(unittest.TestCase):
         """Test direct script execution."""
         # Mock execute_query instead of _transfer_and_execute_script
         with patch.object(self.op_client, "execute_query") as mock_execute:
-            mock_execute.return_value = {"status": "success", "output": "Script executed successfully"}
+            # Return a string that can't be parsed as JSON
+            mock_execute.return_value = "Script executed successfully"
 
             # Call the execute method (which delegates to execute_query)
             script_content = "puts 'Hello, World!'"
             result = self.op_client.execute(script_content)
 
-            # Verify result
-            assert result["status"] == "success"
-            assert result["output"] == "Script executed successfully"
+            # Verify result - execute method returns dict with 'result' key when it can't parse as JSON
+            assert isinstance(result, dict)
+            assert "result" in result
+            assert result["result"] == "Script executed successfully"
 
             # Verify mock was called with the right content
             mock_execute.assert_called_once_with(script_content)

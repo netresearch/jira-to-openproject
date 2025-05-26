@@ -146,6 +146,10 @@ class JiraClient:
             JiraApiError: If the API request fails
 
         """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             projects = self.jira.projects()
             result = [{"key": project.key, "name": project.name, "id": project.id} for project in projects]
@@ -169,6 +173,10 @@ class JiraClient:
             JiraApiError: If the API request fails
 
         """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             issue_types = self.jira.issue_types()
             result = [
@@ -204,7 +212,7 @@ class JiraClient:
             JiraResourceNotFoundError: If the project is not found
 
         """
-        all_issues = []
+        all_issues: list[Issue] = []
         start_at = 0
         max_results = 100  # Fetch in batches of 100
         # Surround project key with quotes to handle reserved words

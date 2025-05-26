@@ -759,8 +759,15 @@ class FileTransferChainTest(unittest.TestCase):
 
             # Verify the result contains expected values
             assert result is not None, "Script execution returned None"
-            assert f"test_value: {test_value}" in result, f"Script did not return expected test value: {test_value}"
-            assert 'message: "Script executed successfully"' in result, "Script did not return expected message"
+
+            # The execute method returns a dict with 'result' key when it can't parse as JSON
+            if isinstance(result, dict) and 'result' in result:
+                result_str = str(result['result'])
+            else:
+                result_str = str(result)
+
+            assert f"test_value: {test_value}" in result_str, f"Script did not return expected test value: {test_value}"
+            assert 'message: "Script executed successfully"' in result_str, "Script did not return expected message"
 
         except Exception as e:
             self.fail(f"Script execution failed: {e!s}")
