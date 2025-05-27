@@ -61,14 +61,20 @@ class AccountMigration(BaseMigration):
         # Load existing data if available
         self.tempo_accounts = self._load_from_json(Mappings.TEMPO_ACCOUNTS_FILE) or []
         self.op_projects = self._load_from_json(Mappings.OP_PROJECTS_FILE) or []
-        self.account_mapping = config.mappings.get_mapping(Mappings.ACCOUNT_MAPPING_FILE)
+        self.account_mapping = config.mappings.get_mapping(
+            Mappings.ACCOUNT_MAPPING_FILE,
+        )
 
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
         self.tempo_accounts = self._load_from_json(Mappings.TEMPO_ACCOUNTS_FILE) or []
         self.op_projects = self._load_from_json(Mappings.OP_PROJECTS_FILE) or []
-        self.company_mapping = config.mappings.get_mapping(Mappings.COMPANY_MAPPING_FILE)
-        self.account_mapping = config.mappings.get_mapping(Mappings.ACCOUNT_MAPPING_FILE)
+        self.company_mapping = config.mappings.get_mapping(
+            Mappings.COMPANY_MAPPING_FILE,
+        )
+        self.account_mapping = config.mappings.get_mapping(
+            Mappings.ACCOUNT_MAPPING_FILE,
+        )
 
         analysis_data = self._load_from_json("account_mapping_analysis.json", {})
         custom_field_id = analysis_data.get("custom_field_id")
@@ -111,7 +117,11 @@ class AccountMigration(BaseMigration):
             MigrationError: If accounts cannot be extracted from Tempo
 
         """
-        if self.tempo_accounts and not config.migration_config.get("force", False) and not force:
+        if (
+            self.tempo_accounts
+            and not config.migration_config.get("force", False)
+            and not force
+        ):
             self.logger.info(
                 "Using cached Tempo accounts from %s",
                 Mappings.TEMPO_ACCOUNTS_FILE,
@@ -160,7 +170,9 @@ class AccountMigration(BaseMigration):
         # Save projects for future reference
         self._save_to_json(self.op_projects, "openproject_projects.json")
 
-        self.logger.info("Extracted %d projects from OpenProject", len(self.op_projects))
+        self.logger.info(
+            "Extracted %d projects from OpenProject", len(self.op_projects),
+        )
         return self.op_projects
 
     def create_account_mapping(self) -> dict:
@@ -181,7 +193,9 @@ class AccountMigration(BaseMigration):
         if not self.op_projects:
             self.extract_openproject_projects()
 
-        op_projects_by_name = {project.get("name", "").lower(): project for project in self.op_projects}
+        op_projects_by_name = {
+            project.get("name", "").lower(): project for project in self.op_projects
+        }
 
         jira_project_mapping = self._load_from_json("jira_project_mapping.json", {})
 
@@ -198,13 +212,21 @@ class AccountMigration(BaseMigration):
             op_project = op_projects_by_name.get(tempo_name_lower)
             match_method = "name" if op_project else "none"
 
-            if not op_project and default_project_key and default_project_key in jira_project_mapping:
+            if (
+                not op_project
+                and default_project_key
+                and default_project_key in jira_project_mapping
+            ):
                 op_project_id = jira_project_mapping[default_project_key].get(
                     "openproject_id",
                 )
                 if op_project_id:
                     op_project = next(
-                        (p for p in self.op_projects if str(p.get("id")) == str(op_project_id)),
+                        (
+                            p
+                            for p in self.op_projects
+                            if str(p.get("id")) == str(op_project_id)
+                        ),
                         None,
                     )
                     match_method = "default_project"
@@ -219,14 +241,19 @@ class AccountMigration(BaseMigration):
                     "tempo_status": tempo_account.get("status"),
                     "tempo_customer_id": tempo_account.get("customer", {}).get("id"),
                     "tempo_category": tempo_account.get("category", {}).get("name"),
-                    "tempo_category_type": tempo_account.get("category", {}).get("categorytype", {}).get("name"),
+                    "tempo_category_type": tempo_account.get("category", {})
+                    .get("categorytype", {})
+                    .get("name"),
                     "company_id": company_id,
                     "default_project_key": default_project_key,
                     "openproject_id": op_project.get("id"),
                     "openproject_identifier": op_project.get("identifier"),
                     "openproject_name": op_project.get("name"),
                     "parent_id": (
-                        op_project.get("_links", {}).get("parent", {}).get("href", "").split("/")[-1]
+                        op_project.get("_links", {})
+                        .get("parent", {})
+                        .get("href", "")
+                        .split("/")[-1]
                         if op_project.get("_links", {}).get("parent", {}).get("href")
                         else None
                     ),
@@ -242,7 +269,9 @@ class AccountMigration(BaseMigration):
                     "tempo_status": tempo_account.get("status"),
                     "tempo_customer_id": tempo_account.get("customer", {}).get("id"),
                     "tempo_category": tempo_account.get("category", {}).get("name"),
-                    "tempo_category_type": tempo_account.get("category", {}).get("categorytype", {}).get("name"),
+                    "tempo_category_type": tempo_account.get("category", {})
+                    .get("categorytype", {})
+                    .get("name"),
                     "company_id": company_id,
                     "default_project_key": default_project_key,
                     "openproject_id": None,
@@ -256,10 +285,20 @@ class AccountMigration(BaseMigration):
         self._save_to_json(mapping, Mappings.ACCOUNT_MAPPING_FILE)
 
         total_accounts = len(mapping)
-        matched_accounts = sum(1 for account in mapping.values() if account["matched_by"] != "none")
-        name_matched = sum(1 for account in mapping.values() if account["matched_by"] == "name")
-        default_project_matched = sum(1 for account in mapping.values() if account["matched_by"] == "default_project")
-        match_percentage = (matched_accounts / total_accounts) * 100 if total_accounts > 0 else 0
+        matched_accounts = sum(
+            1 for account in mapping.values() if account["matched_by"] != "none"
+        )
+        name_matched = sum(
+            1 for account in mapping.values() if account["matched_by"] == "name"
+        )
+        default_project_matched = sum(
+            1
+            for account in mapping.values()
+            if account["matched_by"] == "default_project"
+        )
+        match_percentage = (
+            (matched_accounts / total_accounts) * 100 if total_accounts > 0 else 0
+        )
 
         self.logger.info(
             "Account mapping created for %d accounts",
@@ -298,7 +337,9 @@ class AccountMigration(BaseMigration):
             MigrationError: If custom field creation fails
 
         """
-        self.logger.info("Ensuring 'Tempo Account' custom field exists in OpenProject...")
+        self.logger.info(
+            "Ensuring 'Tempo Account' custom field exists in OpenProject...",
+        )
 
         # First, check if field already exists
         existing_id = self.get_existing_custom_field_id()
@@ -337,7 +378,9 @@ class AccountMigration(BaseMigration):
         )
 
         # Associate with all work package types
-        if not self.associate_field_with_work_package_types(self.account_custom_field_id):
+        if not self.associate_field_with_work_package_types(
+            self.account_custom_field_id,
+        ):
             msg = "Failed to associate custom field with work package types"
             raise MigrationError(msg)
 
@@ -414,11 +457,15 @@ class AccountMigration(BaseMigration):
         analysis = {
             "total_accounts": len(self.account_mapping),
             "matched_accounts": sum(
-                1 for account in self.account_mapping.values() if account.get("custom_field_id") is not None
+                1
+                for account in self.account_mapping.values()
+                if account.get("custom_field_id") is not None
             ),
             "custom_field_id": self.account_custom_field_id,
             "unmatched_accounts": sum(
-                1 for account in self.account_mapping.values() if account.get("custom_field_id") is None
+                1
+                for account in self.account_mapping.values()
+                if account.get("custom_field_id") is None
             ),
             "unmatched_details": [
                 {
@@ -434,11 +481,21 @@ class AccountMigration(BaseMigration):
         }
 
         analysis["match_methods"] = {
-            "name": sum(1 for account in self.account_mapping.values() if account.get("matched_by") == "name"),
-            "default_project": sum(
-                1 for account in self.account_mapping.values() if account.get("matched_by") == "default_project"
+            "name": sum(
+                1
+                for account in self.account_mapping.values()
+                if account.get("matched_by") == "name"
             ),
-            "none": sum(1 for account in self.account_mapping.values() if account.get("matched_by") == "none"),
+            "default_project": sum(
+                1
+                for account in self.account_mapping.values()
+                if account.get("matched_by") == "default_project"
+            ),
+            "none": sum(
+                1
+                for account in self.account_mapping.values()
+                if account.get("matched_by") == "none"
+            ),
         }
 
         total = analysis["total_accounts"]
@@ -451,10 +508,14 @@ class AccountMigration(BaseMigration):
             "total_tempo_accounts": len(self.tempo_accounts),
             "total_openproject_projects": len(self.op_projects),
             "accounts_matched_to_projects": sum(
-                1 for account in self.account_mapping.values() if account.get("openproject_id") is not None
+                1
+                for account in self.account_mapping.values()
+                if account.get("openproject_id") is not None
             ),
             "accounts_without_project_match": sum(
-                1 for account in self.account_mapping.values() if account.get("openproject_id") is None
+                1
+                for account in self.account_mapping.values()
+                if account.get("openproject_id") is None
             ),
             "custom_field_created": self.account_custom_field_id is not None,
             "custom_field_id": self.account_custom_field_id,
@@ -487,8 +548,7 @@ class AccountMigration(BaseMigration):
                 analysis["match_methods"]["default_project"],
             )
         self.logger.info(
-            "Accounts added to custom field but not matched to projects:"
-            " %d",
+            "Accounts added to custom field but not matched to projects: %d",
             analysis["summary"]["accounts_without_project_match"],
         )
         self.logger.info(
@@ -549,7 +609,9 @@ class AccountMigration(BaseMigration):
 
         # Add custom field ID to all accounts in the mapping
         for account_id in self.account_mapping:
-            self.account_mapping[account_id]["custom_field_id"] = self.account_custom_field_id
+            self.account_mapping[account_id]["custom_field_id"] = (
+                self.account_custom_field_id
+            )
 
         # Save the updated mapping
         self._save_to_json(self.account_mapping, ACCOUNT_MAPPING_FILE)
@@ -595,7 +657,9 @@ class AccountMigration(BaseMigration):
                 self.extract_tempo_accounts()
 
             # Get possible values from Tempo accounts
-            possible_values = [acc.get("name") for acc in self.tempo_accounts if acc.get("name")]
+            possible_values = [
+                acc.get("name") for acc in self.tempo_accounts if acc.get("name")
+            ]
 
             # Create custom field command
             create_command = f"""
@@ -646,7 +710,9 @@ class AccountMigration(BaseMigration):
 
         """
         try:
-            self.logger.info("Making custom field available for all work package types...")
+            self.logger.info(
+                "Making custom field available for all work package types...",
+            )
 
             # Command to associate with all types
             activate_command = f"""

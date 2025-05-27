@@ -1,6 +1,6 @@
 """Migration result models for tracking overall migration operations."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -20,8 +20,10 @@ class MigrationResult(BaseModel):
 
         # Set default values for overall dict if they don't exist
         self.overall.setdefault("status", "success")
-        self.overall.setdefault("start_time", datetime.now().isoformat())
-        self.overall.setdefault("timestamp", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+        self.overall.setdefault("start_time", datetime.now(tz=UTC).isoformat())
+        self.overall.setdefault(
+            "timestamp", datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S"),
+        )
 
     def __setitem__(self, key: str, value: Any) -> None:
         """Support dictionary-style item assignment for top-level attributes."""

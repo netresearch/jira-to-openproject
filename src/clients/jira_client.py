@@ -66,8 +66,12 @@ class JiraClient:
             raise ValueError(msg)
 
         # ScriptRunner configuration
-        self.scriptrunner_enabled = config.jira_config.get("scriptrunner", {}).get("enabled", False)
-        self.scriptrunner_custom_field_options_endpoint = config.jira_config.get("scriptrunner", {}).get(
+        self.scriptrunner_enabled = config.jira_config.get("scriptrunner", {}).get(
+            "enabled", False,
+        )
+        self.scriptrunner_custom_field_options_endpoint = config.jira_config.get(
+            "scriptrunner", {},
+        ).get(
             "custom_field_options_endpoint",
             "",
         )
@@ -132,7 +136,9 @@ class JiraClient:
 
         # If all methods failed, raise exception with details
         error_details = "; ".join(connection_errors)
-        logger.error(f"All authentication methods failed for Jira connection to {self.jira_url}")
+        logger.error(
+            "All authentication methods failed for Jira connection to %s", self.jira_url,
+        )
         msg = f"Failed to authenticate with Jira: {error_details}"
         raise JiraAuthenticationError(msg)
 
@@ -152,7 +158,10 @@ class JiraClient:
 
         try:
             projects = self.jira.projects()
-            result = [{"key": project.key, "name": project.name, "id": project.id} for project in projects]
+            result = [
+                {"key": project.key, "name": project.name, "id": project.id}
+                for project in projects
+            ]
 
             if not projects:
                 logger.warning("No projects found in Jira")
@@ -197,7 +206,9 @@ class JiraClient:
             logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
-    def get_all_issues_for_project(self, project_key: str, expand_changelog: bool = True) -> list[Issue]:
+    def get_all_issues_for_project(
+        self, project_key: str, expand_changelog: bool = True,
+    ) -> list[Issue]:
         """Gets all issues for a specific project, handling pagination.
 
         Args:
@@ -220,7 +231,7 @@ class JiraClient:
         fields = None  # Get all fields
         expand = "changelog" if expand_changelog else None
 
-        logger.notice(f"Fetching all issues for project '{project_key}'...")
+        logger.notice("Fetching all issues for project '%s'...", project_key)
 
         # Verify project exists
         try:
@@ -233,7 +244,12 @@ class JiraClient:
         # Fetch all pages
         while True:
             try:
-                logger.debug(f"Fetching issues for {project_key}: startAt={start_at}, maxResults={max_results}")
+                logger.debug(
+                    "Fetching issues for %s: startAt=%s, maxResults=%s",
+                    project_key,
+                    start_at,
+                    max_results,
+                )
 
                 issues_page = self.jira.search_issues(
                     jql,
@@ -245,11 +261,20 @@ class JiraClient:
                 )
 
                 if not issues_page:
-                    logger.debug(f"No more issues found for {project_key} at startAt={start_at}")
+                    logger.debug(
+                        "No more issues found for %s at startAt=%s",
+                        project_key,
+                        start_at,
+                    )
                     break  # Exit loop if no more issues are returned
 
                 all_issues.extend(issues_page)
-                logger.debug(f"Fetched {len(issues_page)} issues (total: {len(all_issues)}) for {project_key}")
+                logger.debug(
+                    "Fetched %s issues (total: %s) for %s",
+                    len(issues_page),
+                    len(all_issues),
+                    project_key,
+                )
 
                 # Check if this was the last page
                 if len(issues_page) < max_results:
@@ -262,7 +287,11 @@ class JiraClient:
                 logger.exception(error_msg)
                 raise JiraApiError(error_msg)
 
-        logger.info(f"Finished fetching {len(all_issues)} issues for project '{project_key}'.")
+        logger.info(
+            "Finished fetching %s issues for project '%s'.",
+            len(all_issues),
+            project_key,
+        )
         return all_issues
 
     def get_issue_details(self, issue_key: str) -> dict[str, Any]:
@@ -346,7 +375,10 @@ class JiraClient:
         except Exception as e:
             error_msg = f"Failed to get issue details for {issue_key}: {e!s}"
             logger.exception(error_msg)
-            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
+            if (
+                "issue does not exist" in str(e).lower()
+                or "issue not found" in str(e).lower()
+            ):
                 msg = f"Issue {issue_key} not found"
                 raise JiraResourceNotFoundError(msg)
             raise JiraApiError(error_msg)
@@ -362,9 +394,11 @@ class JiraClient:
 
         """
         try:
-            users = self.jira.search_users(user=".", includeInactive=True, startAt=0, maxResults=1000)
+            users = self.jira.search_users(
+                user=".", includeInactive=True, startAt=0, maxResults=1000,
+            )
 
-            logger.info(f"Retrieved {len(users)} users from Jira API")
+            logger.info("Retrieved %s users from Jira API", len(users))
 
             # Convert user objects to dictionaries
             return [
@@ -414,7 +448,10 @@ class JiraClient:
         except Exception as e:
             error_msg = f"Failed to get issue count for project {project_key}: {e!s}"
             logger.exception(error_msg)
-            if "project does not exist" in str(e).lower() or "project not found" in str(e).lower():
+            if (
+                "project does not exist" in str(e).lower()
+                or "project not found" in str(e).lower()
+            ):
                 msg = f"Project {project_key} not found"
                 raise JiraResourceNotFoundError(msg)
             raise JiraApiError(error_msg)
@@ -438,7 +475,7 @@ class JiraClient:
             result = self.jira.watchers(issue_key)
 
             if not result:
-                logger.debug(f"No watchers found for issue {issue_key}")
+                logger.debug("No watchers found for issue %s", issue_key)
                 return []
 
             # Convert watchers to dictionaries
@@ -454,7 +491,10 @@ class JiraClient:
         except Exception as e:
             error_msg = f"Failed to get watchers for issue {issue_key}: {e!s}"
             logger.exception(error_msg)
-            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
+            if (
+                "issue does not exist" in str(e).lower()
+                or "issue not found" in str(e).lower()
+            ):
                 msg = f"Issue {issue_key} not found"
                 raise JiraResourceNotFoundError(msg)
             raise JiraApiError(error_msg)
@@ -473,7 +513,7 @@ class JiraClient:
             # Method 1: Use sample issues to extract statuses
             statuses = []
             issues = self.jira.search_issues("order by created DESC", maxResults=50)
-            logger.debug(f"Retrieving statuses from {len(issues)} sample issues")
+            logger.debug("Retrieving statuses from %s sample issues", len(issues))
 
             # Extract unique statuses from these issues
             for issue in issues:
@@ -484,8 +524,12 @@ class JiraClient:
                         "name": status.name,
                         "description": getattr(status, "description", ""),
                         "statusCategory": {
-                            "id": getattr(getattr(status, "statusCategory", None), "id", None),
-                            "key": getattr(getattr(status, "statusCategory", None), "key", None),
+                            "id": getattr(
+                                getattr(status, "statusCategory", None), "id", None,
+                            ),
+                            "key": getattr(
+                                getattr(status, "statusCategory", None), "key", None,
+                            ),
                             "name": getattr(
                                 getattr(status, "statusCategory", None),
                                 "name",
@@ -505,7 +549,7 @@ class JiraClient:
 
             # If we found statuses from sample issues, return them
             if statuses:
-                logger.info(f"Retrieved {len(statuses)} statuses from sample issues")
+                logger.info("Retrieved %s statuses from sample issues", len(statuses))
                 return statuses
 
             # Method 2: Use the status_categories endpoint
@@ -518,7 +562,7 @@ class JiraClient:
                 )
 
             categories = response.json()
-            logger.debug(f"Retrieved {len(categories)} status categories from API")
+            logger.debug("Retrieved %s status categories from API", len(categories))
 
             # Use the status endpoint
             path = "/rest/api/2/status"
@@ -530,7 +574,7 @@ class JiraClient:
                 )
 
             statuses = response.json()
-            logger.info(f"Retrieved {len(statuses)} statuses from Jira API")
+            logger.info("Retrieved %s statuses from Jira API", len(statuses))
 
             return statuses
 
@@ -563,8 +607,11 @@ class JiraClient:
                     f"browser, log in to resolve the CAPTCHA, and then restart the application"
                 )
                 logger.error("CAPTCHA challenge detected from Jira!")
-                logger.error(f"Please open {login_url} in your web browser and log in to resolve the CAPTCHA challenge")
-                logger.debug(f"Jira client request count: {self.request_count}")
+                logger.error(
+                    "Please open %s in your web browser and log in to resolve the CAPTCHA challenge",
+                    login_url,
+                )
+                logger.debug("Jira client request count: %s", self.request_count)
 
                 raise JiraCaptchaError(error_msg)
 
@@ -574,7 +621,9 @@ class JiraClient:
             try:
                 error_json = response.json()
                 if "errorMessages" in error_json:
-                    error_msg = f"{error_msg} - {', '.join(error_json['errorMessages'])}"
+                    error_msg = (
+                        f"{error_msg} - {', '.join(error_json['errorMessages'])}"
+                    )
                 elif "errors" in error_json:
                     error_msg = f"{error_msg} - {error_json['errors']}"
             except Exception:
@@ -611,7 +660,7 @@ class JiraClient:
                 raise JiraApiError(msg)
 
             categories = response.json()
-            logger.info(f"Retrieved {len(categories)} status categories from Jira API")
+            logger.info("Retrieved %s status categories from Jira API", len(categories))
 
             return categories
         except Exception as e:
@@ -633,7 +682,10 @@ class JiraClient:
             JiraApiError: If the API request fails
 
         """
-        logger.debug(f"Attempting to get field metadata for {field_id} using createmeta endpoint")
+        logger.debug(
+            "Attempting to get field metadata for %s using createmeta endpoint",
+            field_id,
+        )
 
         try:
             # We no longer need to check the cache here as it's done in the calling method
@@ -677,7 +729,9 @@ class JiraClient:
                                 field_id_from_response = value.get("fieldId")
                                 if field_id_from_response:
                                     # Store in cache for future use
-                                    self.field_options_cache[field_id_from_response] = value
+                                    self.field_options_cache[field_id_from_response] = (
+                                        value
+                                    )
 
                                     # If this is the field we're looking for, return it immediately
                                     if field_id_from_response == field_id:
@@ -716,32 +770,39 @@ class JiraClient:
         """
         # Check if we already have this field in cache
         if field_id in self.field_options_cache:
-            logger.debug(f"Returning cached metadata for field {field_id}")
+            logger.debug("Returning cached metadata for field %s", field_id)
             return self.field_options_cache[field_id]
 
         # Try ScriptRunner first if enabled
-        if self.scriptrunner_enabled and self.scriptrunner_custom_field_options_endpoint:
+        if (
+            self.scriptrunner_enabled
+            and self.scriptrunner_custom_field_options_endpoint
+        ):
             scriptrunner_cache_key = "_scriptrunner_all_fields"
 
             # If we don't have the full ScriptRunner data cached yet, fetch it
             if scriptrunner_cache_key not in self.field_options_cache:
                 logger.info("Fetching all custom field options via ScriptRunner...")
                 try:
-                    response = self._make_request(self.scriptrunner_custom_field_options_endpoint)
+                    response = self._make_request(
+                        self.scriptrunner_custom_field_options_endpoint,
+                    )
                     if response and response.status_code == 200:
                         # Cache all fields data
                         all_fields_data = response.json()
-                        self.field_options_cache[scriptrunner_cache_key] = all_fields_data
+                        self.field_options_cache[scriptrunner_cache_key] = (
+                            all_fields_data
+                        )
                         logger.info(
-                            f"Successfully cached ScriptRunner data for {len(all_fields_data)} fields"
+                            f"Successfully cached ScriptRunner data for {len(all_fields_data)} fields",
                         )
                     else:
                         logger.warning(
                             f"ScriptRunner request failed with status "
-                            f"{response.status_code if response else 'None'}"
+                            f"{response.status_code if response else 'None'}",
                         )
                 except Exception as e:
-                    logger.warning(f"Error fetching ScriptRunner data: {e}")
+                    logger.warning("Error fetching ScriptRunner data: %s", e)
                     # Fall through to standard method - don't raise here
 
             # Try to get the specific field from the cached ScriptRunner data
@@ -755,13 +816,19 @@ class JiraClient:
 
                     # Cache the result
                     self.field_options_cache[field_id] = result
-                    logger.debug(f"Returning ScriptRunner data for field {field_id} with {len(options)} options")
+                    logger.debug(
+                        "Returning ScriptRunner data for field %s with %s options",
+                        field_id,
+                        len(options),
+                    )
                     return result
-                else:
-                    logger.debug(f"Field {field_id} not found in ScriptRunner data or has no options")
+                logger.debug(
+                    "Field %s not found in ScriptRunner data or has no options",
+                    field_id,
+                )
 
         # If ScriptRunner method didn't work, use the standard method
-        logger.debug(f"Falling back to standard method for field {field_id}")
+        logger.debug("Falling back to standard method for field %s", field_id)
         try:
             result = self._get_field_metadata_via_createmeta(field_id)
 
@@ -774,6 +841,7 @@ class JiraClient:
 
     def _patch_jira_client(self) -> None:
         """Patch the JIRA client to catch CAPTCHA challenges.
+        
         This adds CAPTCHA detection to all API requests made through the JIRA library.
         """
         if not self.jira:
@@ -784,18 +852,22 @@ class JiraClient:
         original_request = self.jira._session.request
 
         # Create patched method that checks for CAPTCHA
-        def patched_request(method: str, url: str, **kwargs: Any) -> Response:
+        def patched_request(method: str, url: str, **kwargs: object) -> Response:
             try:
                 self.request_count += 1
                 # dump requestcount
-                logger.debug(f"Jira client request count: {self.request_count}")
+                logger.debug("Jira client request count: %s", self.request_count)
                 response = original_request(method, url, **kwargs)
 
                 # Check for CAPTCHA or other errors
                 self._handle_response(response)
 
                 return response
-            except (JiraCaptchaError, JiraAuthenticationError, JiraResourceNotFoundError):
+            except (
+                JiraCaptchaError,
+                JiraAuthenticationError,
+                JiraResourceNotFoundError,
+            ):
                 raise  # Re-raise specific exceptions
             except Exception as e:
                 msg = f"Error during API request to {url}: {e!s}"
@@ -810,7 +882,7 @@ class JiraClient:
         path: str,
         method: str = "GET",
         content_type: str = "application/json",
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Response:
         """Generic method to make API requests with proper error handling and CAPTCHA detection.
 
@@ -854,7 +926,12 @@ class JiraClient:
             return self.jira._session.request(method, url, headers=headers, **kwargs)
 
             # If we got here, we've passed the CAPTCHA check in patched_request
-        except (JiraCaptchaError, JiraAuthenticationError, JiraResourceNotFoundError, JiraApiError):
+        except (
+            JiraCaptchaError,
+            JiraAuthenticationError,
+            JiraResourceNotFoundError,
+            JiraApiError,
+        ):
             raise  # Re-raise specific exceptions
         except Exception as e:
             msg = f"Error during API request to {url}: {e!s}"
@@ -862,7 +939,7 @@ class JiraClient:
 
     # Tempo API methods
     def get_tempo_accounts(self, expand: bool = False) -> list[dict[str, Any]]:
-        """Retrieves all Tempo accounts.
+        """Retrieve all Tempo accounts.
 
         Args:
             expand: Whether to expand account details (passed as query param).
@@ -888,7 +965,7 @@ class JiraClient:
                 raise JiraApiError(msg)
 
             accounts = response.json()
-            logger.info(f"Successfully retrieved {len(accounts)} Tempo accounts.")
+            logger.info("Successfully retrieved %s Tempo accounts.", len(accounts))
             return accounts
         except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
             raise  # Re-raise specific exceptions
@@ -898,7 +975,7 @@ class JiraClient:
             raise JiraApiError(error_msg)
 
     def get_tempo_customers(self) -> list[dict[str, Any]]:
-        """Retrieves all Tempo customers (often used for Companies).
+        """Retrieve all Tempo customers (often used for Companies).
 
         Returns:
             A list of Tempo customers
@@ -917,7 +994,7 @@ class JiraClient:
                 raise JiraApiError(msg)
 
             customers = response.json()
-            logger.info(f"Successfully retrieved {len(customers)} Tempo customers.")
+            logger.info("Successfully retrieved %s Tempo customers.", len(customers))
             return customers
         except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
             raise  # Re-raise specific exceptions
@@ -926,8 +1003,10 @@ class JiraClient:
             logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
-    def get_tempo_account_links_for_project(self, project_id: int) -> list[dict[str, Any]]:
-        """Retrieves Tempo account links for a specific Jira project.
+    def get_tempo_account_links_for_project(
+        self, project_id: int,
+    ) -> list[dict[str, Any]]:
+        """Retrieve Tempo account links for a specific Jira project.
 
         Args:
             project_id: The Jira project ID.
@@ -943,13 +1022,13 @@ class JiraClient:
         # Use the Tempo account-by-project endpoint for project-specific account lookup
         path = f"/rest/tempo-accounts/1/account/project/{project_id}"
 
-        logger.debug(f"Fetching Tempo account links for project '{project_id}'")
+        logger.debug("Fetching Tempo account links for project '%s'", project_id)
         try:
             response = self._make_request(path)
 
             # Handle 404s specially - these might be expected if no links exist
             if response.status_code == 404:
-                logger.warning(f"No account links found for project {project_id}.")
+                logger.warning("No account links found for project %s.", project_id)
                 return []
 
             if response.status_code != 200:
@@ -957,21 +1036,29 @@ class JiraClient:
                 raise JiraApiError(msg)
 
             links = response.json()
-            logger.debug(f"Successfully retrieved {len(links)} account links for project {project_id}.")
+            logger.debug(
+                "Successfully retrieved %s account links for project %s.",
+                len(links),
+                project_id,
+            )
             return links
         except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
             raise  # Re-raise specific exceptions
         except JiraResourceNotFoundError:
             # Convert to empty list for this specific case since it's an expected condition
-            logger.warning(f"Project {project_id} not found or no account links exist.")
+            logger.warning(
+                "Project %s not found or no account links exist.", project_id,
+            )
             return []
         except Exception as e:
-            error_msg = f"Failed to retrieve account links for project {project_id}: {e!s}"
+            error_msg = (
+                f"Failed to retrieve account links for project {project_id}: {e!s}"
+            )
             logger.exception(error_msg)
             raise JiraApiError(error_msg)
 
     def get_issue_link_types(self) -> list[dict[str, Any]]:
-        """Retrieves all issue link types configured in Jira.
+        """Retrieve all issue link types configured in Jira.
 
         Returns:
             A list of issue link types
@@ -983,7 +1070,7 @@ class JiraClient:
         try:
             logger.info("Fetching Jira issue link types")
             result = self.jira.issue_link_types()
-            logger.info(f"Successfully retrieved {len(result)} issue link types")
+            logger.info("Successfully retrieved %s issue link types", len(result))
 
             # Convert issue link type objects to dictionaries
             return [

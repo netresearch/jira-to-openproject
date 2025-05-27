@@ -157,7 +157,7 @@ class TestWorkflowMigration(unittest.TestCase):
         # Assertions
         assert result == self.jira_statuses
         mock_jira_instance.jira._session.get.assert_called_once_with("https://jira.local/rest/api/2/status")
-        mock_file.assert_called_with("/tmp/test_data/jira_statuses.json", "w")
+        mock_file.assert_called_with(Path("/tmp/test_data/jira_statuses.json"), "w")
         mock_file().write.assert_called()
 
     @patch("src.migrations.workflow_migration.JiraClient")
@@ -188,7 +188,7 @@ class TestWorkflowMigration(unittest.TestCase):
         # Assertions
         assert result == self.op_statuses
         mock_op_instance.get_statuses.assert_called_once()
-        mock_file.assert_called_with("/tmp/test_data/openproject_statuses.json", "w")
+        mock_file.assert_called_with(Path("/tmp/test_data/openproject_statuses.json"), "w")
         mock_file().write.assert_called()
 
     @patch("src.migrations.workflow_migration.JiraClient")
@@ -241,7 +241,7 @@ class TestWorkflowMigration(unittest.TestCase):
         assert result["4"]["openproject_id"] is None
         assert result["4"]["matched_by"] == "none"
 
-        mock_file.assert_called_with("/tmp/test_data/status_mapping.json", "w")
+        mock_file.assert_called_with(Path("/tmp/test_data/status_mapping.json"), "w")
         mock_file().write.assert_called()
 
     @patch("src.migrations.workflow_migration.JiraClient")
@@ -335,7 +335,7 @@ class TestWorkflowMigration(unittest.TestCase):
         assert result["4"]["openproject_id"] == 4
         assert result["4"]["matched_by"] == "created"
 
-        mock_file.assert_called_with("/tmp/test_data/status_mapping.json", "w")
+        mock_file.assert_called_with(Path("/tmp/test_data/status_mapping.json"), "w")
         mock_file().write.assert_called()
 
     @patch("src.migrations.workflow_migration.JiraClient")
@@ -367,7 +367,7 @@ class TestWorkflowMigration(unittest.TestCase):
         assert "automatically" in result["message"]
         assert "automatically" in result["details"]
 
-        mock_file.assert_called_with("/tmp/test_data/workflow_configuration.json", "w")
+        mock_file.assert_called_with(Path("/tmp/test_data/workflow_configuration.json"), "w")
         mock_file().write.assert_called()
 
     @patch("src.migrations.workflow_migration.JiraClient")

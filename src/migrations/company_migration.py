@@ -347,9 +347,10 @@ class CompanyMigration(BaseMigration):
             ],
         }
 
-        total: int = analysis["total_companies"]
-        if total > 0:
-            analysis["match_percentage"] = (analysis["matched_companies"] / total) * 100
+        total_companies = analysis.get("total_companies", 0)
+        matched_companies = analysis.get("matched_companies", 0)
+        if isinstance(total_companies, int) and isinstance(matched_companies, int) and total_companies > 0:
+            analysis["match_percentage"] = (matched_companies / total_companies) * 100
         else:
             analysis["match_percentage"] = 0
 
@@ -737,7 +738,7 @@ class CompanyMigration(BaseMigration):
             return self.company_mapping
 
         except Exception as e:
-            error_msg = f"Failed to migrate companies: {e!s}"
+            error_msg = f"Failed to migrate companies: {e}"
             self.logger.exception(error_msg)
             raise MigrationError(error_msg) from e
 
@@ -1132,7 +1133,8 @@ class CompanyMigration(BaseMigration):
             analysis = self.analyze_company_mapping()
 
             # Update mappings in global configuration
-            config.mappings.set_mapping("companies", self.company_mapping)
+            if config.mappings:
+                config.mappings.set_mapping("companies", self.company_mapping)
 
             return ComponentResult(
                 success=True,
@@ -1142,10 +1144,10 @@ class CompanyMigration(BaseMigration):
                 total_count=analysis["total_companies"],
             )
         except Exception as e:
-            self.logger.exception(f"Error during company migration: {e!s}")
+            self.logger.exception("Error during company migration: %s", e)
             return ComponentResult(
                 success=False,
-                errors=[f"Error during company migration: {e!s}"],
+                errors=[f"Error during company migration: {e}"],
                 success_count=0,
                 failed_count=len(self.tempo_companies) if self.tempo_companies else 0,
                 total_count=len(self.tempo_companies) if self.tempo_companies else 0,

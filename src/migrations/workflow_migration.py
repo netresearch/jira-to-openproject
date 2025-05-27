@@ -4,7 +4,6 @@ Handles the migration of workflow states and their transitions from Jira to Open
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -88,13 +87,13 @@ class WorkflowMigration:
                     workflow["transitions"] = transitions
                 except Exception as e:
                     logger.warning(
-                        f"Failed to get transitions for workflow {workflow_name}: {e!s}",
+                        f"Failed to get transitions for workflow {workflow_name}: {e}",
                     )
                     workflow["transitions"] = []
 
             return workflows
         except Exception as e:
-            logger.exception(f"Failed to get workflows from Jira: {e!s}")
+            logger.exception("Failed to get workflows from Jira: %s", e)
             return []
 
     def extract_jira_statuses(self) -> list[dict[str, Any]]:
@@ -112,14 +111,14 @@ class WorkflowMigration:
             response.raise_for_status()
             statuses = response.json()
 
-            logger.info(f"Extracted {len(statuses)} statuses from Jira")
+            logger.info("Extracted %s statuses from Jira", len(statuses))
 
             self.jira_statuses = statuses
             self._save_to_json(statuses, "jira_statuses.json")
 
             return statuses
         except Exception as e:
-            logger.exception(f"Failed to get statuses from Jira: {e!s}")
+            logger.exception("Failed to get statuses from Jira: %s", e)
             return []
 
     def extract_openproject_statuses(self) -> list[dict[str, Any]]:
@@ -135,7 +134,7 @@ class WorkflowMigration:
             self.op_statuses = self.op_client.get_statuses()
         except Exception as e:
             logger.warning(
-                f"Failed to get statuses from OpenProject: {e!s}",
+                f"Failed to get statuses from OpenProject: {e}",
             )
             logger.warning(
                 "Using an empty list of statuses for OpenProject",
@@ -336,13 +335,14 @@ class WorkflowMigration:
         logger.info(
             f"Status migration complete for {total_statuses} statuses",
         )
+        match_percentage = (matched_statuses / total_statuses * 100) if total_statuses > 0 else 0
         logger.info(
-            f"Successfully matched {matched_statuses} statuses ({matched_statuses / total_statuses * 100:.1f}% of total)",
+            f"Successfully matched {matched_statuses} statuses ({match_percentage:.1f}% of total)",
         )
         logger.info(
             f"- Existing matches: {matched_statuses - created_statuses}",
         )
-        logger.info(f"- Newly created: {created_statuses}")
+        logger.info("- Newly created: %s", created_statuses)
 
         return self.status_mapping
 
@@ -373,7 +373,7 @@ class WorkflowMigration:
             filename: Name of the file to save to
 
         """
-        filepath = os.path.join(self.data_dir, filename)
+        filepath = Path(self.data_dir) / filename
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
-        logger.info(f"Saved data to {filepath}")
+        logger.info("Saved data to %s", filepath)

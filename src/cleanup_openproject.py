@@ -73,7 +73,7 @@ class OpenProjectCleaner:
         logger.info("Starting project cleanup...")
 
         count = self.op_client.count_records("Project")
-        logger.debug(f"Count: {count}")
+        logger.debug("Count: %s", count)
         if count <= 0:
             logger.info("No projects found to delete")
             return 0
@@ -242,7 +242,7 @@ class OpenProjectCleaner:
                 f"  Custom fields deleted: {results['custom_fields_deleted']}",
             )
         if "u" in self.entities:
-            logger.info(f"  Users deleted: {results['users_deleted']}")
+            logger.info("  Users deleted: %s", results["users_deleted"])
         if "it" in self.entities:
             logger.info(
                 f"  Issue types deleted: {results['issue_types_deleted']}",
@@ -341,7 +341,7 @@ def main() -> None:
         if args.dry_run:
             logger.warning("This was a dry run. No actual changes were made.")
     except Exception as e:
-        logger.exception(f"Error during cleanup: {e!s}")
+        logger.exception("Error during cleanup: %s", e)
         sys.exit(1)
 
 

@@ -6,7 +6,7 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +68,7 @@ class WorkPackageMigration(BaseMigration):
         self._load_mappings()
 
         # Logging
-        self.logger.debug(f"WorkPackageMigration initialized with data dir: {self.data_dir}")
+        self.logger.debug("WorkPackageMigration initialized with data dir: %s", self.data_dir)
 
     def _load_mappings(self) -> None:
         """Load all required mappings from files."""
@@ -127,7 +127,7 @@ class WorkPackageMigration(BaseMigration):
             # First, get the total number of issues for this project to set up progress bar
             total_issues = self.jira_client.get_issue_count(project_key)
             if total_issues <= 0:
-                self.logger.warning(f"No issues found for project {project_key}")
+                self.logger.warning("No issues found for project %s", project_key)
                 return all_issues
 
             self.logger.info(
@@ -165,14 +165,14 @@ class WorkPackageMigration(BaseMigration):
                     except Exception as e:
                         retry_count += 1
                         retry_msg = (
-                            f"Error fetching issues for {project_key} (attempt {retry_count}/{max_retries}): {e!s}"
+                            f"Error fetching issues for {project_key} (attempt {retry_count}/{max_retries}): {e}"
                         )
                         self.logger.warning(retry_msg)
                         project_tracker.add_log_item(retry_msg)
 
                         if retry_count >= max_retries:
                             self.logger.exception(
-                                f"Failed to fetch issues after {max_retries} attempts: {e!s}",
+                                f"Failed to fetch issues after {max_retries} attempts: {e}",
                             )
                             project_tracker.add_log_item(f"Failed to fetch issues after {max_retries} attempts")
                             # Save what we have so far before potentially raising exception
@@ -231,10 +231,13 @@ class WorkPackageMigration(BaseMigration):
                     f"Extracted and saved {len(all_issues)} issues from project {project_key}",
                 )
             except Exception as e:
-                self.logger.exception(f"Failed to save issues to file: {e!s}")
+                self.logger.exception("Failed to save issues to file: %s", e)
                 # Try to save to alternate location as backup
                 backup_path = (
-                    self.data_dir / f"jira_issues_{project_key}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                    self.data_dir / (
+                        f"jira_issues_{project_key}_backup_"
+                        f"{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                    )
                 )
                 try:
                     with open(backup_path, "w") as f:
@@ -244,18 +247,18 @@ class WorkPackageMigration(BaseMigration):
                     )
                 except Exception as backup_error:
                     self.logger.critical(
-                        f"Also failed to save backup: {backup_error!s}",
+                        f"Also failed to save backup: {backup_error}",
                     )
 
             return all_issues
 
         except Exception as e:
-            error_msg = f"Failed to extract issues from project {project_key}: {e!s}"
+            error_msg = f"Failed to extract issues from project {project_key}: {e}"
             self.logger.exception(error_msg)
             if project_tracker:
                 project_tracker.add_log_item(error_msg)
             # Reraise with more context
-            msg = f"Jira issue extraction failed for project {project_key}: {e!s}"
+            msg = f"Jira issue extraction failed for project {project_key}: {e}"
             raise RuntimeError(msg) from e
 
     def _prepare_work_package(self, jira_issue: dict[str, Any], project_id: int) -> dict[str, Any]:
@@ -310,7 +313,7 @@ class WorkPackageMigration(BaseMigration):
                     if watchers_data:
                         watchers = [watcher.get("name") for watcher in watchers_data]
                 except Exception as e:
-                    self.logger.exception(f"Failed to fetch watchers for issue {jira_issue.key}: {e!s}")
+                    self.logger.exception("Failed to fetch watchers for issue %s: %s", jira_issue.key, e)
 
         # Extract custom fields
         custom_fields = {}
@@ -391,7 +394,7 @@ class WorkPackageMigration(BaseMigration):
                 if watcher_id:
                     watcher_ids.append(watcher_id)
             else:
-                self.logger.debug(f"Watcher {watcher_name} not found in user mapping")
+                self.logger.debug("Watcher %s not found in user mapping", watcher_name)
 
         # Add Jira issue key to description for reference
         jira_reference = f"\n\n*Imported from Jira issue: {jira_key}*"
@@ -536,14 +539,14 @@ class WorkPackageMigration(BaseMigration):
             Dictionary mapping Jira custom field IDs to OpenProject custom field IDs
 
         """
-        mapping_file = os.path.join(self.data_dir, "custom_field_mapping.json")
-        if os.path.exists(mapping_file):
+        mapping_file = Path(self.data_dir) / "custom_field_mapping.json"
+        if Path(mapping_file).exists():
             try:
                 with open(mapping_file) as f:
                     return json.load(f)
             except Exception as e:
                 self.logger.warning(
-                    f"Error loading custom field mapping: {e!s}",
+                    f"Error loading custom field mapping: {e}",
                 )
 
         return {}
@@ -654,11 +657,11 @@ class WorkPackageMigration(BaseMigration):
             return {}
 
         # Check for migration state file to resume from last processed project
-        migration_state_file = os.path.join(self.data_dir, "work_package_migration_state.json")
+        migration_state_file = Path(self.data_dir) / "work_package_migration_state.json"
         processed_projects = set()
         last_processed_project = None
 
-        if os.path.exists(migration_state_file):
+        if Path(migration_state_file).exists():
             try:
                 with open(migration_state_file) as f:
                     migration_state = json.load(f)
@@ -673,10 +676,11 @@ class WorkPackageMigration(BaseMigration):
                         f"Last processed project was {last_processed_project} - will resume from there",
                     )
             except Exception as e:
-                self.logger.warning(f"Error loading migration state: {e!s}")
+                self.logger.warning("Error loading migration state: %s", e)
                 # Create a backup of the corrupted state file if it exists
-                if os.path.exists(migration_state_file):
-                    backup_file = f"{migration_state_file}.bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                if Path(migration_state_file).exists():
+                    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+                    backup_file = f"{migration_state_file}.bak.{timestamp}"
                     try:
                         shutil.copy2(migration_state_file, backup_file)
                         self.logger.info(
@@ -684,7 +688,7 @@ class WorkPackageMigration(BaseMigration):
                         )
                     except Exception as backup_err:
                         self.logger.warning(
-                            f"Failed to create backup of state file: {backup_err!s}",
+                            f"Failed to create backup of state file: {backup_err}",
                         )
 
         # Filter unprocessed projects or start from the interrupted project
@@ -709,7 +713,7 @@ class WorkPackageMigration(BaseMigration):
         with ProgressTracker("Migrating projects", len(remaining_projects), "Recent Projects") as project_tracker:
             for project_key in remaining_projects:
                 project_tracker.update_description(f"Processing project {project_key}")
-                self.logger.info(f"Processing project {project_key}")
+                self.logger.info("Processing project %s", project_key)
 
                 # Update the state file at the start of each project processing
                 try:
@@ -718,14 +722,14 @@ class WorkPackageMigration(BaseMigration):
                             {
                                 "processed_projects": list(processed_projects),
                                 "last_processed_project": project_key,
-                                "timestamp": datetime.now().isoformat(),
+                                "timestamp": datetime.now(tz=UTC).isoformat(),
                             },
                             f,
                             indent=2,
                         )
                 except Exception as e:
                     self.logger.warning(
-                        f"Error saving migration state: {e!s}",
+                        f"Error saving migration state: {e}",
                     )
                     # Try alternate location if main save fails
                     try:
@@ -735,7 +739,7 @@ class WorkPackageMigration(BaseMigration):
                                 {
                                     "processed_projects": list(processed_projects),
                                     "last_processed_project": project_key,
-                                    "timestamp": datetime.now().isoformat(),
+                                    "timestamp": datetime.now(tz=UTC).isoformat(),
                                 },
                                 f,
                                 indent=2,
@@ -745,7 +749,7 @@ class WorkPackageMigration(BaseMigration):
                         )
                     except Exception as alt_err:
                         self.logger.exception(
-                            f"Failed to save migration state to alternate location: {alt_err!s}",
+                            f"Failed to save migration state to alternate location: {alt_err}",
                         )
 
                 # Find corresponding OpenProject project ID
@@ -783,7 +787,7 @@ class WorkPackageMigration(BaseMigration):
                         continue
                 except Exception as e:
                     self.logger.exception(
-                        f"Failed to extract issues for project {project_key}: {e!s}",
+                        f"Failed to extract issues for project {project_key}: {e}",
                     )
                     project_tracker.add_log_item(f"Failed: {project_key} (issue extraction error)")
                     project_tracker.increment()
@@ -843,16 +847,16 @@ class WorkPackageMigration(BaseMigration):
                         except Exception as e:
                             # Log the error with details about the issue
                             self.logger.exception(
-                                f"Error preparing work package for issue {issue_key}: {e!s}",
+                                f"Error preparing work package for issue {issue_key}: {e}",
                             )
-                            self.logger.debug(f"Issue type: {type(issue)}")
+                            self.logger.debug("Issue type: %s", type(issue))
                             preparation_errors += 1
                             # Continue with the next issue
                             continue
 
                     except Exception as e:
                         self.logger.exception(
-                            f"Error processing issue at index {i}: {e!s}",
+                            f"Error processing issue at index {i}: {e}",
                         )
                         preparation_errors += 1
                         continue
@@ -956,12 +960,12 @@ class WorkPackageMigration(BaseMigration):
                         except Exception as e:
                             retry_count += 1
                             self.logger.warning(
-                                f"Error enabling types (attempt {retry_count}/{max_retries}): {e!s}",
+                                f"Error enabling types (attempt {retry_count}/{max_retries}): {e}",
                             )
 
                             if retry_count >= max_retries:
                                 self.logger.exception(
-                                    f"Failed to enable types after {max_retries} attempts: {e!s}",
+                                    f"Failed to enable types after {max_retries} attempts: {e}",
                                 )
                                 project_tracker.add_log_item(f"Warning: Failed to enable types for {project_key}")
                                 break
@@ -981,7 +985,7 @@ class WorkPackageMigration(BaseMigration):
                         )
                     else:
                         error_msg = types_result.get("error") if types_result else "No result returned"
-                        self.logger.error(f"Error enabling types: {error_msg}")
+                        self.logger.error("Error enabling types: %s", error_msg)
                         project_tracker.add_log_item(f"Warning: Types may not be properly enabled for {project_key}")
                         # Continue despite errors - the bulk import might still work with default types
 
@@ -996,7 +1000,7 @@ class WorkPackageMigration(BaseMigration):
                     self._update_custom_field_allowed_values(custom_field_values_to_add)
 
                 # First, write the work packages data to a JSON file that Rails can read
-                temp_file_path = os.path.join(self.data_dir, f"work_packages_{project_key}.json")
+                temp_file_path = Path(self.data_dir) / f"work_packages_{project_key}.json"
                 self.logger.info(
                     f"Writing {len(work_packages_data)} work packages to {temp_file_path}",
                 )
@@ -1030,9 +1034,9 @@ class WorkPackageMigration(BaseMigration):
                 container_temp_path = f"/tmp/work_packages_{project_key}.json"
 
                 # Also save a timestamped copy for debugging
-                debug_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                debug_json_path = os.path.join(self.data_dir, f"work_packages_{project_key}_{debug_timestamp}.json")
-                debug_script_path = os.path.join(self.data_dir, f"ruby_script_{project_key}_{debug_timestamp}.rb")
+                debug_timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+                debug_json_path = Path(self.data_dir) / f"work_packages_{project_key}_{debug_timestamp}.json"
+                debug_script_path = Path(self.data_dir) / f"ruby_script_{project_key}_{debug_timestamp}.rb"
 
                 # Copy the file for debugging
                 shutil.copy2(temp_file_path, debug_json_path)
@@ -1290,7 +1294,7 @@ class WorkPackageMigration(BaseMigration):
 
                 # Try to get the result file from the container
                 result_file_container = f"/tmp/wp_result_{project_key}.json"
-                result_file_local = os.path.join(self.data_dir, f"wp_result_{project_key}.json")
+                result_file_local = Path(self.data_dir) / f"wp_result_{project_key}.json"
 
                 # Initialize variables
                 created_count = 0
@@ -1332,7 +1336,7 @@ class WorkPackageMigration(BaseMigration):
                 ):
                     try:
                         # Also save a debug copy with timestamp
-                        debug_result_path = os.path.join(
+                        debug_result_path = Path(
                             self.data_dir,
                             f"wp_result_{project_key}_{debug_timestamp}.json",
                         )
@@ -1373,7 +1377,7 @@ class WorkPackageMigration(BaseMigration):
                                         }
                     except Exception as e:
                         self.logger.exception(
-                            f"Error processing result file: {e!s}",
+                            f"Error processing result file: {e}",
                         )
                 else:
                     # Last resort - try to parse the console output
@@ -1413,18 +1417,18 @@ class WorkPackageMigration(BaseMigration):
                     {
                         "processed_projects": list(processed_projects),
                         "last_processed_project": None,  # Reset the last processed since we're done with it
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(tz=UTC).isoformat(),
                         "completed": True,
                     },
                     f,
                     indent=2,
                 )
         except Exception as e:
-            self.logger.warning(f"Error saving final migration state: {e!s}")
+            self.logger.warning("Error saving final migration state: %s", e)
 
         self.logger.success("Work package migration completed")
-        self.logger.info(f"Total issues processed: {total_issues}")
-        self.logger.info(f"Total work packages created: {total_created}")
+        self.logger.info("Total issues processed: %s", total_issues)
+        self.logger.info("Total work packages created: %s", total_created)
 
         return self.work_package_mapping
 
@@ -1439,11 +1443,11 @@ class WorkPackageMigration(BaseMigration):
 
         if not self.work_package_mapping:
             try:
-                with open(os.path.join(self.data_dir, "work_package_mapping.json")) as f:
+                with open(Path(self.data_dir) / "work_package_mapping.json") as f:
                     self.work_package_mapping = json.load(f)
             except Exception as e:
                 self.logger.exception(
-                    f"Failed to load work package mapping: {e!s}",
+                    f"Failed to load work package mapping: {e}",
                 )
                 return {"status": "error", "message": str(e)}
 
@@ -1557,7 +1561,7 @@ class WorkPackageMigration(BaseMigration):
                     serializable_data.append(item.raw)
                 else:
                     # Skip this item if it doesn't have 'raw' attribute
-                    self.logger.warning(f"Skipping non-serializable item in {filename}")
+                    self.logger.warning("Skipping non-serializable item in %s", filename)
             data = serializable_data
 
         # Call parent method to save the data
@@ -1568,7 +1572,7 @@ class WorkPackageMigration(BaseMigration):
     def _create_wp_via_rails(self, wp_payload: dict[str, Any]) -> dict[str, Any] | None:
         """Creates a work package using the Rails console client via the proper client method."""
         jira_key = wp_payload.get("jira_key", "UNKNOWN")
-        self.logger.debug(f"Attempting to create WP for {jira_key} via Rails client create_record...")
+        self.logger.debug("Attempting to create WP for %s via Rails client create_record...", jira_key)
 
         # Prepare the attributes for the WorkPackage
         attributes = {
@@ -1588,13 +1592,13 @@ class WorkPackageMigration(BaseMigration):
         success, record_data, error_message = self.op_client.create_record("WorkPackage", attributes)
 
         if success and record_data and record_data.get("id"):
-            self.logger.info(f"Successfully created work package {record_data['id']} for Jira issue {jira_key}")
+            self.logger.info("Successfully created work package %s for Jira issue %s", record_data["id"], jira_key)
             return {
                 "id": record_data["id"],
                 "_type": "WorkPackage",
                 "subject": record_data.get("subject"),
             }
-        self.logger.error(f"Failed to create WP for {jira_key} via Rails client: {error_message}")
+        self.logger.error("Failed to create WP for %s via Rails client: %s", jira_key, error_message)
         return None
 
     def run(self) -> ComponentResult:
@@ -1605,7 +1609,7 @@ class WorkPackageMigration(BaseMigration):
 
         """
         self.logger.info("Starting work package migration")
-        start_time = datetime.now()
+        start_time = datetime.now(tz=UTC)
 
         try:
             # Verify required mappings are available
@@ -1645,24 +1649,24 @@ class WorkPackageMigration(BaseMigration):
                 self.logger.warning(warning_message)
 
                 # Create the var/data directory if it doesn't exist
-                if not os.path.exists(self.data_dir):
+                if not Path(self.data_dir).exists():
                     os.makedirs(self.data_dir, exist_ok=True)
 
                 # Record the warning in a migration issues file
-                issues_file = os.path.join(self.data_dir, "migration_issues.json")
+                issues_file = Path(self.data_dir) / "migration_issues.json"
                 issues_data = {}
 
-                if os.path.exists(issues_file):
+                if Path(issues_file).exists():
                     try:
                         with open(issues_file) as f:
                             issues_data = json.load(f)
                     except Exception as e:
                         self.logger.warning(
-                            f"Error loading migration issues file: {e!s}",
+                            f"Error loading migration issues file: {e}",
                         )
 
                 # Update issues data
-                timestamp = datetime.now().isoformat()
+                timestamp = datetime.now(tz=UTC).isoformat()
                 if "work_package_migration" not in issues_data:
                     issues_data["work_package_migration"] = []
 
@@ -1680,7 +1684,7 @@ class WorkPackageMigration(BaseMigration):
                         json.dump(issues_data, f, indent=2)
                 except Exception as e:
                     self.logger.warning(
-                        f"Error writing to migration issues file: {e!s}",
+                        f"Error writing to migration issues file: {e}",
                     )
 
             # Run the migration with additional error handling
@@ -1688,24 +1692,24 @@ class WorkPackageMigration(BaseMigration):
             try:
                 migration_results = self._migrate_work_packages()
             except Exception as e:
-                error_message = f"Work package migration failed with error: {e!s}"
+                error_message = f"Work package migration failed with error: {e}"
                 self.logger.exception(error_message)
 
                 # Record the error in the migration issues file
-                issues_file = os.path.join(self.data_dir, "migration_issues.json")
+                issues_file = Path(self.data_dir) / "migration_issues.json"
                 issues_data = {}
 
-                if os.path.exists(issues_file):
+                if Path(issues_file).exists():
                     try:
                         with open(issues_file) as f:
                             issues_data = json.load(f)
                     except Exception as read_err:
                         self.logger.warning(
-                            f"Error loading migration issues file: {read_err!s}",
+                            f"Error loading migration issues file: {read_err}",
                         )
 
                 # Update issues data
-                timestamp = datetime.now().isoformat()
+                timestamp = datetime.now(tz=UTC).isoformat()
                 if "work_package_migration" not in issues_data:
                     issues_data["work_package_migration"] = []
 
@@ -1724,7 +1728,7 @@ class WorkPackageMigration(BaseMigration):
                         json.dump(issues_data, f, indent=2)
                 except Exception as write_err:
                     self.logger.warning(
-                        f"Error writing to migration issues file: {write_err!s}",
+                        f"Error writing to migration issues file: {write_err}",
                     )
 
                 # Return error result
@@ -1732,12 +1736,12 @@ class WorkPackageMigration(BaseMigration):
                     status="error",
                     success=False,
                     error=str(e),
-                    timestamp=datetime.now().isoformat(),
-                    duration_seconds=(datetime.now() - start_time).total_seconds(),
+                    timestamp=datetime.now(tz=UTC).isoformat(),
+                    duration_seconds=(datetime.now(tz=UTC) - start_time).total_seconds(),
                 )
 
             # Calculate duration
-            end_time = datetime.now()
+            end_time = datetime.now(tz=UTC)
             duration_seconds = (end_time - start_time).total_seconds()
 
             # Create the ComponentResult to return
@@ -1767,20 +1771,20 @@ class WorkPackageMigration(BaseMigration):
 
         except Exception as e:
             # Catch any unexpected errors
-            end_time = datetime.now()
+            end_time = datetime.now(tz=UTC)
             duration_seconds = (end_time - start_time).total_seconds()
 
-            error_message = f"Unexpected error in work package migration: {e!s}"
+            error_message = f"Unexpected error in work package migration: {e}"
             self.logger.critical(error_message)
 
             # Try to save error information
             try:
-                error_file = os.path.join(self.data_dir, "migration_error.json")
+                error_file = Path(self.data_dir) / "migration_error.json"
                 with open(error_file, "w") as f:
                     json.dump(
                         {
                             "component": "work_package_migration",
-                            "timestamp": datetime.now().isoformat(),
+                            "timestamp": datetime.now(tz=UTC).isoformat(),
                             "error": str(e),
                             "traceback": str(getattr(e, "__traceback__", "No traceback available")),
                             "duration_seconds": duration_seconds,
@@ -1788,16 +1792,16 @@ class WorkPackageMigration(BaseMigration):
                         f,
                         indent=2,
                     )
-                self.logger.info(f"Error details saved to {error_file}")
+                self.logger.info("Error details saved to %s", error_file)
             except Exception as save_err:
                 self.logger.warning(
-                    f"Could not save error details: {save_err!s}",
+                    f"Could not save error details: {save_err}",
                 )
 
             return ComponentResult(
                 success=False,
                 error=str(e),
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.now(tz=UTC).isoformat(),
                 duration_seconds=duration_seconds,
             )
 
@@ -1823,7 +1827,7 @@ class WorkPackageMigration(BaseMigration):
                     f"  - Added '{value}' to '{field}'",
                 )
             else:
-                self.logger.info(f"  - {field_value}")
+                self.logger.info("  - %s", field_value)
 
     def _collect_missing_custom_field_values(self, work_packages_data):
         """Collect custom field values from work packages that might need to be added to OpenProject.
@@ -1866,9 +1870,9 @@ class WorkPackageMigration(BaseMigration):
                 self.logger.warning("No custom fields found in OpenProject")
                 return {}
 
-            self.logger.success(f"Successfully retrieved {len(custom_fields)} custom fields")
+            self.logger.success("Successfully retrieved %s custom fields", len(custom_fields))
         except Exception as e:
-            self.logger.exception(f"Error retrieving custom fields from OpenProject: {e!s}")
+            self.logger.exception("Error retrieving custom fields from OpenProject: %s", e)
             return {}
 
         # Create a dictionary of custom field ID to name and allowed values
@@ -1882,10 +1886,10 @@ class WorkPackageMigration(BaseMigration):
                     "possible_values": cf.get("possible_values", []) or [],
                 }
             except (KeyError, TypeError) as e:
-                self.logger.warning(f"Invalid custom field data: {e}")
+                self.logger.warning("Invalid custom field data: %s", e)
                 continue
 
-        self.logger.debug(f"Processed {len(field_id_to_info)} custom fields with IDs")
+        self.logger.debug("Processed %s custom fields with IDs", len(field_id_to_info))
 
         # Collect values that need to be added (field_name -> set of values)
         values_to_add = {}
@@ -1911,7 +1915,7 @@ class WorkPackageMigration(BaseMigration):
 
                     cf_id = cf.get("id")
                     if not cf_id:
-                        self.logger.debug(f"Custom field in work package {i} has no ID")
+                        self.logger.debug("Custom field in work package %s has no ID", i)
                         continue
 
                     # Convert to int if it's a string
@@ -1919,7 +1923,7 @@ class WorkPackageMigration(BaseMigration):
                         cf_id = int(cf_id)
 
                     if cf_id not in field_id_to_info:
-                        self.logger.debug(f"Custom field ID {cf_id} not found in OpenProject fields")
+                        self.logger.debug("Custom field ID %s not found in OpenProject fields", cf_id)
                         continue
 
                     cf_info = field_id_to_info[cf_id]
@@ -1943,10 +1947,10 @@ class WorkPackageMigration(BaseMigration):
                             if cf_name not in values_to_add:
                                 values_to_add[cf_name] = set()
                             values_to_add[cf_name].add(value)
-                            self.logger.debug(f"Found missing value '{value}' for field '{cf_name}'")
+                            self.logger.debug("Found missing value '%s' for field '%s'", value, cf_name)
                 except Exception as e:
                     self.logger.warning(
-                        f"Error processing custom field in work package {i}: {e!s}",
+                        f"Error processing custom field in work package {i}: {e}",
                     )
                     continue
 
@@ -1974,7 +1978,7 @@ class WorkPackageMigration(BaseMigration):
 
         """
         # Add detailed debugging of the input
-        self.logger.debug(f"_update_custom_field_allowed_values received: type={type(missing_values)}")
+        self.logger.debug("_update_custom_field_allowed_values received: type=%s", type(missing_values))
 
         # Check if missing_values is a dictionary
         if not isinstance(missing_values, dict):
@@ -1984,7 +1988,7 @@ class WorkPackageMigration(BaseMigration):
             # Try to handle it if it's a string that might be JSON
             if isinstance(missing_values, str):
                 try:
-                    self.logger.debug(f"Attempting to parse string as JSON. First 100 chars: {missing_values[:100]}")
+                    self.logger.debug("Attempting to parse string as JSON. First 100 chars: %s", missing_values[:100])
                     missing_values = json.loads(missing_values)
                     self.logger.info("Successfully parsed string as JSON")
                 except json.JSONDecodeError:
@@ -1998,11 +2002,11 @@ class WorkPackageMigration(BaseMigration):
             self.logger.info("No custom field values to add")
             return True
 
-        self.logger.info(f"Adding values to {len(missing_values)} custom fields...")
+        self.logger.info("Adding values to %s custom fields...", len(missing_values))
 
         # Debug the structure of missing_values
         for field_name, values in missing_values.items():
-            self.logger.debug(f"Field: {field_name}, Values type: {type(values)}, Content: {values}")
+            self.logger.debug("Field: %s, Values type: %s, Content: %s", field_name, type(values), values)
 
         all_success = True
 
@@ -2029,7 +2033,7 @@ class WorkPackageMigration(BaseMigration):
                     except TypeError:
                         values = [values]
 
-            self.logger.info(f"Adding {len(values)} values to custom field '{field_name}'")
+            self.logger.info("Adding %s values to custom field '%s'", len(values), field_name)
 
             # Create Ruby script to update the field
             ruby_header = f"""
@@ -2093,17 +2097,17 @@ class WorkPackageMigration(BaseMigration):
             output = result.get("output", "")
 
             if "SUCCESS:" in output:
-                self.logger.success(f"Successfully added values to custom field '{field_name}'")
+                self.logger.success("Successfully added values to custom field '%s'", field_name)
             elif "ERROR:" in output:
                 error_msg = output.split("ERROR:", 1)[1].strip()
-                self.logger.error(f"Failed to update custom field '{field_name}': {error_msg}")
+                self.logger.error("Failed to update custom field '%s': %s", field_name, error_msg)
                 all_success = False
             elif "SKIP:" in output:
                 self.logger.warning(
                     f"Skipped updating custom field '{field_name}': not a list type",
                 )
             elif "INFO:" in output:
-                self.logger.info(f"No new values needed for custom field '{field_name}'")
+                self.logger.info("No new values needed for custom field '%s'", field_name)
 
         return all_success
 

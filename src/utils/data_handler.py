@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any, TypeVar
 
+from pydantic import BaseModel
+
 from src import config
 
 T = TypeVar("T")
@@ -44,7 +46,7 @@ def save(
     filename: str | Path,
     directory: str | Path | None = None,
     indent: int = 2,
-    ensure_ascii: bool = False
+    ensure_ascii: bool = False,
 ) -> bool:
     """Save data to a JSON file, automatically handling Pydantic models.
 
@@ -75,16 +77,16 @@ def save(
 
     try:
         # Convert Pydantic models to dict if necessary
-        if hasattr(data, "model_dump"):
+        if isinstance(data, BaseModel):
             data = data.model_dump()
 
         with filepath.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=indent, ensure_ascii=ensure_ascii)
 
-        config.logger.info(f"Saved data to {filepath}")
+        config.logger.info("Saved data to %s", filepath)
         return True
     except Exception:
-        config.logger.exception(f"Failed to save data to {filepath}")
+        config.logger.exception("Failed to save data to %s", filepath)
         return False
 
 
@@ -92,7 +94,7 @@ def load(
     model_class: type[T],
     filename: str | Path,
     directory: str | Path | None = None,
-    default: Any | None = None
+    default: Any | None = None,
 ) -> T | None:
     """Load data from a JSON file and convert to specified model type.
 
@@ -120,7 +122,7 @@ def load(
     filepath = directory / filename
 
     if not filepath.exists():
-        config.logger.info(f"File not found: {filepath}, returning default")
+        config.logger.info("File not found: %s, returning default", filepath)
         return default
 
     try:
@@ -137,17 +139,17 @@ def load(
             # Fallback to normal constructor
             result = model_class(**data)
 
-        config.logger.info(f"Loaded data from {filepath}")
+        config.logger.info("Loaded data from %s", filepath)
         return result
     except Exception:
-        config.logger.exception(f"Failed to load data from {filepath}")
+        config.logger.exception("Failed to load data from %s", filepath)
         return default
 
 
 def load_dict(
     filename: Path,
     directory: Path | None = None,
-    default: dict[str, Any] | None = None
+    default: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Load dictionary data from a JSON file.
 
@@ -187,7 +189,7 @@ def load_dict(
     except FileNotFoundError:
         config.logger.debug("File does not exist: %s", file_path)
         return default
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
         # Only check file size after JSON parsing fails
         if file_path.stat().st_size == 0:
             config.logger.debug("File is empty: %s", file_path)
@@ -202,7 +204,7 @@ def load_dict(
 def load_list(
     filename: str | Path,
     directory: str | Path | None = None,
-    default: list[Any] | None = None
+    default: list[Any] | None = None,
 ) -> list[Any]:
     """Load list data from a JSON file.
 
@@ -258,7 +260,7 @@ def save_to_path(
     data: Any,
     filepath: Path | str,
     indent: int = 2,
-    ensure_ascii: bool = False
+    ensure_ascii: bool = False,
 ) -> bool:
     """Save data to a JSON file at a specific path.
 
@@ -280,31 +282,21 @@ def save_to_path(
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
         # Handle Pydantic models by converting to dict first
-        if hasattr(data, "model_dump"):
-            # For Pydantic v2+
-            json_data = data.model_dump()
-        elif hasattr(data, "dict"):
-            # For older Pydantic versions
-            json_data = data.dict()
-        else:
-            # Not a Pydantic model
-            json_data = data
+        if isinstance(data, BaseModel):
+            data = data.model_dump()
 
-        # Write JSON data to file
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(json_data, f, indent=indent, ensure_ascii=ensure_ascii)
+        with filepath.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=indent, ensure_ascii=ensure_ascii)
 
         # Verify file was created successfully
         if filepath.exists():
-            file_size = filepath.stat().st_size
-            config.logger.info(f"Saved data to {filepath}")
+            config.logger.info("Saved data to %s", filepath)
             return True
-        else:
-            config.logger.error(f"Failed to save data to {filepath}")
-            return False
+        config.logger.error("Failed to save data to %s", filepath)
+        return False
 
     except Exception as e:
-        config.logger.exception(f"Failed to save data to {filepath}: {e}")
+        config.logger.exception("Failed to save data to %s: %s", filepath, e)
         return False
 
 

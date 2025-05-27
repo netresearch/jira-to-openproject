@@ -180,7 +180,7 @@ class JiraToOPMapping:
                 lastname = ""
 
         # Debug info with f-string = operator
-        logger.debug(f"{email=}, {username=}, {firstname=}, {lastname=}")
+        logger.debug("email=%s, username=%s, firstname=%s, lastname=%s", email, username, firstname, lastname)
 
         return {
             "login": username,

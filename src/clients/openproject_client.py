@@ -175,7 +175,7 @@ class OpenProjectClient:
             f"RailsConsoleClient with tmux session {self.tmux_session_name}",
         )
 
-        logger.success(f"OpenProjectClient initialized for host {self.ssh_host}, container {self.container_name}")
+        logger.success("OpenProjectClient initialized for host %s, container %s", self.ssh_host, self.container_name)
 
     def _create_script_file(self, script_content: str) -> Path:
         """Create a temporary file with the script content.
@@ -208,11 +208,11 @@ class OpenProjectClient:
             logger.debug("Created temporary script file: %s", file_path.as_posix())
             return file_path
         except OSError:
-            error_msg = f"Failed to create script file: {str(file_path)}"
+            error_msg = f"Failed to create script file: {file_path!s}"
             logger.exception(error_msg)
             raise OSError(error_msg)
         except Exception:
-            error_msg = f"Failed to create script file: {str(file_path)}"
+            error_msg = f"Failed to create script file: {file_path!s}"
             logger.exception(error_msg)
             raise OSError(error_msg)
 

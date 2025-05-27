@@ -126,7 +126,9 @@ def validate_config() -> bool:
                 config_section = openproject_config
                 prefix = "J2O_OPENPROJECT_"
                 # Special handling for OpenProject authentication
-                if not (config_section.get("api_token") or config_section.get("api_key")):
+                if not (
+                    config_section.get("api_token") or config_section.get("api_key")
+                ):
                     missing_vars.append(f"{prefix}API_TOKEN or {prefix}API_KEY")
                 continue
             case _:
@@ -137,7 +139,9 @@ def validate_config() -> bool:
                 missing_vars.append(f"{prefix}{key.upper()}")
 
     if missing_vars:
-        logger.error("Missing required environment variables: %s", ", ".join(missing_vars))
+        logger.error(
+            "Missing required environment variables: %s", ", ".join(missing_vars),
+        )
         return False
 
     return True

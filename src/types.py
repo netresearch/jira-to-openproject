@@ -49,18 +49,13 @@ type ConfigValue = str | int | bool | dict[str, Any] | list[Any]
 type ConfigDict = dict[str, dict[str, ConfigValue]]
 
 
-OpenProjectConfig = TypedDict(
-    "OpenProjectConfig",
-    {
-        "url": str,
-        "server": str,
-        "user": str,
-        "container": str,
-        "tmux_session_name": str,
-        "rails_path": str,
-    },
-    total=False,
-)
+class OpenProjectConfig(TypedDict, total=False):
+    url: str
+    server: str
+    user: str
+    container: str
+    tmux_session_name: str
+    rails_path: str
 
 
 class JiraConfig(TypedDict):
