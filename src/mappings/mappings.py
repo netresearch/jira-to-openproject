@@ -23,7 +23,9 @@ class Mappings:
     STATUS_MAPPING_FILE = Path("status_mapping.json")
     LINK_TYPE_MAPPING_FILE = Path("link_type_mapping.json")
     CUSTOM_FIELD_MAPPING_FILE = Path("custom_field_mapping.json")
-    WORK_PACKAGE_MAPPING_FILE_PATTERN = Path("work_package_mapping_{}.json")  # Per project
+    WORK_PACKAGE_MAPPING_FILE_PATTERN = Path(
+        "work_package_mapping_{}.json",
+    )  # Per project
 
     TEMPO_ACCOUNTS_FILE = Path("tempo_accounts.json")
     OP_PROJECTS_FILE = Path("openproject_projects.json")
@@ -175,7 +177,7 @@ class Mappings:
         mapping_attr = f"{mapping_name}_mapping"
         if hasattr(self, mapping_attr):
             return getattr(self, mapping_attr)
-        logger.warning(f"Mapping '{mapping_name}' not found")
+        logger.warning("Mapping '%s' not found", mapping_name)
         return {}
 
     def set_mapping(self, mapping_name: str, mapping_data: dict[str, Any]) -> None:

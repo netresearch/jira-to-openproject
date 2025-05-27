@@ -47,7 +47,7 @@ class BaseMigration:
 
             config.mappings = Mappings(data_dir=self.data_dir)
 
-    def _load_from_json(self, filename: Path, default: Any = None) -> Any:
+    def _load_from_json(self, filename: Path | str, default: Any = None) -> Any:
         """Load data from a JSON file in the data directory.
 
         Args:
@@ -79,7 +79,7 @@ class BaseMigration:
             self.logger.exception("Unexpected error loading %s: %s", filepath, e)
             return default
 
-    def _save_to_json(self, data: Any, filename: Path) -> Path:
+    def _save_to_json(self, data: Any, filename: Path | str) -> Path:
         """Save data to a JSON file in the data directory.
 
         Args:
@@ -90,7 +90,7 @@ class BaseMigration:
             Path to the saved file
 
         """
-        filepath = self.data_dir / filename
+        filepath = self.data_dir / Path(filename)
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
         with filepath.open("w") as f:
@@ -112,7 +112,9 @@ class BaseMigration:
         )
         return ComponentResult(
             success=False,
-            errors=[f"The run method has not been implemented for {self.__class__.__name__}"],
+            errors=[
+                f"The run method has not been implemented for {self.__class__.__name__}",
+            ],
             success_count=0,
             failed_count=0,
             total_count=0,

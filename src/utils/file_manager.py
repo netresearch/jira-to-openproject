@@ -14,7 +14,7 @@ import shutil
 import string
 import time
 from pathlib import Path
-from typing import Any, Self
+from typing import Any
 
 from src import config
 
@@ -139,7 +139,7 @@ class FileManager:
     # Singleton instance
     _instance: FileManager | None = None
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> Self:
+    def __new__(cls, *args: object, **kwargs: object) -> FileManager:
         """Create a singleton instance of the FileManager."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -202,7 +202,9 @@ class FileManager:
         timestamp = datetime.datetime.now(tz=datetime.UTC)
         microseconds = timestamp.microsecond
         timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
-        random_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+        random_suffix = "".join(
+            random.choices(string.ascii_lowercase + string.digits, k=4),
+        )
         return f"{timestamp_str}_{microseconds:06d}_{random_suffix}"
 
     def create_debug_session(self, name: str | None = None) -> Path:
@@ -287,8 +289,8 @@ class FileManager:
             return file_path
 
         except Exception as e:
-            logger.exception(f"Failed to create data file: {e}")
-            raise IOError(f"Failed to create data file: {e}") from e
+            logger.exception("Failed to create data file: %s", e)
+            raise OSError(f"Failed to create data file: {e}") from e
 
     def create_script_file(
         self,
@@ -381,13 +383,13 @@ class FileManager:
             raise FileNotFoundError(f"File not found: {path}")
 
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except json.JSONDecodeError as e:
-            logger.exception(f"Failed to parse JSON: {e}")
+            logger.exception("Failed to parse JSON: %s", e)
             raise
         except Exception as e:
-            logger.exception(f"Failed to read file: {e}")
+            logger.exception("Failed to read file: %s", e)
             raise
 
     def copy_file(self, source_path: Path, dest_path: Path) -> Path:
@@ -411,7 +413,12 @@ class FileManager:
             # Verify file was copied
             if dest_path.exists():
                 file_size = dest_path.stat().st_size
-                logger.debug("Copied file: %s -> %s (%s bytes)", source_path, dest_path, file_size)
+                logger.debug(
+                    "Copied file: %s -> %s (%s bytes)",
+                    source_path,
+                    dest_path,
+                    file_size,
+                )
             else:
                 logger.error("Failed to copy file: %s -> %s", source_path, dest_path)
                 msg = f"Failed to copy file: {source_path} -> {dest_path}"
@@ -468,7 +475,7 @@ class FileManager:
 
         """
         # Start with an empty path
-        result = Path("")
+        result = Path()
 
         # Join each component using / operator
         for component in paths:

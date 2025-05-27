@@ -5,12 +5,11 @@ This script orchestrates the complete migration process.
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict
 
@@ -78,13 +77,13 @@ def create_backup(backup_dir: BackupDir | None = None) -> BackupDir:
     # Use the centralized config for var directories
     data_dir: Path = config.get_path("data")
 
-    backup_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    backup_timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
     # Create backup directory
     if not backup_dir:
         backup_dir = Path(config.get_path("backups")) / f"backup_{backup_timestamp}"
 
     backup_dir.mkdir(parents=True, exist_ok=True)
-    config.logger.info(f"Creating backup in: {backup_dir=}")
+    config.logger.info("Creating backup in: %s", backup_dir)
 
     # Copy all files from data directory to backup directory
     for file_path in data_dir.iterdir():
@@ -93,7 +92,7 @@ def create_backup(backup_dir: BackupDir | None = None) -> BackupDir:
 
     backup_files = list(backup_dir.iterdir())
     file_count = len(backup_files)
-    config.logger.info(f"Backup created with {file_count=} files")
+    config.logger.info("Backup created with %s files", file_count)
 
     # Save migration metadata to backup
     metadata = {
@@ -122,13 +121,13 @@ def restore_backup(backup_dir: Path) -> bool:
     data_dir: Path = config.get_path("data")
 
     if not backup_dir.exists():
-        config.logger.error(f"Backup directory not found: {backup_dir=}")
+        config.logger.error("Backup directory not found: %s", backup_dir)
         return False
 
     if not data_dir.exists():
         data_dir.mkdir(parents=True, exist_ok=True)
 
-    config.logger.info(f"Restoring from backup: {backup_dir=}")
+    config.logger.info("Restoring from backup: %s", backup_dir)
 
     # Check for metadata file to verify it's a valid backup
     metadata_path = backup_dir / "backup_metadata.json"
@@ -136,11 +135,11 @@ def restore_backup(backup_dir: Path) -> bool:
         try:
             with metadata_path.open("r") as f:
                 metadata = json.load(f)
-            config.logger.info(f"Backup was created on: {metadata.get('timestamp')}")
+            config.logger.info("Backup was created on: %s", metadata.get("timestamp"))
             files_count = len(metadata.get("files_backed_up", []))
-            config.logger.info(f"Contains {files_count=} files")
+            config.logger.info("Contains %s files", files_count)
         except Exception as e:
-            config.logger.warning(f"Could not read backup metadata: {e=!s}")
+            config.logger.warning("Could not read backup metadata: %s", e)
 
     # Copy all files from backup to data directory
     restored_count = 0
@@ -153,7 +152,7 @@ def restore_backup(backup_dir: Path) -> bool:
             shutil.copy2(file_path, data_dir)
             restored_count += 1
 
-    config.logger.info(f"Restored {restored_count=} files from backup")
+    config.logger.info("Restored %s files from backup", restored_count)
     return True
 
 
@@ -185,14 +184,14 @@ def run_migration(
         )
 
         # Create a timestamp for this migration run
-        migration_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        migration_timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S")
 
         # Results object
         results = MigrationResult(
             overall={
                 "timestamp": migration_timestamp,
                 "status": "success",  # Will be updated if any component fails
-                "start_time": datetime.now().isoformat(),
+                "start_time": datetime.now(tz=UTC).isoformat(),
                 "input_params": {
                     "dry_run": config.migration_config.get("dry_run", False),
                     "components": components,
@@ -210,7 +209,7 @@ def run_migration(
             backup_path = create_backup()
             if backup_path:
                 results.overall["backup_path"] = backup_path
-                config.logger.success(f"Backup created at: {backup_path}")
+                config.logger.success("Backup created at: %s", backup_path)
             else:
                 config.logger.warning("No backup created (no data to back up)")
 
@@ -218,7 +217,7 @@ def run_migration(
         config.logger.info("Initializing API clients...")
 
         # Debug: print available config keys to help identify the correct ones
-        config.logger.info(f"Available OpenProject config keys: {list(config.openproject_config.keys())}")
+        config.logger.info("Available OpenProject config keys: %s", list(config.openproject_config.keys()))
 
         # Create clients in the correct hierarchical order
         # 1. First, create the SSH client which is the foundation
@@ -227,7 +226,7 @@ def run_migration(
                 config.openproject_config.get("server", "openproject.local"),
             ),
             user=config.openproject_config.get("user", None),
-            key_file=config.openproject_config.get("key_file", None),
+            key_file=str(config.openproject_config.get("key_file", "")) if config.openproject_config.get("key_file") else None,
         )
 
         # 2. Next, create the Docker client using the SSH client
@@ -261,6 +260,7 @@ def run_migration(
         config.mappings = Mappings(data_dir=config.get_path("data"))
 
         # Define all available migration components
+        # Initialize work_packages with a dummy instance that will be replaced later
         available_components = AvailableComponents(
             users=UserMigration(jira_client=jira_client, op_client=op_client),
             custom_fields=CustomFieldMigration(jira_client=jira_client, op_client=op_client),
@@ -269,13 +269,13 @@ def run_migration(
             link_types=LinkTypeMigration(jira_client=jira_client, op_client=op_client),
             issue_types=IssueTypeMigration(jira_client=jira_client, op_client=op_client),
             status_types=StatusMigration(jira_client=jira_client, op_client=op_client),
-            work_packages=None,  # Initialized later if needed
+            work_packages=WorkPackageMigration(jira_client=jira_client, op_client=op_client),  # Will be re-initialized if needed
             accounts=AccountMigration(jira_client=jira_client, op_client=op_client),
         )
 
         # If components parameter is not provided, use default component order
         if not components:
-            default_components = [
+            default_components: list[ComponentName] = [
                 "users",
                 "custom_fields",
                 "companies",
@@ -297,7 +297,7 @@ def run_migration(
         components = [c for c in components if c in available_components]
 
         # Show which components will be run
-        config.logger.info(f"Migration will run the following components in order: {components}")
+        config.logger.info("Migration will run the following components in order: %s", components)
 
         # Initialize work package migration if it's in the components list
         if "work_packages" in components:
@@ -355,12 +355,12 @@ def run_migration(
                             )
                     else:
                         # Handle case where component didn't return a result (should not happen with dataclass)
-                        config.logger.warning(f"Component '{component_name}' did not return a result")
+                        config.logger.warning("Component '%s' did not return a result", component_name)
                         results.components[component_name] = component_result
 
                 except KeyboardInterrupt:
                     # Handle user interruption within a component
-                    config.logger.warning(f"Component '{component_name}' was interrupted by user")
+                    config.logger.warning("Component '%s' was interrupted by user", component_name)
                     # Create a basic result reflecting interruption
                     interrupted_result = ComponentResult(
                         success=False,
@@ -374,12 +374,12 @@ def run_migration(
                 except Exception as e:
                     # Handle unexpected errors during component execution
                     config.logger.exception(
-                        f"Error during '{component_name}' migration: {e!s}",
+                        f"Error during '{component_name}' migration: {e}",
                     )
                     # Create a basic result reflecting the error
                     error_result = ComponentResult(
                         success=False,
-                        message=f"Error during component execution: {e!s}",
+                        message=f"Error during component execution: {e}",
                         errors=[str(e)],
                         details={
                             "status": "failed",
@@ -441,7 +441,7 @@ def run_migration(
             results.overall["message"] = "Migration was interrupted by user"
 
         # Add end time to results
-        results.overall["end_time"] = datetime.now().isoformat()
+        results.overall["end_time"] = datetime.now(tz=UTC).isoformat()
 
         # Calculate total time
         start_time = datetime.fromisoformat(results.overall["start_time"])
@@ -451,9 +451,13 @@ def run_migration(
 
         # Print final status
         if results.overall["status"] == "success":
-            config.logger.success(f"Migration completed successfully in {total_seconds:.2f} seconds.")
+            config.logger.success("Migration completed successfully in %.2f seconds.", total_seconds)
         else:
-            config.logger.error(f"Migration completed with status '{results.overall['status']}' in {total_seconds:.2f} seconds.")
+            config.logger.error(
+                "Migration completed with status '%s' in %.2f seconds.",
+                results.overall["status"],
+                total_seconds,
+            )
 
         # Save results to file
         results_file = f"migration_results_{migration_timestamp}.json"
@@ -462,22 +466,22 @@ def run_migration(
             filename=results_file,
         )
 
-        config.logger.info(f"Migration results saved to {results_file}")
+        config.logger.info("Migration results saved to %s", results_file)
 
         return results
 
     except Exception as e:
         # Handle unexpected errors at the top level
         config.logger.exception(e)
-        config.logger.error(f"Unexpected error during migration: {e!s}")
+        config.logger.error("Unexpected error during migration: %s", e)
 
         # Create a basic result object
         return MigrationResult(
             overall={
                 "status": "failed",
                 "error": str(e),
-                "message": f"Unexpected error during migration: {e!s}",
-                "timestamp": datetime.now().isoformat(),
+                "message": f"Unexpected error during migration: {e}",
+                "timestamp": datetime.now(tz=UTC).isoformat(),
             },
         )
 
@@ -529,7 +533,7 @@ def setup_tmux_session() -> bool:
 
     session_name = config.openproject_config.get("tmux_session_name", "rails_console")
 
-    config.logger.info(f"Setting up tmux session '{session_name}' for Rails console...")
+    config.logger.info("Setting up tmux session '%s' for Rails console...", session_name)
 
     try:
         # Check if tmux is installed
@@ -543,17 +547,17 @@ def setup_tmux_session() -> bool:
         )
 
         if result.returncode == 0:
-            config.logger.warning(f"tmux session '{session_name}' already exists")
+            config.logger.warning("tmux session '%s' already exists", session_name)
             config.logger.info("To attach to this session, run:")
-            config.logger.info(f"tmux attach -t {session_name}")
+            config.logger.info("tmux attach -t %s", session_name)
             return True
 
         # Create a new session
         subprocess.run(["tmux", "new-session", "-d", "-s", session_name], check=True)
 
-        config.logger.success(f"Created tmux session '{session_name}'")
+        config.logger.success("Created tmux session '%s'", session_name)
         config.logger.info("To attach to this session, run:")
-        config.logger.info(f"tmux attach -t {session_name}")
+        config.logger.info("tmux attach -t %s", session_name)
 
         # Determine if Docker is being used
         using_docker = "container" in config.openproject_config
@@ -561,20 +565,20 @@ def setup_tmux_session() -> bool:
         # Send commands to the session to set up Rails console
         if using_docker:
             container = config.openproject_config.get("container", "openproject")
-            config.logger.info(f"Detected Docker setup with container '{container}'")
+            config.logger.info("Detected Docker setup with container '%s'", container)
             config.logger.info(
                 "Please manually run the following commands in the tmux session:",
             )
-            config.logger.info(f"docker exec -it {container} bash")
+            config.logger.info("docker exec -it %s bash", container)
             config.logger.info("cd /app && bundle exec rails console")
         else:
             server = config.openproject_config.get("server")
             if server:
-                config.logger.info(f"Detected remote server '{server}'")
+                config.logger.info("Detected remote server '%s'", server)
                 config.logger.info(
                     "Please manually run the following commands in the tmux session:",
                 )
-                config.logger.info(f"ssh {server}")
+                config.logger.info("ssh %s", server)
                 config.logger.info("cd /opt/openproject && bundle exec rails console")
             else:
                 config.logger.info(
@@ -618,7 +622,7 @@ def main() -> None:
             # Create clients in the correct hierarchical order
 
             # Debug: print available config keys
-            config.logger.info(f"Available OpenProject config keys: {list(config.openproject_config.keys())}")
+            config.logger.info("Available OpenProject config keys: %s", list(config.openproject_config.keys()))
 
             ssh_client = SSHClient(
                 host=str(
@@ -681,7 +685,7 @@ def main() -> None:
             return
 
         # dump args
-        config.logger.debug(f"Args: {args}")
+        config.logger.debug("Args: %s", args)
 
         # Update configuration with CLI arguments
         config.update_from_cli_args(args)
@@ -712,11 +716,11 @@ def main() -> None:
                 # Access status from details
                 status = comp_result.details.get("status", "unknown") if comp_result.details else "unknown"
                 if status == "success":
-                    config.logger.success(f"✓ {component}: {status}")
+                    config.logger.success("✓ %s: %s", component, status)
                 elif status == "interrupted":
-                    config.logger.warning(f"⚠ {component}: {status}")
+                    config.logger.warning("⚠ %s: %s", component, status)
                 else:
-                    config.logger.error(f"✗ {component}: {status}")
+                    config.logger.error("✗ %s: %s", component, status)
 
     except KeyboardInterrupt:
         console.print("\nMigration manually interrupted. Exiting...")

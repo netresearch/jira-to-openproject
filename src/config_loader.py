@@ -32,6 +32,7 @@ def is_test_environment() -> bool:
 
     Returns:
         bool: True if running in a test environment, False otherwise
+
     """
     # Check for pytest environment variable
     if "PYTEST_CURRENT_TEST" in os.environ:
@@ -94,24 +95,24 @@ class ConfigLoader:
 
             # In test mode, load both .env.local and .env.test
             # with test having higher precedence
-            if os.path.exists(".env.local"):
+            if Path(".env.local").exists():
                 load_dotenv(".env.local", override=True)
                 config_logger.debug("Loaded local overrides from .env.local")
 
             # Always load .env.test in test mode
-            if os.path.exists(".env.test"):
+            if Path(".env.test").exists():
                 load_dotenv(".env.test", override=True)
                 config_logger.debug("Loaded test environment from .env.test")
 
             # Load test-specific local overrides if they exist
-            if os.path.exists(".env.test.local"):
+            if Path(".env.test.local").exists():
                 load_dotenv(".env.test.local", override=True)
                 config_logger.debug("Loaded local test overrides from .env.test.local")
         else:
             config_logger.debug("Running in development/production environment")
 
             # In non-test mode, only load .env.local if it exists
-            if os.path.exists(".env.local"):
+            if Path(".env.local").exists():
                 load_dotenv(".env.local", override=True)
                 config_logger.debug("Loaded local overrides from .env.local")
 
@@ -142,8 +143,11 @@ class ConfigLoader:
 
             match env_var.split("_"):
                 case ["J2O", "LOG", "LEVEL"]:
-                    self.config["migration"]["log_level"] = env_value.upper()
-                    config_logger.debug("Applied log level: %s", env_value.upper())
+                    # Cast to proper log level type
+                    log_level = env_value.upper()
+                    if log_level in ["DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "SUCCESS"]:
+                        self.config["migration"]["log_level"] = log_level
+                    config_logger.debug("Applied log level: %s", log_level)
 
                 case ["J2O", "JIRA", *rest] if rest:
                     key: str = "_".join(rest).lower()
@@ -156,7 +160,9 @@ class ConfigLoader:
 
                         # Extract the specific scriptrunner config key
                         sr_key = key[len("scriptrunner_") :]
-                        self.config["jira"]["scriptrunner"][sr_key] = self._convert_value(env_value)
+                        self.config["jira"]["scriptrunner"][sr_key] = (
+                            self._convert_value(env_value)
+                        )
                         config_logger.debug(
                             "Applied Jira ScriptRunner config: %s=%s",
                             sr_key,
@@ -165,12 +171,16 @@ class ConfigLoader:
                     else:
                         # Regular Jira config
                         self.config["jira"][key] = self._convert_value(env_value)
-                        config_logger.debug("Applied Jira config: %s=%s", key, env_value)
+                        config_logger.debug(
+                            "Applied Jira config: %s=%s", key, env_value,
+                        )
 
                 case ["J2O", "OPENPROJECT", *rest] if rest:
                     key = "_".join(rest).lower()
                     self.config["openproject"][key] = self._convert_value(env_value)
-                    config_logger.debug("Applied OpenProject config: %s=%s", key, env_value)
+                    config_logger.debug(
+                        "Applied OpenProject config: %s=%s", key, env_value,
+                    )
 
                     # Special handling for tmux_session_name
                     if key == "tmux_session_name":

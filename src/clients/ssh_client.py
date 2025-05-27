@@ -30,7 +30,12 @@ class SSHCommandError(Exception):
     """Exception raised when an SSH command fails."""
 
     def __init__(
-        self, command: str, returncode: int, stdout: str, stderr: str, message: str = "SSH command failed",
+        self,
+        command: str,
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        message: str = "SSH command failed",
     ) -> None:
         self.command = command
         self.returncode = returncode
@@ -43,7 +48,9 @@ class SSHCommandError(Exception):
 class SSHFileTransferError(Exception):
     """Exception raised when an SCP file transfer operation fails."""
 
-    def __init__(self, source: str, destination: str, message: str = "File transfer failed") -> None:
+    def __init__(
+        self, source: str, destination: str, message: str = "File transfer failed",
+    ) -> None:
         self.source = source
         self.destination = destination
         self.message = message
@@ -167,7 +174,13 @@ class SSHClient:
             cmd = self.get_ssh_base_command()
             cmd.extend(["-o", "BatchMode=yes", "echo", "Connection successful"])
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.connect_timeout, check=False)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.connect_timeout,
+                check=False,
+            )
 
             return result.returncode == 0 and "Connection successful" in result.stdout
 
@@ -221,7 +234,12 @@ class SSHClient:
 
         for attempt in range(max_attempts):
             if attempt > 0:
-                logger.debug("Retrying command (attempt %d/%d): %s", attempt + 1, max_attempts, command)
+                logger.debug(
+                    "Retrying command (attempt %d/%d): %s",
+                    attempt + 1,
+                    max_attempts,
+                    command,
+                )
                 time.sleep(self.retry_delay * attempt)
 
             try:
@@ -258,7 +276,9 @@ class SSHClient:
 
             except subprocess.CalledProcessError as e:
                 # This shouldn't be reached since we set check=False above
-                logger.exception("SSH command failed with exit code %d: %s", e.returncode, e.stderr)
+                logger.exception(
+                    "SSH command failed with exit code %d: %s", e.returncode, e.stderr,
+                )
                 last_exception = SSHCommandError(
                     command=command,
                     returncode=e.returncode,
@@ -281,7 +301,9 @@ class SSHClient:
         msg = "Command failed after all retry attempts"
         raise RuntimeError(msg)  # Fallback in case of logic error
 
-    def copy_file_to_remote(self, local_path: Path | str, remote_path: Path | str, retry: bool = True) -> None:
+    def copy_file_to_remote(
+        self, local_path: Path | str, remote_path: Path | str, retry: bool = True,
+    ) -> None:
         """Copy a file from local to remote host using scp.
 
         Args:
@@ -330,11 +352,19 @@ class SSHClient:
                 logger.debug("Executing SCP command: %s", " ".join(cmd))
 
                 # Execute scp command
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.operation_timeout, check=True)
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.operation_timeout,
+                    check=True,
+                )
 
                 # Verify the command was successful
                 if result.returncode == 0:
-                    logger.debug("File copied successfully: %s -> %s", local_path, remote_path)
+                    logger.debug(
+                        "File copied successfully: %s -> %s", local_path, remote_path,
+                    )
                     return
                 # This shouldn't be reached due to check=True above
                 raise SSHFileTransferError(
@@ -347,7 +377,9 @@ class SSHClient:
                 logger.exception("SCP command failed: %s", e.stderr)
                 # Check if the error was due to missing local file
                 if not local_path.exists():
-                    raise FileNotFoundError(f"Local file does not exist: {local_path}") from e
+                    raise FileNotFoundError(
+                        f"Local file does not exist: {local_path}",
+                    ) from e
                 last_exception = SSHFileTransferError(
                     source=str(local_path),
                     destination=f"{self.host}:{remote_path}",
@@ -362,7 +394,9 @@ class SSHClient:
                 raise
 
             except subprocess.TimeoutExpired as e:
-                logger.exception("SCP command timed out after %d seconds", self.operation_timeout)
+                logger.exception(
+                    "SCP command timed out after %d seconds", self.operation_timeout,
+                )
                 last_exception = e
                 if attempt < max_attempts - 1:
                     continue
@@ -384,7 +418,9 @@ class SSHClient:
         msg = "File copy failed after all retry attempts"
         raise RuntimeError(msg)  # Fallback in case of logic error
 
-    def copy_file_from_remote(self, remote_path: Path | str, local_path: Path | str, retry: bool = True) -> Path:
+    def copy_file_from_remote(
+        self, remote_path: Path | str, local_path: Path | str, retry: bool = True,
+    ) -> Path:
         """Copy a file from remote host to local using scp.
 
         Args:
@@ -439,7 +475,13 @@ class SSHClient:
                 logger.debug("Executing SCP command: %s", " ".join(cmd))
 
                 # Execute scp command
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.operation_timeout, check=True)
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.operation_timeout,
+                    check=True,
+                )
 
                 # Verify the command was successful and file exists
                 if result.returncode == 0 and not local_path.exists():
@@ -447,7 +489,12 @@ class SSHClient:
                     raise FileNotFoundError(msg)
 
                 file_size = local_path.stat().st_size
-                logger.debug("File downloaded successfully: %s -> %s (%d bytes)", remote_path, local_path, file_size)
+                logger.debug(
+                    "File downloaded successfully: %s -> %s (%d bytes)",
+                    remote_path,
+                    local_path,
+                    file_size,
+                )
 
                 # Register the file with the file manager
                 self.file_manager.registry.register(local_path, "temp")
@@ -470,7 +517,9 @@ class SSHClient:
                 raise
 
             except subprocess.TimeoutExpired as e:
-                logger.exception("SCP command timed out after %d seconds", self.operation_timeout)
+                logger.exception(
+                    "SCP command timed out after %d seconds", self.operation_timeout,
+                )
                 last_exception = e
                 if attempt < max_attempts - 1:
                     continue
@@ -543,14 +592,18 @@ class SSHClient:
             try:
                 return int(stdout.strip())
             except ValueError:
-                logger.exception("Invalid file size returned for %s: %s", remote_path, stdout.strip())
+                logger.exception(
+                    "Invalid file size returned for %s: %s", remote_path, stdout.strip(),
+                )
                 return None
 
         except Exception:
             logger.exception("Error getting remote file size: %s", remote_path)
             return None
 
-    def with_retry(self, operation: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    def with_retry(
+        self, operation: Callable[..., Any], *args: object, **kwargs: object,
+    ) -> Any:
         """Execute an operation with retry logic.
 
         Args:
@@ -570,7 +623,9 @@ class SSHClient:
 
         for attempt in range(max_attempts):
             if attempt > 0:
-                logger.debug("Retrying operation (attempt %d/%d)", attempt + 1, max_attempts)
+                logger.debug(
+                    "Retrying operation (attempt %d/%d)", attempt + 1, max_attempts,
+                )
                 time.sleep(self.retry_delay * attempt)
 
             try:

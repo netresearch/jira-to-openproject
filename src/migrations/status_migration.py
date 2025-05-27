@@ -10,7 +10,7 @@ Implementation is now complete, including:
 """
 
 import json
-import os
+from pathlib import Path
 from typing import Any, TypeVar
 
 from src import config
@@ -77,9 +77,9 @@ class StatusMigration(BaseMigration):
         self.jira_status_categories = self._load_from_json("jira_status_categories.json", [])
         self.op_statuses = self._load_from_json("op_statuses.json", [])
 
-        logger.info(f"Loaded {len(self.jira_statuses)} Jira statuses")
-        logger.info(f"Loaded {len(self.jira_status_categories)} Jira status categories")
-        logger.info(f"Loaded {len(self.op_statuses)} OpenProject statuses")
+        logger.info("Loaded %s Jira statuses", len(self.jira_statuses))
+        logger.info("Loaded %s Jira status categories", len(self.jira_status_categories))
+        logger.info("Loaded %s OpenProject statuses", len(self.op_statuses))
 
     def extract_jira_statuses(self) -> list[dict[str, Any]]:
         """Extract all statuses from Jira using the Jira statuses API endpoint.
@@ -88,9 +88,9 @@ class StatusMigration(BaseMigration):
             List of Jira status dictionaries
 
         """
-        statuses_file = os.path.join(self.data_dir, "jira_statuses.json")
+        statuses_file = Path(self.data_dir) / "jira_statuses.json"
 
-        if os.path.exists(statuses_file) and not config.migration_config.get("force", False):
+        if Path(statuses_file).exists() and not config.migration_config.get("force", False):
             logger.info("Jira statuses data already exists, skipping extraction (use --force to override)")
             with open(statuses_file) as f:
                 self.jira_statuses = json.load(f)
@@ -112,14 +112,14 @@ class StatusMigration(BaseMigration):
                 logger.warning("No statuses found in Jira")
                 return []
 
-            logger.info(f"Extracted {len(statuses)} statuses from Jira")
+            logger.info("Extracted %s statuses from Jira", len(statuses))
 
             self.jira_statuses = statuses
             self._save_to_json(statuses, "jira_statuses.json")
 
             return statuses
         except Exception as e:
-            logger.exception(f"Failed to extract statuses from Jira: {e!s}")
+            logger.exception("Failed to extract statuses from Jira: %s", e)
             return []
 
     def extract_status_categories(self) -> list[dict[str, Any]]:
@@ -129,9 +129,9 @@ class StatusMigration(BaseMigration):
             List of Jira status category dictionaries
 
         """
-        categories_file = os.path.join(self.data_dir, "jira_status_categories.json")
+        categories_file = Path(self.data_dir) / "jira_status_categories.json"
 
-        if os.path.exists(categories_file) and not config.migration_config.get("force", False):
+        if Path(categories_file).exists() and not config.migration_config.get("force", False):
             logger.info("Jira status categories data already exists, skipping extraction (use --force to override)")
             with open(categories_file) as f:
                 self.jira_status_categories = json.load(f)
@@ -145,14 +145,14 @@ class StatusMigration(BaseMigration):
                 logger.warning("No status categories found in Jira")
                 return []
 
-            logger.info(f"Extracted {len(categories)} status categories from Jira")
+            logger.info("Extracted %s status categories from Jira", len(categories))
 
             self.jira_status_categories = categories
             self._save_to_json(categories, "jira_status_categories.json")
 
             return categories
         except Exception as e:
-            logger.exception(f"Failed to extract status categories from Jira: {e!s}")
+            logger.exception("Failed to extract status categories from Jira: %s", e)
             return []
 
     def get_openproject_statuses(self) -> list[dict[str, Any]]:
@@ -162,9 +162,9 @@ class StatusMigration(BaseMigration):
             List of OpenProject status dictionaries
 
         """
-        statuses_file = os.path.join(self.data_dir, "op_statuses.json")
+        statuses_file = Path(self.data_dir) / "op_statuses.json"
 
-        if os.path.exists(statuses_file) and not config.migration_config.get("force", False):
+        if Path(statuses_file).exists() and not config.migration_config.get("force", False):
             logger.info("OpenProject statuses data already exists, skipping extraction (use --force to override)")
             with open(statuses_file) as f:
                 self.op_statuses = json.load(f)
@@ -206,7 +206,7 @@ class StatusMigration(BaseMigration):
                 logger.warning("No statuses found in OpenProject")
                 return []
 
-            logger.info(f"Found {len(statuses)} statuses in OpenProject")
+            logger.info("Found %s statuses in OpenProject", len(statuses))
 
             # Explicitly convert to the expected return type
             result_statuses: list[dict[str, Any]] = []
@@ -218,14 +218,14 @@ class StatusMigration(BaseMigration):
                     try:
                         result_statuses.append(dict(status))
                     except (TypeError, ValueError):
-                        logger.warning(f"Skipping invalid status format: {status}")
+                        logger.warning("Skipping invalid status format: %s", status)
 
             self.op_statuses = result_statuses
             self._save_to_json(result_statuses, "op_statuses.json")
 
             return result_statuses
         except Exception as e:
-            logger.exception(f"Failed to get statuses from OpenProject: {e!s}")
+            logger.exception("Failed to get statuses from OpenProject: %s", e)
             return []
 
     def create_statuses_bulk_via_rails(self, statuses_to_create: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -247,7 +247,7 @@ class StatusMigration(BaseMigration):
             logger.warning("No statuses provided for bulk creation")
             return {}
 
-        logger.info(f"Creating {len(statuses_to_create)} statuses in bulk via Rails...")
+        logger.info("Creating %s statuses in bulk via Rails...", len(statuses_to_create))
 
         # Create Ruby script that processes the data passed in
         ruby_script = """
@@ -339,7 +339,7 @@ class StatusMigration(BaseMigration):
 
             if result.get("status") == "success" and "data" in result:
                 created_statuses = result["data"]
-                logger.info(f"Successfully processed {len(created_statuses)} statuses via Rails")
+                logger.info("Successfully processed %s statuses via Rails", len(created_statuses))
                 # Ensure the return value has the expected type
                 typed_statuses: dict[str, dict[str, Any]] = {}
                 for jira_id, status_info in created_statuses.items():
@@ -356,13 +356,13 @@ class StatusMigration(BaseMigration):
 
                 return typed_statuses
             error_msg = result.get("message", "Unknown error")
-            logger.error(f"Failed to create statuses: {error_msg}")
+            logger.error("Failed to create statuses: %s", error_msg)
             if "output" in result:
-                logger.debug(f"Rails output: {result['output'][:500]}...")
+                logger.debug("Rails output: %s...", result["output"][:500])
             return {}
 
         except Exception as e:
-            logger.exception(f"Exception during Rails bulk execution: {e!s}")
+            logger.exception("Exception during Rails bulk execution: %s", e)
             return {}
 
     def create_status_mapping(self) -> dict[str, Any]:
@@ -372,9 +372,9 @@ class StatusMigration(BaseMigration):
             Dictionary mapping Jira status names to OpenProject status IDs
 
         """
-        mapping_file = os.path.join(self.data_dir, "status_mapping.json")
+        mapping_file = Path(self.data_dir) / "status_mapping.json"
 
-        if os.path.exists(mapping_file) and not config.migration_config.get("force", False):
+        if Path(mapping_file).exists() and not config.migration_config.get("force", False):
             logger.info("Status mapping already exists, loading from file (use --force to recreate)")
             with open(mapping_file) as f:
                 self.status_mapping = json.load(f)
@@ -398,7 +398,7 @@ class StatusMigration(BaseMigration):
 
             # Skip if jira_id is None
             if jira_id is None:
-                logger.warning(f"Skipping Jira status with no ID: {jira_name}")
+                logger.warning("Skipping Jira status with no ID: %s", jira_name)
                 continue
 
             # Ensure jira_id is a string
@@ -524,7 +524,7 @@ class StatusMigration(BaseMigration):
             name = jira_status.get("name")
 
             if not jira_id or not name:
-                logger.warning(f"Skipping status with missing ID or name: {jira_status}")
+                logger.warning("Skipping status with missing ID or name: %s", jira_status)
                 continue
 
             # Check if a similar status already exists in OpenProject
@@ -580,7 +580,7 @@ class StatusMigration(BaseMigration):
 
         # Create statuses in bulk if there are any to create
         if statuses_to_create:
-            logger.info(f"Creating {len(statuses_to_create)} statuses in bulk")
+            logger.info("Creating %s statuses in bulk", len(statuses_to_create))
 
             creation_results = self.create_statuses_bulk_via_rails(statuses_to_create)
 
@@ -606,9 +606,9 @@ class StatusMigration(BaseMigration):
 
         # Save status mapping
         if status_mapping:
-            mapping_file_path = os.path.join(self.data_dir, "status_mapping.json")
+            mapping_file_path = Path(self.data_dir) / "status_mapping.json"
             self._save_to_json(status_mapping, "status_mapping.json")
-            logger.info(f"Saved status mapping to {mapping_file_path}")
+            logger.info("Saved status mapping to %s", mapping_file_path)
 
             # Update the mappings instance
             if self.mappings is not None:
@@ -619,7 +619,7 @@ class StatusMigration(BaseMigration):
                 self.mappings.status_mapping = migration_status_mapping
 
         logger.info("Status migration completed")
-        logger.info(f"Total Jira statuses processed: {len(self.jira_statuses)}")
+        logger.info("Total Jira statuses processed: %s", len(self.jira_statuses))
         logger.info(
             f"OpenProject statuses: {already_exists_count} existing, {created_count} created, {error_count} errors",
         )
@@ -776,10 +776,10 @@ class StatusMigration(BaseMigration):
             )
 
         except Exception as e:
-            logger.exception(f"Error during status migration: {e!s}")
+            logger.exception("Error during status migration: %s", e)
             return ComponentResult(
                 success=False,
-                errors=[f"Error during status migration: {e!s}"],
+                errors=[f"Error during status migration: {e}"],
                 success_count=0,
                 failed_count=0,
                 total_count=0,

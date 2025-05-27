@@ -109,7 +109,8 @@ class UserMigration(BaseMigration):
             raise MigrationError(msg)
 
         self.logger.info(
-            "Extracted %s users from OpenProject", len(self.op_users),
+            "Extracted %s users from OpenProject",
+            len(self.op_users),
         )
 
         self._save_to_json(self.op_users, Path("op_users.json"))
@@ -135,8 +136,7 @@ class UserMigration(BaseMigration):
             self.extract_openproject_users()
 
         op_users_by_username = {
-            user.get("login", "").lower(): user
-            for user in self.op_users
+            user.get("login", "").lower(): user for user in self.op_users
         }
         op_users_by_email = {
             user.get("email", "").lower(): user
@@ -176,7 +176,7 @@ class UserMigration(BaseMigration):
                         "matched_by": "username",
                     }
                     tracker.add_log_item(
-                        f"Matched by username: {jira_display_name} → {op_user.get('login')}"
+                        f"Matched by username: {jira_display_name} → {op_user.get('login')}",
                     )
                     tracker.increment()
                     continue
@@ -194,7 +194,7 @@ class UserMigration(BaseMigration):
                         "matched_by": "email",
                     }
                     tracker.add_log_item(
-                        f"Matched by email: {jira_display_name} → {op_user.get('login')}"
+                        f"Matched by email: {jira_display_name} → {op_user.get('login')}",
                     )
                     tracker.increment()
                     continue
@@ -245,7 +245,8 @@ class UserMigration(BaseMigration):
             return {"created": 0, "failed": 0, "total": 0}
 
         self.logger.info(
-            "Found %s users missing in OpenProject", len(missing_users),
+            "Found %s users missing in OpenProject",
+            len(missing_users),
         )
 
         created = 0
@@ -253,7 +254,9 @@ class UserMigration(BaseMigration):
         created_users: list[dict[str, Any]] = []
 
         with ProgressTracker(
-            "Creating users", len(missing_users), "Recent User Creations",
+            "Creating users",
+            len(missing_users),
+            "Recent User Creations",
         ) as tracker:
             for i in range(0, len(missing_users), batch_size):
                 batch = missing_users[i : i + batch_size]
@@ -307,13 +310,17 @@ class UserMigration(BaseMigration):
                             success_count_1 = 0
                             success_count_2 = 0
                             if isinstance(result_str, str):
-                                success_count_1 = result_str.count('"status": "success"')
-                                success_count_2 = result_str.count('"status" => "success"')
+                                success_count_1 = result_str.count(
+                                    '"status": "success"',
+                                )
+                                success_count_2 = result_str.count(
+                                    '"status" => "success"',
+                                )
                             success_count = success_count_1 + success_count_2
                             result = {
                                 "created_count": success_count,
                                 "created_users": [],
-                                "failed_users": []
+                                "failed_users": [],
                             }
 
                     # Extract result stats
@@ -327,12 +334,16 @@ class UserMigration(BaseMigration):
                     failed += batch_failed
                     created_users.extend(batch_created_users)
 
-                    tracker.add_log_item(f"Created {batch_created}/{len(batch)} users in batch")
+                    tracker.add_log_item(
+                        f"Created {batch_created}/{len(batch)} users in batch",
+                    )
                 except Exception as e:
                     error_msg = f"Exception during bulk user creation: {e!s}"
                     self.logger.exception(error_msg)
                     failed += len(batch)
-                    tracker.add_log_item(f"Exception during creation: {', '.join(batch_users)}")
+                    tracker.add_log_item(
+                        f"Exception during creation: {', '.join(batch_users)}",
+                    )
                     raise MigrationError(error_msg) from e
 
                 tracker.increment(len(batch))
@@ -363,37 +374,59 @@ class UserMigration(BaseMigration):
             self.create_user_mapping()
 
         total_users = len(self.user_mapping)
-        matched_by_username = len([u for u in self.user_mapping.values() if u["matched_by"] == "username"])
-        matched_by_email = len([u for u in self.user_mapping.values() if u["matched_by"] == "email"])
-        not_matched = len([u for u in self.user_mapping.values() if u["matched_by"] == "none"])
+        matched_by_username = len(
+            [u for u in self.user_mapping.values() if u["matched_by"] == "username"],
+        )
+        matched_by_email = len(
+            [u for u in self.user_mapping.values() if u["matched_by"] == "email"],
+        )
+        not_matched = len(
+            [u for u in self.user_mapping.values() if u["matched_by"] == "none"],
+        )
 
         analysis = {
             "total_users": total_users,
             "matched_by_username": matched_by_username,
             "matched_by_email": matched_by_email,
             "not_matched": not_matched,
-            "username_match_percentage": ((matched_by_username / total_users) * 100 if total_users > 0 else 0),
-            "email_match_percentage": ((matched_by_email / total_users) * 100 if total_users > 0 else 0),
-            "total_match_percentage": (
-                ((matched_by_username + matched_by_email) / total_users) * 100 if total_users > 0 else 0
+            "username_match_percentage": (
+                (matched_by_username / total_users) * 100 if total_users > 0 else 0
             ),
-            "not_matched_percentage": ((not_matched / total_users) * 100 if total_users > 0 else 0),
+            "email_match_percentage": (
+                (matched_by_email / total_users) * 100 if total_users > 0 else 0
+            ),
+            "total_match_percentage": (
+                ((matched_by_username + matched_by_email) / total_users) * 100
+                if total_users > 0
+                else 0
+            ),
+            "not_matched_percentage": (
+                (not_matched / total_users) * 100 if total_users > 0 else 0
+            ),
         }
 
         # Display the analysis
         self.logger.info("User mapping analysis:")
         self.logger.info("Total users: %s", total_users)
         self.logger.info(
-            "Matched by username: %s (%s%%)", matched_by_username, analysis["username_match_percentage"]
+            "Matched by username: %s (%s%%)",
+            matched_by_username,
+            analysis["username_match_percentage"],
         )
         self.logger.info(
-            "Matched by email: %s (%s%%)", matched_by_email, analysis["email_match_percentage"]
+            "Matched by email: %s (%s%%)",
+            matched_by_email,
+            analysis["email_match_percentage"],
         )
         self.logger.info(
-            "Total matched: %s (%s%%)", matched_by_username + matched_by_email, analysis["total_match_percentage"]
+            "Total matched: %s (%s%%)",
+            matched_by_username + matched_by_email,
+            analysis["total_match_percentage"],
         )
         self.logger.info(
-            "Not matched: %s (%s%%)", not_matched, analysis["not_matched_percentage"]
+            "Not matched: %s (%s%%)",
+            not_matched,
+            analysis["not_matched_percentage"],
         )
 
         return analysis
@@ -419,12 +452,16 @@ class UserMigration(BaseMigration):
             analysis = self.analyze_user_mapping()
 
             # Create missing users if configured
-            create_missing = config.get_value("migration", "create_missing_users", False)
+            create_missing = config.get_value(
+                "migration", "create_missing_users", False,
+            )
             creation_results: dict[str, Any] = {}
             if create_missing:
                 creation_results = self.create_missing_users()
                 self.logger.info(
-                    "Created %s users, %s failed", creation_results["created"], creation_results["failed"]
+                    "Created %s users, %s failed",
+                    creation_results["created"],
+                    creation_results["failed"],
                 )
             else:
                 self.logger.info(
@@ -444,7 +481,8 @@ class UserMigration(BaseMigration):
                     "analysis": analysis,
                     "creation_results": creation_results,
                 },
-                success_count=analysis["matched_by_username"] + analysis["matched_by_email"],
+                success_count=analysis["matched_by_username"]
+                + analysis["matched_by_email"],
                 failed_count=analysis["not_matched"],
                 total_count=analysis["total_users"],
             )
