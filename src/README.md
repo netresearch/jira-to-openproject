@@ -92,7 +92,7 @@ The codebase implements comprehensive error handling strategies to ensure robust
 
    ```python
    # Migration state is saved at the beginning of each project processing
-   with open(migration_state_file, 'w') as f:
+   with migration_state_file.open('w') as f:
        json.dump({
            'processed_projects': list(processed_projects),
            'last_processed_project': project_key,
@@ -104,13 +104,13 @@ The codebase implements comprehensive error handling strategies to ensure robust
 
    ```python
    try:
-       with open(filepath, 'w') as f:
+       with filepath.open('w') as f:
            json.dump(data, f, indent=2)
    except Exception as e:
        # Attempt backup save to alternate location
        try:
            backup_path = f"{filepath}.backup"
-           with open(backup_path, 'w') as f:
+           with backup_path.open('w') as f:
                json.dump(data, f, indent=2)
        except Exception as backup_e:
            logger.critical(f"Failed to save backup: {str(backup_e)}")

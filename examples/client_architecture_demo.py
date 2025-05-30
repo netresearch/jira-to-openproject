@@ -12,6 +12,7 @@ Run this script with appropriate configuration to see how the components work to
 
 import os
 import traceback
+from zipfile import Path
 
 # Import after path is set
 from src import config
@@ -30,7 +31,7 @@ def demo_each_client_independently() -> None:
     # Load configuration
     ssh_host = config.openproject_config.get("server")
     ssh_user = config.openproject_config.get("user")
-    ssh_key_file = config.openproject_config.get("key_file")
+    config.openproject_config.get("key_file")
     container_name = config.openproject_config.get("container")
     tmux_session = config.openproject_config.get("tmux_session_name", "rails_console")
 
@@ -118,13 +119,13 @@ def demo_file_transfer() -> None:
     print("=" * 80)
 
     # Create a test file locally
-    with open("/tmp/test_transfer.txt", "w") as f:
+    with Path("/tmp/test_transfer.txt").open("w") as f:
         f.write("This is a test file for demonstrating the file transfer workflow.")
 
     # Create clients for file transfer
     ssh_host = config.openproject_config.get("server")
     ssh_user = config.openproject_config.get("user")
-    ssh_key_file = config.openproject_config.get("key_file")
+    config.openproject_config.get("key_file")
     container_name = config.openproject_config.get("container")
 
     # 1. Create the SSHClient (Foundation Layer)

@@ -7,7 +7,7 @@ from typing import Any
 
 from src.config_loader import ConfigLoader
 from src.display import configure_logging
-from src.types import Config, DirType, LogLevel, SectionName
+from src.type_definitions import Config, DirType, LogLevel, SectionName
 
 # Create a singleton instance of ConfigLoader
 _config_loader = ConfigLoader()

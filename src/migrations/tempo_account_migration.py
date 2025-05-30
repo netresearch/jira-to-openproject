@@ -72,7 +72,7 @@ class TempoAccountMigration:
             response = requests.get(
                 accounts_endpoint,
                 headers=self.tempo_auth_headers,
-                verify=False,  # Only use in development
+                verify=False,  # Only use in development  # noqa: S501
             )
 
             if response.status_code == 200:
@@ -332,7 +332,7 @@ class TempoAccountMigration:
         if not self.account_mapping:
             mapping_path = Path(self.data_dir) / "tempo_account_mapping.json"
             if Path(mapping_path).exists():
-                with open(mapping_path) as f:
+                with mapping_path.open() as f:
                     self.account_mapping = json.load(f)
             else:
                 logger.error("No account mapping found. Run create_account_mapping() first.")
@@ -389,7 +389,7 @@ class TempoAccountMigration:
 
         """
         filepath = Path(self.data_dir) / filename
-        with open(filepath, "w") as f:
+        with filepath.open("w") as f:
             json.dump(data, f, indent=2)
         logger.info("Saved data to %s", filepath)
 

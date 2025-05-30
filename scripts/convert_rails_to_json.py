@@ -5,6 +5,7 @@ This script takes Ruby-formatted output and converts it to valid JSON.
 """
 
 import json
+from pathlib import Path
 import re
 import sys
 
@@ -18,7 +19,7 @@ def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
 
     """
     # Read the input file
-    with open(input_file) as f:
+    with Path(input_file).open() as f:
         ruby_str = f.read()
 
     # Extract the array portion
@@ -46,7 +47,7 @@ def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
         data = json.loads(json_str)
 
         # Write to output file
-        with open(output_file, "w") as f:
+        with Path(output_file).open("w") as f:
             json.dump(data, f, indent=2)
 
         print(f"Successfully converted {len(data)} records to JSON")

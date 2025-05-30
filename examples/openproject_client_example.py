@@ -20,7 +20,7 @@ def main() -> None:
         ssh_host="example.com",
         ssh_user="username",
         # ssh_key_file parameter is no longer needed - using system SSH configuration
-        tmux_session_name="rails_console"
+        tmux_session_name="rails_console",
     )
 
     print("Connected to OpenProject. Running examples...")

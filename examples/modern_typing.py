@@ -100,7 +100,7 @@ class DataProcessor:
                 source_name = source_path.stem
 
                 try:
-                    with open(source_path) as f:
+                    with source_path.open() as f:
                         items = json.load(f)
                 except Exception as e:
                     all_results[source_name] = [{"error": f"Failed to load {source}: {e}"}]

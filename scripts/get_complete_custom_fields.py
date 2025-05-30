@@ -7,6 +7,7 @@ information about custom fields and saves it to a JSON file.
 
 import contextlib
 import json
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -124,7 +125,7 @@ def get_complete_custom_fields(
     output = capture_tmux_output(session_name, lines=10000)
 
     # Save raw output for debugging
-    with open("raw_fields_output.txt", "w") as f:
+    with Path("raw_fields_output.txt").open("w") as f:
         f.write(output)
 
     # Find the markers in the output
@@ -216,7 +217,7 @@ def get_complete_custom_fields(
 
     # Save to output file if provided
     if output_file:
-        with open(output_file, "w") as f:
+        with Path(output_file).open("w") as f:
             json.dump(custom_fields, f, indent=2)
         print(f"Saved custom fields to {output_file}")
 
@@ -234,10 +235,7 @@ def main() -> int:
     """Main entry point."""
     # Parse command line arguments
     output_file: str | None = None
-    if len(sys.argv) > 1:
-        output_file = sys.argv[1]
-    else:
-        output_file = "var/data/openproject_custom_fields_complete.json"
+    output_file = sys.argv[1] if len(sys.argv) > 1 else "var/data/openproject_custom_fields_complete.json"
 
     # Get the custom fields
     fields: list[dict[str, Any]] = get_complete_custom_fields(session_name="rails_console", output_file=output_file)

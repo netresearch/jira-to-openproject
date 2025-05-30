@@ -6,12 +6,13 @@ and creates a JSON file with the custom field data.
 """
 
 import json
+from pathlib import Path
 import re
 import sys
 from typing import Any
 
 
-def parse_custom_fields_list(input_file: str) -> list[dict[str, Any]]:
+def parse_custom_fields_list(input_file: Path) -> list[dict[str, Any]]:
     """Parse the custom fields list.
 
     Args:
@@ -24,7 +25,7 @@ def parse_custom_fields_list(input_file: str) -> list[dict[str, Any]]:
     custom_fields = []
 
     # Read the input file
-    with open(input_file) as f:
+    with input_file.open() as f:
         lines = f.readlines()
 
     # Find the start and end markers
@@ -66,8 +67,8 @@ def main() -> int:
         print("Usage: python create_custom_fields_json.py <input_file> <output_file>")
         return 1
 
-    input_file = sys.argv[1]
-    output_file = sys.argv[2]
+    input_file = Path(sys.argv[1])
+    output_file = Path(sys.argv[2])
 
     # Parse the custom fields list
     custom_fields = parse_custom_fields_list(input_file)
@@ -77,7 +78,7 @@ def main() -> int:
         return 1
 
     # Save to output file
-    with open(output_file, "w") as f:
+    with output_file.open("w") as f:
         json.dump(custom_fields, f, indent=2)
 
     print(f"Successfully saved {len(custom_fields)} custom fields to {output_file}")

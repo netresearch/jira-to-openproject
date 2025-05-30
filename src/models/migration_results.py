@@ -16,6 +16,7 @@ class MigrationResult(BaseModel):
 
     # Default values for overall dictionary
     def __init__(self, **data: Any) -> None:
+        """Initialize migration results with provided data."""
         super().__init__(**data)
 
         # Set default values for overall dict if they don't exist

@@ -75,7 +75,7 @@ def main() -> None:
     local_path = temp_dir / "test_script.rb"
 
     # Write script to file
-    with open(local_path, "w") as f:
+    with Path(local_path).open("w") as f:
         f.write(ruby_script)
 
     # Transfer to container using our modified method

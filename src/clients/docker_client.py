@@ -200,8 +200,9 @@ class DockerClient:
                     logger.error(
                         "File not found in container after copy: %s", container_path,
                     )
+                    msg = f"File not found in container after copy: {container_path}"
                     raise ValueError(
-                        f"File not found in container after copy: {container_path}",
+                        msg,
                     )
 
                 # Get file size in container
@@ -212,7 +213,8 @@ class DockerClient:
                 )
             else:
                 logger.error("Failed to copy file to container: %s", stderr)
-                raise ValueError(f"Failed to copy file to container: {stderr}")
+                msg = f"Failed to copy file to container: {stderr}"
+                raise ValueError(msg)
 
         except FileNotFoundError:
             # Re-raise file not found errors
@@ -221,9 +223,10 @@ class DockerClient:
             # Check if the error was due to missing local file
             local_file_exists = self.ssh_client.check_remote_file_exists(local_path)
             if not local_file_exists:
-                logger.error("Local file not found: %s", local_path)
+                logger.exception("Local file not found: %s", local_path)
+                msg = f"Local file does not exist: {local_path}"
                 raise FileNotFoundError(
-                    f"Local file does not exist: {local_path}",
+                    msg,
                 ) from e
 
             logger.exception("Error copying file to container: %s", e)
@@ -275,7 +278,8 @@ class DockerClient:
                 # Check if local file exists
                 if not self.ssh_client.check_remote_file_exists(local_path):
                     logger.error("File not found locally after copy: %s", local_path)
-                    raise ValueError(f"File not found locally after copy: {local_path}")
+                    msg = f"File not found locally after copy: {local_path}"
+                    raise ValueError(msg)
 
                 # Get file size
                 size = self.ssh_client.get_remote_file_size(local_path)
@@ -286,7 +290,8 @@ class DockerClient:
 
                 return local_path
             logger.error("Failed to copy file from container: %s", stderr)
-            raise ValueError(f"Failed to copy file from container: {stderr}")
+            msg = f"Failed to copy file from container: {stderr}"
+            raise ValueError(msg)
 
         except FileNotFoundError:
             # Re-raise file not found errors
@@ -294,9 +299,10 @@ class DockerClient:
         except Exception as e:
             # Check if file exists in container only after failure
             if not self.check_file_exists_in_container(container_path):
-                logger.error("File not found in container: %s", container_path)
+                logger.exception("File not found in container: %s", container_path)
+                msg = f"File not found in container: {container_path}"
                 raise FileNotFoundError(
-                    f"File not found in container: {container_path}",
+                    msg,
                 ) from e
 
             logger.exception("Error copying file from container: %s", e)

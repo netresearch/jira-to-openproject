@@ -650,7 +650,7 @@ class CustomFieldMigration(BaseMigration):
 
         # Write the custom fields data to a JSON file
         data_file_path = self.data_dir / f"custom_fields_batch_{timestamp}.json"
-        with open(data_file_path, "w", encoding="utf-8") as f:
+        with data_file_path.open("w", encoding="utf-8") as f:
             json.dump(custom_fields_data, f, indent=2, ensure_ascii=False)
 
         self.logger.info(
@@ -666,7 +666,7 @@ class CustomFieldMigration(BaseMigration):
                 data_file_path, container_data_path,
             )
         except Exception as e:
-            self.logger.error(
+            self.logger.exception(
                 "Failed to transfer custom fields data to container: %s", str(e),
             )
             return False
@@ -818,7 +818,7 @@ result
             return False
 
         except Exception as e:
-            self.logger.error("Error executing Ruby script: %s", str(e))
+            self.logger.exception("Error executing Ruby script: %s", str(e))
             return False
         finally:
             # Clean up temporary files

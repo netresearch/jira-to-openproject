@@ -2,7 +2,6 @@
 
 import subprocess
 import time
-from typing import Dict, Optional, Tuple
 
 
 def check_docker_available() -> bool:
@@ -10,13 +9,14 @@ def check_docker_available() -> bool:
 
     Returns:
         bool: True if Docker is available, False otherwise
+
     """
     try:
         result = subprocess.run(
             ["docker", "info"],
             capture_output=True,
             text=True,
-            check=False
+            check=False,
         )
         return result.returncode == 0
     except (FileNotFoundError, subprocess.SubprocessError):
@@ -31,13 +31,14 @@ def pull_docker_image(image_name: str) -> bool:
 
     Returns:
         bool: True if successful, False otherwise
+
     """
     try:
         result = subprocess.run(
             ["docker", "pull", image_name],
             capture_output=True,
             text=True,
-            check=False
+            check=False,
         )
         return result.returncode == 0
     except (FileNotFoundError, subprocess.SubprocessError):
@@ -46,11 +47,11 @@ def pull_docker_image(image_name: str) -> bool:
 
 def start_docker_container(
     image_name: str,
-    container_name: Optional[str] = None,
-    ports: Optional[Dict[str, str]] = None,
-    env_vars: Optional[Dict[str, str]] = None,
-    volumes: Optional[Dict[str, str]] = None,
-) -> Tuple[bool, str]:
+    container_name: str | None = None,
+    ports: dict[str, str] | None = None,
+    env_vars: dict[str, str] | None = None,
+    volumes: dict[str, str] | None = None,
+) -> tuple[bool, str]:
     """Start a Docker container.
 
     Args:
@@ -62,6 +63,7 @@ def start_docker_container(
 
     Returns:
         Tuple[bool, str]: Success status and container ID or error message
+
     """
     cmd = ["docker", "run", "-d"]
 
@@ -92,13 +94,12 @@ def start_docker_container(
             cmd,
             capture_output=True,
             text=True,
-            check=False
+            check=False,
         )
 
         if result.returncode == 0:
             return True, result.stdout.strip()
-        else:
-            return False, result.stderr.strip()
+        return False, result.stderr.strip()
     except Exception as e:
         return False, str(e)
 
@@ -111,6 +112,7 @@ def stop_docker_container(container_id_or_name: str) -> bool:
 
     Returns:
         bool: True if successful, False otherwise
+
     """
     try:
         # Stop the container
@@ -118,7 +120,7 @@ def stop_docker_container(container_id_or_name: str) -> bool:
             ["docker", "stop", container_id_or_name],
             capture_output=True,
             text=True,
-            check=False
+            check=False,
         )
 
         # Remove the container
@@ -126,7 +128,7 @@ def stop_docker_container(container_id_or_name: str) -> bool:
             ["docker", "rm", container_id_or_name],
             capture_output=True,
             text=True,
-            check=False
+            check=False,
         )
 
         return stop_result.returncode == 0 and rm_result.returncode == 0
@@ -137,7 +139,7 @@ def stop_docker_container(container_id_or_name: str) -> bool:
 def start_jira_test_container(
     container_name: str = "jira_test",
     port: str = "8080",
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """Start a Jira test container.
 
     Args:
@@ -146,29 +148,30 @@ def start_jira_test_container(
 
     Returns:
         Tuple[bool, str]: Success status and container ID or error message
+
     """
     image_name = "atlassian/jira-software:latest"
 
     ports = {
-        port: "8080"
+        port: "8080",
     }
 
     env_vars = {
-        "JIRA_SETUP_MODE": "QUICK"
+        "JIRA_SETUP_MODE": "QUICK",
     }
 
     return start_docker_container(
         image_name=image_name,
         container_name=container_name,
         ports=ports,
-        env_vars=env_vars
+        env_vars=env_vars,
     )
 
 
 def start_openproject_test_container(
     container_name: str = "openproject_test",
     port: str = "8081",
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """Start an OpenProject test container.
 
     Args:
@@ -177,32 +180,33 @@ def start_openproject_test_container(
 
     Returns:
         Tuple[bool, str]: Success status and container ID or error message
+
     """
     image_name = "openproject/community:latest"
 
     ports = {
-        port: "80"
+        port: "80",
     }
 
     env_vars = {
         "OPENPROJECT_TOKEN_SECRET": "test-secret",
         "OPENPROJECT_ADMIN_EMAIL": "admin@example.com",
         "OPENPROJECT_ADMIN_PASSWORD": "admin-password",
-        "DATABASE_TYPE": "sqlite"
+        "DATABASE_TYPE": "sqlite",
     }
 
     return start_docker_container(
         image_name=image_name,
         container_name=container_name,
         ports=ports,
-        env_vars=env_vars
+        env_vars=env_vars,
     )
 
 
 def wait_for_service_startup(
     url: str,
     max_attempts: int = 30,
-    delay_seconds: int = 2
+    delay_seconds: int = 2,
 ) -> bool:
     """Wait for an HTTP service to be available.
 
@@ -213,6 +217,7 @@ def wait_for_service_startup(
 
     Returns:
         bool: True if service available, False if timed out
+
     """
     import requests
 

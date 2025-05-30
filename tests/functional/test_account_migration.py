@@ -3,6 +3,7 @@
 import json
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, mock_open, patch
 
 from src.migrations.account_migration import AccountMigration
@@ -91,7 +92,7 @@ class TestAccountMigration(unittest.TestCase):
     @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("src.migrations.account_migration.Path.exists")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("pathlib.Path.open", new_callable=mock_open)
     def test_extract_tempo_accounts(
         self,
         mock_file: MagicMock,
@@ -113,38 +114,40 @@ class TestAccountMigration(unittest.TestCase):
         mock_exists.return_value = False  # Force new extraction
 
         # Mock _save_to_json to avoid actually writing to file
-        with patch("src.migrations.account_migration.BaseMigration._save_to_json") as mock_save:
-            # Mock _load_from_json to return empty list initially
-            with patch("src.migrations.account_migration.BaseMigration._load_from_json") as mock_load:
-                # Return empty list for tempo_accounts.json, empty dict for others
-                def load_side_effect(filename, default=None):
-                    if "tempo_accounts" in str(filename):
-                        return []
-                    elif "account_mapping" in str(filename):
-                        return {}
-                    return default if default is not None else {}
+        with patch("src.migrations.account_migration.BaseMigration._save_to_json") as mock_save, \
+             patch("src.migrations.account_migration.BaseMigration._load_from_json") as mock_load:
+            # Return empty list for tempo_accounts.json, empty dict for others
+            def load_side_effect(
+                filename: str | Path,
+                default: list[dict[str, Any]] | dict[str, dict[str, Any]] | None = None,
+            ) -> list[dict[str, Any]] | dict[str, dict[str, Any]]:
+                if "tempo_accounts" in str(filename):
+                    return []
+                if "account_mapping" in str(filename):
+                    return {}
+                return default if default is not None else {}
 
-                mock_load.side_effect = load_side_effect
+            mock_load.side_effect = load_side_effect
 
-                # Initialize migration
-                migration = AccountMigration(mock_jira_instance, mock_op_instance)
+            # Initialize migration
+            migration = AccountMigration(mock_jira_instance, mock_op_instance)
 
-                # Call extract_tempo_accounts
-                result = migration.extract_tempo_accounts()
+            # Call extract_tempo_accounts
+            result = migration.extract_tempo_accounts()
 
-                # Verify API was called and data was saved
-                mock_jira_instance.get_tempo_accounts.assert_called_once_with(expand=True)
-                mock_save.assert_called_once()
+            # Verify API was called and data was saved
+            mock_jira_instance.get_tempo_accounts.assert_called_once_with(expand=True)
+            mock_save.assert_called_once()
 
-                # Verify data was extracted
-                assert len(result) == 2
-                assert migration.tempo_accounts == self.tempo_accounts
+            # Verify data was extracted
+            assert len(result) == 2
+            assert migration.tempo_accounts == self.tempo_accounts
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("os.path.exists")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("pathlib.Path.open", new_callable=mock_open)
     def test_extract_openproject_projects(
         self,
         mock_file: MagicMock,
@@ -180,7 +183,7 @@ class TestAccountMigration(unittest.TestCase):
     @patch("src.migrations.account_migration.config.get_path")
     @patch("src.migrations.account_migration.config.migration_config")
     @patch("os.path.exists")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("pathlib.Path.open", new_callable=mock_open)
     def test_create_account_mapping(
         self,
         mock_file: MagicMock,
@@ -207,34 +210,34 @@ class TestAccountMigration(unittest.TestCase):
             read_data=json.dumps({"PROJ1": {"openproject_id": "3"}, "PROJ2": {"openproject_id": None}}),
         )
         # This patch will be used when loading jira_project_mapping.json
-        with patch("builtins.open", project_mapping_mock):
+        with patch("pathlib.Path.open", project_mapping_mock):
             # Initialize migration
             migration = AccountMigration(mock_jira_instance, mock_op_instance)
 
             # Mock _load_from_json to return the project mapping
-            migration._load_from_json = MagicMock()
-            migration._load_from_json.return_value = {
-                "PROJ1": {"openproject_id": "3"},
-                "PROJ2": {"openproject_id": None},
-            }
+            with patch.object(migration, '_load_from_json') as mock_load:
+                mock_load.return_value = {
+                    "PROJ1": {"openproject_id": "3"},
+                    "PROJ2": {"openproject_id": None},
+                }
 
-            # Set the extracted data
-            migration.tempo_accounts = self.tempo_accounts
-            migration.op_projects = self.op_projects
+                # Set the extracted data
+                migration.tempo_accounts = self.tempo_accounts
+                migration.op_projects = self.op_projects
 
-            # Mock _save_to_json method to avoid file I/O
-            with patch.object(migration, "_save_to_json"):
-                # Call create_account_mapping
-                result = migration.create_account_mapping()
+                # Mock _save_to_json method to avoid file I/O
+                with patch.object(migration, "_save_to_json"):
+                    # Call create_account_mapping
+                    result = migration.create_account_mapping()
 
-                # Verify mappings
-                assert "101" in result
-                assert "102" in result
-                assert result["101"]["tempo_name"] == "Account One"
-                assert result["101"]["openproject_id"] == 1
-                assert result["101"]["matched_by"] == "name"
-                assert result["102"]["openproject_id"] is None
-                assert result["102"]["matched_by"] == "none"
+                    # Verify mappings
+                    assert "101" in result
+                    assert "102" in result
+                    assert result["101"]["tempo_name"] == "Account One"
+                    assert result["101"]["openproject_id"] == 1
+                    assert result["101"]["matched_by"] == "name"
+                    assert result["102"]["openproject_id"] is None
+                    assert result["102"]["matched_by"] == "none"
 
     def test_create_account_custom_field(self) -> None:
         """Test the create_account_custom_field method."""

@@ -2,13 +2,12 @@
 
 import os
 import random
-from typing import Dict
 
 import pytest
 
 
 @pytest.mark.unit
-def test_example_with_environment_override(test_env: Dict[str, str]) -> None:
+def test_example_with_environment_override(test_env: dict[str, str]) -> None:
     """Example test showing how to override environment variables.
 
     This test demonstrates how to use the test_env fixture to:
@@ -17,6 +16,7 @@ def test_example_with_environment_override(test_env: Dict[str, str]) -> None:
 
     Args:
         test_env: Dictionary fixture that provides access to modify environment variables
+
     """
     # Create a special variable that won't interfere with existing variables
     test_url = f"https://example-{random.randint(10000, 99999)}.com"
@@ -44,7 +44,7 @@ def test_example_with_environment_override(test_env: Dict[str, str]) -> None:
 
 
 @pytest.mark.unit
-def test_example_demonstrating_isolation(test_env: Dict[str, str]) -> None:
+def test_example_demonstrating_isolation(test_env: dict[str, str]) -> None:
     """Example showing environment variables are isolated between tests.
 
     This test demonstrates that changes made in the previous test
@@ -52,6 +52,7 @@ def test_example_demonstrating_isolation(test_env: Dict[str, str]) -> None:
 
     Args:
         test_env: Dictionary fixture that provides access to modify environment variables
+
     """
     # This should no longer have the overridden values from the previous test
     assert test_env.get("J2O_JIRA_URL") != "https://example-test-jira.com"

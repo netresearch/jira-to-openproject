@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
-from src.types import (
+from src.type_definitions import (
     Config,
     ConfigValue,
     JiraConfig,
@@ -39,20 +39,17 @@ def is_test_environment() -> bool:
         return True
 
     # Check for our custom test mode flag (set by test fixtures)
-    if os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes"):
-        return True
-
-    return False
+    return os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes")
 
 
 class ConfigLoader:
     """Loads and provides access to configuration settings from YAML files and environment variables."""
 
-    def __init__(self, config_file_path: str = "config/config.yaml") -> None:
+    def __init__(self, config_file_path: Path = Path("config/config.yaml")) -> None:
         """Initialize the configuration loader.
 
         Args:
-            config_file_path (str): Path to the YAML configuration file
+            config_file_path (Path): Path to the YAML configuration file
 
         """
         # Load environment variables in the correct order based on context
@@ -116,18 +113,18 @@ class ConfigLoader:
                 load_dotenv(".env.local", override=True)
                 config_logger.debug("Loaded local overrides from .env.local")
 
-    def _load_yaml_config(self, config_file_path: str) -> Config:
+    def _load_yaml_config(self, config_file_path: Path) -> Config:
         """Load configuration from YAML file.
 
         Args:
-            config_file_path (str): Path to the YAML configuration file
+            config_file_path (Path): Path to the YAML configuration file
 
         Returns:
             dict: Configuration settings
 
         """
         try:
-            with Path(config_file_path).open("r") as config_file:
+            with config_file_path.open("r") as config_file:
                 config: Config = yaml.safe_load(config_file)
                 return config
         except FileNotFoundError:

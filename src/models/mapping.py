@@ -1,10 +1,11 @@
 """Data mapping module for Jira to OpenProject migration.
+
 Defines the mapping strategies between Jira and OpenProject data models.
 """
 
 # Add the logger import
 from src import config
-from src.types import JiraData, OpenProjectData, StatusMapping, TypeMapping
+from src.type_definitions import JiraData, OpenProjectData, StatusMapping, TypeMapping
 
 # Get logger from config
 logger = config.logger

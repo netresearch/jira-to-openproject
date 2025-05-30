@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.config_loader import ConfigLoader, is_test_environment
-from src.types import Config
+from src.type_definitions import Config
 
 
 # Create a test helper subclass of ConfigLoader for easier testing
@@ -19,7 +19,6 @@ class ConfigLoaderTestHelper(ConfigLoader):
 
     def _load_environment_configuration(self) -> None:
         """Override to prevent environment loading."""
-        pass
 
     def _load_yaml_config(self, config_file_path: str) -> Config:
         """Override to prevent file loading."""
@@ -27,7 +26,6 @@ class ConfigLoaderTestHelper(ConfigLoader):
 
     def _apply_environment_overrides(self) -> None:
         """Override to prevent environment variable processing."""
-        pass
 
 
 @pytest.mark.unit

@@ -7,6 +7,7 @@ and output capture are working correctly.
 """
 
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -141,7 +142,7 @@ def main() -> None:
         json_output = capture_tmux_output(session_name, lines=5000)  # Capture more lines for large datasets
 
         # Save the raw output for debugging if needed
-        with open("raw_tmux_output.txt", "w") as f:
+        with Path("raw_tmux_output.txt").open("w") as f:
             f.write(json_output)
         print("Saved raw tmux output to raw_tmux_output.txt for debugging")
 
@@ -161,7 +162,7 @@ def main() -> None:
 
                 # Save to local file if path provided
                 if output_file:
-                    with open(output_file, "w") as f:
+                    with Path(output_file).open("w") as f:
                         json.dump(custom_fields, f, indent=2)
                     print(f"Saved custom fields to {output_file}")
 
@@ -190,7 +191,7 @@ def main() -> None:
 
                     # Save to local file if path provided
                     if output_file:
-                        with open(output_file, "w") as f:
+                        with Path(output_file).open("w") as f:
                             json.dump(custom_fields, f, indent=2)
                         print(f"Saved custom fields to {output_file}")
 

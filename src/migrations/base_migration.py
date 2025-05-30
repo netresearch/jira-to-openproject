@@ -47,7 +47,7 @@ class BaseMigration:
 
             config.mappings = Mappings(data_dir=self.data_dir)
 
-    def _load_from_json(self, filename: Path | str, default: Any = None) -> Any:
+    def _load_from_json(self, filename: Path, default: Any = None) -> Any:
         """Load data from a JSON file in the data directory.
 
         Args:

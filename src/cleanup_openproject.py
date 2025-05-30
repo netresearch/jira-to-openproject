@@ -6,11 +6,13 @@ This script removes all existing work packages, projects, and custom fields from
 
 import argparse
 import sys
-from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from src import config
 from src.clients.openproject_client import OpenProjectClient
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # Set up logger
 logger = config.logger

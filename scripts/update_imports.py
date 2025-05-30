@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 
-def update_file(file_path: str, dry_run: bool = False) -> bool:
+def update_file(file_path: Path, dry_run: bool = False) -> bool:
     """Update imports in a single file.
 
     Args:
@@ -17,7 +17,7 @@ def update_file(file_path: str, dry_run: bool = False) -> bool:
         True if changes were made or would be made, False otherwise
 
     """
-    with open(file_path, encoding="utf-8") as f:
+    with file_path.open(encoding="utf-8") as f:
         content = f.read()
 
     # Find the import statement
@@ -45,7 +45,7 @@ def update_file(file_path: str, dry_run: bool = False) -> bool:
         print(f"Would update {file_path}")
         return True
 
-    with open(file_path, "w", encoding="utf-8") as f:
+    with file_path.open("w", encoding="utf-8") as f:
         f.write(new_content)
 
     print(f"Updated {file_path}")
@@ -70,7 +70,7 @@ def main() -> None:
     changed_files = 0
     for dir_path in dirs_to_search:
         for py_file in dir_path.glob("**/*.py"):
-            if update_file(str(py_file), args.dry_run):
+            if update_file(py_file, args.dry_run):
                 changed_files += 1
 
     if args.dry_run:

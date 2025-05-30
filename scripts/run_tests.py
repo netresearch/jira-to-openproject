@@ -5,19 +5,18 @@ import argparse
 import os
 import subprocess
 import sys
-from typing import List, Optional
 
 
 def run_tests(
-    test_type: Optional[str] = None,
-    test_path: Optional[str] = None,
+    test_type: str | None = None,
+    test_path: str | None = None,
     verbose: bool = False,
     coverage: bool = False,
-    markers: Optional[str] = None,
-    keyword: Optional[str] = None,
+    markers: str | None = None,
+    keyword: str | None = None,
     junit_report: bool = False,
     parallel: bool = False,
-    extra_args: Optional[List[str]] = None,
+    extra_args: list[str] | None = None,
 ) -> int:
     """Run tests with the specified configuration.
 
@@ -34,6 +33,7 @@ def run_tests(
 
     Returns:
         int: Exit code (0 for success, non-zero for failure)
+
     """
     cmd = ["python", "-m", "pytest"]
 
@@ -101,6 +101,7 @@ def main() -> int:
 
     Returns:
         int: Exit code
+
     """
     parser = argparse.ArgumentParser(description="Run different types of tests")
 
@@ -115,54 +116,54 @@ def main() -> int:
     # Test path
     parser.add_argument(
         "--path",
-        help="Specific test path or file to run"
+        help="Specific test path or file to run",
     )
 
     # Verbosity
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
-        help="Show verbose output"
+        help="Show verbose output",
     )
 
     # Coverage
     parser.add_argument(
         "--cov", "--coverage",
         action="store_true",
-        help="Generate coverage report"
+        help="Generate coverage report",
     )
 
     # Markers
     parser.add_argument(
         "-m", "--markers",
-        help="Pytest markers to include"
+        help="Pytest markers to include",
     )
 
     # Keyword expression
     parser.add_argument(
         "-k", "--keyword",
-        help="Keyword expression to filter tests"
+        help="Keyword expression to filter tests",
     )
 
     # JUnit report
     parser.add_argument(
         "--junit",
         action="store_true",
-        help="Generate JUnit XML report"
+        help="Generate JUnit XML report",
     )
 
     # Parallel execution
     parser.add_argument(
         "--parallel",
         action="store_true",
-        help="Run tests in parallel"
+        help="Run tests in parallel",
     )
 
     # Additional arguments
     parser.add_argument(
         "rest",
         nargs=argparse.REMAINDER,
-        help="Additional arguments to pass to pytest"
+        help="Additional arguments to pass to pytest",
     )
 
     args = parser.parse_args()
@@ -180,7 +181,7 @@ def main() -> int:
         keyword=args.keyword,
         junit_report=args.junit,
         parallel=args.parallel,
-        extra_args=args.rest
+        extra_args=args.rest,
     )
 
 

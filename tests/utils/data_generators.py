@@ -6,7 +6,7 @@ import string
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
 def generate_random_string(length: int = 10) -> str:
@@ -17,9 +17,10 @@ def generate_random_string(length: int = 10) -> str:
 
     Returns:
         str: Random string
+
     """
     letters = string.ascii_letters + string.digits
-    return ''.join(random.choice(letters) for _ in range(length))
+    return "".join(random.choice(letters) for _ in range(length))
 
 
 def generate_random_jira_key() -> str:
@@ -27,9 +28,10 @@ def generate_random_jira_key() -> str:
 
     Returns:
         str: Random 3-5 character uppercase Jira project key
+
     """
     length = random.randint(3, 5)
-    return ''.join(random.choice(string.ascii_uppercase) for _ in range(length))
+    return "".join(random.choice(string.ascii_uppercase) for _ in range(length))
 
 
 def generate_uuid() -> str:
@@ -37,6 +39,7 @@ def generate_uuid() -> str:
 
     Returns:
         str: Random UUID
+
     """
     return str(uuid.uuid4())
 
@@ -49,16 +52,17 @@ def generate_timestamp(days_ago: int = 0) -> str:
 
     Returns:
         str: ISO format timestamp
+
     """
     date = datetime.now() - timedelta(days=days_ago)
     return date.isoformat()
 
 
 def generate_jira_project(
-    project_key: Optional[str] = None,
-    name: Optional[str] = None,
-    num_custom_fields: int = 3
-) -> Dict[str, Any]:
+    project_key: str | None = None,
+    name: str | None = None,
+    num_custom_fields: int = 3,
+) -> dict[str, Any]:
     """Generate a Jira project with random data.
 
     Args:
@@ -68,6 +72,7 @@ def generate_jira_project(
 
     Returns:
         Dict[str, Any]: Dictionary representing a Jira project
+
     """
     if project_key is None:
         project_key = generate_random_jira_key()
@@ -101,9 +106,9 @@ def generate_jira_project(
 def generate_jira_issue_data(
     project_key: str,
     num_issues: int = 10,
-    issue_types: Optional[List[str]] = None,
-    statuses: Optional[List[str]] = None
-) -> List[Dict[str, Any]]:
+    issue_types: list[str] | None = None,
+    statuses: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Generate multiple Jira issues for a project.
 
     Args:
@@ -114,6 +119,7 @@ def generate_jira_issue_data(
 
     Returns:
         List[Dict[str, Any]]: List of dictionaries representing Jira issues
+
     """
     if issue_types is None:
         issue_types = ["Bug", "Task", "Story", "Epic"]
@@ -144,7 +150,7 @@ def generate_jira_issue_data(
                 "created": generate_timestamp(random.randint(10, 100)),
                 "updated": generate_timestamp(random.randint(0, 10)),
                 "resolutiondate": generate_timestamp(0) if status in ["Resolved", "Closed"] else None,
-            }
+            },
         }
         results.append(issue)
 
@@ -152,9 +158,9 @@ def generate_jira_issue_data(
 
 
 def generate_op_project_data(
-    identifier: Optional[str] = None,
-    name: Optional[str] = None,
-) -> Dict[str, Any]:
+    identifier: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
     """Generate OpenProject project data.
 
     Args:
@@ -163,6 +169,7 @@ def generate_op_project_data(
 
     Returns:
         Dict[str, Any]: Dictionary representing an OpenProject project
+
     """
     if identifier is None:
         identifier = generate_random_string(8).lower()
@@ -182,15 +189,15 @@ def generate_op_project_data(
         "_links": {
             "self": {
                 "href": f"/api/v3/projects/{project_id}",
-                "title": name
-            }
-        }
+                "title": name,
+            },
+        },
     }
 
 
 def generate_config_file(
     output_path: Path,
-    config_data: Dict[str, Any]
+    config_data: dict[str, Any],
 ) -> Path:
     """Generate a JSON configuration file for testing.
 
@@ -200,10 +207,11 @@ def generate_config_file(
 
     Returns:
         Path: Path to the generated config file
+
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, 'w') as f:
+    with output_path.open("w") as f:
         json.dump(config_data, f, indent=2)
 
     return output_path
@@ -212,8 +220,8 @@ def generate_config_file(
 def generate_test_migration_config(
     output_dir: Path,
     jira_project_key: str = "TEST",
-    op_identifier: str = "test"
-) -> Tuple[Path, Dict[str, Any]]:
+    op_identifier: str = "test",
+) -> tuple[Path, dict[str, Any]]:
     """Generate a test migration configuration file.
 
     Args:
@@ -223,25 +231,26 @@ def generate_test_migration_config(
 
     Returns:
         Tuple[Path, Dict[str, Any]]: Path to the config file and the config data
+
     """
     config_data = {
         "jira": {
             "url": "https://jira-test.example.com",
             "username": "test-user",
             "password": "test-password",
-            "project_key": jira_project_key
+            "project_key": jira_project_key,
         },
         "openproject": {
             "url": "https://openproject-test.example.com",
             "api_token": "test-token",
-            "project_identifier": op_identifier
+            "project_identifier": op_identifier,
         },
         "migration": {
             "include_attachments": True,
             "include_comments": True,
             "map_users": True,
-            "default_user": "admin"
-        }
+            "default_user": "admin",
+        },
     }
 
     output_path = output_dir / "test_migration_config.json"
