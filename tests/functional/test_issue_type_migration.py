@@ -104,7 +104,7 @@ class TestIssueTypeMigration(unittest.TestCase):
         elif "work_package_types_created.json" in str(path):
             file_mock.read.return_value = json.dumps({
                 "created": [{"id": 3, "name": "Epic", "color": "#9B59B6"}],
-                "errors": []
+                "errors": [],
             })
         else:
             file_mock.read.return_value = "{}"

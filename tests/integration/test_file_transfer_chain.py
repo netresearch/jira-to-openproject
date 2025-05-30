@@ -36,10 +36,7 @@ def should_skip_tests() -> bool:
         return False
 
     # Check for required SSH environment variables
-    if not os.environ.get("J2O_OPENPROJECT_SERVER") or not os.environ.get("J2O_OPENPROJECT_USER"):
-        return True
-
-    return False
+    return bool(not os.environ.get("J2O_OPENPROJECT_SERVER") or not os.environ.get("J2O_OPENPROJECT_USER"))
 
 
 # Skip message for when tests can't be run
@@ -74,7 +71,8 @@ class MockSSHClient:
     def copy_file_to_remote(self, *args: Any, **kwargs: Any) -> None:
         """Mock copying a file to remote."""
         if not self.connected:
-            raise ValueError("Not connected")
+            msg = "Not connected"
+            raise ValueError(msg)
 
 
 class MockDockerClient:
@@ -98,7 +96,8 @@ class MockDockerClient:
     def copy_file_to_container(self, *args: Any, **kwargs: Any) -> None:
         """Mock copying a file to container."""
         if not self.connected:
-            raise ValueError("Not connected")
+            msg = "Not connected"
+            raise ValueError(msg)
 
     def check_file_exists_in_container(self, *args: Any, **kwargs: Any) -> bool:
         """Mock checking if file exists in container."""
@@ -335,22 +334,26 @@ class FileTransferChainTest(unittest.TestCase):
     def _requires_ssh(self) -> None:
         """Skip test if SSH is not connected."""
         if not self.__class__.ssh_connected:
-            raise unittest.SkipTest("Test requires SSH connection")
+            msg = "Test requires SSH connection"
+            raise unittest.SkipTest(msg)
 
     def _requires_docker(self) -> None:
         """Skip test if Docker is not connected."""
         if not self.__class__.docker_connected:
-            raise unittest.SkipTest("Test requires Docker connection")
+            msg = "Test requires Docker connection"
+            raise unittest.SkipTest(msg)
 
     def _requires_rails(self) -> None:
         """Skip test if Rails console is not connected."""
         if not self.__class__.rails_connected:
-            raise unittest.SkipTest("Test requires Rails console connection")
+            msg = "Test requires Rails console connection"
+            raise unittest.SkipTest(msg)
 
     def _requires_openproject(self) -> None:
         """Skip test if OpenProject client is not available."""
         if not self.__class__.op_client:
-            raise unittest.SkipTest("Test requires OpenProject client")
+            msg = "Test requires OpenProject client"
+            raise unittest.SkipTest(msg)
 
     @classmethod
     def _create_remote_directories(cls) -> None:
@@ -365,10 +368,10 @@ class FileTransferChainTest(unittest.TestCase):
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             # Submit tasks
             remote_dir_future = executor.submit(
-                cls._create_remote_directory, cls.remote_temp_dir
+                cls._create_remote_directory, cls.remote_temp_dir,
             )
             container_dir_future = executor.submit(
-                cls._create_container_directory, cls.container_temp_dir
+                cls._create_container_directory, cls.container_temp_dir,
             )
 
             # Wait for results
@@ -394,7 +397,8 @@ class FileTransferChainTest(unittest.TestCase):
             stdout, stderr, rc = cls.ssh_client.execute_command(f"test -d {remote_dir} && echo 'DIR_EXISTS'")
             print(f"Remote directory exists: {'DIR_EXISTS' in stdout}")
             if "DIR_EXISTS" not in stdout:
-                raise Exception(f"Failed to create remote directory: {remote_dir}")
+                msg = f"Failed to create remote directory: {remote_dir}"
+                raise RuntimeError(msg)
         except Exception as e:
             print(f"Error creating remote directory: {e!s}")
             raise
@@ -411,7 +415,8 @@ class FileTransferChainTest(unittest.TestCase):
             )
             print(f"Container directory exists: {'DIR_EXISTS' in stdout}")
             if "DIR_EXISTS" not in stdout:
-                raise Exception(f"Failed to create container directory: {container_dir}")
+                msg = f"Failed to create container directory: {container_dir}"
+                raise RuntimeError(msg)
         except Exception as e:
             print(f"Error creating container directory: {e!s}")
             raise
@@ -472,13 +477,13 @@ class FileTransferChainTest(unittest.TestCase):
     @functools.lru_cache(maxsize=20)
     def _get_cached_file_content(file_path: str) -> bytes:
         """Cache file content to avoid repeated disk reads."""
-        with open(file_path, 'rb') as f:
+        with Path(file_path).open("rb") as f:
             return f.read()
 
     def _create_and_transfer_test_file(
         self,
         content: str,
-        local_filename: str | None = None
+        local_filename: str | None = None,
     ) -> tuple[Path, str, str]:
         """Create and transfer a test file through the chain.
 
@@ -516,7 +521,8 @@ class FileTransferChainTest(unittest.TestCase):
         except Exception as e:
             print(f"Warning: Could not transfer file to remote: {e!s}")
             # Skip test if we can't transfer files
-            raise unittest.SkipTest(f"SSH file transfer failed: {e!s}")
+            msg = f"SSH file transfer failed: {e!s}"
+            raise unittest.SkipTest(msg) from e
 
         # Transfer to container
         container_file = f"{self.__class__.container_temp_dir}/{local_filename}"
@@ -544,7 +550,7 @@ class FileTransferChainTest(unittest.TestCase):
         if not any([
             self.__class__.ssh_connected,
             self.__class__.docker_connected,
-            self.__class__.rails_connected
+            self.__class__.rails_connected,
         ]):
             self.skipTest("All connections failed - see skip messages for details")
 
@@ -557,18 +563,15 @@ class FileTransferChainTest(unittest.TestCase):
 
             # Check ssh connection
             ssh_result = ssh_future.result()
-            self.assertEqual(ssh_result, self.__class__.ssh_connected,
-                             "SSH connection status doesn't match expected value")
+            assert ssh_result == self.__class__.ssh_connected, "SSH connection status doesn't match expected value"
 
             # Check docker connection
             docker_result = docker_future.result()
-            self.assertEqual(docker_result, self.__class__.docker_connected,
-                             "Docker connection status doesn't match expected value")
+            assert docker_result == self.__class__.docker_connected, "Docker connection status doesn't match expected value"
 
             # Check rails connection (optional)
             rails_result = rails_future.result()
-            self.assertEqual(rails_result, self.__class__.rails_connected,
-                             "Rails connection status doesn't match expected value")
+            assert rails_result == self.__class__.rails_connected, "Rails connection status doesn't match expected value"
 
     def _test_ssh_connection(self) -> bool:
         """Test SSH connection."""
@@ -620,7 +623,7 @@ class FileTransferChainTest(unittest.TestCase):
         # 2. Create and transfer the file through each step of the chain
         local_file, remote_file, container_file = self._create_and_transfer_test_file(
             content=test_content,
-            local_filename=filename
+            local_filename=filename,
         )
 
         # 3. Verify file at each stage
@@ -655,7 +658,7 @@ class FileTransferChainTest(unittest.TestCase):
                 if not content_match:
                     print(
                         f"Remote file content mismatch. "
-                        f"Expected: '{expected_content}', Got: '{stdout.strip()}'"
+                        f"Expected: '{expected_content}', Got: '{stdout.strip()}'",
                     )
                 return content_match
             except Exception as e:
@@ -681,7 +684,7 @@ class FileTransferChainTest(unittest.TestCase):
 
             # First check if file exists
             stdout, stderr, rc = self.__class__.docker_client.execute_command(
-                f"test -f {file_path} && echo 'FILE_EXISTS'"
+                f"test -f {file_path} && echo 'FILE_EXISTS'",
             )
             if "FILE_EXISTS" not in stdout:
                 print(f"Container file does not exist: {file_path}")
@@ -694,7 +697,7 @@ class FileTransferChainTest(unittest.TestCase):
                 if not content_match:
                     print(
                         f"Container file content mismatch. "
-                        f"Expected: '{expected_content}', Got: '{stdout.strip()}'"
+                        f"Expected: '{expected_content}', Got: '{stdout.strip()}'",
                     )
                 return content_match
             except Exception as e:
@@ -761,10 +764,7 @@ class FileTransferChainTest(unittest.TestCase):
             assert result is not None, "Script execution returned None"
 
             # The execute method returns a dict with 'result' key when it can't parse as JSON
-            if isinstance(result, dict) and 'result' in result:
-                result_str = str(result['result'])
-            else:
-                result_str = str(result)
+            result_str = str(result["result"]) if isinstance(result, dict) and "result" in result else str(result)
 
             assert f"test_value: {test_value}" in result_str, f"Script did not return expected test value: {test_value}"
             assert 'message: "Script executed successfully"' in result_str, "Script did not return expected message"
@@ -821,7 +821,7 @@ class FileTransferChainTest(unittest.TestCase):
                     self.fail(f"Parallel file transfer failed: {e!s}")
 
         # 3. Verify all files one by one (parallel verification is already tested)
-        for remote_file, filename, content in remote_results:
+        for remote_file, _filename, content in remote_results:
             assert self._verify_remote_file(remote_file, content), \
                 f"Parallel file verification failed for: {remote_file}"
 

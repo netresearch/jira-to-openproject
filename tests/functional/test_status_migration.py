@@ -3,7 +3,6 @@
 This module contains test cases for validating the status migration from Jira to OpenProject.
 """
 
-import os
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -74,7 +73,7 @@ class TestStatusMigration(unittest.TestCase):
         # Initialize the migration with the mocked clients
         self.status_migration = StatusMigration(
             jira_client=self.jira_client,
-            op_client=self.op_client
+            op_client=self.op_client,
         )
 
     def tearDown(self) -> None:

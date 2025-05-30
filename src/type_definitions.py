@@ -1,6 +1,12 @@
+"""Type definitions for Jira to OpenProject migration.
+
+This module contains data classes and type definitions used throughout
+the migration process.
+"""
+
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 type JiraData = dict[str, Any]
 type OpenProjectData = dict[str, Any]
@@ -11,6 +17,8 @@ type StatusMapping = dict[str, int]
 
 @dataclass(slots=True)
 class JiraIssueType:
+    """Represents a Jira issue type."""
+
     id: str
     name: str
     description: str | None = None
@@ -18,30 +26,38 @@ class JiraIssueType:
 
 @dataclass(slots=True)
 class OpenProjectWorkPackageType:
+    """Represents an OpenProject work package type."""
+
     name: str
     color: str = "#0000FF"
-    is_milestone: bool = False
     is_default: bool = False
+    is_milestone: bool = False
     position: int = 1
-    is_in_roadmap: bool = True
-    jira_id: str | None = None
-    description: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 @dataclass(slots=True)
 class JiraStatus:
+    """Represents a Jira status."""
+
     id: str
     name: str
-    description: str | None = None
+    statusCategory: dict[str, str] | None = None
 
 
 @dataclass(slots=True)
 class OpenProjectStatus:
+    """Represents an OpenProject status."""
+
     name: str
     description: str | None = None
-    is_closed: bool = False
     color: str = "#0000FF"
-    jira_id: str | None = None
+    is_closed: bool = False
+    is_default: bool = False
+    is_readonly: bool = False
+    default_done_ratio: int | None = None
+    position: int = 1
 
 
 type ConfigValue = str | int | bool | dict[str, Any] | list[Any]
@@ -50,12 +66,15 @@ type ConfigDict = dict[str, dict[str, ConfigValue]]
 
 
 class OpenProjectConfig(TypedDict, total=False):
+    """Configuration for OpenProject connection."""
+
     url: str
     server: str
-    user: str
-    container: str
-    tmux_session_name: str
-    rails_path: str
+    port: NotRequired[int]
+    user: NotRequired[str]
+    container_name: NotRequired[str]
+    project_path: NotRequired[str]
+    api_key: NotRequired[str]
 
 
 class JiraConfig(TypedDict):

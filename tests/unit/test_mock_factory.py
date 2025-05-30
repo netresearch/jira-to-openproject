@@ -135,7 +135,7 @@ def test_create_mock_openproject_project_default() -> None:
 def test_create_mock_openproject_project_custom() -> None:
     """Test creating a mock OpenProject project with custom values."""
     project = create_mock_openproject_project(
-        id=100,
+        project_id=100,
         name="Custom Project",
         identifier="custom-project",
         description="Custom description",

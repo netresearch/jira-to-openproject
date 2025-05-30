@@ -188,7 +188,7 @@ class TestOpenProjectClient(unittest.TestCase):
         with patch.object(
             self.op_client.rails_client,
             "_send_command_to_tmux",
-            return_value=expected_result
+            return_value=expected_result,
         ) as mock_send_command:
             # Execute a query (which now directly calls _send_command_to_tmux)
             result = self.op_client.execute_query("puts 'test'")
@@ -203,7 +203,7 @@ class TestOpenProjectClient(unittest.TestCase):
         """Test script execution failing during SSH transfer."""
         # Mock the rails_client._send_command_to_tmux to throw a CommandExecutionError
         self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError(
-            "SSH transfer failed: Connection refused"
+            "SSH transfer failed: Connection refused",
         )
 
         # Execute the test with expected exception
@@ -217,7 +217,7 @@ class TestOpenProjectClient(unittest.TestCase):
         """Test script execution failing during Docker transfer."""
         # Mock the rails_client._send_command_to_tmux to throw a CommandExecutionError
         self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError(
-            "Failed to copy script to container"
+            "Failed to copy script to container",
         )
 
         # Execute the test with expected exception

@@ -3,7 +3,6 @@ Handles the migration of issues from Jira to work packages in OpenProject.
 """
 
 import json
-import os
 import re
 import shutil
 from datetime import UTC, datetime
@@ -240,7 +239,7 @@ class WorkPackageMigration(BaseMigration):
                     )
                 )
                 try:
-                    with open(backup_path, "w") as f:
+                    with backup_path.open("w") as f:
                         json.dump(all_issues, f, indent=2)
                     self.logger.info(
                         f"Saved backup of issues to {backup_path}",
@@ -316,10 +315,11 @@ class WorkPackageMigration(BaseMigration):
                     self.logger.exception("Failed to fetch watchers for issue %s: %s", jira_issue.key, e)
 
         # Extract custom fields
-        custom_fields = {}
-        for field_name, field_value in jira_issue.raw.get("fields", {}).items():
-            if field_name.startswith("customfield_") and field_value is not None:
-                custom_fields[field_name] = field_value
+        custom_fields = {
+            field_name: field_value
+            for field_name, field_value in jira_issue.raw.get("fields", {}).items()
+            if field_name.startswith("customfield_") and field_value is not None
+        }
 
         subject = jira_issue.fields.summary
         description = getattr(jira_issue.fields, "description", "") or ""
@@ -457,6 +457,7 @@ class WorkPackageMigration(BaseMigration):
 
     def prepare_work_package(self, jira_issue: dict[str, Any], project_id: int) -> dict[str, Any]:
         """Prepare a work package object from a Jira issue (without creating it).
+
         Public method that calls the internal _prepare_work_package method.
 
         Args:
@@ -542,7 +543,7 @@ class WorkPackageMigration(BaseMigration):
         mapping_file = Path(self.data_dir) / "custom_field_mapping.json"
         if Path(mapping_file).exists():
             try:
-                with open(mapping_file) as f:
+                with Path(mapping_file).open() as f:
                     return json.load(f)
             except Exception as e:
                 self.logger.warning(
@@ -551,7 +552,7 @@ class WorkPackageMigration(BaseMigration):
 
         return {}
 
-    def _process_custom_field_value(self, value: Any, field_type: str) -> Any:
+    def _process_custom_field_value(self, value: Any, field_type: str) -> Any:  # noqa: PLR0911
         """Process a custom field value based on its type.
 
         Args:
@@ -582,7 +583,7 @@ class WorkPackageMigration(BaseMigration):
                     # Try parsing various formats
                     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
                         try:
-                            date_obj = datetime.strptime(value, fmt)
+                            date_obj = datetime.strptime(value, fmt).replace(tzinfo=UTC)
                             return date_obj.strftime("%Y-%m-%d")
                         except ValueError:
                             continue
@@ -663,7 +664,7 @@ class WorkPackageMigration(BaseMigration):
 
         if Path(migration_state_file).exists():
             try:
-                with open(migration_state_file) as f:
+                with Path(migration_state_file).open() as f:
                     migration_state = json.load(f)
                     processed_projects = set(migration_state.get("processed_projects", []))
                     last_processed_project = migration_state.get("last_processed_project")
@@ -717,7 +718,7 @@ class WorkPackageMigration(BaseMigration):
 
                 # Update the state file at the start of each project processing
                 try:
-                    with open(migration_state_file, "w") as f:
+                    with Path(migration_state_file).open("w") as f:
                         json.dump(
                             {
                                 "processed_projects": list(processed_projects),
@@ -734,7 +735,7 @@ class WorkPackageMigration(BaseMigration):
                     # Try alternate location if main save fails
                     try:
                         alt_file = f"{migration_state_file}.latest"
-                        with open(alt_file, "w") as f:
+                        with Path(alt_file).open("w") as f:
                             json.dump(
                                 {
                                     "processed_projects": list(processed_projects),
@@ -1027,7 +1028,7 @@ class WorkPackageMigration(BaseMigration):
                     wp.update(wp_copy)
 
                 # Write the JSON file
-                with open(temp_file_path, "w") as f:
+                with temp_file_path.open("w") as f:
                     json.dump(work_packages_data, f, indent=2)
 
                 # Define the path for the file inside the container
@@ -1273,7 +1274,7 @@ class WorkPackageMigration(BaseMigration):
                  """
 
                 # Save the Ruby script for debugging
-                with open(debug_script_path, "w") as f:
+                with debug_script_path.open("w") as f:
                     f.write(header_script + main_script)
                 self.logger.info(
                     f"Saved debug copy of Ruby script to {debug_script_path}",
@@ -1345,7 +1346,7 @@ class WorkPackageMigration(BaseMigration):
                             f"Saved debug copy of result file to {debug_result_path}",
                         )
 
-                        with open(result_file_local) as f:
+                        with result_file_local.open() as f:
                             result_data = json.load(f)
 
                             if result_data.get("status") == "success":
@@ -1412,7 +1413,7 @@ class WorkPackageMigration(BaseMigration):
 
         # Save final migration state
         try:
-            with open(migration_state_file, "w") as f:
+            with Path(migration_state_file).open("w") as f:
                 json.dump(
                     {
                         "processed_projects": list(processed_projects),
@@ -1443,7 +1444,7 @@ class WorkPackageMigration(BaseMigration):
 
         if not self.work_package_mapping:
             try:
-                with open(Path(self.data_dir) / "work_package_mapping.json") as f:
+                with (Path(self.data_dir) / "work_package_mapping.json").open() as f:
                     self.work_package_mapping = json.load(f)
             except Exception as e:
                 self.logger.exception(
@@ -1462,7 +1463,7 @@ class WorkPackageMigration(BaseMigration):
 
         # Count issues by project
         projects_count = {}
-        for wp_id, wp_data in self.work_package_mapping.items():
+        for _wp_id, wp_data in self.work_package_mapping.items():
             jira_key = wp_data.get("jira_key", "")
             if jira_key:
                 project_key = jira_key.split("-")[0]
@@ -1543,7 +1544,7 @@ class WorkPackageMigration(BaseMigration):
             "potential_issues": potential_issues,
         }
 
-    def _save_to_json(self, data: Any, filename: str):
+    def _save_to_json(self, data: Any, filename: str) -> None:
         """Save data to a JSON file in the data directory.
 
         Args:
@@ -1650,7 +1651,7 @@ class WorkPackageMigration(BaseMigration):
 
                 # Create the var/data directory if it doesn't exist
                 if not Path(self.data_dir).exists():
-                    os.makedirs(self.data_dir, exist_ok=True)
+                    Path(self.data_dir).mkdir(parents=True, exist_ok=True)
 
                 # Record the warning in a migration issues file
                 issues_file = Path(self.data_dir) / "migration_issues.json"
@@ -1658,7 +1659,7 @@ class WorkPackageMigration(BaseMigration):
 
                 if Path(issues_file).exists():
                     try:
-                        with open(issues_file) as f:
+                        with Path(issues_file).open() as f:
                             issues_data = json.load(f)
                     except Exception as e:
                         self.logger.warning(
@@ -1680,7 +1681,7 @@ class WorkPackageMigration(BaseMigration):
                 )
 
                 try:
-                    with open(issues_file, "w") as f:
+                    with Path(issues_file).open("w") as f:
                         json.dump(issues_data, f, indent=2)
                 except Exception as e:
                     self.logger.warning(
@@ -1701,7 +1702,7 @@ class WorkPackageMigration(BaseMigration):
 
                 if Path(issues_file).exists():
                     try:
-                        with open(issues_file) as f:
+                        with Path(issues_file).open() as f:
                             issues_data = json.load(f)
                     except Exception as read_err:
                         self.logger.warning(
@@ -1724,7 +1725,7 @@ class WorkPackageMigration(BaseMigration):
                 )
 
                 try:
-                    with open(issues_file, "w") as f:
+                    with Path(issues_file).open("w") as f:
                         json.dump(issues_data, f, indent=2)
                 except Exception as write_err:
                     self.logger.warning(
@@ -1780,7 +1781,7 @@ class WorkPackageMigration(BaseMigration):
             # Try to save error information
             try:
                 error_file = Path(self.data_dir) / "migration_error.json"
-                with open(error_file, "w") as f:
+                with error_file.open("w") as f:
                     json.dump(
                         {
                             "component": "work_package_migration",
@@ -1829,7 +1830,7 @@ class WorkPackageMigration(BaseMigration):
             else:
                 self.logger.info("  - %s", field_value)
 
-    def _collect_missing_custom_field_values(self, work_packages_data):
+    def _collect_missing_custom_field_values(self, work_packages_data: list[dict[str, Any]]) -> dict[str, set[str]]:
         """Collect custom field values from work packages that might need to be added to OpenProject.
 
         Args:
@@ -1967,7 +1968,7 @@ class WorkPackageMigration(BaseMigration):
 
         return result
 
-    def _update_custom_field_allowed_values(self, missing_values):
+    def _update_custom_field_allowed_values(self, missing_values: dict[str, set[str]]) -> bool:
         """Update OpenProject custom fields with missing values.
 
         Args:
@@ -2111,11 +2112,11 @@ class WorkPackageMigration(BaseMigration):
 
         return all_success
 
-    def _format_values_list(self, values):
+    def _format_values_list(self, values: set[str]) -> str:
         """Format a list of values for logging.
 
         Args:
-            values: List of values to format
+            values: Set of values to format
 
         Returns:
             Formatted string of values
@@ -2132,6 +2133,7 @@ class WorkPackageMigration(BaseMigration):
 
     def migrate_work_packages(self) -> dict[str, Any]:
         """Migrate work packages from Jira to OpenProject.
+
         Public method that calls the internal _migrate_work_packages method.
 
         Returns:

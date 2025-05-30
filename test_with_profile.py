@@ -29,23 +29,19 @@ def load_environment_configuration() -> None:
     """
     # Always load base configuration
     load_dotenv(".env")
-    print("Loaded base environment from .env")
 
     # In test mode, load both .env.local and .env.test
     # with test having higher precedence
     if Path(".env.local").exists():
         load_dotenv(".env.local", override=True)
-        print("Loaded local overrides from .env.local")
 
     # Always load .env.test for testing
     if Path(".env.test").exists():
         load_dotenv(".env.test", override=True)
-        print("Loaded test environment from .env.test")
 
     # Load test-specific local overrides if they exist
     if Path(".env.test.local").exists():
         load_dotenv(".env.test.local", override=True)
-        print("Loaded local test overrides from .env.test.local")
 
 
 # Load environment configuration
@@ -60,22 +56,19 @@ def set_default_env(key: str, default: str) -> None:
     """Set default value for environment variable if not already set."""
     if key not in os.environ:
         os.environ[key] = default
-        print(f"Set default for {key}: {default}")
 
 
 # Force mock mode to avoid actual network connections
 if "J2O_TEST_MOCK_MODE" not in os.environ:
     os.environ["J2O_TEST_MOCK_MODE"] = "true"
-    print("Enabling mock mode for testing")
 
 
 @contextmanager
-def timing(description: str) -> Generator[None, None, None]:
+def timing(_description: str) -> Generator[None, None, None]:
     """Context manager for timing code blocks."""
     start = time.time()
     yield
-    elapsed = time.time() - start
-    print(f"{description}: {elapsed:.3f} seconds")
+    time.time() - start
 
 
 def run_tests_with_profiling() -> None:
@@ -97,22 +90,17 @@ def run_tests_with_profiling() -> None:
         profile.disable()
 
     # Print profiling stats sorted by cumulative time
-    print("\n=== Profiling Results ===")
     s = io.StringIO()
     ps = pstats.Stats(profile, stream=s).sort_stats("cumulative")
     ps.print_stats(30)  # Print top 30 functions by cumulative time
-    print(s.getvalue())
 
     # Print profiling stats sorted by total time
-    print("\n=== Profiling Results (Sorted by Total Time) ===")
     s = io.StringIO()
     ps = pstats.Stats(profile, stream=s).sort_stats("time")
     ps.print_stats(30)  # Print top 30 functions by total time
-    print(s.getvalue())
 
     # Save profiling results to file
     ps.dump_stats("profile_results.prof")
-    print("Full profiling stats saved to 'profile_results.prof'")
 
 
 if __name__ == "__main__":

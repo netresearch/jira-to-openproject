@@ -660,7 +660,7 @@ class IssueTypeMigration(BaseMigration):
 
         # Create a temporary JSON file to store the types
         temp_file = self.data_dir / "work_package_types_to_create.json"
-        with open(temp_file, "w") as f:
+        with temp_file.open("w") as f:
             json.dump(types_to_create, f, indent=2)
 
         self.logger.info("Saved %s work package types to create to %s", len(types_to_create), temp_file)
@@ -854,7 +854,7 @@ class IssueTypeMigration(BaseMigration):
                 self.logger.debug("Rails console output: %s", output)
                 return False
 
-            with open(results_file) as f:
+            with results_file.open() as f:
                 result_content = f.read()
                 if not result_content.strip():
                     self.logger.error("Results file %s is empty", results_file)
@@ -1038,7 +1038,7 @@ class IssueTypeMigration(BaseMigration):
         filepath = self.data_dir / filename
         if filepath.exists():
             try:
-                with open(filepath) as f:
+                with filepath.open() as f:
                     return json.load(f)
             except Exception as e:
                 self.logger.warning("Failed to load %s: %s", filepath, e)

@@ -11,7 +11,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from rich.console import Console
 
@@ -23,7 +23,6 @@ from src.clients.rails_console_client import RailsConsoleClient
 from src.clients.ssh_client import SSHClient
 from src.mappings.mappings import Mappings
 from src.migrations.account_migration import AccountMigration
-from src.migrations.base_migration import BaseMigration
 from src.migrations.company_migration import CompanyMigration
 from src.migrations.custom_field_migration import CustomFieldMigration
 from src.migrations.issue_type_migration import IssueTypeMigration
@@ -33,8 +32,11 @@ from src.migrations.status_migration import StatusMigration
 from src.migrations.user_migration import UserMigration
 from src.migrations.work_package_migration import WorkPackageMigration
 from src.models import ComponentResult, MigrationResult
-from src.types import BackupDir, ComponentName
+from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler
+
+if TYPE_CHECKING:
+    from src.migrations.base_migration import BaseMigration
 
 console = Console()
 
@@ -230,7 +232,7 @@ def run_migration(
         )
 
         # 2. Next, create the Docker client using the SSH client
-        docker_client = DockerClient(
+        DockerClient(
             container_name=str(
                 config.openproject_config.get(
                     "container_name",
@@ -241,7 +243,7 @@ def run_migration(
         )
 
         # 3. Create the Rails console client
-        rails_client = RailsConsoleClient(
+        RailsConsoleClient(
             tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console"),
         )
 
@@ -427,12 +429,11 @@ def run_migration(
                 component_result_data = results.components
                 current_component_result = component_result_data.get(component_name, ComponentResult())
                 current_component_status = current_component_result.details.get("status")
-                if current_component_status == "failed":
-                    if component_name in ["users", "projects"]:
-                        config.logger.error(
-                            f"Critical component '{component_name}' failed, aborting migration",
-                        )
-                        break
+                if current_component_status == "failed" and component_name in ["users", "projects"]:
+                    config.logger.error(
+                        f"Critical component '{component_name}' failed, aborting migration",
+                    )
+                    break
 
         except KeyboardInterrupt:
             # Handle user interruption at the top level
@@ -632,7 +633,7 @@ def main() -> None:
                 key_file=config.openproject_config.get("key_file", None),
             )
 
-            docker_client = DockerClient(
+            DockerClient(
                 container_name=str(
                     config.openproject_config.get(
                         "container_name",
@@ -642,7 +643,7 @@ def main() -> None:
                 ssh_client=ssh_client,
             )
 
-            rails_client = RailsConsoleClient(
+            RailsConsoleClient(
                 tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console"),
             )
 

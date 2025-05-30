@@ -73,9 +73,9 @@ class StatusMigration(BaseMigration):
 
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
-        self.jira_statuses = self._load_from_json("jira_statuses.json", [])
-        self.jira_status_categories = self._load_from_json("jira_status_categories.json", [])
-        self.op_statuses = self._load_from_json("op_statuses.json", [])
+        self.jira_statuses = self._load_from_json(Path("jira_statuses.json"), [])
+        self.jira_status_categories = self._load_from_json(Path("jira_status_categories.json"), [])
+        self.op_statuses = self._load_from_json(Path("op_statuses.json"), [])
 
         logger.info("Loaded %s Jira statuses", len(self.jira_statuses))
         logger.info("Loaded %s Jira status categories", len(self.jira_status_categories))
@@ -88,11 +88,11 @@ class StatusMigration(BaseMigration):
             List of Jira status dictionaries
 
         """
-        statuses_file = Path(self.data_dir) / "jira_statuses.json"
+        statuses_file = self.data_dir / "jira_statuses.json"
 
-        if Path(statuses_file).exists() and not config.migration_config.get("force", False):
+        if statuses_file.exists() and not config.migration_config.get("force", False):
             logger.info("Jira statuses data already exists, skipping extraction (use --force to override)")
-            with open(statuses_file) as f:
+            with statuses_file.open() as f:
                 self.jira_statuses = json.load(f)
             return self.jira_statuses
 
@@ -129,11 +129,11 @@ class StatusMigration(BaseMigration):
             List of Jira status category dictionaries
 
         """
-        categories_file = Path(self.data_dir) / "jira_status_categories.json"
+        categories_file = self.data_dir / "jira_status_categories.json"
 
-        if Path(categories_file).exists() and not config.migration_config.get("force", False):
+        if categories_file.exists() and not config.migration_config.get("force", False):
             logger.info("Jira status categories data already exists, skipping extraction (use --force to override)")
-            with open(categories_file) as f:
+            with categories_file.open() as f:
                 self.jira_status_categories = json.load(f)
             return self.jira_status_categories
 
@@ -162,11 +162,11 @@ class StatusMigration(BaseMigration):
             List of OpenProject status dictionaries
 
         """
-        statuses_file = Path(self.data_dir) / "op_statuses.json"
+        statuses_file = self.data_dir / "op_statuses.json"
 
-        if Path(statuses_file).exists() and not config.migration_config.get("force", False):
+        if statuses_file.exists() and not config.migration_config.get("force", False):
             logger.info("OpenProject statuses data already exists, skipping extraction (use --force to override)")
-            with open(statuses_file) as f:
+            with statuses_file.open() as f:
                 self.op_statuses = json.load(f)
             return self.op_statuses
 
@@ -372,11 +372,11 @@ class StatusMigration(BaseMigration):
             Dictionary mapping Jira status names to OpenProject status IDs
 
         """
-        mapping_file = Path(self.data_dir) / "status_mapping.json"
+        mapping_file = self.data_dir / "status_mapping.json"
 
-        if Path(mapping_file).exists() and not config.migration_config.get("force", False):
+        if mapping_file.exists() and not config.migration_config.get("force", False):
             logger.info("Status mapping already exists, loading from file (use --force to recreate)")
-            with open(mapping_file) as f:
+            with mapping_file.open() as f:
                 self.status_mapping = json.load(f)
             return self.status_mapping
 
@@ -643,7 +643,7 @@ class StatusMigration(BaseMigration):
         logger.info("Analyzing status mapping...")
 
         if not self.status_mapping:
-            self.status_mapping = self._load_from_json("status_mapping.json", {})
+            self.status_mapping = self._load_from_json(Path("status_mapping.json"), {})
 
         if not self.status_mapping:
             return {

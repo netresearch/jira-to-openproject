@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Setup script for the Jira to OpenProject migration tool."""
 
+from pathlib import Path
 from setuptools import find_packages, setup
 
 # Read requirements from requirements.txt file
-with open("requirements.txt") as f:
+with Path("requirements.txt").open() as f:
     requirements = f.read().splitlines()
 
 # Remove any comments or blank lines from requirements

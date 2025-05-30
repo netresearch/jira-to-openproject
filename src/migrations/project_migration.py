@@ -369,7 +369,7 @@ class ProjectMigration(BaseMigration):
 
         # Write projects data to a temp file
         temp_file_path = Path(self.data_dir) / "projects_data.json"
-        with open(temp_file_path, "w") as f:
+        with temp_file_path.open("w") as f:
             json.dump(projects_data, f, indent=2)
 
         # Transfer file to the container
@@ -577,7 +577,7 @@ class ProjectMigration(BaseMigration):
 
             if self.op_client.rails_client.transfer_file_from_container(result_file_container, result_file_local):
                 try:
-                    with open(result_file_local) as f:
+                    with result_file_local.open() as f:
                         result_data = json.load(f)
                         if result_data.get("status") == "success":
                             created_projects = result_data.get("created", [])
@@ -636,7 +636,7 @@ class ProjectMigration(BaseMigration):
         if not self.project_mapping:
             mapping_file = Path(self.data_dir) / Mappings.PROJECT_MAPPING_FILE
             if mapping_file.exists():
-                with open(mapping_file) as f:
+                with mapping_file.open() as f:
                     self.project_mapping = json.load(f)
             else:
                 logger.error("No project mapping found. Run bulk_migrate_projects() first.")

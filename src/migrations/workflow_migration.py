@@ -72,7 +72,7 @@ class WorkflowMigration:
         """
         try:
             url = f"{self.jira_client.base_url}/rest/api/2/workflow"
-            response = self.jira_client.jira._session.get(url)
+            response = self.jira_client.jira._session.get(url)  # noqa: SLF001
             response.raise_for_status()
             workflows = response.json()
 
@@ -81,7 +81,7 @@ class WorkflowMigration:
                 url = f"{self.jira_client.base_url}/rest/api/2/workflow/{workflow_name}/transitions"
 
                 try:
-                    response = self.jira_client.jira._session.get(url)
+                    response = self.jira_client.jira._session.get(url)  # noqa: SLF001
                     response.raise_for_status()
                     transitions = response.json()
                     workflow["transitions"] = transitions
@@ -107,7 +107,7 @@ class WorkflowMigration:
 
         try:
             url = f"{self.jira_client.base_url}/rest/api/2/status"
-            response = self.jira_client.jira._session.get(url)
+            response = self.jira_client.jira._session.get(url)  # noqa: SLF001
             response.raise_for_status()
             statuses = response.json()
 
@@ -263,9 +263,9 @@ class WorkflowMigration:
             if result.get("success", False):
                 logger.info("Successfully created status: %s.", name)
             else:
-                message = "Failed to create status: %s - %s." % (name, result.get("message", "Unknown error"))
+                message = "Failed to create status: {} - {}.".format(name, result.get("message", "Unknown error"))
                 logger.error(message)
-                raise Exception(message)
+                raise RuntimeError(message)
         except Exception:
             logger.exception("Error creating status %s.", name)
             raise
@@ -374,6 +374,6 @@ class WorkflowMigration:
 
         """
         filepath = Path(self.data_dir) / filename
-        with open(filepath, "w") as f:
+        with filepath.open("w") as f:
             json.dump(data, f, indent=2)
         logger.info("Saved data to %s", filepath)

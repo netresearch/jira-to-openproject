@@ -8,7 +8,7 @@ class MigrationError(Exception):
     that prevents it from continuing execution.
     """
 
-    def __init__(self, message: str, *args, **kwargs) -> None:
+    def __init__(self, message: str, *args: object, **kwargs: object) -> None:
         """Initialize the exception with a descriptive message.
 
         Args:

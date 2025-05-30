@@ -1,10 +1,10 @@
 """Custom assertion helpers for testing."""
 
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 
-def assert_projects_equivalent(op_project: Dict[str, Any], jira_project: Dict[str, Any]) -> None:
+def assert_projects_equivalent(op_project: dict[str, Any], jira_project: dict[str, Any]) -> None:
     """Assert that an OpenProject project correctly represents a Jira project.
 
     Args:
@@ -13,6 +13,7 @@ def assert_projects_equivalent(op_project: Dict[str, Any], jira_project: Dict[st
 
     Raises:
         AssertionError: If projects are not equivalent
+
     """
     assert op_project["name"] == jira_project["name"]
     assert op_project["identifier"].lower() == jira_project["key"].lower()
@@ -20,8 +21,8 @@ def assert_projects_equivalent(op_project: Dict[str, Any], jira_project: Dict[st
 
 
 def assert_work_package_equivalent(
-    work_package: Dict[str, Any],
-    jira_issue: Dict[str, Any]
+    work_package: dict[str, Any],
+    jira_issue: dict[str, Any],
 ) -> None:
     """Assert that an OpenProject work package correctly represents a Jira issue.
 
@@ -31,6 +32,7 @@ def assert_work_package_equivalent(
 
     Raises:
         AssertionError: If the work package does not match the issue
+
     """
     assert work_package["subject"] == jira_issue["fields"]["summary"]
     assert work_package["description"]["raw"] is not None
@@ -52,6 +54,7 @@ def assert_file_exists(path: str) -> None:
 
     Raises:
         AssertionError: If the file does not exist
+
     """
     assert os.path.exists(path), f"File does not exist: {path}"
     assert os.path.isfile(path), f"Path exists but is not a file: {path}"
@@ -65,6 +68,7 @@ def assert_dir_exists(path: str) -> None:
 
     Raises:
         AssertionError: If the directory does not exist
+
     """
     assert os.path.exists(path), f"Directory does not exist: {path}"
     assert os.path.isdir(path), f"Path exists but is not a directory: {path}"
@@ -78,12 +82,13 @@ def assert_file_not_empty(path: str) -> None:
 
     Raises:
         AssertionError: If the file does not exist or is empty
+
     """
     assert_file_exists(path)
     assert os.path.getsize(path) > 0, f"File exists but is empty: {path}"
 
 
-def assert_dict_subset(subset: Dict[str, Any], full_dict: Dict[str, Any]) -> None:
+def assert_dict_subset(subset: dict[str, Any], full_dict: dict[str, Any]) -> None:
     """Assert that all key-value pairs in subset exist in full_dict.
 
     Args:
@@ -92,6 +97,7 @@ def assert_dict_subset(subset: Dict[str, Any], full_dict: Dict[str, Any]) -> Non
 
     Raises:
         AssertionError: If any key-value pair from subset is not in full_dict
+
     """
     for key, value in subset.items():
         assert key in full_dict, f"Key '{key}' not found in dictionary"
@@ -103,7 +109,7 @@ def assert_dict_subset(subset: Dict[str, Any], full_dict: Dict[str, Any]) -> Non
             assert full_dict[key] == value, f"Value mismatch for key '{key}'"
 
 
-def assert_lists_equal_unordered(list1: List[Any], list2: List[Any]) -> None:
+def assert_lists_equal_unordered(list1: list[Any], list2: list[Any]) -> None:
     """Assert that two lists contain the same elements, regardless of order.
 
     Args:
@@ -112,6 +118,7 @@ def assert_lists_equal_unordered(list1: List[Any], list2: List[Any]) -> None:
 
     Raises:
         AssertionError: If lists don't contain the same elements
+
     """
     assert len(list1) == len(list2), f"Lists have different lengths: {len(list1)} vs {len(list2)}"
 
@@ -126,7 +133,7 @@ def assert_lists_equal_unordered(list1: List[Any], list2: List[Any]) -> None:
             assert item in list1, f"Item {item} not found in first list"
 
 
-def assert_migration_complete(migration_result: Dict[str, Any]) -> None:
+def assert_migration_complete(migration_result: dict[str, Any]) -> None:
     """Assert that a migration completed successfully.
 
     Args:
@@ -134,6 +141,7 @@ def assert_migration_complete(migration_result: Dict[str, Any]) -> None:
 
     Raises:
         AssertionError: If the migration did not complete successfully
+
     """
     assert migration_result["success"] is True, f"Migration failed: {migration_result.get('error', 'Unknown error')}"
     assert "error" not in migration_result, f"Migration had errors: {migration_result.get('error')}"

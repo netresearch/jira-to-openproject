@@ -6,10 +6,11 @@ by looking for specific markers in the output.
 """
 
 import json
+from pathlib import Path
 import sys
 
 
-def extract_json(input_file: str, output_file: str) -> bool:
+def extract_json(input_file: Path, output_file: Path) -> bool:
     """Extract JSON from raw tmux output.
 
     Args:
@@ -21,7 +22,7 @@ def extract_json(input_file: str, output_file: str) -> bool:
 
     """
     # Read the raw output file
-    with open(input_file) as f:
+    with input_file.open() as f:
         content = f.read()
 
     # First find the line numbers where json_output is printed
@@ -65,7 +66,7 @@ def extract_json(input_file: str, output_file: str) -> bool:
             print(f"Successfully parsed JSON with {len(data)} records")
 
             # Save to output file
-            with open(output_file, "w") as f:
+            with output_file.open("w") as f:
                 json.dump(data, f, indent=2)
 
             print(f"Saved JSON data to {output_file}")
@@ -94,8 +95,8 @@ def main() -> int:
         print("Usage: python extract_json.py <input_file> <output_file>")
         return 1
 
-    input_file = sys.argv[1]
-    output_file = sys.argv[2]
+    input_file = Path(sys.argv[1])
+    output_file = Path(sys.argv[2])
 
     success = extract_json(input_file, output_file)
     return 0 if success else 1

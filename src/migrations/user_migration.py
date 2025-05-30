@@ -293,10 +293,7 @@ class UserMigration(BaseMigration):
                         result = json.loads(result_str[0])
                     except json.JSONDecodeError:
                         # If standard parsing fails, attempt to extract a JSON-like structure
-                        if not isinstance(result_str, str):
-                            result_str_safe = str(result_str)  # Ensure it's a string
-                        else:
-                            result_str_safe = result_str
+                        result_str_safe = str(result_str) if not isinstance(result_str, str) else result_str
 
                         match = re.search(r"\{.*\}", result_str_safe, re.DOTALL)
                         if match:
@@ -453,7 +450,7 @@ class UserMigration(BaseMigration):
 
             # Create missing users if configured
             create_missing = config.get_value(
-                "migration", "create_missing_users", False,
+                "migration", "create_missing_users", default=False,
             )
             creation_results: dict[str, Any] = {}
             if create_missing:

@@ -210,11 +210,11 @@ class OpenProjectClient:
         except OSError:
             error_msg = f"Failed to create script file: {file_path!s}"
             logger.exception(error_msg)
-            raise OSError(error_msg)
+            raise OSError(error_msg) from None
         except Exception:
             error_msg = f"Failed to create script file: {file_path!s}"
             logger.exception(error_msg)
-            raise OSError(error_msg)
+            raise OSError(error_msg) from None
 
     def _transfer_rails_script(self, local_path: Path | str) -> Path:
         """Transfer a script to the Rails environment.
@@ -929,7 +929,7 @@ end
                     return int(result)
                 except ValueError:
                     msg = f"Invalid ID format: {result}"
-                    raise QueryExecutionError(msg)
+                    raise QueryExecutionError(msg) from None
 
             msg = f"Unexpected result type: {type(result)}"
             raise QueryExecutionError(msg)

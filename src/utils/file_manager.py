@@ -14,7 +14,7 @@ import shutil
 import string
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from src import config
 
@@ -56,10 +56,7 @@ class FileRegistry:
             category: Optional category, if None searches all categories
 
         """
-        if category and category in self._files:
-            categories = [category]
-        else:
-            categories = list(self._files.keys())
+        categories = [category] if category and category in self._files else list(self._files.keys())
 
         for cat in categories:
             if file_path in self._files[cat]:
@@ -139,7 +136,7 @@ class FileManager:
     # Singleton instance
     _instance: FileManager | None = None
 
-    def __new__(cls, *args: object, **kwargs: object) -> FileManager:
+    def __new__(cls, *_args: object, **_kwargs: object) -> Self:
         """Create a singleton instance of the FileManager."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -218,10 +215,7 @@ class FileManager:
 
         """
         session_id = self.generate_unique_id()
-        if name:
-            session_dir = f"{name}_{session_id}"
-        else:
-            session_dir = session_id
+        session_dir = f"{name}_{session_id}" if name else session_id
 
         debug_dir = Path(self.debug_dir) / session_dir
         debug_dir.mkdir(parents=True, exist_ok=True)
@@ -277,7 +271,7 @@ class FileManager:
 
         try:
             # Write the content based on the type
-            with open(file_path, "w", encoding="utf-8") as f:
+            with file_path.open("w", encoding="utf-8") as f:
                 if isinstance(data, str):
                     f.write(data)
                 else:
@@ -290,7 +284,8 @@ class FileManager:
 
         except Exception as e:
             logger.exception("Failed to create data file: %s", e)
-            raise OSError(f"Failed to create data file: {e}") from e
+            msg = f"Failed to create data file: {e}"
+            raise OSError(msg) from e
 
     def create_script_file(
         self,
@@ -380,10 +375,11 @@ class FileManager:
         path = Path(file_path)
 
         if not path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
+            msg = f"File not found: {path}"
+            raise FileNotFoundError(msg)
 
         try:
-            with open(path, encoding="utf-8") as f:
+            with path.open(encoding="utf-8") as f:
                 return json.load(f)
         except json.JSONDecodeError as e:
             logger.exception("Failed to parse JSON: %s", e)

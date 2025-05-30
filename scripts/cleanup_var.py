@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 
 from src.config import var_dirs
-from src.types import DirType
+from src.type_definitions import DirType
 
 if TYPE_CHECKING:
     from pathlib import Path

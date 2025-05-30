@@ -287,7 +287,7 @@ class SSHClient:
                 )
                 if check and attempt < max_attempts - 1:
                     continue
-                raise last_exception
+                raise last_exception from None
 
             except Exception as e:
                 logger.exception("Unexpected error executing SSH command: %s", e)
@@ -377,8 +377,9 @@ class SSHClient:
                 logger.exception("SCP command failed: %s", e.stderr)
                 # Check if the error was due to missing local file
                 if not local_path.exists():
+                    msg = f"Local file does not exist: {local_path}"
                     raise FileNotFoundError(
-                        f"Local file does not exist: {local_path}",
+                        msg,
                     ) from e
                 last_exception = SSHFileTransferError(
                     source=str(local_path),
@@ -387,7 +388,7 @@ class SSHClient:
                 )
                 if attempt < max_attempts - 1:
                     continue
-                raise last_exception
+                raise last_exception from None
 
             except FileNotFoundError:
                 # Don't convert FileNotFoundError
@@ -411,7 +412,7 @@ class SSHClient:
                 )
                 if attempt < max_attempts - 1:
                     continue
-                raise last_exception
+                raise last_exception from None
 
         if last_exception:
             raise last_exception  # This should never be reached due to the raise statements above
@@ -510,7 +511,7 @@ class SSHClient:
                 )
                 if attempt < max_attempts - 1:
                     continue
-                raise last_exception
+                raise last_exception from None
 
             except FileNotFoundError:
                 # Don't convert FileNotFoundError
@@ -534,7 +535,7 @@ class SSHClient:
                 )
                 if attempt < max_attempts - 1:
                     continue
-                raise last_exception
+                raise last_exception from None
 
         if last_exception:
             raise last_exception  # This should never be reached due to the raise statements above
@@ -552,10 +553,7 @@ class SSHClient:
 
         """
         # Convert to string for the remote command
-        if isinstance(remote_path, Path):
-            remote_path_str = str(remote_path)
-        else:
-            remote_path_str = remote_path
+        remote_path_str = str(remote_path) if isinstance(remote_path, Path) else remote_path
 
         try:
             cmd = f"test -e {quote(remote_path_str)} && echo 'EXISTS' || echo 'NOT_EXISTS'"
@@ -577,10 +575,7 @@ class SSHClient:
 
         """
         # Convert to string for the remote command
-        if isinstance(remote_path, Path):
-            remote_path_str = str(remote_path)
-        else:
-            remote_path_str = remote_path
+        remote_path_str = str(remote_path) if isinstance(remote_path, Path) else remote_path
 
         try:
             cmd = f"stat -c '%s' {quote(remote_path_str)} 2>/dev/null || echo 'NOT_EXISTS'"

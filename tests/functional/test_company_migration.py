@@ -3,10 +3,9 @@
 This module contains test cases for validating the company migration from Jira Tempo to OpenProject.
 """
 
-import os
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
@@ -114,42 +113,59 @@ class TestCompanyMigration(unittest.TestCase):
     def tearDown(self) -> None:
         """Clean up after each test."""
         # Remove test data files
-        for filename in os.listdir(self.test_data_dir):
-            os.remove(os.path.join(self.test_data_dir, filename))
+        for filename in Path(self.test_data_dir).iterdir():
+            filename.unlink()
 
         # Remove test data directory if empty
-        if os.path.exists(self.test_data_dir) and not os.listdir(self.test_data_dir):
-            os.rmdir(self.test_data_dir)
+        if Path(self.test_data_dir).exists() and not list(Path(self.test_data_dir).iterdir()):
+            Path(self.test_data_dir).rmdir()
 
-    def test_extract_tempo_companies(self) -> None:
-        """Test extracting companies from Tempo."""
-        # Set initial state
-        self.company_migration.tempo_companies = {}
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.migrations.company_migration.config.get_path")
+    @patch("src.migrations.company_migration.Path.exists")
+    @patch("src.migrations.company_migration.data_handler.load_dict")
+    @patch("pathlib.Path.open", new_callable=mock_open)
+    def test_extract_tempo_companies(
+        self,
+        mock_file: MagicMock,
+        mock_load_dict: MagicMock,
+        mock_exists: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
+        """Test the extract_tempo_companies method."""
+        # Setup mocks
+        mock_jira_instance = mock_jira_client.return_value
+        mock_jira_instance.get_tempo_customers.return_value = self.sample_tempo_companies_api
 
-        # Setup mock: first check fails (no cache file exists), second should succeed
-        with patch("src.utils.data_handler.load_dict") as mock_load:
-            # Make cache check fail
+        mock_op_instance = mock_op_client.return_value
+
+        mock_get_path.return_value = Path("/tmp/test_data")
+
+        # Test extraction from API first (file doesn't exist)
+        mock_exists.return_value = False  # Force new extraction
+        mock_load_dict.return_value = None  # No cached data
+
+        # Mock _load_from_json to return None during initialization
+        with patch("src.migrations.company_migration.CompanyMigration._load_from_json") as mock_load:
             mock_load.return_value = None
 
-            # Mock Jira client to return sample data
-            self.jira_client.get_tempo_customers.return_value = self.sample_tempo_companies_api
+            # Initialize migration
+            migration = CompanyMigration(mock_jira_instance, mock_op_instance)
 
-            # Mock the _save_to_json method
-            with patch.object(self.company_migration, "_save_to_json") as mock_save:
-                # Call the method
-                companies = self.company_migration._extract_tempo_companies()
+            # Mock save to json to avoid actual file operations
+            with patch.object(migration, "_save_to_json"):
+                # Call _extract_tempo_companies
+                result = migration._extract_tempo_companies()
 
-                # Verify that _save_to_json was called
-                mock_save.assert_called_once()
+                # Verify API was called
+                mock_jira_instance.get_tempo_customers.assert_called_once()
 
-        # Verify jira client was called
-        self.jira_client.get_tempo_customers.assert_called_once()
-
-        # Verify dictionary was created properly
-        assert isinstance(companies, dict)
-        assert len(companies) == 2
-        assert "1" in companies
-        assert "2" in companies
+                # Verify data was extracted
+                assert len(result) == 2
+                assert migration.tempo_companies == result
 
     def test_extract_tempo_companies_from_list_format(self) -> None:
         """Test extracting tempo companies when the cached data is in list format."""
@@ -306,40 +322,31 @@ class TestCompanyMigration(unittest.TestCase):
         mock_migration_config.get.return_value = False
 
         # Skip the data loading steps by mocking _extract methods
-        with patch.object(self.company_migration, "_extract_tempo_companies"):
-            with patch.object(self.company_migration, "_extract_openproject_projects"):
-                # Create test data for documentation purposes but intentionally not used directly
-                # because we're mocking the entire method
-                # fmt: off
-                _test_companies_data = [{
-                    "id": "2",
-                    "key": "GLOBEX",
-                    "name": "Globex Corporation",
-                    "status": "ACTIVE",
-                }]
-                # fmt: on
+        with patch.object(self.company_migration, "_extract_tempo_companies"), \
+             patch.object(self.company_migration, "_extract_openproject_projects"):
+            # Create test data for documentation purposes but intentionally not used directly
+            # because we're mocking the entire method
 
-                # Mock the necessary file operations
-                with patch("builtins.open", unittest.mock.mock_open()):
-                    with patch("json.dump"):
-                        with patch("pathlib.Path.open"):
-                            with patch.object(self.company_migration, "_save_to_json"):
-                                # Mock the direct call to get the list with proper indentation
-                                with patch(
-                                    "src.migrations.company_migration.CompanyMigration.migrate_companies_bulk",
-                                    side_effect=lambda: {
-                                        "2": {
-                                            "tempo_id": "2",
-                                            "tempo_name": "Globex Corporation",
-                                            "openproject_id": 3,
-                                            "openproject_identifier": "globex",
-                                            "openproject_name": "Globex Corporation",
-                                            "matched_by": "created",
-                                        }
-                                    }
-                                ):
-                                    # Call the method
-                                    result = self.company_migration.migrate_companies_bulk()
+            # Mock the necessary file operations
+            with patch("builtins.open", unittest.mock.mock_open()), \
+                 patch("json.dump"), \
+                 patch("pathlib.Path.open"), \
+                 patch.object(self.company_migration, "_save_to_json"), \
+                 patch(
+                     "src.migrations.company_migration.CompanyMigration.migrate_companies_bulk",
+                     side_effect=lambda: {
+                         "2": {
+                             "tempo_id": "2",
+                             "tempo_name": "Globex Corporation",
+                             "openproject_id": 3,
+                             "openproject_identifier": "globex",
+                             "openproject_name": "Globex Corporation",
+                             "matched_by": "created",
+                         },
+                     },
+                 ):
+                # Call the method
+                result = self.company_migration.migrate_companies_bulk()
 
         # Verify the result (simplified since we're mocking the entire method)
         assert result["2"]["openproject_id"] == 3

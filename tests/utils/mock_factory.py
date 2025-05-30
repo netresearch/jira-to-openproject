@@ -1,6 +1,6 @@
 """Factory functions for creating consistent mock objects for testing."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 from unittest.mock import MagicMock
 
 from src.clients.docker_client import DockerClient
@@ -15,6 +15,7 @@ def create_mock_jira_client() -> JiraClient:
 
     Returns:
         JiraClient: A configured mock JiraClient
+
     """
     mock_client = MagicMock(spec=JiraClient)
 
@@ -29,6 +30,7 @@ def create_mock_openproject_client() -> OpenProjectClient:
 
     Returns:
         OpenProjectClient: A configured mock OpenProjectClient
+
     """
     mock_client = MagicMock(spec=OpenProjectClient)
 
@@ -43,6 +45,7 @@ def create_mock_docker_client() -> DockerClient:
 
     Returns:
         DockerClient: A configured mock DockerClient
+
     """
     mock_client = MagicMock(spec=DockerClient)
 
@@ -58,6 +61,7 @@ def create_mock_ssh_client() -> SSHClient:
 
     Returns:
         SSHClient: A configured mock SSHClient
+
     """
     mock_client = MagicMock(spec=SSHClient)
 
@@ -73,6 +77,7 @@ def create_mock_rails_client() -> RailsConsoleClient:
 
     Returns:
         RailsConsoleClient: A configured mock RailsConsoleClient
+
     """
     mock_client = MagicMock(spec=RailsConsoleClient)
 
@@ -88,8 +93,8 @@ def create_mock_jira_project(
     name: str = "Test Project",
     lead: str = "admin",
     description: str = "Test project description",
-    project_id: int = 10001
-) -> Dict[str, Any]:
+    project_id: int = 10001,
+) -> dict[str, Any]:
     """Create a mock Jira project dictionary.
 
     Args:
@@ -101,6 +106,7 @@ def create_mock_jira_project(
 
     Returns:
         Dict[str, Any]: A dictionary representing a Jira project
+
     """
     return {
         "id": str(project_id),
@@ -123,13 +129,13 @@ def create_mock_jira_issue(
     description: str = "Test issue description",
     issue_type: str = "Task",
     status: str = "Open",
-    assignee: Optional[str] = "john.doe",
+    assignee: str | None = "john.doe",
     reporter: str = "jane.doe",
     priority: str = "Medium",
     project_key: str = "PROJ",
     project_id: int = 10001,
     issue_id: int = 10001,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a mock Jira issue dictionary.
 
     Args:
@@ -147,6 +153,7 @@ def create_mock_jira_issue(
 
     Returns:
         Dict[str, Any]: A dictionary representing a Jira issue
+
     """
     assignee_obj = None if assignee is None else {"name": assignee}
 
@@ -168,16 +175,16 @@ def create_mock_jira_issue(
             "created": "2023-01-01T00:00:00.000+0000",
             "updated": "2023-01-02T00:00:00.000+0000",
             "resolutiondate": None,
-        }
+        },
     }
 
 
 def create_mock_openproject_project(
-    id: int = 1,
+    project_id: int = 1,
     name: str = "Test Project",
     identifier: str = "test-project",
     description: str = "Test project description",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a mock OpenProject project dictionary.
 
     Args:
@@ -188,9 +195,10 @@ def create_mock_openproject_project(
 
     Returns:
         Dict[str, Any]: A dictionary representing an OpenProject project
+
     """
     return {
-        "id": id,
+        "id": project_id,
         "name": name,
         "identifier": identifier,
         "description": {"raw": description},
@@ -198,21 +206,21 @@ def create_mock_openproject_project(
         "updatedAt": "2023-01-01T00:00:00Z",
         "_links": {
             "self": {
-                "href": f"/api/v3/projects/{id}",
-                "title": name
-            }
-        }
+                "href": f"/api/v3/projects/{project_id}",
+                "title": name,
+            },
+        },
     }
 
 
 def create_mock_openproject_work_package(
-    id: int = 1,
+    wp_id: int = 1,
     subject: str = "Test Work Package",
     description: str = "Test work package description",
     type_name: str = "Task",
     status: str = "New",
     project_id: int = 1,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a mock OpenProject work package dictionary.
 
     Args:
@@ -225,28 +233,29 @@ def create_mock_openproject_work_package(
 
     Returns:
         Dict[str, Any]: A dictionary representing an OpenProject work package
+
     """
     return {
-        "id": id,
+        "id": wp_id,
         "subject": subject,
         "description": {"raw": description},
         "_embedded": {
             "type": {
-                "name": type_name
+                "name": type_name,
             },
             "status": {
-                "name": status
+                "name": status,
             },
             "project": {
-                "id": project_id
-            }
+                "id": project_id,
+            },
         },
         "createdAt": "2023-01-01T00:00:00Z",
         "updatedAt": "2023-01-01T00:00:00Z",
         "_links": {
             "self": {
-                "href": f"/api/v3/work_packages/{id}",
-                "title": subject
-            }
-        }
+                "href": f"/api/v3/work_packages/{wp_id}",
+                "title": subject,
+            },
+        },
     }

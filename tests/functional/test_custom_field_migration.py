@@ -42,8 +42,8 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "error": [],
                 "created_count": 0,
                 "existing_count": 0,
-                "error_count": 0
-            }
+                "error_count": 0,
+            },
         })
         self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
 
@@ -57,8 +57,8 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "error": [],
                 "created_count": 0,
                 "existing_count": 0,
-                "error_count": 0
-            }
+                "error_count": 0,
+            },
         })
         self.mock_op_client.transfer_file_to_container = Mock()
 
@@ -300,12 +300,12 @@ class TestCustomFieldMigration(unittest.TestCase):
         script_content = args[0]
 
         # Check for expected values in the script
-        assert 'field_format' in script_content
-        assert 'list' in script_content
-        assert 'possible_values' in script_content
-        assert 'Value 1' in script_content
-        assert 'Value 2' in script_content
-        assert 'Value 3' in script_content
+        assert "field_format" in script_content
+        assert "list" in script_content
+        assert "possible_values" in script_content
+        assert "Value 1" in script_content
+        assert "Value 2" in script_content
+        assert "Value 3" in script_content
 
     def test_migrate_custom_fields(self) -> None:
         """Test migrating custom fields using the JSON-based approach."""
@@ -427,7 +427,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                     "status": "success",
                     "created_count": 1,
                     "existing_count": 0,
-                    "error_count": 0
+                    "error_count": 0,
                 }
 
                 # Call migrate_custom_fields_via_json directly
