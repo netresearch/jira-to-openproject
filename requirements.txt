@@ -3,7 +3,7 @@ requests==2.32.3
 jira==3.8.0
 
 # Data processing
-pandas==2.2.3
+pandas==2.3.0
 pydantic==2.11.5
 
 # Configuration and environment
