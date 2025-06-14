@@ -4,7 +4,7 @@ jira==3.8.0
 
 # Data processing
 pandas==2.3.0
-pydantic==2.11.5
+pydantic==2.11.7
 
 # Configuration and environment
 python-dotenv==1.1.1
