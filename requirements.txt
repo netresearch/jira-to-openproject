@@ -22,7 +22,7 @@ pytest-xdist==3.7.0
 # Code quality
 black==25.1.0
 flake8==7.3.0
-mypy==1.16.0+dev
+mypy==1.16.1
 pandas-stubs==2.2.3.250527
 types-setuptools==80.9.0.20250529
 
