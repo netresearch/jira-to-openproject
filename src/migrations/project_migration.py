@@ -314,11 +314,34 @@ class ProjectMigration(BaseMigration):
 
             # Find if it already exists
             existing_project = None
+
+            # Log the current project being checked
+            logger.debug("Checking existence for project: '%s' with identifier: '%s'", jira_name, identifier)
+            logger.debug("Available OpenProject projects count: %d", len(self.op_projects))
+
+            # Log a few existing projects for comparison
+            if self.op_projects:
+                logger.debug("Sample existing projects:")
+                for i, op_project in enumerate(self.op_projects[:3]):
+                    logger.debug(
+                        "  %d: name='%s', identifier='%s'",
+                        i+1,
+                        op_project.get("name", ""),
+                        op_project.get("identifier", "")
+                    )
+
             for op_project in self.op_projects:
-                if (
-                    op_project.get("name", "").lower() == jira_name.lower()
-                    or op_project.get("identifier", "") == identifier
-                ):
+                op_name = op_project.get("name", "").lower()
+                op_identifier = op_project.get("identifier", "")
+
+                # Check for match
+                name_match = op_name == jira_name.lower()
+                identifier_match = op_identifier == identifier
+
+                if name_match or identifier_match:
+                    logger.debug("Found existing project match:")
+                    logger.debug("  Name match: %s ('%s' vs '%s')", name_match, op_name, jira_name.lower())
+                    logger.debug("  Identifier match: %s ('%s' vs '%s')", identifier_match, op_identifier, identifier)
                     existing_project = op_project
                     break
 
@@ -329,6 +352,8 @@ class ProjectMigration(BaseMigration):
                     existing_project.get("id"),
                 )
                 continue
+            else:
+                logger.debug("No existing project found for '%s' (identifier: '%s') - will create", jira_name, identifier)
 
             # Find parent company
             parent_company = self.find_parent_company_for_project(jira_project)
@@ -422,21 +447,18 @@ class ProjectMigration(BaseMigration):
                     })
                     continue
 
-                # Create the project using simple Rails commands
-                create_script = f"""
-                project = Project.new(
-                  name: '{project_data['name'].replace("'", "\\\\'")}',
-                  identifier: '{project_data['identifier']}',
-                  description: '{project_data.get('description', '').replace("'", "\\\\'")}',
-                  public: false
+                # Create the project using simplified Rails command (atomic and concise)
+                name_escaped = project_data['name'].replace("'", "\\'")
+                desc_escaped = project_data.get('description', '').replace("'", "\\'")
+
+                # Use create! for atomic creation with validation
+                create_script = (
+                    f"p = Project.create!(name: '{name_escaped}', "
+                    f"identifier: '{project_data['identifier']}', "
+                    f"description: '{desc_escaped}', public: false); "
+                    f"p.enabled_module_names = ['work_package_tracking', 'wiki']; "
+                    f"p.save!; puts p.to_json"
                 )
-                project.enabled_module_names = ['work_package_tracking', 'wiki']
-                if project.save
-                  puts project.to_json
-                else
-                  puts "ERROR: " + project.errors.full_messages.join(', ')
-                end
-                """
 
                 result = self.op_client.execute_query_to_json_file(create_script.strip())
 

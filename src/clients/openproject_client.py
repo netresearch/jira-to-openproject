@@ -423,15 +423,50 @@ class OpenProjectClient:
             raise
 
     def _execute_batched_query(self, model_name: str, timeout: int | None = None) -> list[dict[str, Any]]:
-        """Execute a query in very small batches to avoid any truncation issues."""
+        """Execute a query in batches to avoid any truncation issues."""
         try:
+            # First, try a simple non-batched approach for smaller datasets
+            # This handles the common case where batching isn't needed
+            simple_query = f"{model_name}.limit(50).to_json"
+            result_output = self.execute_query(simple_query, timeout=timeout)
+
+            try:
+                simple_data = self._parse_rails_output(result_output)
+
+                # If we get valid data and it's less than 50 items, we're done
+                if isinstance(simple_data, list) and len(simple_data) < 50:
+                    logger.debug("Retrieved %d total records using simple query", len(simple_data))
+                    return simple_data
+                elif isinstance(simple_data, list) and len(simple_data) == 50:
+                    # We might have more data, fall through to batched approach
+                    logger.debug(
+                        "Simple query returned 50 items, using batched approach for complete data"
+                    )
+                else:
+                    # Handle single item or other data types
+                    if isinstance(simple_data, dict):
+                        logger.debug("Retrieved 1 record using simple query")
+                        return [simple_data]
+                    elif simple_data is not None:
+                        logger.debug("Retrieved non-list data using simple query")
+                        # For non-dict, non-list data, return empty list
+                        logger.warning("Unexpected data type from simple query: %s", type(simple_data))
+                        return []
+                    else:
+                        return []
+
+            except Exception as e:
+                logger.debug("Simple query failed, falling back to batched approach: %s", e)
+
+            # Fall back to batched approach for larger datasets
             all_results = []
-            batch_size = 3  # Very small batch size to avoid any issues
+            batch_size = 50  # Increased batch size for better performance
             offset = 0
 
             while True:
-                # Query for a very small batch
-                query = f"puts {model_name}.offset({offset}).limit({batch_size}).to_json"
+                # Use a more reliable query pattern that works with Rails scopes
+                # Use order by id to ensure consistent pagination
+                query = f"{model_name}.unscoped.order(:id).offset({offset}).limit({batch_size}).to_json"
                 result_output = self.execute_query(query, timeout=timeout)
 
                 try:
@@ -458,23 +493,23 @@ class OpenProjectClient:
 
                     offset += batch_size
 
-                    # Safety limit to prevent infinite loops
-                    if offset > 1000:  # Lower safety limit
-                        logger.warning("Reached safety limit of 1000 records, stopping")
+                    # Increased safety limit for larger datasets
+                    if offset > 5000:
+                        logger.warning("Reached safety limit of 5000 records, stopping")
                         break
 
                     # Small delay to avoid overwhelming the console
-                    time.sleep(0.1)
+                    time.sleep(0.05)  # Reduced delay for better performance
 
                 except Exception as e:
                     logger.error("Failed to parse batch at offset %d: %s", offset, e)
                     break
 
-            logger.debug("Retrieved %d total records using simple batched approach", len(all_results))
+            logger.debug("Retrieved %d total records using batched approach", len(all_results))
             return all_results
 
         except Exception as e:
-            logger.error("Simple batched query failed: %s", e)
+            logger.error("Batched query failed: %s", e)
             # Return empty list instead of failing completely
             return []
 
@@ -1182,17 +1217,14 @@ class OpenProjectClient:
         """Get all projects from OpenProject.
 
         Returns:
-            List of project objects
+            List of OpenProject projects
 
         Raises:
-            QueryExecutionError: If query fails
+            QueryExecutionError: If unable to retrieve projects
 
         """
-        try:
-            return self.execute_json_query("Project.all") or []
-        except Exception as e:
-            msg = "Failed to get projects."
-            raise QueryExecutionError(msg) from e
+        # Use unscoped to bypass any default scopes that might filter projects
+        return self.execute_json_query("Project.unscoped") or []
 
     def get_project_by_identifier(self, identifier: str) -> dict[str, Any]:
         """Get a project by identifier.
