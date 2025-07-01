@@ -58,6 +58,16 @@ def main() -> None:
     migrate_parser.add_argument(
         "--tmux", action="store_true", help="Run in a tmux session for persistence",
     )
+    migrate_parser.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        help="Stop the migration on the first error or exception encountered",
+    )
+    migrate_parser.add_argument(
+        "--no-confirm",
+        action="store_true",
+        help="Skip the 'Continue to next component' prompt and run all components without pausing",
+    )
 
     # Parse arguments
     args = parser.parse_args()
@@ -80,8 +90,12 @@ def main() -> None:
         if args.tmux:
             setup_tmux_session()
 
-        # Run the migration
-        result = run_migration(components=args.components)
+        # Run the migration with new options
+        result = run_migration(
+            components=args.components,
+            stop_on_error=getattr(args, "stop_on_error", False),
+            no_confirm=getattr(args, "no_confirm", False),
+        )
 
         # Exit with appropriate code
         if result["overall"]["status"] == "success":
