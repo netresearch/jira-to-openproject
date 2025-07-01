@@ -1,0 +1,5 @@
+rulesets:
+  - internal:yolo
+toolsets:
+  - internal:core
+roots: []
