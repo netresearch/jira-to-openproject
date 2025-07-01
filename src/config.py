@@ -56,9 +56,6 @@ log_file = var_dirs["logs"] / "migration.log"
 # Configure rich logging instead of standard logging
 logger = configure_logging(LOG_LEVEL, log_file)
 
-# Create mappings object
-mappings = None
-
 # Now log the directory creation messages
 for message in created_dirs:
     logger.debug(message)
@@ -165,5 +162,13 @@ def update_from_cli_args(args: Any) -> None:
     if hasattr(args, "force") and args.force:
         migration_config["force"] = True
         logger.debug("Setting force=True from CLI arguments")
+
+    if hasattr(args, "stop_on_error") and args.stop_on_error:
+        migration_config["stop_on_error"] = True
+        logger.debug("Setting stop_on_error=True from CLI arguments")
+
+    if hasattr(args, "no_confirm") and args.no_confirm:
+        migration_config["no_confirm"] = True
+        logger.debug("Setting no_confirm=True from CLI arguments")
 
     # Add any other CLI arguments that should affect configuration here

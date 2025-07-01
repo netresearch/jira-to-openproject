@@ -108,6 +108,8 @@ class MigrationConfig(TypedDict):
     dry_run: bool
     force: bool
     no_backup: bool
+    stop_on_error: bool
+    no_confirm: bool
 
 
 class Config(TypedDict):

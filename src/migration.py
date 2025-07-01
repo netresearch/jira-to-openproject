@@ -160,11 +160,15 @@ def restore_backup(backup_dir: Path) -> bool:
 
 def run_migration(
     components: list[ComponentName] | None = None,
+    stop_on_error: bool = False,
+    no_confirm: bool = False,
 ) -> MigrationResult:
     """Run the migration process.
 
     Args:
         components: List of specific components to run (if None, run all)
+        stop_on_error: If True, stop migration on the first error/exception
+        no_confirm: If True, skip the 'Continue to next component' prompt
 
     Returns:
         Dictionary with migration results
@@ -393,7 +397,7 @@ def run_migration(
                     results.overall["status"] = "failed"
 
                 # Pause for user confirmation between components
-                if component_name != components[-1]:  # Skip after the last component
+                if component_name != components[-1] and not no_confirm:  # Skip after the last component or if no_confirm is set
                     try:
                         result: str = "\033[1;90mUNKNOWN RESULT\033[0m"
                         current_result = results.components.get(component_name)
@@ -429,7 +433,12 @@ def run_migration(
                 component_result_data = results.components
                 current_component_result = component_result_data.get(component_name, ComponentResult())
                 current_component_status = current_component_result.details.get("status")
-                if current_component_status == "failed" and component_name in ["users", "projects"]:
+                if stop_on_error and current_component_status == "failed":
+                    config.logger.error(
+                        f"Component '{component_name}' failed and --stop-on-error is set, aborting migration",
+                    )
+                    break
+                elif current_component_status == "failed" and component_name in ["users", "projects"]:
                     config.logger.error(
                         f"Critical component '{component_name}' failed, aborting migration",
                     )
