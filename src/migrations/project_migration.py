@@ -8,15 +8,16 @@ import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+import time
 
 from src import config
+from src.clients.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
-    from src.clients.openproject_client import OpenProjectClient
 
 # Get logger from config
 logger = config.logger
@@ -367,20 +368,6 @@ class ProjectMigration(BaseMigration):
                 message="No new projects to create",
             )
 
-        # Write projects data to a temp file
-        temp_file_path = Path(self.data_dir) / "projects_data.json"
-        with temp_file_path.open("w") as f:
-            json.dump(projects_data, f, indent=2)
-
-        # Transfer file to the container
-        container_temp_path = "/tmp/projects_data.json"
-        if not self.op_client.rails_client.transfer_file_to_container(temp_file_path, container_temp_path):
-            logger.error("Failed to transfer projects data file to container. Aborting.")
-            return ComponentResult(
-                success=False,
-                message="Failed to transfer projects data file to container. Aborting.",
-            )
-
         # Check for dry run
         if config.migration_config.get("dry_run", False):
             logger.info("DRY RUN: Skipping Rails script execution. Would have created these projects:")
@@ -409,181 +396,90 @@ class ProjectMigration(BaseMigration):
                 message=f"DRY RUN: Would have created {len(projects_data)} projects",
             )
 
-        # Create Ruby script for bulk project creation
-        header_script = f"""
-        # Ruby variables from Python
-        projects_file_path = '{container_temp_path}'
-        result_file_path = '/tmp/projects_result.json'
-        """
-
-        main_script = """
-        begin
-          require 'json'
-
-          # Load the data from the JSON file
-          projects_data = JSON.parse(File.read(projects_file_path))
-          puts "Loaded #{projects_data.length} projects from JSON file"
-
-          created_projects = []
-          errors = []
-
-          # Create each project
-          projects_data.each do |project_attrs|
-            begin
-              # Store Jira data for mapping
-              jira_key = project_attrs['jira_key']
-              account_name = project_attrs['account_name']
-              account_id = project_attrs['account_id']
-
-              # Check if project already exists
-              existing = Project.find_by(identifier: project_attrs['identifier'])
-              if existing
-                puts "Project with identifier '#{project_attrs['identifier']}' already exists (ID: #{existing.id})"
-                created_projects << {
-                  'jira_key' => jira_key,
-                  'openproject_id' => existing.id,
-                  'name' => existing.name,
-                  'identifier' => existing.identifier,
-                  'created_new' => false
-                }
-                next
-              end
-
-              # Create project object
-              project = Project.new(
-                name: project_attrs['name'],
-                identifier: project_attrs['identifier'],
-                description: project_attrs['description'],
-                public: false
-              )
-
-              # Set parent if specified
-              if project_attrs['parent_id']
-                parent = Project.find_by(id: project_attrs['parent_id'])
-                if parent
-                  project.parent = parent
-                else
-                  puts "Warning: Parent project ID #{project_attrs['parent_id']} not found"
-                end
-              end
-
-              # Enable default modules
-              project.enabled_module_names = ['work_package_tracking', 'wiki']
-
-              # Save the project
-              if project.save
-                puts "Created project ##{project.id}: #{project.name}"
-
-                # Set account custom field if available
-                if account_name
-                  begin
-                    account_cf = CustomField.where(type: 'ProjectCustomField', name: 'Account').first
-                    if account_cf
-                      project.custom_values.create(custom_field_id: account_cf.id, value: account_name)
-                      puts "Added account '#{account_name}' to project '#{project.name}'"
-                    else
-                      puts "Warning: Account custom field not found"
-                    end
-                  rescue => cf_error
-                    puts "Error setting account custom field: #{cf_error.message}"
-                  end
-                end
-
-                created_projects << {
-                  'jira_key' => jira_key,
-                  'openproject_id' => project.id,
-                  'name' => project.name,
-                  'identifier' => project.identifier,
-                  'created_new' => true
-                }
-              else
-                errors << {
-                  'jira_key' => jira_key,
-                  'name' => project_attrs['name'],
-                  'errors' => project.errors.full_messages,
-                  'error_type' => 'validation_error'
-                }
-                puts "Error creating project: #{project.errors.full_messages.join(', ')}"
-              end
-            rescue => e
-              errors << {
-                'jira_key' => project_attrs['jira_key'],
-                'name' => project_attrs['name'],
-                'errors' => [e.message],
-                'error_type' => 'exception'
-              }
-              puts "Exception: #{e.message}"
-            end
-          end
-
-          # Write results to result file
-          result = {
-            'status' => 'success',
-            'created' => created_projects,
-            'errors' => errors,
-            'created_count' => created_projects.length,
-            'error_count' => errors.length,
-            'total' => projects_data.length
-          }
-
-          File.write(result_file_path, result.to_json)
-          puts "Results written to #{result_file_path}"
-
-          # Also return the result for direct capture
-          result
-        rescue => e
-          error_result = {
-            'status' => 'error',
-            'message' => e.message,
-            'backtrace' => e.backtrace[0..5]
-          }
-
-          # Try to save error to file
-          begin
-            File.write(result_file_path, error_result.to_json)
-          rescue => write_error
-            puts "Failed to write error to file: #{write_error.message}"
-          end
-
-          # Return error result
-          error_result
-        end
-        """
-
-        # Execute the Ruby script
-        result = self.op_client.rails_client.execute_query(header_script + main_script)
-
-        if result.get("status") != "success":
-            logger.error("Rails error during bulk project creation: %s", result.get("error", "Unknown error"))
-            logger.error("Bulk project migration failed. Aborting.")
-            return ComponentResult(
-                success=False,
-                message=f"Rails error during bulk project creation: {result.get('error', 'Unknown error')}",
-            )
-
-        # Get the results
+        # Create projects individually using simple Rails commands
+        # This is more reliable than complex bulk scripts
         created_projects = []
         errors = []
 
-        # Try to get results from direct output first
-        output = result.get("output")
-        if isinstance(output, dict) and output.get("status") == "success":
-            created_projects = output.get("created", [])
-            errors = output.get("errors", [])
-        else:
-            # Try to get the result file from the container
-            result_file_container = "/tmp/projects_result.json"
-            result_file_local = Path(self.data_dir) / "projects_result.json"
+        logger.info("Creating %d projects individually...", len(projects_data))
 
-            if self.op_client.rails_client.transfer_file_from_container(result_file_container, result_file_local):
-                try:
-                    with result_file_local.open() as f:
-                        result_data = json.load(f)
-                        if result_data.get("status") == "success":
-                            created_projects = result_data.get("created", [])
-                            errors = result_data.get("errors", [])
-                except Exception as e:
-                    logger.exception("Error reading result file: %s", e)
+        for i, project_data in enumerate(projects_data):
+            try:
+                logger.info("Creating project %d/%d: %s", i+1, len(projects_data), project_data["name"])
+
+                # Check if project already exists
+                check_query = f"Project.find_by(identifier: '{project_data['identifier']}')"
+                existing = self.op_client.execute_query_to_json_file(check_query)
+
+                if existing and isinstance(existing, dict) and existing.get("id"):
+                    logger.info("Project '%s' already exists with ID %s", project_data["name"], existing["id"])
+                    created_projects.append({
+                        "jira_key": project_data["jira_key"],
+                        "openproject_id": existing["id"],
+                        "name": existing["name"],
+                        "identifier": existing["identifier"],
+                        "created_new": False
+                    })
+                    continue
+
+                # Create the project using simple Rails commands
+                create_script = f"""
+                project = Project.new(
+                  name: '{project_data['name'].replace("'", "\\\\'")}',
+                  identifier: '{project_data['identifier']}',
+                  description: '{project_data.get('description', '').replace("'", "\\\\'")}',
+                  public: false
+                )
+                project.enabled_module_names = ['work_package_tracking', 'wiki']
+                if project.save
+                  puts project.to_json
+                else
+                  puts "ERROR: " + project.errors.full_messages.join(', ')
+                end
+                """
+
+                result = self.op_client.execute_query_to_json_file(create_script.strip())
+
+                if isinstance(result, dict) and result.get("id"):
+                    logger.info("Successfully created project '%s' with ID %s", project_data["name"], result["id"])
+                    created_projects.append({
+                        "jira_key": project_data["jira_key"],
+                        "openproject_id": result["id"],
+                        "name": result["name"],
+                        "identifier": result["identifier"],
+                        "created_new": True
+                    })
+                else:
+                    error_msg = f"Failed to create project: {result}"
+                    logger.error("Error creating project '%s': %s", project_data["name"], error_msg)
+                    errors.append({
+                        "jira_key": project_data["jira_key"],
+                        "name": project_data["name"],
+                        "errors": [error_msg],
+                        "error_type": "creation_error"
+                    })
+
+                    # Check if we should stop on error
+                    if config.migration_config.get("stop_on_error", False):
+                        logger.error("Stopping migration due to creation error and --stop-on-error flag is set")
+                        raise Exception(f"Project creation failed: {error_msg}")
+
+            except Exception as e:
+                logger.exception("Exception creating project '%s': %s", project_data.get("name", "unknown"), e)
+                errors.append({
+                    "jira_key": project_data.get("jira_key"),
+                    "name": project_data.get("name"),
+                    "errors": [str(e)],
+                    "error_type": "exception"
+                })
+
+                # Check if we should stop on error
+                if config.migration_config.get("stop_on_error", False):
+                    logger.error("Stopping migration due to error and --stop-on-error flag is set")
+                    raise e
+
+            # Small delay to avoid overwhelming the Rails console
+            time.sleep(0.2)
 
         # Create mapping from results
         mapping = {}

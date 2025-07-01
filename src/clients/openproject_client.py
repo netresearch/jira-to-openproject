@@ -21,23 +21,16 @@ Workflow:
 import json
 import os
 import random
+import re
+import time
 from pathlib import Path
 from shlex import quote
-from time import time
 from typing import Any
 
 from src import config
 from src.clients.docker_client import DockerClient
-from src.clients.rails_console_client import (
-    CommandExecutionError,
-    RailsConsoleClient,
-    RubyError,
-)
-from src.clients.ssh_client import (
-    SSHClient,
-    SSHCommandError,
-    SSHConnectionError,
-)
+from src.clients.rails_console_client import RailsConsoleClient, RubyError
+from src.clients.ssh_client import SSHClient
 from src.utils.file_manager import FileManager
 
 logger = config.logger
@@ -370,104 +363,253 @@ class OpenProjectClient:
         return self.rails_client._send_command_to_tmux(f"puts ({query})", 5)
 
     def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> Any:
-        """Execute a Rails query and save the result to a JSON file, then transfer it back.
+        """Execute a Rails query and return parsed JSON result.
 
         Args:
             query: Rails query to execute
             timeout: Timeout in seconds
 
         Returns:
-            Parsed JSON data from the file
+            Parsed JSON data
 
         Raises:
             QueryExecutionError: If execution fails
-            FileTransferError: If file transfer fails
             JsonParseError: If result parsing fails
 
         """
-        # Generate filenames
-        uid = self.file_manager.generate_unique_id()
-        container_result_file = Path("/tmp") / f"query_result_{uid}.json"
-        # Use remote temp path instead of local temp path for docker_client.copy_file_from_container
-        remote_result_file = Path("/tmp") / f"query_result_{uid}.json"
-        local_result_file = self.file_manager.temp_dir / f"query_result_{uid}.json"
-
-        # Create a simplified script that avoids variable name conflicts
-        script = f"""
-require 'json'
-
-begin
-  # Execute query
-  result = {query}
-
-  # Write to file
-  file_content = result.nil? ? "null" : result.to_json
-  File.write('{quote(container_result_file.as_posix())}', file_content)
-
-  # Return true to indicate success
-  true
-rescue StandardError => error
-  # Re-raise the error to trigger exception handling
-  raise error
-end
-"""
-
         try:
-            # Create and transfer script
-            local_script_file = self._create_script_file(script)
-            container_script_file = self._transfer_rails_script(local_script_file)
+            # For very simple queries, use direct execution
+            if any(keyword in query.lower() for keyword in ["project.all", "project.offset", "project.limit"]):
+                # Use the simpler batched approach for Project queries that might return large results
+                model_match = None
+                for pattern in ["Project.all", "Project.offset", "Project.limit"]:
+                    if pattern in query:
+                        model_match = "Project"
+                        break
 
-            # Run the script
-            self.rails_client.execute(
-                f"load '{container_script_file}'",
-                timeout=timeout or self.command_timeout,
-            )
+                if model_match:
+                    return self._execute_batched_query(model_match, timeout)
 
-            # First copy from container to remote server
-            self.docker_client.copy_file_from_container(
-                container_result_file,
-                remote_result_file,
-            )
+            # For other queries, execute directly but be careful about automatic modifications
+            # Only add .limit() for queries that are clearly meant to return collections
+            collection_indicators = ["all", "where", "offset", "order", "includes", "joins"]
+            single_record_indicators = ["find_by", "find(", "first", "last", "count", "sum", "exists?"]
 
-            # Then copy from remote server to local machine
-            self.ssh_client.copy_file_from_remote(remote_result_file, local_result_file)
+            # Check if this is a single-record query that shouldn't have .limit() added
+            is_single_record = any(indicator in query.lower() for indicator in single_record_indicators)
+            is_collection = any(indicator in query.lower() for indicator in collection_indicators)
 
-            # Clean up script file
-            if local_script_file.exists():
-                local_script_file.unlink()
+            # Ensure the query produces JSON output
+            if ".to_json" not in query and not query.strip().endswith(".to_json"):
+                if is_single_record and not is_collection:
+                    # For single record queries, just add .to_json
+                    query = f"({query}).to_json"
+                elif is_collection or not is_single_record:
+                    # For collection queries or ambiguous queries, add .limit() for safety
+                    if ".limit(" not in query:
+                        query = f"({query}).limit(5).to_json"
+                    else:
+                        query = f"({query}).to_json"
+                else:
+                    # Default case - just add .to_json
+                    query = f"({query}).to_json"
 
-            # Clean up container file
-            rm_command = ["rm", "-f", quote(container_result_file.as_posix())]
-            self.docker_client.execute_command(" ".join(rm_command))
+            # Execute the query and parse result
+            result_output = self.execute_query(query, timeout=timeout)
+            return self._parse_rails_output(result_output)
 
-            # Clean up remote file
-            self.ssh_client.execute_command(f"rm -f {quote(str(remote_result_file))}")
-
-            # Parse and return
-            try:
-                with local_result_file.open("r") as f:
-                    data = json.load(f)
-                logger.debug("Successfully parsed JSON data from %s", local_result_file)
-                return data
-            except json.JSONDecodeError as e:
-                msg = "Failed to parse JSON result file."
-                raise JsonParseError(msg) from e
-            finally:
-                # Clean up local file
-                if local_result_file.exists():
-                    local_result_file.unlink()
-
-        except (RubyError, CommandExecutionError) as e:
-            msg = "Error executing query."
-            raise QueryExecutionError(msg) from e
-        except (SSHCommandError, SSHConnectionError) as e:
-            msg = "SSH error during file operation."
-            raise ConnectionError(msg) from e
-        except FileTransferError:
-            raise  # Just re-raise FileTransferError
         except Exception as e:
-            msg = "Unexpected error during query execution."
-            raise QueryExecutionError(msg) from e
+            logger.error(f"Error in execute_query_to_json_file: {e}")
+            raise
+
+    def _execute_batched_query(self, model_name: str, timeout: int | None = None) -> list[dict[str, Any]]:
+        """Execute a query in very small batches to avoid any truncation issues."""
+        try:
+            all_results = []
+            batch_size = 3  # Very small batch size to avoid any issues
+            offset = 0
+
+            while True:
+                # Query for a very small batch
+                query = f"puts {model_name}.offset({offset}).limit({batch_size}).to_json"
+                result_output = self.execute_query(query, timeout=timeout)
+
+                try:
+                    batch_data = self._parse_rails_output(result_output)
+
+                    # If we get no data or empty array, we're done
+                    if not batch_data or (isinstance(batch_data, list) and len(batch_data) == 0):
+                        break
+
+                    # If we get a single item instead of array, wrap it
+                    if isinstance(batch_data, dict):
+                        batch_data = [batch_data]
+
+                    # Add to results
+                    if isinstance(batch_data, list):
+                        all_results.extend(batch_data)
+
+                        # If we got fewer items than batch_size, we're done
+                        if len(batch_data) < batch_size:
+                            break
+                    else:
+                        logger.warning("Unexpected data type from batch query: %s", type(batch_data))
+                        break
+
+                    offset += batch_size
+
+                    # Safety limit to prevent infinite loops
+                    if offset > 1000:  # Lower safety limit
+                        logger.warning("Reached safety limit of 1000 records, stopping")
+                        break
+
+                    # Small delay to avoid overwhelming the console
+                    time.sleep(0.1)
+
+                except Exception as e:
+                    logger.error("Failed to parse batch at offset %d: %s", offset, e)
+                    break
+
+            logger.debug("Retrieved %d total records using simple batched approach", len(all_results))
+            return all_results
+
+        except Exception as e:
+            logger.error("Simple batched query failed: %s", e)
+            # Return empty list instead of failing completely
+            return []
+
+    def _parse_rails_output(self, result_output: str) -> Any:
+        """Parse Rails console output into Python objects."""
+        try:
+            # Clean up the output - remove any extra whitespace and newlines
+            clean_output = result_output.strip()
+            if not clean_output:
+                return None
+
+            # Handle Ruby nil -> None
+            if clean_output == "nil" or clean_output == "null":
+                return None
+
+            # First, try to extract content between execution markers if present
+            # This handles the case where execute_query was used with --EXEC_START--/--EXEC_END-- markers
+            start_marker_pattern = r"--EXEC_START--[a-zA-Z0-9_]+"
+            end_marker_pattern = r"--EXEC_END--[a-zA-Z0-9_]+"
+
+            start_match = re.search(start_marker_pattern, clean_output)
+            end_match = re.search(end_marker_pattern, clean_output)
+
+            if start_match and end_match:
+                start_idx = start_match.end()
+                end_idx = end_match.start()
+                if start_idx < end_idx:
+                    marked_content = clean_output[start_idx:end_idx].strip()
+                    logger.debug("Extracted content between execution markers: %s", marked_content[:200])
+                    clean_output = marked_content
+
+            # Try to parse as JSON directly first (for clean output)
+            try:
+                data = json.loads(clean_output)
+                logger.debug("Successfully parsed JSON directly")
+                return data
+            except json.JSONDecodeError:
+                logger.debug("Direct JSON parsing failed, trying to extract JSON from mixed output")
+
+            # If direct parsing fails, try to extract JSON from mixed Rails console output
+            # Look for JSON content patterns within the output
+            lines = clean_output.split("\n")
+            json_candidate_lines = []
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # Skip lines that are clearly Rails console commands or prompts
+                if (line.startswith("puts ") or
+                    line.startswith("p ") or
+                    line.startswith("pp ") or
+                    line.startswith("irb(") or
+                    line.startswith("open-project(") or
+                    line.startswith("=>") or
+                    "--EXEC_" in line or
+                    "TMUX_CMD_" in line or
+                    line.endswith("*>") or  # Handles prompts like 'open-project(prod)*>'
+                    line.endswith(">")):    # Generic prompt endings
+                    continue
+
+                # Look for lines that contain JSON-like content
+                if (line.startswith("{") or
+                    line.startswith("[") or
+                    line.startswith('"') or
+                    (json_candidate_lines and (
+                        '"' in line or
+                        line.endswith("}") or
+                        line.endswith("]") or
+                        line.endswith(",") or
+                        ":" in line or
+                        "true" in line or
+                        "false" in line or
+                        "null" in line or
+                        line.isdigit()))):
+                    json_candidate_lines.append(line)
+
+            if json_candidate_lines:
+                # Try to reconstruct JSON from the candidate lines
+                json_text = "".join(json_candidate_lines)
+
+                try:
+                    data = json.loads(json_text)
+                    logger.debug("Successfully parsed JSON from extracted lines")
+                    return data
+                except json.JSONDecodeError as e:
+                    logger.debug("Failed to parse extracted JSON: %s", e)
+
+                    # Try to find a complete JSON object within the text
+                    # Look for the first '{' or '[' and try to find the matching closing bracket
+                    for start_char, end_char in [("{", "}"), ("[", "]")]:
+                        start_idx = json_text.find(start_char)
+                        if start_idx != -1:
+                            # Find the matching closing bracket
+                            bracket_count = 0
+                            end_idx = -1
+                            for i in range(start_idx, len(json_text)):
+                                if json_text[i] == start_char:
+                                    bracket_count += 1
+                                elif json_text[i] == end_char:
+                                    bracket_count -= 1
+                                    if bracket_count == 0:
+                                        end_idx = i + 1
+                                        break
+
+                            if end_idx != -1:
+                                extracted_json = json_text[start_idx:end_idx]
+                                try:
+                                    data = json.loads(extracted_json)
+                                    logger.debug("Successfully parsed JSON using bracket matching")
+                                    return data
+                                except json.JSONDecodeError:
+                                    continue
+
+            # If we still can't parse, check for simple scalar values
+            if clean_output.isdigit():
+                return int(clean_output)
+            if clean_output in ["true", "false"]:
+                return clean_output == "true"
+            if (clean_output.startswith('"') and clean_output.endswith('"')) or (clean_output.startswith("'") and clean_output.endswith("'")):
+                return clean_output[1:-1]  # Remove quotes
+
+            # Final fallback - log the issue and raise an error
+            logger.warning("Could not parse Rails console output as JSON")
+            logger.debug("Full output: %s", clean_output[:500])
+
+            # For migration purposes, fail rather than return unparseable data
+            msg = f"Failed to parse Rails console output as JSON: {clean_output[:200]}..."
+            raise JsonParseError(msg)
+
+        except Exception as e:
+            logger.error("Failed to process query result: %s", result_output[:200])
+            msg = f"Failed to process query result: {e}"
+            raise JsonParseError(msg) from e
 
     def execute_json_query(self, query: str, timeout: int | None = None) -> Any:
         """Execute a Rails query and return parsed JSON result.
