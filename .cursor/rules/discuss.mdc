@@ -3,8 +3,8 @@ description:
 globs:
 alwaysApply: true
 ---
-Discuss any planning made with Ze.
-When planning a new feature, discuss the plan with Zen.
+Challenge any planning you made with Zen.
+When you are done planning a new feature, let Zen deepthink about the plan.
 When starting a new task, make a plan and discuss this plan with Zen.
-Let Zen Review every change - add any findings or suggestions by Zen to our tasklist.
-Let Zen review every commit - add any findings or suggestions by Zen to our tasklist.
+Let Zen do a codereview for every change - add any findings or suggestions by Zen to our tasklist.
+Let Zen do a codereview for every commit - add any findings or suggestions by Zen to our tasklist.

@@ -396,6 +396,21 @@ def run_migration(
                     results.components[component_name] = error_result
                     results.overall["status"] = "failed"
 
+                    # Check if we should stop on error immediately after an exception
+                    if stop_on_error:
+                        config.logger.error(
+                            f"Component '{component_name}' failed with exception and --stop-on-error is set, aborting migration",
+                        )
+                        break
+
+                # Check if component failed and we should stop on error (before user confirmation)
+                component_result_obj = results.components.get(component_name)
+                if component_result_obj and not component_result_obj.success and stop_on_error:
+                    config.logger.error(
+                        f"Component '{component_name}' failed and --stop-on-error is set, aborting migration",
+                    )
+                    break
+
                 # Pause for user confirmation between components
                 if component_name != components[-1] and not no_confirm:  # Skip after the last component or if no_confirm is set
                     try:
@@ -429,16 +444,15 @@ def run_migration(
                         results.overall["message"] = "Migration was interrupted by user"
                         break
 
-                # Break out if the component failed and it's critical
+                # Break out if critical components failed
                 component_result_data = results.components
                 current_component_result = component_result_data.get(component_name, ComponentResult())
-                current_component_status = current_component_result.details.get("status")
-                if stop_on_error and current_component_status == "failed":
-                    config.logger.error(
-                        f"Component '{component_name}' failed and --stop-on-error is set, aborting migration",
-                    )
-                    break
-                elif current_component_status == "failed" and component_name in ["users", "projects"]:
+
+                # Check if component failed - use success flag as primary indicator
+                component_failed = not current_component_result.success if current_component_result else True
+
+                # Stop for critical components regardless of stop_on_error flag
+                if component_failed and component_name in ["users", "projects"]:
                     config.logger.error(
                         f"Critical component '{component_name}' failed, aborting migration",
                     )
@@ -533,6 +547,16 @@ def parse_args() -> argparse.Namespace:
         "--update-mapping",
         action="store_true",
         help="Update custom field mapping after manual Ruby script execution",
+    )
+    parser.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        help="Stop the migration on the first error or exception encountered",
+    )
+    parser.add_argument(
+        "--no-confirm",
+        action="store_true",
+        help="Skip the 'Continue to next component' prompt and run all components without pausing",
     )
     return parser.parse_args()
 
@@ -701,7 +725,11 @@ def main() -> None:
         config.update_from_cli_args(args)
 
         # Run migration with provided arguments
-        migration_result = run_migration(components=args.components)
+        migration_result = run_migration(
+            components=args.components,
+            stop_on_error=getattr(args, "stop_on_error", False),
+            no_confirm=getattr(args, "no_confirm", False),
+        )
 
         # Display migration results summary
         if migration_result:

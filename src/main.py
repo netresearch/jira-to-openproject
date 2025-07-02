@@ -98,7 +98,7 @@ def main() -> None:
         )
 
         # Exit with appropriate code
-        if result["overall"]["status"] == "success":
+        if result.overall.get("status") == "success":
             sys.exit(0)
         else:
             sys.exit(1)
