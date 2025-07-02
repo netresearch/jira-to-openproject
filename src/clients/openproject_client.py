@@ -585,7 +585,8 @@ class OpenProjectClient:
 
                 logger.debug("Clean lines after filtering: %s", repr(clean_lines))
                 if clean_lines:
-                    clean_output = '\n'.join(clean_lines).strip()
+                    # Join all clean lines together to reconstruct potentially multi-line JSON
+                    clean_output = ''.join(clean_lines).strip()
                     logger.debug("Extracted TMUX content: %s", repr(clean_output))
                 else:
                     logger.debug("No content found between TMUX markers")
