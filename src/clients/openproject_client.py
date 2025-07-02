@@ -586,8 +586,9 @@ class OpenProjectClient:
                 logger.debug("Clean lines after filtering: %s", repr(clean_lines))
                 if clean_lines:
                     # Join all clean lines together to reconstruct potentially multi-line JSON
+                    # For large JSON arrays, we need to join without any separators
                     clean_output = ''.join(clean_lines).strip()
-                    logger.debug("Extracted TMUX content: %s", repr(clean_output))
+                    logger.debug("Extracted TMUX content: %s", repr(clean_output)[:200] + "...")
                 else:
                     logger.debug("No content found between TMUX markers")
                     return None
@@ -1506,8 +1507,8 @@ class OpenProjectClient:
             import time as time_module
 
             # Use direct tmux approach to avoid Rails console client timing issues
-            # Query actual Project records with proper attributes
-            query = "puts Project.all.limit(10).select(:id, :name, :identifier, :description, :status_code).to_json"
+            # Query actual Project records with proper attributes - get ALL projects for migration
+            query = "puts Project.all.select(:id, :name, :identifier, :description, :status_code).to_json"
 
             # Send the command directly to tmux
             target = f"{self.rails_client.tmux_session_name}:{self.rails_client.window}.{self.rails_client.pane}"
