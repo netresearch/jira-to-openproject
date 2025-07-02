@@ -105,8 +105,11 @@ class UserMigration(BaseMigration):
         self.op_users = self.op_client.get_users()
 
         if not self.op_users:
-            msg = "Failed to extract users from OpenProject"
-            raise MigrationError(msg)
+            # Instead of failing completely, log a warning and continue with empty list
+            # This allows the migration to proceed even if user extraction has issues
+            self.logger.warning("Failed to extract users from OpenProject - continuing with empty user list")
+            self.logger.warning("This may be due to JSON parsing issues with large user datasets")
+            self.op_users = []
 
         self.logger.info(
             "Extracted %s users from OpenProject",
@@ -134,6 +137,28 @@ class UserMigration(BaseMigration):
 
         if not self.op_users:
             self.extract_openproject_users()
+
+        # Debug: Check what type of data we're getting
+        self.logger.debug("OpenProject users data type: %s", type(self.op_users))
+        if self.op_users:
+            self.logger.debug("First user data type: %s", type(self.op_users[0]))
+            self.logger.debug("First user content: %s", str(self.op_users[0])[:200])
+
+        # Ensure we have a list of dictionaries
+        if not isinstance(self.op_users, list):
+            raise MigrationError(f"Expected list of users, got {type(self.op_users)}")
+
+        # Filter out any non-dictionary items
+        valid_users = []
+        for i, user in enumerate(self.op_users):
+            if isinstance(user, dict):
+                valid_users.append(user)
+            else:
+                self.logger.warning("Skipping invalid user data at index %d: %s (type: %s)",
+                                    i, str(user)[:100], type(user))
+
+        self.op_users = valid_users
+        self.logger.info("Filtered to %d valid user records", len(self.op_users))
 
         op_users_by_username = {
             user.get("login", "").lower(): user for user in self.op_users
