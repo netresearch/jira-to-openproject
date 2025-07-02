@@ -428,7 +428,7 @@ class RailsConsoleClient:
         while time.time() - start_time < timeout:
             try:
                 capture = subprocess.run(
-                    ["tmux", "capture-pane", "-p", "-S", "-200", "-t", target],
+                    ["tmux", "capture-pane", "-p", "-S", "-500", "-t", target],
                     capture_output=True,
                     text=True,
                     check=True,
@@ -562,6 +562,10 @@ class RailsConsoleClient:
                 text=True,
                 check=True,
             )
+
+            # Give the command time to execute before checking if console is ready
+            # This prevents sending the end marker before the command output appears
+            time.sleep(0.5)
             self._wait_for_console_ready(target, timeout)
 
             logger.debug("Sending end marker to tmux session: %s", end_marker)
