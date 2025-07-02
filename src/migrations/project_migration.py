@@ -436,31 +436,67 @@ class ProjectMigration(BaseMigration):
                 check_query = f"Project.find_by(identifier: '{project_data['identifier']}')"
                 existing = self.op_client.execute_query_to_json_file(check_query)
 
-                if existing and isinstance(existing, dict) and existing.get("id"):
-                    logger.info("Project '%s' already exists with ID %s", project_data["name"], existing["id"])
+                # Handle both JSON responses and scalar strings that indicate existence
+                project_exists = False
+                project_id = None
+                project_name = None
+                project_identifier = None
+
+                if existing:
+                    if isinstance(existing, dict) and existing.get("id"):
+                        # Proper JSON response
+                        project_exists = True
+                        project_id = existing["id"]
+                        project_name = existing["name"]
+                        project_identifier = existing["identifier"]
+                    elif isinstance(existing, str) and existing.strip() and existing.strip() != "nil":
+                        # Scalar string response indicates project exists
+                        # but format is not JSON
+                        project_exists = True
+                        # Try to get project details with a more explicit query
+                        detail_query = (
+                            f"p = Project.find_by(identifier: '{project_data['identifier']}'); "
+                            "p ? p.as_json : nil"
+                        )
+                        details = self.op_client.execute_query_to_json_file(detail_query)
+                        if isinstance(details, dict) and details.get("id"):
+                            project_id = details["id"]
+                            project_name = details["name"]
+                            project_identifier = details["identifier"]
+
+                if project_exists:
+                    logger.info("Project '%s' already exists with ID %s", project_data["name"], project_id or "unknown")
                     created_projects.append({
                         "jira_key": project_data["jira_key"],
-                        "openproject_id": existing["id"],
-                        "name": existing["name"],
-                        "identifier": existing["identifier"],
+                        "openproject_id": project_id,
+                        "name": project_name or project_data["name"],
+                        "identifier": project_identifier or project_data["identifier"],
                         "created_new": False
                     })
                     continue
 
                 # Create the project using simplified Rails command (atomic and concise)
-                name_escaped = project_data['name'].replace("'", "\\'")
-                desc_escaped = project_data.get('description', '').replace("'", "\\'")
+                # Properly escape strings for Rails/Ruby
+                # Handle quotes, backslashes, and newlines
+                def ruby_escape(s):
+                    if not s:
+                        return ""
+                    # First escape backslashes, then single quotes
+                    return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
 
-                # Use create! for atomic creation with validation
+                name_escaped = ruby_escape(project_data['name'])
+                desc_escaped = ruby_escape(project_data.get('description', ''))
+
+                # Use a single-line Rails command for better reliability
                 create_script = (
                     f"p = Project.create!(name: '{name_escaped}', "
                     f"identifier: '{project_data['identifier']}', "
                     f"description: '{desc_escaped}', public: false); "
                     f"p.enabled_module_names = ['work_package_tracking', 'wiki']; "
-                    f"p.save!; puts p.to_json"
+                    f"p.save!; p.as_json"
                 )
 
-                result = self.op_client.execute_query_to_json_file(create_script.strip())
+                result = self.op_client.execute_query_to_json_file(create_script)
 
                 if isinstance(result, dict) and result.get("id"):
                     logger.info("Successfully created project '%s' with ID %s", project_data["name"], result["id"])

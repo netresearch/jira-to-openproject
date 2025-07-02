@@ -381,7 +381,15 @@ class IssueTypeMigration(BaseMigration):
 
         try:
             self.logger.info("Executing Rails command to write work package types to %s...", temp_file_path)
-            write_result = self.rails_console.execute_query(command)
+            write_result = self.op_client.execute_query(command)
+            self.logger.debug(f"Result from work package type write: type={type(write_result)}, value={write_result}")
+            if not isinstance(write_result, dict):
+                msg = (
+                    "Failed to run work package type write: Invalid response from OpenProject "
+                    f"(type={type(write_result)}, value={write_result})"
+                )
+                self.logger.error(msg)
+                return []
 
             if (
                 write_result.get("status") == "success"
@@ -508,21 +516,27 @@ class IssueTypeMigration(BaseMigration):
 
         # Check if the type already exists to avoid duplicates
         check_command = f'existing_type = Type.where("name ilike ?", "{type_name}").first'
-        check_result = self.rails_console.execute_query(check_command)
-
-        if check_result["status"] != "success":
-            return {
-                "status": "error",
-                "error": f"Failed to check for existing type: {check_result.get('error', 'Unknown error')}",
-            }
+        check_result = self.op_client.execute_query(check_command)
+        self.logger.debug(f"check_result type: {type(check_result)}, value: {check_result}")
+        if not isinstance(check_result, dict):
+            self.logger.error(f"Expected dict from execute_query, got {type(check_result)}: {check_result}")
+            return {"status": "error", "error": "Invalid result type from execute_query (check_result)"}
 
         exists_command = "existing_type.present?"
-        exists_result = self.rails_console.execute_query(exists_command)
+        exists_result = self.op_client.execute_query(exists_command)
+        self.logger.debug(f"exists_result type: {type(exists_result)}, value: {exists_result}")
+        if not isinstance(exists_result, dict):
+            self.logger.error(f"Expected dict from execute_query, got {type(exists_result)}: {exists_result}")
+            return {"status": "error", "error": "Invalid result type from execute_query (exists_result)"}
 
         if exists_result["status"] == "success" and "true" in exists_result["output"]:
             self.logger.info("Work package type '%s' already exists, retrieving ID", type_name)
             id_command = "existing_type.id"
-            id_result = self.rails_console.execute_query(id_command)
+            id_result = self.op_client.execute_query(id_command)
+            self.logger.debug(f"id_result type: {type(id_result)}, value: {id_result}")
+            if not isinstance(id_result, dict):
+                self.logger.error(f"Expected dict from execute_query, got {type(id_result)}: {id_result}")
+                return {"status": "error", "error": "Invalid result type from execute_query (id_result)"}
 
             if id_result["status"] == "success" and id_result["output"].strip().isdigit():
                 type_id = int(id_result["output"].strip())
@@ -554,16 +568,11 @@ class IssueTypeMigration(BaseMigration):
         end
         """
 
-        result = self.rails_console.execute_query(command)
-
-        if result["status"] != "success":
-            self.logger.error(
-                f"Error executing Rails command to create type '{type_name}': {result.get('error', 'Unknown error')}",
-            )
-            return {
-                "status": "error",
-                "error": f"Rails execution error: {result.get('error', 'Unknown error')}",
-            }
+        result = self.op_client.execute_query(command)
+        self.logger.debug(f"result type: {type(result)}, value: {result}")
+        if not isinstance(result, dict):
+            self.logger.error(f"Expected dict from execute_query, got {type(result)}: {result}")
+            return {"status": "error", "error": "Invalid result type from execute_query (result)"}
 
         # Parse the result
         output = result.get("output", "")
@@ -585,7 +594,11 @@ class IssueTypeMigration(BaseMigration):
 
             # Verify the type exists by querying it
             verify_command = f"Type.find({type_id}).present? rescue false"
-            verify_result = self.rails_console.execute_query(verify_command)
+            verify_result = self.op_client.execute_query(verify_command)
+            self.logger.debug(f"verify_result type: {type(verify_result)}, value: {verify_result}")
+            if not isinstance(verify_result, dict):
+                self.logger.error(f"Expected dict from execute_query, got {type(verify_result)}: {verify_result}")
+                return {"status": "error", "error": "Invalid result type from execute_query (verify_result)"}
 
             if verify_result["status"] == "success" and "true" in verify_result["output"]:
                 self.logger.info("Verified work package type '%s' with ID %s exists", type_name, type_id)
@@ -673,7 +686,7 @@ class IssueTypeMigration(BaseMigration):
         results_file = self.data_dir / "work_package_types_created.json"
 
         # Transfer the file to the container
-        if not self.rails_console.transfer_file_to_container(temp_file, container_temp_path):
+        if not self.op_client.transfer_file_to_container(temp_file, container_temp_path):
             self.logger.error(
                 "Failed to transfer types file to container from %s to %s",
                 temp_file,
@@ -821,7 +834,11 @@ class IssueTypeMigration(BaseMigration):
 
         # Execute the bulk creation script
         self.logger.info("Executing bulk creation of work package types via Rails console...")
-        result = self.rails_console.execute_query(bulk_create_script)
+        result = self.op_client.execute_query(bulk_create_script)
+        self.logger.debug(f"bulk_create_script result type: {type(result)}, value: {result}")
+        if not isinstance(result, dict):
+            self.logger.error(f"Expected dict from execute_query, got {type(result)}: {result}")
+            return False
 
         if result["status"] != "success":
             self.logger.error("Failed to execute bulk creation script: %s", result.get("error", "Unknown error"))
@@ -842,7 +859,7 @@ class IssueTypeMigration(BaseMigration):
         # Parse results
         try:
             # Try to get the result file from the container
-            if not self.rails_console.transfer_file_from_container(container_results_path, results_file):
+            if not self.op_client.transfer_file_from_container(container_results_path, results_file):
                 self.logger.error("Failed to retrieve results file from container: %s", container_results_path)
                 # Dump the entire output for debugging
                 self.logger.debug("Rails console output: %s", output)
