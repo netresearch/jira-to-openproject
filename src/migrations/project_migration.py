@@ -301,7 +301,14 @@ class ProjectMigration(BaseMigration):
 
         # Prepare project data for bulk creation
         projects_data = []
-        for jira_project in self.jira_projects:
+        for i, jira_project in enumerate(self.jira_projects):
+            # Refresh OpenProject projects list every 10 projects to catch newly created ones
+            if i > 0 and i % 10 == 0:
+                logger.debug(
+                    "Refreshing OpenProject projects list after %d projects", i
+                )
+                self.extract_openproject_projects()
+
             jira_key = jira_project.get("key", "")
             jira_name = jira_project.get("name", "")
             jira_description = jira_project.get("description", "")
@@ -322,10 +329,10 @@ class ProjectMigration(BaseMigration):
             # Log a few existing projects for comparison
             if self.op_projects:
                 logger.debug("Sample existing projects:")
-                for i, op_project in enumerate(self.op_projects[:3]):
+                for j, op_project in enumerate(self.op_projects[:3]):
                     logger.debug(
                         "  %d: name='%s', identifier='%s'",
-                        i+1,
+                        j+1,
                         op_project.get("name", ""),
                         op_project.get("identifier", "")
                     )
