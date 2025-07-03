@@ -37,6 +37,28 @@ help: ## Show this help message
 # Build and Environment Management
 # =============================================================================
 
+check-env: ## Validate required environment variables for services
+	@echo "Checking environment configuration..."
+	@if [ ! -f .env ]; then \
+		echo "❌ Missing .env file!"; \
+		echo ""; \
+		echo "PostgreSQL service requires environment variables."; \
+		echo "Quick fix:"; \
+		echo "  cp .env.example .env"; \
+		echo "  # Edit .env and set POSTGRES_PASSWORD"; \
+		echo ""; \
+		echo "For help: cat .env.example"; \
+		exit 1; \
+	fi
+	@if [ -f .env ] && [ -z "$$(grep '^POSTGRES_PASSWORD=' .env | cut -d'=' -f2)" ]; then \
+		echo "❌ POSTGRES_PASSWORD not set in .env file!"; \
+		echo ""; \
+		echo "Please edit .env and set a secure password:"; \
+		echo "  POSTGRES_PASSWORD=your_secure_password_here"; \
+		exit 1; \
+	fi
+	@echo "✅ Environment configuration OK"
+
 build: ## Build development containers
 	docker compose build
 
@@ -46,13 +68,13 @@ rebuild: ## Rebuild containers without cache
 up dev: ## Start development environment (app only)
 	docker compose --profile dev up -d
 
-dev-services: ## Start development with services (Redis, PostgreSQL)
+dev-services: check-env ## Start development with services (Redis, PostgreSQL)
 	docker compose --profile dev --profile services up -d
 
 dev-testing: ## Start development with testing services (mock APIs)
 	docker compose --profile dev --profile testing up -d
 
-dev-full: ## Start everything (app + services + testing)
+dev-full: check-env ## Start everything (app + services + testing)
 	docker compose --profile dev --profile services --profile testing up -d
 
 down dev-down: ## Stop all services

@@ -1,10 +1,11 @@
 # SECURITY CHECKLIST - Review before adding any Docker configuration:
 # [ ] Is Docker socket mount really needed? (Usually NO - see security docs)
 # [ ] Are services running as non-root users?
-# [ ] Are secrets excluded from version control?
+# [ ] Are secrets in .env file (not hardcoded in compose.yml)?
 # [ ] Are unnecessary ports closed?
 # [ ] Are resource limits defined?
 # [ ] Are volumes properly scoped?
+# [ ] Is .env file properly ignored by git?
 
 services:
   app:
@@ -75,9 +76,9 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: migration_test
-      POSTGRES_USER: testuser
-      POSTGRES_PASSWORD: testpass
+      POSTGRES_DB: ${POSTGRES_DB:-migration_test}
+      POSTGRES_USER: ${POSTGRES_USER:-testuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
     ports:
       - "5432:5432"
     networks:

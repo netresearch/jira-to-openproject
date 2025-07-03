@@ -61,6 +61,62 @@ make dev-setup
 make shell
 ```
 
+## ⚙️ **Environment Setup**
+
+### Required Environment Variables
+
+Some services require environment variables for proper operation:
+
+### Step 1: Copy Environment Template
+```bash
+# Copy the template file
+cp .env.example .env
+```
+
+### Step 2: Configure Required Variables
+Edit `.env` and update the required values:
+
+```bash
+# DATABASE CONFIGURATION (Required for 'services' profile)
+POSTGRES_DB=migration_test
+POSTGRES_USER=testuser
+POSTGRES_PASSWORD=your_secure_password_here  # ⚠️ UPDATE THIS
+```
+
+### Step 3: Environment Validation
+
+The system automatically validates environment configuration:
+
+```bash
+# These commands check for required environment variables:
+make dev-services   # Requires .env for PostgreSQL
+make dev-full       # Requires .env for PostgreSQL
+
+# These commands work without .env:
+make dev           # App only (no databases)
+make dev-testing   # Mock APIs only
+```
+
+### Troubleshooting Environment Issues
+
+**Missing .env file error:**
+```
+❌ Missing .env file!
+PostgreSQL service requires environment variables.
+Quick fix:
+  cp .env.example .env
+  # Edit .env and set POSTGRES_PASSWORD
+```
+
+**Solution:** Follow steps 1-2 above to create and configure your `.env` file.
+
+### Security Notes
+
+- **Never commit `.env` to version control** - it contains sensitive data
+- **Use `.env.example`** as a template for team sharing
+- **Update passwords** from default values before use
+- **Review `.gitignore`** to ensure `.env` is excluded
+
 ## 🔧 **Available Commands**
 
 Run `make help` to see all available commands:
