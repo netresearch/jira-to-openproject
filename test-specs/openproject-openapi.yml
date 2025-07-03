@@ -1,0 +1,210 @@
+openapi: 3.0.3
+info:
+  title: OpenProject API (Mock)
+  description: |
+    Minimal OpenProject API specification for testing purposes.
+
+    This is a placeholder OpenAPI spec that provides basic OpenProject API endpoints
+    for development and testing. The mock service (Stoplight Prism) uses this
+    specification to generate mock responses.
+
+    NOTE: This is NOT a complete OpenProject API specification. It contains only
+    the minimal endpoints needed to prevent Docker mount failures.
+
+    For production integration, refer to OpenProject's official API documentation.
+  version: 1.0.0
+  contact:
+    name: Development Team
+    url: https://www.openproject.org/docs/api/
+servers:
+  - url: http://localhost:4011
+    description: Mock OpenProject server
+
+paths:
+  /api/v3:
+    get:
+      summary: API Root
+      description: Returns the API root resource
+      operationId: getApiRoot
+      responses:
+        '200':
+          description: API root information
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  _type:
+                    type: string
+                    example: "Root"
+                  instanceName:
+                    type: string
+                    example: "OpenProject Mock"
+                  coreVersion:
+                    type: string
+                    example: "12.0.0"
+
+  /api/v3/users/me:
+    get:
+      summary: Get current user
+      description: Returns the current user
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Current user details
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  _type:
+                    type: string
+                    example: "User"
+                  id:
+                    type: integer
+                    example: 1
+                  name:
+                    type: string
+                    example: "Test User"
+                  email:
+                    type: string
+                    example: "test@example.com"
+                  login:
+                    type: string
+                    example: "testuser"
+
+  /api/v3/projects:
+    get:
+      summary: List projects
+      description: Returns a collection of projects
+      operationId: listProjects
+      responses:
+        '200':
+          description: Projects collection
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  _type:
+                    type: string
+                    example: "Collection"
+                  total:
+                    type: integer
+                    example: 1
+                  count:
+                    type: integer
+                    example: 1
+                  _embedded:
+                    type: object
+                    properties:
+                      elements:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            _type:
+                              type: string
+                              example: "Project"
+                            id:
+                              type: integer
+                              example: 1
+                            identifier:
+                              type: string
+                              example: "test-project"
+                            name:
+                              type: string
+                              example: "Test Project"
+
+  /api/v3/work_packages:
+    get:
+      summary: List work packages
+      description: Returns a collection of work packages
+      operationId: listWorkPackages
+      responses:
+        '200':
+          description: Work packages collection
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  _type:
+                    type: string
+                    example: "Collection"
+                  total:
+                    type: integer
+                    example: 0
+                  count:
+                    type: integer
+                    example: 0
+                  _embedded:
+                    type: object
+                    properties:
+                      elements:
+                        type: array
+                        items:
+                          type: object
+    post:
+      summary: Create work package
+      description: Creates a new work package
+      operationId: createWorkPackage
+      requestBody:
+        required: true
+        content:
+          application/hal+json:
+            schema:
+              type: object
+              properties:
+                subject:
+                  type: string
+                  example: "Test work package"
+                _links:
+                  type: object
+                  properties:
+                    type:
+                      type: object
+                      properties:
+                        href:
+                          type: string
+                          example: "/api/v3/types/1"
+                    project:
+                      type: object
+                      properties:
+                        href:
+                          type: string
+                          example: "/api/v3/projects/1"
+      responses:
+        '201':
+          description: Work package created
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  _type:
+                    type: string
+                    example: "WorkPackage"
+                  id:
+                    type: integer
+                    example: 1
+                  subject:
+                    type: string
+                    example: "Test work package"
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        _type:
+          type: string
+          example: "Error"
+        errorIdentifier:
+          type: string
+        message:
+          type: string
+      required:
+        - _type
+        - errorIdentifier
+        - message

@@ -59,6 +59,29 @@ check-env: ## Validate required environment variables for services
 	fi
 	@echo "✅ Environment configuration OK"
 
+ensure-test-specs: ## Ensure test-specs directory exists for mock services
+	@echo "Checking test-specs directory..."
+	@if [ ! -d test-specs ]; then \
+		echo "❌ Missing test-specs directory!"; \
+		echo ""; \
+		echo "Mock services require API specifications."; \
+		echo "This directory should be created automatically."; \
+		echo "If you see this error, please report it as a bug."; \
+		exit 1; \
+	fi
+	@if [ ! -f test-specs/jira-openapi.yml ] || [ ! -f test-specs/openproject-openapi.yml ]; then \
+		echo "❌ Missing OpenAPI specification files!"; \
+		echo ""; \
+		echo "Required files:"; \
+		echo "  test-specs/jira-openapi.yml"; \
+		echo "  test-specs/openproject-openapi.yml"; \
+		echo ""; \
+		echo "These files should be created automatically."; \
+		echo "If you see this error, please report it as a bug."; \
+		exit 1; \
+	fi
+	@echo "✅ Test specifications OK"
+
 build: ## Build development containers
 	docker compose build
 
@@ -71,10 +94,10 @@ up dev: ## Start development environment (app only)
 dev-services: check-env ## Start development with services (Redis, PostgreSQL)
 	docker compose --profile dev --profile services up -d
 
-dev-testing: ## Start development with testing services (mock APIs)
+dev-testing: ensure-test-specs ## Start development with testing services (mock APIs)
 	docker compose --profile dev --profile testing up -d
 
-dev-full: check-env ## Start everything (app + services + testing)
+dev-full: check-env ensure-test-specs ## Start everything (app + services + testing)
 	docker compose --profile dev --profile services --profile testing up -d
 
 down dev-down: ## Stop all services
