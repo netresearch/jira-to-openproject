@@ -274,6 +274,50 @@ class ProjectMigration(BaseMigration):
 
         return company
 
+    def _get_existing_project_details(self, identifier: str) -> dict[str, Any] | None:
+        """
+        Robustly check if a project exists and return its details using a single optimized query.
+
+        This method uses a single Rails console query that returns consistent results,
+        avoiding the performance penalty of multiple round-trips.
+
+        Args:
+            identifier: The project identifier to check
+
+        Returns:
+            Dictionary with project details if it exists, otherwise None
+
+        Raises:
+            Exception: If Rails console query fails or times out
+        """
+        try:
+            # Single optimized query that returns consistent format for both cases
+            check_query = (
+                f"p = Project.find_by(identifier: '{identifier}'); "
+                "if p; [true, p.id, p.name, p.identifier]; else; [false, nil, nil, nil]; end"
+            )
+
+            # Execute with basic timeout protection
+            result = self.op_client.execute_query_to_json_file(check_query)
+
+            # Parse the consistent array response
+            if isinstance(result, list) and len(result) == 4:
+                project_exists = result[0]
+                if project_exists is True:
+                    return {
+                        "id": result[1],
+                        "name": result[2],
+                        "identifier": result[3],
+                    }
+
+            # Project doesn't exist or query returned unexpected format
+            return None
+
+        except Exception as e:
+            logger.error("Project existence check failed for '%s': %s", identifier, e)
+            # Re-raise to let caller handle the error appropriately
+            raise Exception("Rails query failed") from e
+
     def bulk_migrate_projects(self) -> ComponentResult:
         """Migrate projects from Jira to OpenProject in bulk using Rails console.
         This is more efficient than creating each project individually with API calls.
@@ -439,62 +483,22 @@ class ProjectMigration(BaseMigration):
             try:
                 logger.info("Creating project %d/%d: %s", i+1, len(projects_data), project_data["name"])
 
-                # Check if project already exists with a more robust check
+                # Check if project already exists using optimized single-query method
                 identifier = project_data['identifier']
 
-                # First try: Look for the project by identifier with detailed output
-                check_query = f"p = Project.find_by(identifier: '{identifier}'); p ? p.as_json : nil"
-                existing = self.op_client.execute_query_to_json_file(check_query)
+                existing_project_details = self._get_existing_project_details(identifier)
 
-                # Handle both JSON responses and scalar strings that indicate existence
-                project_exists = False
-                project_id = None
-                project_name = None
-                project_identifier = None
-
-                if existing:
-                    if isinstance(existing, dict) and existing.get("id"):
-                        # Proper JSON response
-                        project_exists = True
-                        project_id = existing["id"]
-                        project_name = existing["name"]
-                        project_identifier = existing["identifier"]
-                    elif isinstance(existing, str):
-                        # Any non-empty string response could indicate project exists
-                        # Let's do a more explicit check
-                        exists_query = f"Project.exists?(identifier: '{identifier}')"
-                        exists_result = self.op_client.execute_query_to_json_file(exists_query)
-
-                        if (exists_result is True or
-                            (isinstance(exists_result, str) and
-                             exists_result.strip().lower() in ['true', 't'])):
-                            project_exists = True
-                            # Get the project details separately
-                            detail_query = f"Project.find_by(identifier: '{identifier}').as_json"
-                            details = self.op_client.execute_query_to_json_file(detail_query)
-                            if isinstance(details, dict) and details.get("id"):
-                                project_id = details["id"]
-                                project_name = details["name"]
-                                project_identifier = details["identifier"]
-                            else:
-                                # If we can't get details but know it exists, try a simpler query
-                                simple_query = (
-                                    f"p = Project.find_by(identifier: '{identifier}'); "
-                                    "[p.id, p.name, p.identifier]"
-                                )
-                                simple_result = self.op_client.execute_query_to_json_file(simple_query)
-                                if isinstance(simple_result, list) and len(simple_result) >= 3:
-                                    project_id = simple_result[0]
-                                    project_name = simple_result[1]
-                                    project_identifier = simple_result[2]
-
-                if project_exists:
-                    logger.info("Project '%s' already exists with ID %s", project_data["name"], project_id or "unknown")
+                if existing_project_details:
+                    logger.info(
+                        "Project '%s' already exists with ID %s",
+                        project_data["name"],
+                        existing_project_details["id"]
+                    )
                     created_projects.append({
                         "jira_key": project_data["jira_key"],
-                        "openproject_id": project_id,
-                        "name": project_name or project_data["name"],
-                        "identifier": project_identifier or project_data["identifier"],
+                        "openproject_id": existing_project_details["id"],
+                        "name": existing_project_details["name"],
+                        "identifier": existing_project_details["identifier"],
                         "created_new": False
                     })
                     continue
