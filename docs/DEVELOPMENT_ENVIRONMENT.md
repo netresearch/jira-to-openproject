@@ -167,6 +167,36 @@ Services are organized using Docker Compose profiles:
 - **`services`**: Optional persistence (Redis, PostgreSQL)
 - **`testing`**: Mock APIs for testing (Prism mock servers)
 
+#### Mock API Services
+
+The `testing` profile includes mock API services for offline development:
+
+- **Mock Jira API** (port 4010): Simulates Atlassian Jira REST API
+- **Mock OpenProject API** (port 4011): Simulates OpenProject REST API
+
+These services use [Stoplight Prism](https://stoplight.io/open-source/prism) to generate mock responses from OpenAPI specifications stored in `test-specs/`:
+
+```
+test-specs/
+├── jira-openapi.yml          # Jira API specification
+├── openproject-openapi.yml   # OpenProject API specification
+└── README.md                 # Documentation
+```
+
+**Mock Service Usage:**
+```bash
+# Test mock Jira API
+curl http://localhost:4010/rest/api/3/myself
+
+# Test mock OpenProject API
+curl http://localhost:4011/api/v3/users/me
+
+# Start with mock services
+make dev-testing
+```
+
+**Note:** These are minimal placeholder specifications designed to prevent Docker mount failures. For comprehensive testing, expand the OpenAPI specifications with additional endpoints and realistic responses.
+
 ```bash
 # Start only the app
 make dev

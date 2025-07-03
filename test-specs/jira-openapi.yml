@@ -1,0 +1,129 @@
+openapi: 3.0.3
+info:
+  title: Jira API (Mock)
+  description: |
+    Minimal Jira API specification for testing purposes.
+
+    This is a placeholder OpenAPI spec that provides basic Jira API endpoints
+    for development and testing. The mock service (Stoplight Prism) uses this
+    specification to generate mock responses.
+
+    NOTE: This is NOT a complete Jira API specification. It contains only
+    the minimal endpoints needed to prevent Docker mount failures.
+
+    For production integration, refer to Atlassian's official Jira API documentation.
+  version: 1.0.0
+  contact:
+    name: Development Team
+    url: https://developer.atlassian.com/cloud/jira/platform/rest/v3/
+servers:
+  - url: http://localhost:4010
+    description: Mock Jira server
+
+paths:
+  /rest/api/3/myself:
+    get:
+      summary: Get current user
+      description: Returns details for the current user
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Current user details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accountId:
+                    type: string
+                    example: "5b10a2844c20165700ede21g"
+                  displayName:
+                    type: string
+                    example: "Mia Krystof"
+                  emailAddress:
+                    type: string
+                    example: "mia@example.com"
+                  active:
+                    type: boolean
+                    example: true
+
+  /rest/api/3/project:
+    get:
+      summary: Get all projects
+      description: Returns all projects which the user has permissions to view
+      operationId: getAllProjects
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      example: "10000"
+                    key:
+                      type: string
+                      example: "EX"
+                    name:
+                      type: string
+                      example: "Example Project"
+
+  /rest/api/3/issue:
+    post:
+      summary: Create issue
+      description: Creates an issue or a sub-task
+      operationId: createIssue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fields:
+                  type: object
+                  properties:
+                    summary:
+                      type: string
+                      example: "Test issue"
+                    project:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                          example: "EX"
+      responses:
+        '201':
+          description: Issue created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    example: "10001"
+                  key:
+                    type: string
+                    example: "EX-1"
+                  self:
+                    type: string
+                    example: "http://localhost:4010/rest/api/3/issue/10001"
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        errorMessages:
+          type: array
+          items:
+            type: string
+        errors:
+          type: object
+      required:
+        - errorMessages
