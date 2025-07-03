@@ -558,6 +558,45 @@ volumes:
 - All Docker operations executed remotely via SSH
 - No local Docker daemon access required
 
+### Network Security
+
+**Localhost-only Port Binding - SECURE BY DEFAULT**
+```yaml
+# ✅ SECURE: All services use localhost-only binding
+services:
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"  # Only accessible from localhost
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"  # Only accessible from localhost
+  app:
+    ports:
+      - "127.0.0.1:8000:8000"  # Only accessible from localhost
+```
+
+**Why localhost-only binding matters:**
+- Prevents external network access to development services
+- Services remain accessible from browser (localhost:8000) and containers
+- Eliminates security risk of exposing databases on public interfaces
+- Consistent with security-first development principles
+
+**Implementation details:**
+- **Port mapping**: `127.0.0.1:HOST_PORT:CONTAINER_PORT` format
+- **Container binding**: Services bind to `0.0.0.0` inside containers for Docker networking
+- **Host access**: Services only accessible via `localhost` or `127.0.0.1` on host
+- **Browser access**: Full functionality preserved (localhost:8000, localhost:4010, etc.)
+
+**Testing network security:**
+```bash
+# Verify localhost-only binding
+ss -tulnp | grep -E "(5432|6379|8000|5000|4010|4011)"
+
+# Should show only 127.0.0.1:PORT bindings, never 0.0.0.0:PORT
+```
+
+**Cross-reference**: See `compose.yml` for complete implementation and `test-specs/README.md` for mock service security configuration.
+
 ### Development Security Guidelines
 
 **Non-root User Execution**

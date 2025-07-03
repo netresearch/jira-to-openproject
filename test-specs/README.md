@@ -124,20 +124,22 @@ Mock services are defined in `compose.yml` under the `testing` profile:
 
 ```yaml
 # Mock Jira API server for testing
+# SECURITY: Mock services use localhost-only binding for development security
 mock-jira:
   image: stoplight/prism:4
-  command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml
+  command: mock -h 127.0.0.1 -p 4010 /specs/jira-openapi.yml
   ports:
-    - "4010:4010"
+    - "127.0.0.1:4010:4010"  # Localhost-only access
   volumes:
     - ./test-specs:/specs:ro
 
 # Mock OpenProject API server for testing
+# SECURITY: Consistent with localhost-only binding pattern across all services
 mock-openproject:
   image: stoplight/prism:4
-  command: mock -h 0.0.0.0 -p 4011 /specs/openproject-openapi.yml
+  command: mock -h 127.0.0.1 -p 4011 /specs/openproject-openapi.yml
   ports:
-    - "4011:4011"
+    - "127.0.0.1:4011:4011"  # Localhost-only access
   volumes:
     - ./test-specs:/specs:ro
 ```
