@@ -229,7 +229,7 @@ This approach provides:
 
 The `.devcontainer/devcontainer.json` configures VS Code to:
 - Use the Docker Compose app service
-- Forward relevant ports (8000, 5000, 4010, 4011)
+- Forward relevant ports (8000, 4010, 4011)
 - Install Python extensions automatically
 - Configure Python interpreter path for user-installed packages
 
@@ -367,27 +367,56 @@ PYTHONPATH=/app
 
 ### Port Configuration
 
-Default ports (configurable in `compose.yml`):
-- `8000, 5000`: Application ports
-- `4010`: Mock Jira API
-- `4011`: Mock OpenProject API
-- `5432`: PostgreSQL
-- `6379`: Redis
+Default ports (only exposed with appropriate profiles):
+- `8000`: Primary application port (always available with --profile dev)
+- `4010`: Mock Jira API (available with --profile dev)
+- `4011`: Mock OpenProject API (available with --profile dev)
+- `5432`: PostgreSQL (internal service - no external exposure)
+- `6379`: Redis (internal service - no external exposure)
 
-### Service Profiles
+### Service Profiles & Security Architecture
 
-Customize which services start by default by modifying profiles in `compose.yml`:
+This environment implements an **intelligent security-first architecture** using Docker Compose profiles:
 
-```yaml
-# Always start with app
-profiles: ["dev"]
+#### Security by Default
+```bash
+# Default: ZERO exposed ports (maximum security)
+docker compose up
+# Result: No services exposed to host network
 
-# Include in dev-services
-profiles: ["services"]
+# Development: Minimal necessary exposure
+docker compose --profile dev up
+# Result: Only app (8000) and mock services (4010, 4011) exposed
 
-# Include in dev-testing
-profiles: ["testing"]
+# Full services: Internal services for integration testing
+docker compose --profile dev --profile services up
+# Result: App + mock services exposed, databases internal-only
 ```
+
+#### Profile Strategy
+```yaml
+# No profile: Secure by default (no services)
+# --profile dev: Development convenience (3 ports)
+# --profile services: Add internal services (Redis, PostgreSQL)
+
+app:
+  # Always included in dev profile
+  profiles: ["dev"]
+
+mock-jira:
+  # Only exposed with dev profile
+  profiles: ["dev"]
+
+redis:
+  # Internal service - no external ports
+  profiles: ["services"]
+```
+
+#### Benefits
+- **🔒 Maximum Security**: Default operation exposes no attack surface
+- **🛠️ Developer Convenience**: `--profile dev` provides necessary access
+- **🏗️ Architectural Clarity**: Clear distinction between internal and external services
+- **🎯 DevContainer Integration**: Perfect alignment with VS Code development workflow
 
 ## 🏭 **Production Considerations**
 
@@ -560,19 +589,23 @@ volumes:
 
 ### Network Security
 
-**Localhost-only Port Binding - SECURE BY DEFAULT**
+**Intelligent Port Exposure - SECURE BY DEFAULT**
 ```yaml
-# ✅ SECURE: All services use localhost-only binding
+# ✅ SECURE: Services use intelligent exposure strategy
 services:
+  # Internal services - no external port exposure
   redis:
-    ports:
-      - "127.0.0.1:6379:6379"  # Only accessible from localhost
+    # Accessible via hostname 'redis:6379' on Docker network only
   postgres:
-    ports:
-      - "127.0.0.1:5432:5432"  # Only accessible from localhost
+    # Accessible via hostname 'postgres:5432' on Docker network only
+
+  # Dev services - exposed only with --profile dev
   app:
     ports:
       - "127.0.0.1:8000:8000"  # Only accessible from localhost
+  mock-jira:
+    ports:
+      - "127.0.0.1:4010:4010"  # Only accessible from localhost
 ```
 
 **Why localhost-only binding matters:**
@@ -589,10 +622,11 @@ services:
 
 **Testing network security:**
 ```bash
-# Verify localhost-only binding
-ss -tulnp | grep -E "(5432|6379|8000|5000|4010|4011)"
+# Verify intelligent port exposure strategy
+ss -tulnp | grep -E "(8000|4010|4011)"
 
-# Should show only 127.0.0.1:PORT bindings, never 0.0.0.0:PORT
+# Should show only 127.0.0.1:PORT bindings for exposed services
+# Internal services (Redis, PostgreSQL) should not appear in results
 ```
 
 **Cross-reference**: See `compose.yml` for complete implementation and `test-specs/README.md` for mock service security configuration.

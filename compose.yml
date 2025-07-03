@@ -27,18 +27,19 @@ services:
       - ENV_FILE=/app/.env
     networks:
       - dev_network
-    # SECURITY: App services exposed on localhost only via port mapping (127.0.0.1:port)
+    # SECURITY: App service exposed on localhost only via port mapping (127.0.0.1:port)
     # Container binding uses 0.0.0.0 for Docker networking, but host access is localhost-only
-    # Developers can access via browser at localhost:8000 and localhost:5000
+    # Primary web application port - accessible at localhost:8000
     ports:
-      - "127.0.0.1:8000:8000"  # Common web app port
-      - "127.0.0.1:5000:5000"  # Flask default
+      - "127.0.0.1:8000:8000"  # Primary web app port
+      # REMOVED: Secondary port 5000 (unnecessary duplication)
     profiles:
       - dev
 
   # Mock Jira API server for testing
-  # SECURITY: Mock services exposed on localhost only via port mapping (127.0.0.1:4010)
-  # Container binding uses 0.0.0.0 for Docker networking, but host access is localhost-only
+  # SECURITY: Mock service ports only exposed with --profile dev for development convenience
+  # Default: No external port exposure (maximum security)
+  # Dev mode: Accessible at localhost:4010 when using --profile dev
   mock-jira:
     image: stoplight/prism:4
     command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml
@@ -49,9 +50,12 @@ services:
     networks:
       - dev_network
     profiles:
-      - testing
+      - dev  # Changed from 'testing' to 'dev' for better integration
 
   # Mock OpenProject API server for testing
+  # SECURITY: Mock service ports only exposed with --profile dev for development convenience
+  # Default: No external port exposure (maximum security)
+  # Dev mode: Accessible at localhost:4011 when using --profile dev
   mock-openproject:
     image: stoplight/prism:4
     command: mock -h 0.0.0.0 -p 4011 /specs/openproject-openapi.yml
@@ -62,15 +66,15 @@ services:
     networks:
       - dev_network
     profiles:
-      - testing
+      - dev  # Changed from 'testing' to 'dev' for better integration
 
   # Redis for caching (optional)
-  # SECURITY: Redis exposed on localhost only via port mapping (127.0.0.1:6379)
-  # Container binding uses 0.0.0.0 for Docker networking, but host access is localhost-only
+  # SECURITY: Redis internal service - no external port exposure needed
+  # Available to other services via hostname 'redis:6379' on Docker network
   redis:
     image: redis:7-alpine
-    ports:
-      - "127.0.0.1:6379:6379"
+    # REMOVED: External port mapping (was 127.0.0.1:6379:6379)
+    # Service accessible internally via hostname 'redis' on port 6379
     networks:
       - dev_network
     profiles:
@@ -79,16 +83,16 @@ services:
       - redis_data:/data
 
   # PostgreSQL for testing migration state tracking (optional)
-  # SECURITY: PostgreSQL exposed on localhost only via port mapping (127.0.0.1:5432)
-  # Container binding uses 0.0.0.0 for Docker networking, but host access is localhost-only
+  # SECURITY: PostgreSQL internal service - no external port exposure needed
+  # Available to other services via hostname 'postgres:5432' on Docker network
   postgres:
     image: postgres:15-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-migration_test}
       POSTGRES_USER: ${POSTGRES_USER:-testuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?POSTGRES_PASSWORD must be set in .env file}
-    ports:
-      - "127.0.0.1:5432:5432"
+    # REMOVED: External port mapping (was 127.0.0.1:5432:5432)
+    # Service accessible internally via hostname 'postgres' on port 5432
     networks:
       - dev_network
     profiles:
