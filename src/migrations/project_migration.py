@@ -439,8 +439,11 @@ class ProjectMigration(BaseMigration):
             try:
                 logger.info("Creating project %d/%d: %s", i+1, len(projects_data), project_data["name"])
 
-                # Check if project already exists
-                check_query = f"Project.find_by(identifier: '{project_data['identifier']}')"
+                # Check if project already exists with a more robust check
+                identifier = project_data['identifier']
+
+                # First try: Look for the project by identifier with detailed output
+                check_query = f"p = Project.find_by(identifier: '{identifier}'); p ? p.as_json : nil"
                 existing = self.op_client.execute_query_to_json_file(check_query)
 
                 # Handle both JSON responses and scalar strings that indicate existence
@@ -456,20 +459,34 @@ class ProjectMigration(BaseMigration):
                         project_id = existing["id"]
                         project_name = existing["name"]
                         project_identifier = existing["identifier"]
-                    elif isinstance(existing, str) and existing.strip() and existing.strip() != "nil":
-                        # Scalar string response indicates project exists
-                        # but format is not JSON
-                        project_exists = True
-                        # Try to get project details with a more explicit query
-                        detail_query = (
-                            f"p = Project.find_by(identifier: '{project_data['identifier']}'); "
-                            "p ? p.as_json : nil"
-                        )
-                        details = self.op_client.execute_query_to_json_file(detail_query)
-                        if isinstance(details, dict) and details.get("id"):
-                            project_id = details["id"]
-                            project_name = details["name"]
-                            project_identifier = details["identifier"]
+                    elif isinstance(existing, str):
+                        # Any non-empty string response could indicate project exists
+                        # Let's do a more explicit check
+                        exists_query = f"Project.exists?(identifier: '{identifier}')"
+                        exists_result = self.op_client.execute_query_to_json_file(exists_query)
+
+                        if (exists_result is True or
+                            (isinstance(exists_result, str) and
+                             exists_result.strip().lower() in ['true', 't'])):
+                            project_exists = True
+                            # Get the project details separately
+                            detail_query = f"Project.find_by(identifier: '{identifier}').as_json"
+                            details = self.op_client.execute_query_to_json_file(detail_query)
+                            if isinstance(details, dict) and details.get("id"):
+                                project_id = details["id"]
+                                project_name = details["name"]
+                                project_identifier = details["identifier"]
+                            else:
+                                # If we can't get details but know it exists, try a simpler query
+                                simple_query = (
+                                    f"p = Project.find_by(identifier: '{identifier}'); "
+                                    "[p.id, p.name, p.identifier]"
+                                )
+                                simple_result = self.op_client.execute_query_to_json_file(simple_query)
+                                if isinstance(simple_result, list) and len(simple_result) >= 3:
+                                    project_id = simple_result[0]
+                                    project_name = simple_result[1]
+                                    project_identifier = simple_result[2]
 
                 if project_exists:
                     logger.info("Project '%s' already exists with ID %s", project_data["name"], project_id or "unknown")
