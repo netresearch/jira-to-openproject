@@ -77,6 +77,53 @@ ports:
 
 This ensures mock services cannot be accessed from external networks while maintaining full functionality for local development and testing.
 
+## Docker Networking Fundamentals
+
+Understanding the difference between container binding and host security is crucial for proper Docker configuration.
+
+### Container Binding (Inside Container)
+
+Mock services **must** bind to `0.0.0.0` inside the container:
+
+```yaml
+command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml
+```
+
+**Why 0.0.0.0 is Required:**
+- Enables Docker bridge network communication
+- Allows container-to-container connections
+- Required for port mapping to function properly
+- **Does NOT affect host security** (that's handled by port mapping)
+
+### Host Security (Port Mapping Level)
+
+Security is achieved through **port mapping configuration**:
+
+```yaml
+ports:
+  - "127.0.0.1:4010:4010"  # Only localhost can access
+```
+
+**How This Provides Security:**
+- External connections cannot reach `127.0.0.1:4010`
+- Only localhost and Docker containers can access the service
+- Network isolation maintained despite container binding to 0.0.0.0
+
+### Complete Secure Configuration
+
+```yaml
+services:
+  mock-jira:
+    image: stoplight/prism:4
+    command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml  # Container networking
+    ports:
+      - "127.0.0.1:4010:4010"  # Host security
+    volumes:
+      - ./test-specs:/specs:ro
+```
+
+This configuration provides **both** functional Docker networking **and** security through localhost-only host access.
+
 ## Development Notes
 
 ### Mock Service Technology
@@ -127,7 +174,7 @@ Mock services are defined in `compose.yml` under the `testing` profile:
 # SECURITY: Mock services use localhost-only binding for development security
 mock-jira:
   image: stoplight/prism:4
-  command: mock -h 127.0.0.1 -p 4010 /specs/jira-openapi.yml
+  command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml
   ports:
     - "127.0.0.1:4010:4010"  # Localhost-only access
   volumes:
@@ -137,7 +184,7 @@ mock-jira:
 # SECURITY: Consistent with localhost-only binding pattern across all services
 mock-openproject:
   image: stoplight/prism:4
-  command: mock -h 127.0.0.1 -p 4011 /specs/openproject-openapi.yml
+  command: mock -h 0.0.0.0 -p 4011 /specs/openproject-openapi.yml
   ports:
     - "127.0.0.1:4011:4011"  # Localhost-only access
   volumes:
