@@ -22,22 +22,25 @@ RUN apt-get update \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and setuptools
-RUN python -m pip install --upgrade pip \
-    && python -m pip install --upgrade setuptools \
-    && python -m pip install --upgrade wheel
+# Create a non-root user early (before copying files)
+RUN useradd -m -u 1000 vscode && \
+    chown -R vscode:vscode /app
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Switch to non-root user for dependency installation
+USER vscode
 
-# Copy project files
-COPY . .
+# Copy only requirements first (for optimal caching)
+COPY --chown=vscode:vscode requirements.txt .
 
-# Create a non-root user
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
-USER appuser
+# Upgrade pip and install Python dependencies as non-root user
+RUN python -m pip install --user --upgrade pip setuptools wheel && \
+    python -m pip install --user --no-cache-dir -r requirements.txt
 
-# Set default command
-CMD ["python", "-m", "pytest"]
+# Add user's local Python bin to PATH
+ENV PATH="/home/vscode/.local/bin:${PATH}"
+
+# Copy project files (this layer changes most frequently, so it's last)
+COPY --chown=vscode:vscode . .
+
+# Set default command for development
+CMD ["sleep", "infinity"]

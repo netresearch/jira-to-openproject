@@ -1,0 +1,89 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Mount source code for live editing
+      - .:/app
+      # Mount Docker socket for container access if needed
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: sleep infinity
+    user: vscode
+    environment:
+      # Ensure Python can find user-installed packages
+      - PYTHONPATH=/app
+      # Load environment variables from .env file
+      - ENV_FILE=/app/.env
+    networks:
+      - dev_network
+    # Expose common development ports
+    ports:
+      - "8000:8000"  # Common web app port
+      - "5000:5000"  # Flask default
+    profiles:
+      - dev
+
+  # Mock Jira API server for testing
+  mock-jira:
+    image: stoplight/prism:4
+    command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml
+    ports:
+      - "4010:4010"
+    volumes:
+      - ./test-specs:/specs:ro
+    networks:
+      - dev_network
+    profiles:
+      - testing
+
+  # Mock OpenProject API server for testing
+  mock-openproject:
+    image: stoplight/prism:4
+    command: mock -h 0.0.0.0 -p 4011 /specs/openproject-openapi.yml
+    ports:
+      - "4011:4011"
+    volumes:
+      - ./test-specs:/specs:ro
+    networks:
+      - dev_network
+    profiles:
+      - testing
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - dev_network
+    profiles:
+      - services
+    volumes:
+      - redis_data:/data
+
+  # PostgreSQL for testing migration state tracking (optional)
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: migration_test
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+    ports:
+      - "5432:5432"
+    networks:
+      - dev_network
+    profiles:
+      - services
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+networks:
+  dev_network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
