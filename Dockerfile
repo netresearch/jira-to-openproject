@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (minimal attack surface)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     git \
@@ -18,9 +18,10 @@ RUN apt-get update \
     libssl-dev \
     libffi-dev \
     python3-dev \
-    docker.io \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
+# SECURITY: docker.io package removed - uses SSH-based remote Docker client
+# See src/clients/docker_client.py for remote Docker operations via SSH
 
 # Create a non-root user early (before copying files)
 RUN useradd -m -u 1000 vscode && \
