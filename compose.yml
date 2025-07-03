@@ -35,11 +35,13 @@ services:
       - dev
 
   # Mock Jira API server for testing
+  # SECURITY: Mock services exposed on localhost only via port mapping (127.0.0.1:4010)
+  # Container binding uses 0.0.0.0 for Docker networking, but host access is localhost-only
   mock-jira:
     image: stoplight/prism:4
     command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml
     ports:
-      - "4010:4010"
+      - "127.0.0.1:4010:4010"
     volumes:
       - ./test-specs:/specs:ro
     networks:
@@ -52,7 +54,7 @@ services:
     image: stoplight/prism:4
     command: mock -h 0.0.0.0 -p 4011 /specs/openproject-openapi.yml
     ports:
-      - "4011:4011"
+      - "127.0.0.1:4011:4011"
     volumes:
       - ./test-specs:/specs:ro
     networks:
