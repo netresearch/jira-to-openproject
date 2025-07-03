@@ -1,3 +1,11 @@
+# SECURITY CHECKLIST - Review before adding any Docker configuration:
+# [ ] Is Docker socket mount really needed? (Usually NO - see security docs)
+# [ ] Are services running as non-root users?
+# [ ] Are secrets excluded from version control?
+# [ ] Are unnecessary ports closed?
+# [ ] Are resource limits defined?
+# [ ] Are volumes properly scoped?
+
 services:
   app:
     build:
@@ -6,8 +14,9 @@ services:
     volumes:
       # Mount source code for live editing
       - .:/app
-      # Mount Docker socket for container access if needed
-      - /var/run/docker.sock:/var/run/docker.sock
+      # SECURITY: Docker socket mount removed to prevent container escape
+      # This migration tool uses SSH-based remote Docker client - no local Docker daemon access needed
+      # See src/clients/docker_client.py for SSH-based Docker operations
     command: sleep infinity
     user: vscode
     environment:

@@ -131,7 +131,7 @@ make dev-full
 # In compose.yml
 volumes:
   - .:/app                           # Source code (live editing)
-  - /var/run/docker.sock:/var/run/docker.sock  # Docker access
+  # SECURITY: Docker socket mount removed - see Security section below
 ```
 
 This approach provides:
@@ -447,6 +447,117 @@ When modifying this development environment:
 2. **Update documentation**: Modify this README for any changes
 3. **Consider all platforms**: Test on different operating systems
 4. **Backward compatibility**: Provide migration notes for breaking changes
+
+## 🔒 **Security Best Practices**
+
+This development environment follows security-first principles:
+
+### Container Security
+
+**Docker Socket Mount - REMOVED FOR SECURITY**
+```yaml
+# ❌ NEVER DO THIS (removed from our compose.yml):
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+```
+
+**Why this is dangerous:**
+- Grants root-equivalent access to host Docker daemon
+- Enables container escape attacks
+- Bypasses all container isolation
+- Unnecessary for SSH-based remote Docker operations
+
+**Our secure alternative:**
+- Use SSH-based Docker client (`src/clients/docker_client.py`)
+- All Docker operations executed remotely via SSH
+- No local Docker daemon access required
+
+### Development Security Guidelines
+
+**Non-root User Execution**
+```dockerfile
+# All development runs as non-root user
+USER vscode
+RUN pip install --user -r requirements.txt
+```
+
+**Secrets Management**
+```bash
+# Use .env files (never commit secrets)
+echo "SECRET_KEY=your-secret" >> .env
+echo ".env" >> .gitignore
+
+# For team sharing, use .env.example
+cp .env .env.example
+# Remove actual secrets from .env.example
+```
+
+**Resource Limits** (TODO: See security task list)
+```yaml
+# Add to compose.yml services
+deploy:
+  resources:
+    limits:
+      memory: 512M
+      cpus: '0.5'
+```
+
+### Security Review Checklist
+
+Before adding ANY Docker configuration:
+- [ ] Is Docker socket mount really needed? (Usually NO)
+- [ ] Are services running as non-root users?
+- [ ] Are secrets excluded from version control?
+- [ ] Are unnecessary ports closed?
+- [ ] Are resource limits defined?
+- [ ] Are volumes properly scoped?
+
+### Secure Development Workflow
+
+1. **Environment Isolation**: Development container isolates host system
+2. **Volume Scoping**: Only mount necessary directories (source code)
+3. **Network Segmentation**: Services use dedicated Docker network
+4. **User Permissions**: All operations run as `vscode` user (UID 1000)
+5. **Secret Management**: Use environment variables, never hardcode
+
+### Alternative Solutions for Docker Access
+
+If you ever need Docker daemon access (you probably don't):
+
+**Option 1: Host Commands (Recommended)**
+```bash
+# Run Docker commands on host, not in container
+make exec CMD="echo 'Use host Docker commands instead'"
+```
+
+**Option 2: Docker-in-Docker (Complex)**
+```yaml
+# Only if absolutely necessary
+services:
+  app:
+    image: docker:dind
+    privileged: true  # Security risk - avoid
+```
+
+**Option 3: Remote Docker Context (Advanced)**
+```bash
+# Use remote Docker context instead of socket mount
+docker context create remote --docker "host=ssh://user@remote-host"
+```
+
+### Security Monitoring
+
+**Regular Security Checks:**
+```bash
+# Scan for vulnerabilities
+make security-scan  # TODO: Implement
+
+# Audit container configuration
+docker compose config | grep -E "(privileged|volumes|ports)"
+
+# Check for exposed secrets
+git secrets --scan  # TODO: Setup
+```
 
 ## 📄 **License**
 
