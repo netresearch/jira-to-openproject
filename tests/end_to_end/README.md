@@ -85,4 +85,4 @@ We recommend using Docker Compose for setting up complete test environments with
 - OpenProject instance
 - Any required supporting services
 
-See the docker-compose.yml file in the tests/end_to_end directory for details.
+See the compose.yml file in the tests/end_to_end directory for details.
