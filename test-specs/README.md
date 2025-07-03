@@ -53,6 +53,30 @@ When running, you can view interactive API documentation:
 - Jira Mock: http://localhost:4010/__prism/
 - OpenProject Mock: http://localhost:4011/__prism/
 
+## Security Configuration
+
+The mock services are configured with security best practices for development environments:
+
+### Network Security
+- **Localhost-only binding**: Services are only accessible from the development machine (127.0.0.1)
+- **No external network exposure**: Port mapping prevents access from other machines on the network
+- **Container isolation**: Services run in isolated Docker containers with proper network segmentation
+
+### Development Safety
+- **Mock data only**: Services contain no real production data
+- **No authentication required**: Simplified for development workflows
+- **Resource isolation**: Services are isolated from production systems
+
+### Configuration Details
+The security is implemented through Docker Compose port mapping:
+```yaml
+ports:
+  - "127.0.0.1:4010:4010"  # Localhost-only access
+  - "127.0.0.1:4011:4011"  # Localhost-only access
+```
+
+This ensures mock services cannot be accessed from external networks while maintaining full functionality for local development and testing.
+
 ## Development Notes
 
 ### Mock Service Technology
