@@ -27,10 +27,12 @@ services:
       - ENV_FILE=/app/.env
     networks:
       - dev_network
-    # Expose common development ports
+    # SECURITY: App services exposed on localhost only via port mapping (127.0.0.1:port)
+    # Container binding uses 0.0.0.0 for Docker networking, but host access is localhost-only
+    # Developers can access via browser at localhost:8000 and localhost:5000
     ports:
-      - "8000:8000"  # Common web app port
-      - "5000:5000"  # Flask default
+      - "127.0.0.1:8000:8000"  # Common web app port
+      - "127.0.0.1:5000:5000"  # Flask default
     profiles:
       - dev
 
@@ -63,10 +65,12 @@ services:
       - testing
 
   # Redis for caching (optional)
+  # SECURITY: Redis exposed on localhost only via port mapping (127.0.0.1:6379)
+  # Container binding uses 0.0.0.0 for Docker networking, but host access is localhost-only
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     networks:
       - dev_network
     profiles:
@@ -75,6 +79,8 @@ services:
       - redis_data:/data
 
   # PostgreSQL for testing migration state tracking (optional)
+  # SECURITY: PostgreSQL exposed on localhost only via port mapping (127.0.0.1:5432)
+  # Container binding uses 0.0.0.0 for Docker networking, but host access is localhost-only
   postgres:
     image: postgres:15-alpine
     environment:
@@ -82,7 +88,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-testuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?POSTGRES_PASSWORD must be set in .env file}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     networks:
       - dev_network
     profiles:
