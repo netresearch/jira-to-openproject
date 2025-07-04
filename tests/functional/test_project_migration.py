@@ -631,6 +631,9 @@ def test_bulk_migrate_projects_ruby_escape_function(project_migration):
     project_migration.project_account_mapping = {}
     project_migration.company_mapping = {}
 
+    # Mock OpenProject client methods to return empty data
+    project_migration.op_client.get_projects.return_value = []
+
     # Mock _get_existing_project_details to return None (project doesn't exist)
     project_migration._get_existing_project_details = Mock(return_value=None)
 
@@ -655,7 +658,7 @@ def test_bulk_migrate_projects_ruby_escape_function(project_migration):
 
     # Check that special characters are properly escaped
     assert "Test\\'s" in executed_script, "Single quotes should be escaped"
-    assert '\\"Project\\"' in executed_script, "Double quotes should be escaped"
+    assert '"Project"' in executed_script, "Double quotes are preserved in single-quoted Ruby strings"
     assert "with\\\\backslash" in executed_script, "Backslashes should be escaped"
     assert "and\\nnewline" in executed_script, "Newlines should be escaped"
     assert "\\rand" in executed_script, "Carriage returns should be escaped"
@@ -676,6 +679,9 @@ def test_bulk_migrate_projects_empty_and_none_values(project_migration):
     project_migration.project_account_mapping = {}
     project_migration.company_mapping = {}
 
+    # Mock OpenProject client methods to return empty data
+    project_migration.op_client.get_projects.return_value = []
+
     # Mock _get_existing_project_details to return None
     project_migration._get_existing_project_details = Mock(return_value=None)
 
@@ -687,7 +693,7 @@ def test_bulk_migrate_projects_empty_and_none_values(project_migration):
         executed_script = script
         return {"id": 123, "name": "Test Project", "identifier": "test"}
 
-    project_migration.op_client.execute_query_to_json_file.side_error = mock_execute_query
+    project_migration.op_client.execute_query_to_json_file.side_effect = mock_execute_query
 
     # Execute the migration
     result = project_migration.bulk_migrate_projects()
