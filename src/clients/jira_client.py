@@ -1058,33 +1058,587 @@ class JiraClient:
             raise JiraApiError(error_msg) from e
 
     def get_issue_link_types(self) -> list[dict[str, Any]]:
-        """Retrieve all issue link types configured in Jira.
+        """Get all issue link types from Jira.
 
         Returns:
-            A list of issue link types
+            List of issue link type dictionaries with id, name, inward, and outward
 
         Raises:
             JiraApiError: If the API request fails
 
         """
         try:
-            logger.info("Fetching Jira issue link types")
-            result = self.jira.issue_link_types()
-            logger.info("Successfully retrieved %s issue link types", len(result))
-
-            # Convert issue link type objects to dictionaries
-            return [
+            link_types = self.jira.issue_link_types()
+            result = [
                 {
                     "id": link_type.id,
                     "name": link_type.name,
                     "inward": link_type.inward,
                     "outward": link_type.outward,
-                    "self": getattr(link_type, "self", None),
                 }
-                for link_type in result
+                for link_type in link_types
             ]
 
+            if not link_types:
+                logger.warning("No issue link types found in Jira")
+
+            return result
         except Exception as e:
-            error_msg = f"Failed to retrieve issue link types: {e!s}"
+            error_msg = f"Failed to get issue link types: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    def get_work_logs_for_issue(self, issue_key: str) -> list[dict[str, Any]]:
+        """Get all work logs for a specific issue.
+
+        Args:
+            issue_key: The key of the issue to get work logs for
+
+        Returns:
+            List of work log dictionaries with complete metadata
+
+        Raises:
+            JiraResourceNotFoundError: If the issue is not found
+            JiraApiError: If the API request fails
+
+        """
+        try:
+            # Get work logs using the JIRA library's worklog method
+            work_logs = self.jira.worklogs(issue_key)
+
+            result = []
+            for work_log in work_logs:
+                work_log_data = {
+                    "id": work_log.id,
+                    "issue_key": issue_key,
+                    "author": {
+                        "name": getattr(work_log.author, "name", None),
+                        "display_name": getattr(work_log.author, "displayName", None),
+                        "email": getattr(work_log.author, "emailAddress", None),
+                        "account_id": getattr(work_log.author, "accountId", None),
+                    },
+                    "started": work_log.started,
+                    "time_spent": work_log.timeSpent,
+                    "time_spent_seconds": work_log.timeSpentSeconds,
+                    "comment": getattr(work_log, "comment", None),
+                    "created": work_log.created,
+                    "updated": work_log.updated,
+                }
+
+                # Add update author if different from original author
+                if hasattr(work_log, "updateAuthor") and work_log.updateAuthor:
+                    work_log_data["update_author"] = {
+                        "name": getattr(work_log.updateAuthor, "name", None),
+                        "display_name": getattr(work_log.updateAuthor, "displayName", None),
+                        "email": getattr(work_log.updateAuthor, "emailAddress", None),
+                        "account_id": getattr(work_log.updateAuthor, "accountId", None),
+                    }
+
+                result.append(work_log_data)
+
+            logger.debug(
+                "Retrieved %s work logs for issue %s",
+                len(result),
+                issue_key,
+            )
+            return result
+
+        except Exception as e:
+            error_msg = f"Failed to get work logs for issue {issue_key}: {e!s}"
+            logger.exception(error_msg)
+            if (
+                "issue does not exist" in str(e).lower()
+                or "issue not found" in str(e).lower()
+            ):
+                msg = f"Issue {issue_key} not found"
+                raise JiraResourceNotFoundError(msg) from e
+            raise JiraApiError(error_msg) from e
+
+    def get_all_work_logs_for_project(
+        self, project_key: str, include_empty: bool = False,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Get all work logs for all issues in a project.
+
+        Args:
+            project_key: The key of the project to get work logs for
+            include_empty: Whether to include issues with no work logs
+
+        Returns:
+            Dictionary mapping issue keys to their work logs
+
+        Raises:
+            JiraResourceNotFoundError: If the project is not found
+            JiraApiError: If the API request fails
+
+        """
+        try:
+            logger.info(
+                "Fetching work logs for all issues in project '%s'...",
+                project_key,
+            )
+
+            # Get all issues for the project with worklog field expanded
+            all_issues = self.get_all_issues_for_project(project_key, expand_changelog=False)
+
+            work_logs_by_issue = {}
+            issues_with_logs = 0
+            total_work_logs = 0
+
+            for issue in all_issues:
+                issue_key = issue.key
+
+                # Check if issue has work logs in the basic fields first
+                has_work_logs = (
+                    hasattr(issue.fields, "worklog")
+                    and issue.fields.worklog
+                    and issue.fields.worklog.total > 0
+                )
+
+                if has_work_logs or include_empty:
+                    try:
+                        work_logs = self.get_work_logs_for_issue(issue_key)
+                        if work_logs or include_empty:
+                            work_logs_by_issue[issue_key] = work_logs
+                            if work_logs:
+                                issues_with_logs += 1
+                                total_work_logs += len(work_logs)
+
+                    except JiraResourceNotFoundError:
+                        # Issue was deleted between listing and fetching work logs
+                        logger.warning(
+                            "Issue %s not found when fetching work logs",
+                            issue_key,
+                        )
+                        continue
+                    except JiraApiError as e:
+                        logger.warning(
+                            "Failed to get work logs for issue %s: %s",
+                            issue_key,
+                            e,
+                        )
+                        continue
+
+                # Rate limiting - small delay between requests
+                time.sleep(0.1)
+
+            logger.info(
+                "Work log extraction complete for project '%s': "
+                "%s issues with work logs, %s total work logs",
+                project_key,
+                issues_with_logs,
+                total_work_logs,
+            )
+
+            return work_logs_by_issue
+
+        except Exception as e:
+            error_msg = f"Failed to get work logs for project {project_key}: {e!s}"
+            logger.exception(error_msg)
+            if (
+                "project does not exist" in str(e).lower()
+                or "project not found" in str(e).lower()
+            ):
+                msg = f"Project {project_key} not found"
+                raise JiraResourceNotFoundError(msg) from e
+            raise JiraApiError(error_msg) from e
+
+    def get_work_log_details(self, issue_key: str, work_log_id: str) -> dict[str, Any]:
+        """Get detailed information for a specific work log.
+
+        Args:
+            issue_key: The key of the issue containing the work log
+            work_log_id: The ID of the work log to get details for
+
+        Returns:
+            Dictionary containing detailed work log information
+
+        Raises:
+            JiraResourceNotFoundError: If the issue or work log is not found
+            JiraApiError: If the API request fails
+
+        """
+        try:
+            # Use the JIRA library's worklog method to get specific work log
+            work_log = self.jira.worklog(issue_key, work_log_id)
+
+            work_log_data = {
+                "id": work_log.id,
+                "issue_key": issue_key,
+                "author": {
+                    "name": getattr(work_log.author, "name", None),
+                    "display_name": getattr(work_log.author, "displayName", None),
+                    "email": getattr(work_log.author, "emailAddress", None),
+                    "account_id": getattr(work_log.author, "accountId", None),
+                },
+                "started": work_log.started,
+                "time_spent": work_log.timeSpent,
+                "time_spent_seconds": work_log.timeSpentSeconds,
+                "comment": getattr(work_log, "comment", None),
+                "created": work_log.created,
+                "updated": work_log.updated,
+            }
+
+            # Add update author if different from original author
+            if hasattr(work_log, "updateAuthor") and work_log.updateAuthor:
+                work_log_data["update_author"] = {
+                    "name": getattr(work_log.updateAuthor, "name", None),
+                    "display_name": getattr(work_log.updateAuthor, "displayName", None),
+                    "email": getattr(work_log.updateAuthor, "emailAddress", None),
+                    "account_id": getattr(work_log.updateAuthor, "accountId", None),
+                }
+
+            # Add visibility restrictions if present
+            if hasattr(work_log, "visibility") and work_log.visibility:
+                work_log_data["visibility"] = {
+                    "type": getattr(work_log.visibility, "type", None),
+                    "value": getattr(work_log.visibility, "value", None),
+                }
+
+            return work_log_data
+
+        except Exception as e:
+            error_msg = f"Failed to get work log {work_log_id} for issue {issue_key}: {e!s}"
+            logger.exception(error_msg)
+            if (
+                "issue does not exist" in str(e).lower()
+                or "issue not found" in str(e).lower()
+                or "worklog does not exist" in str(e).lower()
+                or "worklog not found" in str(e).lower()
+            ):
+                msg = f"Issue {issue_key} or work log {work_log_id} not found"
+                raise JiraResourceNotFoundError(msg) from e
+            raise JiraApiError(error_msg) from e
+
+    def get_tempo_work_logs(
+        self,
+        issue_key: str | None = None,
+        project_key: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        user_key: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Get Tempo work logs with enhanced metadata and attributes.
+
+        Args:
+            issue_key: Filter by specific issue key
+            project_key: Filter by specific project key
+            date_from: Start date in YYYY-MM-DD format
+            date_to: End date in YYYY-MM-DD format
+            user_key: Filter by specific user key
+            limit: Maximum number of results per request (default: 1000)
+
+        Returns:
+            List of Tempo work log dictionaries with enhanced metadata
+
+        Raises:
+            JiraApiError: If the API request fails
+
+        """
+        try:
+            # Build query parameters
+            params = {"limit": limit}
+            if issue_key:
+                params["issue"] = issue_key
+            if project_key:
+                params["project"] = project_key
+            if date_from:
+                params["dateFrom"] = date_from
+            if date_to:
+                params["dateTo"] = date_to
+            if user_key:
+                params["user"] = user_key
+
+            # Use Tempo Timesheets API v3 endpoint
+            path = "/rest/tempo-timesheets/3/worklogs"
+            logger.info(
+                "Fetching Tempo work logs with params: %s",
+                {k: v for k, v in params.items() if k != "limit"},
+            )
+
+            response = self.jira._session.get(
+                f"{self.base_url}{path}",
+                params=params,
+            )
+
+            if response.status_code != 200:
+                msg = f"Failed to retrieve Tempo work logs: HTTP {response.status_code}"
+                logger.error(msg)
+                raise JiraApiError(msg)
+
+            work_logs = response.json()
+            logger.info("Successfully retrieved %s Tempo work logs", len(work_logs))
+
+            # Enhance work logs with additional metadata
+            enhanced_work_logs = []
+            for work_log in work_logs:
+                enhanced_work_log = {
+                    "tempo_worklog_id": work_log.get("tempoWorklogId"),
+                    "jira_worklog_id": work_log.get("jiraWorklogId"),
+                    "issue_key": work_log.get("issue", {}).get("key"),
+                    "issue_id": work_log.get("issue", {}).get("id"),
+                    "author": {
+                        "username": work_log.get("author", {}).get("name"),
+                        "display_name": work_log.get("author", {}).get("displayName"),
+                        "account_id": work_log.get("author", {}).get("accountId"),
+                    },
+                    "time_spent_seconds": work_log.get("timeSpentSeconds"),
+                    "billable_seconds": work_log.get("billableSeconds"),
+                    "date_started": work_log.get("dateStarted"),
+                    "time_started": work_log.get("timeStarted"),
+                    "comment": work_log.get("comment"),
+                    "created": work_log.get("created"),
+                    "updated": work_log.get("updated"),
+                    "work_attributes": work_log.get("workAttributes", []),
+                    "account": work_log.get("account", {}),
+                    "approval_status": work_log.get("approvalStatus"),
+                    "external_hours": work_log.get("externalHours"),
+                    "external_id": work_log.get("externalId"),
+                    "origin_task_id": work_log.get("originTaskId"),
+                }
+                enhanced_work_logs.append(enhanced_work_log)
+
+            return enhanced_work_logs
+
+        except Exception as e:
+            error_msg = f"Failed to retrieve Tempo work logs: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    def get_tempo_work_attributes(self) -> list[dict[str, Any]]:
+        """Get all Tempo work attributes (custom fields for work logs).
+
+        Returns:
+            List of work attribute dictionaries
+
+        Raises:
+            JiraApiError: If the API request fails
+
+        """
+        try:
+            path = "/rest/tempo-timesheets/3/work-attributes"
+            logger.info("Fetching Tempo work attributes")
+
+            response = self.jira._session.get(
+                f"{self.base_url}{path}",
+            )
+
+            if response.status_code != 200:
+                msg = f"Failed to retrieve Tempo work attributes: HTTP {response.status_code}"
+                logger.error(msg)
+                raise JiraApiError(msg)
+
+            attributes = response.json()
+            logger.info("Successfully retrieved %s Tempo work attributes", len(attributes))
+
+            return attributes
+
+        except Exception as e:
+            error_msg = f"Failed to retrieve Tempo work attributes: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    def get_tempo_all_work_logs_for_project(
+        self, project_key: str, date_from: str | None = None, date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get all Tempo work logs for a project with pagination handling.
+
+        Args:
+            project_key: The key of the project to get work logs for
+            date_from: Optional start date in YYYY-MM-DD format
+            date_to: Optional end date in YYYY-MM-DD format
+
+        Returns:
+            List of all Tempo work logs for the project
+
+        Raises:
+            JiraApiError: If the API request fails
+
+        """
+        try:
+            logger.info(
+                "Fetching all Tempo work logs for project '%s' from %s to %s",
+                project_key,
+                date_from or "beginning",
+                date_to or "end",
+            )
+
+            all_work_logs = []
+            limit = 1000
+            offset = 0
+
+            while True:
+                # Build query parameters
+                params = {
+                    "project": project_key,
+                    "limit": limit,
+                    "offset": offset,
+                }
+                if date_from:
+                    params["dateFrom"] = date_from
+                if date_to:
+                    params["dateTo"] = date_to
+
+                path = "/rest/tempo-timesheets/3/worklogs"
+                response = self.jira._session.get(
+                    f"{self.base_url}{path}",
+                    params=params,
+                )
+
+                if response.status_code != 200:
+                    msg = f"Failed to retrieve Tempo work logs for project {project_key}: HTTP {response.status_code}"
+                    logger.error(msg)
+                    raise JiraApiError(msg)
+
+                work_logs_batch = response.json()
+
+                if not work_logs_batch:
+                    break
+
+                # Process batch and add to results
+                for work_log in work_logs_batch:
+                    enhanced_work_log = {
+                        "tempo_worklog_id": work_log.get("tempoWorklogId"),
+                        "jira_worklog_id": work_log.get("jiraWorklogId"),
+                        "issue_key": work_log.get("issue", {}).get("key"),
+                        "issue_id": work_log.get("issue", {}).get("id"),
+                        "author": {
+                            "username": work_log.get("author", {}).get("name"),
+                            "display_name": work_log.get("author", {}).get("displayName"),
+                            "account_id": work_log.get("author", {}).get("accountId"),
+                        },
+                        "time_spent_seconds": work_log.get("timeSpentSeconds"),
+                        "billable_seconds": work_log.get("billableSeconds"),
+                        "date_started": work_log.get("dateStarted"),
+                        "time_started": work_log.get("timeStarted"),
+                        "comment": work_log.get("comment"),
+                        "created": work_log.get("created"),
+                        "updated": work_log.get("updated"),
+                        "work_attributes": work_log.get("workAttributes", []),
+                        "account": work_log.get("account", {}),
+                        "approval_status": work_log.get("approvalStatus"),
+                        "external_hours": work_log.get("externalHours"),
+                        "external_id": work_log.get("externalId"),
+                        "origin_task_id": work_log.get("originTaskId"),
+                    }
+                    all_work_logs.append(enhanced_work_log)
+
+                # Check if we've reached the end
+                if len(work_logs_batch) < limit:
+                    break
+
+                offset += limit
+                # Rate limiting
+                time.sleep(0.1)
+
+            logger.info(
+                "Tempo work log extraction complete for project '%s': %s total work logs",
+                project_key,
+                len(all_work_logs),
+            )
+            return all_work_logs
+
+        except Exception as e:
+            error_msg = f"Failed to retrieve all Tempo work logs for project {project_key}: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    def get_tempo_work_log_by_id(self, tempo_worklog_id: str) -> dict[str, Any]:
+        """Get a specific Tempo work log by its Tempo ID.
+
+        Args:
+            tempo_worklog_id: The Tempo work log ID
+
+        Returns:
+            Dictionary containing detailed Tempo work log information
+
+        Raises:
+            JiraResourceNotFoundError: If the work log is not found
+            JiraApiError: If the API request fails
+
+        """
+        try:
+            path = f"/rest/tempo-timesheets/3/worklogs/{tempo_worklog_id}"
+            logger.debug("Fetching Tempo work log with ID: %s", tempo_worklog_id)
+
+            response = self.jira._session.get(
+                f"{self.base_url}{path}",
+            )
+
+            if response.status_code == 404:
+                msg = f"Tempo work log {tempo_worklog_id} not found"
+                raise JiraResourceNotFoundError(msg)
+            elif response.status_code != 200:
+                msg = f"Failed to retrieve Tempo work log {tempo_worklog_id}: HTTP {response.status_code}"
+                logger.error(msg)
+                raise JiraApiError(msg)
+
+            work_log = response.json()
+
+            # Return enhanced work log data
+            enhanced_work_log = {
+                "tempo_worklog_id": work_log.get("tempoWorklogId"),
+                "jira_worklog_id": work_log.get("jiraWorklogId"),
+                "issue_key": work_log.get("issue", {}).get("key"),
+                "issue_id": work_log.get("issue", {}).get("id"),
+                "author": {
+                    "username": work_log.get("author", {}).get("name"),
+                    "display_name": work_log.get("author", {}).get("displayName"),
+                    "account_id": work_log.get("author", {}).get("accountId"),
+                },
+                "time_spent_seconds": work_log.get("timeSpentSeconds"),
+                "billable_seconds": work_log.get("billableSeconds"),
+                "date_started": work_log.get("dateStarted"),
+                "time_started": work_log.get("timeStarted"),
+                "comment": work_log.get("comment"),
+                "created": work_log.get("created"),
+                "updated": work_log.get("updated"),
+                "work_attributes": work_log.get("workAttributes", []),
+                "account": work_log.get("account", {}),
+                "approval_status": work_log.get("approvalStatus"),
+                "external_hours": work_log.get("externalHours"),
+                "external_id": work_log.get("externalId"),
+                "origin_task_id": work_log.get("originTaskId"),
+            }
+
+            return enhanced_work_log
+
+        except Exception as e:
+            if "not found" in str(e).lower():
+                msg = f"Tempo work log {tempo_worklog_id} not found"
+                raise JiraResourceNotFoundError(msg) from e
+            error_msg = f"Failed to retrieve Tempo work log {tempo_worklog_id}: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    def get_tempo_user_work_logs(
+        self,
+        user_key: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get all Tempo work logs for a specific user.
+
+        Args:
+            user_key: The user key to get work logs for
+            date_from: Optional start date in YYYY-MM-DD format
+            date_to: Optional end date in YYYY-MM-DD format
+
+        Returns:
+            List of Tempo work logs for the user
+
+        Raises:
+            JiraApiError: If the API request fails
+
+        """
+        try:
+            return self.get_tempo_work_logs(
+                user_key=user_key,
+                date_from=date_from,
+                date_to=date_to,
+            )
+
+        except Exception as e:
+            error_msg = f"Failed to retrieve Tempo work logs for user {user_key}: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
