@@ -18,6 +18,7 @@ from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult
 from src.utils import data_handler
+from src.utils.markdown_converter import MarkdownConverter
 
 
 class WorkPackageMigration(BaseMigration):
@@ -63,6 +64,9 @@ class WorkPackageMigration(BaseMigration):
         self.issue_type_mapping: dict[str, Any] = {}
         self.status_mapping: dict[str, Any] = {}
 
+        # Initialize markdown converter (will be updated with mappings when available)
+        self.markdown_converter = MarkdownConverter()
+
         # Load existing mappings
         self._load_mappings()
 
@@ -98,6 +102,29 @@ class WorkPackageMigration(BaseMigration):
             filename="status_mapping.json",
             directory=self.data_dir,
             default={},
+        )
+
+        # Update markdown converter with loaded mappings
+        self._update_markdown_converter_mappings()
+
+    def _update_markdown_converter_mappings(self) -> None:
+        """Update the markdown converter with current user and work package mappings."""
+        # Create user mapping for markdown converter (Jira username -> OpenProject user ID)
+        user_mapping = {username: str(user_id) for username, user_id in self.user_mapping.items() if user_id}
+
+        # For work package mapping, we need to load the existing mapping if available
+        work_package_mapping = {}
+        if hasattr(self, 'work_package_mapping') and self.work_package_mapping:
+            work_package_mapping = {
+                entry.get('jira_key', ''): entry.get('openproject_id', '')
+                for entry in self.work_package_mapping.values()
+                if entry.get('jira_key') and entry.get('openproject_id')
+            }
+
+        # Update the markdown converter with new mappings
+        self.markdown_converter = MarkdownConverter(
+            user_mapping=user_mapping,
+            work_package_mapping=work_package_mapping
         )
 
     def _extract_jira_issues(
@@ -324,6 +351,10 @@ class WorkPackageMigration(BaseMigration):
         subject = jira_issue.fields.summary
         description = getattr(jira_issue.fields, "description", "") or ""
 
+        # Convert Jira wiki markup to OpenProject markdown
+        if description:
+            description = self.markdown_converter.convert(description)
+
         jira_id = jira_issue.id
         jira_key = jira_issue.key
 
@@ -463,6 +494,10 @@ class WorkPackageMigration(BaseMigration):
             # Get the key and description
             jira_key = jira_issue.get("key", "")
             description = jira_issue.get("description", "")
+
+            # Convert Jira wiki markup to OpenProject markdown
+            if description:
+                description = self.markdown_converter.convert(description)
 
             # Format the description to include the Jira key
             formatted_description = f"Jira Issue: {jira_key}\n\n{description}"
