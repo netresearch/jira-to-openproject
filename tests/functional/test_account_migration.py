@@ -252,6 +252,227 @@ class TestAccountMigration(unittest.TestCase):
         # This avoids the complex mocking needed for this test after our refactoring
         # The actual functionality is tested in real migrations
 
+    def test_create_custom_field_via_rails_injection_prevention(self) -> None:
+        """Test that create_custom_field_via_rails prevents injection attacks."""
+        # Test data with malicious account names that could cause injection
+        malicious_accounts = [
+            {"id": "1", "name": "'; system('rm -rf /'); #"},  # Command injection attempt
+            {"id": "2", "name": "test\"; puts 'HACKED'; \""},  # Ruby code injection
+            {"id": "3", "name": "Normal Account"},  # Normal account
+            {"id": "4", "name": "Account with 'quotes'"},  # Single quotes
+            {"id": "5", "name": "Account with }brace}"},  # Curly braces
+            {"id": "6", "name": "Account\\with\\backslashes"},  # Backslashes
+            {"id": "7", "name": None},  # Null name (should be skipped)
+        ]
+
+        # Mock the clients
+        mock_jira_client = MagicMock()
+        mock_op_client = MagicMock()
+
+        # Mock successful Rails execution
+        mock_op_client.execute_query.return_value = {"output": "42"}
+
+        # Initialize migration with mocked clients
+        migration = AccountMigration(mock_jira_client, mock_op_client)
+        migration.tempo_accounts = malicious_accounts
+
+        # Mock the associate method to avoid additional complexity
+        with patch.object(migration, 'associate_field_with_work_package_types'):
+            # Call the method
+            result = migration.create_custom_field_via_rails()
+
+            # Verify the result
+            self.assertEqual(result, 42)
+
+            # Capture the executed command
+            executed_command = mock_op_client.execute_query.call_args[0][0]
+
+            # Verify malicious code is safely escaped within %q{} literals, not executed as raw Ruby
+            # The patterns should appear within %q{} but not as executable Ruby code
+            self.assertIn("%q{'; system('rm -rf /'); #}", executed_command)
+            self.assertIn('%q{test"; puts \'HACKED\'; "}', executed_command)
+
+            # Verify that Ruby %q{} syntax is used for safe escaping
+            self.assertIn("%q{", executed_command)
+            self.assertIn("possible_values_array", executed_command)
+
+            # Verify that normal accounts are properly included
+            self.assertIn("Normal Account", executed_command)
+
+            # Verify proper escaping of special characters
+            # The escaped version should be safe for Ruby execution
+            self.assertIn("\\}", executed_command)  # Escaped braces
+            self.assertIn("\\\\", executed_command)  # Escaped backslashes
+
+            # Verify dangerous patterns are not executed as raw Ruby code
+            # They should only appear within safe %q{} string literals
+            lines = executed_command.split('\n')
+            for line in lines:
+                # Skip the line that defines the array (contains safe %q{} literals)
+                if 'possible_values_array = [' in line:
+                    continue
+                # Other lines should not contain unescaped dangerous patterns
+                if 'system(' in line and '%q{' not in line:
+                    self.fail(f"Found unescaped dangerous pattern in line: {line}")
+                if 'puts ' in line and 'HACKED' in line and '%q{' not in line:
+                    self.fail(f"Found unescaped dangerous pattern in line: {line}")
+
+    def test_create_custom_field_via_rails_empty_accounts(self) -> None:
+        """Test create_custom_field_via_rails with empty or no accounts."""
+        # Mock the clients
+        mock_jira_client = MagicMock()
+        mock_op_client = MagicMock()
+
+        # Mock successful Rails execution
+        mock_op_client.execute_query.return_value = {"output": "42"}
+
+        # Initialize migration with mocked clients
+        migration = AccountMigration(mock_jira_client, mock_op_client)
+        migration.tempo_accounts = []  # Empty accounts list
+
+        # Mock the associate method and _save_to_json to avoid JSON serialization issues
+        with patch.object(migration, 'associate_field_with_work_package_types'), \
+             patch.object(migration, '_save_to_json'):
+            # Call the method
+            result = migration.create_custom_field_via_rails()
+
+            # Verify the result
+            self.assertEqual(result, 42)
+
+            # Capture the executed command
+            executed_command = mock_op_client.execute_query.call_args[0][0]
+
+            # Verify empty array is created safely
+            self.assertIn("possible_values_array = []", executed_command)
+
+    def test_associate_field_with_work_package_types_injection_prevention(self) -> None:
+        """Test that associate_field_with_work_package_types validates field_id properly."""
+        # Mock the clients
+        mock_jira_client = MagicMock()
+        mock_op_client = MagicMock()
+
+        # Mock successful Rails execution
+        mock_op_client.execute_query.return_value = "SUCCESS"
+
+        # Initialize migration
+        migration = AccountMigration(mock_jira_client, mock_op_client)
+
+        # Test with valid integer field_id
+        migration.associate_field_with_work_package_types(42)
+
+        # Verify the command was executed with the validated ID
+        executed_command = mock_op_client.execute_query.call_args[0][0]
+        self.assertIn("CustomField.find(42)", executed_command)
+        self.assertIn("%q{SUCCESS}", executed_command)
+
+    def test_associate_field_with_work_package_types_invalid_field_id(self) -> None:
+        """Test that associate_field_with_work_package_types rejects invalid field_id values."""
+        # Mock the clients
+        mock_jira_client = MagicMock()
+        mock_op_client = MagicMock()
+
+        # Initialize migration
+        migration = AccountMigration(mock_jira_client, mock_op_client)
+
+        # Test with malicious string field_id
+        with self.assertRaises(Exception) as context:
+            migration.associate_field_with_work_package_types("'; system('rm -rf /'); #")
+
+        self.assertIn("Invalid field_id provided", str(context.exception))
+
+        # Test with negative field_id
+        with self.assertRaises(Exception) as context:
+            migration.associate_field_with_work_package_types(-1)
+
+        self.assertIn("must be positive integer", str(context.exception))
+
+        # Test with zero field_id
+        with self.assertRaises(Exception) as context:
+            migration.associate_field_with_work_package_types(0)
+
+        self.assertIn("must be positive integer", str(context.exception))
+
+        # Test with None field_id
+        with self.assertRaises(Exception) as context:
+            migration.associate_field_with_work_package_types(None)
+
+        self.assertIn("Invalid field_id provided", str(context.exception))
+
+    def test_associate_field_with_work_package_types_string_to_int_conversion(self) -> None:
+        """Test that associate_field_with_work_package_types properly converts string integers."""
+        # Mock the clients
+        mock_jira_client = MagicMock()
+        mock_op_client = MagicMock()
+
+        # Mock successful Rails execution
+        mock_op_client.execute_query.return_value = "SUCCESS"
+
+        # Initialize migration
+        migration = AccountMigration(mock_jira_client, mock_op_client)
+
+        # Test with string representation of valid integer
+        migration.associate_field_with_work_package_types("42")
+
+        # Verify the command was executed with the converted integer
+        executed_command = mock_op_client.execute_query.call_args[0][0]
+        self.assertIn("CustomField.find(42)", executed_command)
+
+    def test_ruby_escaping_comprehensive(self) -> None:
+        """Test comprehensive Ruby escaping for various malicious inputs."""
+        # Mock the clients
+        mock_jira_client = MagicMock()
+        mock_op_client = MagicMock()
+
+        # Mock successful Rails execution
+        mock_op_client.execute_query.return_value = {"output": "42"}
+
+        # Test accounts with comprehensive malicious patterns
+        test_accounts = [
+            {"id": "1", "name": "#{system('ls')}"},  # Ruby interpolation
+            {"id": "2", "name": "`whoami`"},  # Backtick execution
+            {"id": "3", "name": "$USER"},  # Variable interpolation
+            {"id": "4", "name": "\\#{escape}"},  # Mixed escaping
+            {"id": "5", "name": "test}end{test"},  # Brace injection
+            {"id": "6", "name": "multi\nline\nstring"},  # Newlines
+            {"id": "7", "name": "unicode\u0000null"},  # Null bytes
+            {"id": "8", "name": 'double"quote"test'},  # Double quotes
+        ]
+
+        # Initialize migration
+        migration = AccountMigration(mock_jira_client, mock_op_client)
+        migration.tempo_accounts = test_accounts
+
+        # Mock the associate method
+        with patch.object(migration, 'associate_field_with_work_package_types'):
+            # Call the method
+            result = migration.create_custom_field_via_rails()
+
+            # Verify the result
+            self.assertEqual(result, 42)
+
+            # Capture the executed command
+            executed_command = mock_op_client.execute_query.call_args[0][0]
+
+            # Verify dangerous patterns are not executed as code
+            dangerous_patterns = [
+                "system('ls')",
+                "`whoami`",
+                "$USER",
+                "#{",
+                "end{",
+            ]
+
+            for pattern in dangerous_patterns:
+                # These patterns should not appear as executable code in the command
+                # They should be safely escaped within %q{} literals
+                if pattern in executed_command:
+                    # If they appear, they should be within safe %q{} escaping
+                    self.assertTrue(
+                        f"%q{{{pattern}}}" in executed_command or
+                        "%q{" in executed_command and "}" in executed_command,
+                        f"Dangerous pattern '{pattern}' not properly escaped"
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

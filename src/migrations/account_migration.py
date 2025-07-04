@@ -688,16 +688,32 @@ class AccountMigration(BaseMigration):
                 acc.get("name") for acc in self.tempo_accounts if acc.get("name")
             ]
 
-            # Create custom field command
+            # Safely construct Ruby array literal to prevent injection attacks
+            # Each account name is properly escaped for Ruby string literals
+            escaped_values = []
+            for value in possible_values:
+                if value is None:
+                    continue
+                # Escape single quotes and backslashes for Ruby %q{} syntax
+                # This prevents arbitrary Ruby code execution via malicious account names
+                escaped_value = str(value).replace("\\", "\\\\").replace("}", "\\}")
+                escaped_values.append(f"%q{{{escaped_value}}}")
+
+            # Construct Ruby array using safe literal syntax
+            ruby_array_literal = "[" + ", ".join(escaped_values) + "]"
+
+            # Create custom field command with safe parameterization
+            # Uses Ruby %q{} syntax to prevent injection attacks
             create_command = f"""
+            possible_values_array = {ruby_array_literal}
             cf = CustomField.new(
-              name: 'Tempo Account',
-              field_format: 'list',
+              name: %q{{Tempo Account}},
+              field_format: %q{{list}},
               is_required: false,
               searchable: true,
               editable: true,
-              type: 'WorkPackageCustomField',
-              possible_values: {json.dumps(possible_values)}
+              type: %q{{WorkPackageCustomField}},
+              possible_values: possible_values_array
             )
             cf.save!
             cf.id
@@ -744,16 +760,26 @@ class AccountMigration(BaseMigration):
                 "Making custom field available for all work package types...",
             )
 
-            # Command to associate with all types
+            # Validate field_id is a valid integer to prevent injection attacks
+            try:
+                validated_field_id = int(field_id)
+                if validated_field_id <= 0:
+                    raise ValueError("Field ID must be positive")
+            except (ValueError, TypeError) as e:
+                error_msg = f"Invalid field_id provided: {field_id!r} (must be positive integer)"
+                raise MigrationError(error_msg) from e
+
+            # Command to associate with all types using validated integer ID
+            # No string interpolation of user input to prevent injection attacks
             activate_command = f"""
-            cf = CustomField.find({field_id})
+            cf = CustomField.find({validated_field_id})
             cf.is_for_all = true
             cf.save!
             Type.all.each do |type|
               type.custom_fields << cf unless type.custom_fields.include?(cf)
               type.save!
             end
-            puts 'SUCCESS'
+            puts %q{{SUCCESS}}
             """
 
             result = self.op_client.execute_query(activate_command)
