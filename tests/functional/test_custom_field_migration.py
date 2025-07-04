@@ -324,7 +324,7 @@ class TestCustomFieldMigration(unittest.TestCase):
         # Mock the execute_query_to_json_file method to return success
         self.mock_op_client.execute_query_to_json_file.return_value = {
             "status": "success",
-            "created": [
+            "created_fields": [
                 {
                     "name": "Test Text Field",
                     "status": "created",
@@ -332,6 +332,8 @@ class TestCustomFieldMigration(unittest.TestCase):
                     "jira_id": "customfield_10001",
                 },
             ],
+            "existing_fields": [],
+            "error_fields": [],
             "created_count": 1,
             "existing_count": 0,
             "error_count": 0,

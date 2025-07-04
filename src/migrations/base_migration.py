@@ -8,6 +8,7 @@ from src.clients.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 from src.utils.change_detector import ChangeDetector, ChangeReport
 from src.utils.state_manager import StateManager
+from src.utils.data_preservation_manager import DataPreservationManager
 
 
 class ComponentInitializationError(Exception):
@@ -35,6 +36,7 @@ class BaseMigration:
         op_client: OpenProjectClient | None = None,
         change_detector: ChangeDetector | None = None,
         state_manager: StateManager | None = None,
+        data_preservation_manager: DataPreservationManager | None = None,
     ) -> None:
         """Initialize the base migration with common attributes.
 
@@ -45,6 +47,7 @@ class BaseMigration:
             op_client: Initialized OpenProject client
             change_detector: Initialized change detector for idempotent operations
             state_manager: Initialized state manager for entity mapping and history
+            data_preservation_manager: Initialized data preservation manager for conflict resolution
 
         """
         # Initialize clients using dependency injection
@@ -52,6 +55,10 @@ class BaseMigration:
         self.op_client = op_client or OpenProjectClient()
         self.change_detector = change_detector or ChangeDetector()
         self.state_manager = state_manager or StateManager()
+        self.data_preservation_manager = data_preservation_manager or DataPreservationManager(
+            jira_client=self.jira_client,
+            openproject_client=self.op_client
+        )
 
         self.data_dir: Path = config.get_path("data")
         self.output_dir: Path = config.get_path("output")
@@ -181,6 +188,116 @@ class BaseMigration:
             description=description,
             user=migration_component,
             metadata=metadata
+        )
+
+    def store_original_entity_state(
+        self,
+        entity_id: str,
+        entity_type: str,
+        entity_data: dict[str, Any],
+        source: str = "migration"
+    ) -> None:
+        """Store the original state of an entity for data preservation.
+
+        Args:
+            entity_id: Unique identifier for the entity
+            entity_type: Type of entity (users, projects, work_packages, etc.)
+            entity_data: Current state of the entity
+            source: Source of the data ("migration" or "manual")
+        """
+        self.data_preservation_manager.store_original_state(
+            entity_id=entity_id,
+            entity_type=entity_type,
+            entity_data=entity_data,
+            source=source
+        )
+
+    def detect_preservation_conflicts(
+        self,
+        jira_changes: dict[str, Any],
+        entity_id: str,
+        entity_type: str,
+        current_openproject_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Detect conflicts between Jira changes and OpenProject modifications.
+
+        Args:
+            jira_changes: Changes detected in Jira
+            entity_id: Entity identifier
+            entity_type: Type of entity
+            current_openproject_data: Current OpenProject entity data
+
+        Returns:
+            ConflictInfo if conflict detected, None otherwise
+        """
+        return self.data_preservation_manager.detect_conflicts(
+            jira_changes=jira_changes,
+            entity_id=entity_id,
+            entity_type=entity_type,
+            current_openproject_data=current_openproject_data
+        )
+
+    def resolve_preservation_conflict(
+        self,
+        conflict: dict[str, Any],
+        jira_data: dict[str, Any],
+        openproject_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Resolve a conflict between Jira and OpenProject data.
+
+        Args:
+            conflict: Conflict information
+            jira_data: Current Jira entity data
+            openproject_data: Current OpenProject entity data
+
+        Returns:
+            Resolved entity data
+        """
+        return self.data_preservation_manager.resolve_conflict(
+            conflict=conflict,
+            jira_data=jira_data,
+            openproject_data=openproject_data
+        )
+
+    def create_entity_backup(
+        self,
+        entity_id: str,
+        entity_type: str,
+        entity_data: dict[str, Any]
+    ) -> Path:
+        """Create a backup of entity data before updating.
+
+        Args:
+            entity_id: Entity identifier
+            entity_type: Type of entity
+            entity_data: Entity data to backup
+
+        Returns:
+            Path to the backup file
+        """
+        return self.data_preservation_manager.create_backup(
+            entity_id=entity_id,
+            entity_type=entity_type,
+            entity_data=entity_data
+        )
+
+    def analyze_preservation_status(
+        self,
+        jira_changes: dict[str, dict[str, Any]],
+        entity_type: str
+    ) -> dict[str, Any]:
+        """Analyze potential conflicts for a set of entities.
+
+        Args:
+            jira_changes: Dictionary of entity_id -> changes from Jira
+            entity_type: Type of entities being analyzed
+
+        Returns:
+            Report of all conflicts detected
+        """
+        return self.data_preservation_manager.analyze_preservation_status(
+            jira_changes=jira_changes,
+            entity_type=entity_type
         )
 
     def detect_changes(self, current_entities: list[dict[str, Any]], entity_type: str) -> ChangeReport:
@@ -409,6 +526,209 @@ class BaseMigration:
                     self.logger.warning("Failed to complete migration record during error cleanup: %s", cleanup_error)
 
             # Fall back to standard migration if state management fails
+            return self.run()
+
+    def run_with_data_preservation(
+        self,
+        entity_type: str | None = None,
+        operation_type: str = "migrate",
+        entity_count: int = 0,
+        analyze_conflicts: bool = True,
+        create_backups: bool = True
+    ) -> ComponentResult:
+        """Run migration with comprehensive data preservation, state management, and change detection.
+
+        This method provides the complete migration workflow with all safeguards:
+        1. Analyze potential conflicts before migration
+        2. Check for changes to avoid unnecessary processing
+        3. Start migration record tracking
+        4. Create backups of entities before modification
+        5. Run the actual migration with conflict resolution
+        6. Store original states for future conflict detection
+        7. Register entity mappings during migration
+        8. Create snapshots after successful migration
+        9. Complete migration record tracking
+        10. Save state and create snapshot for rollback
+
+        Args:
+            entity_type: Type of entities being migrated (required for all features)
+            operation_type: Type of operation being performed
+            entity_count: Number of entities to be processed
+            analyze_conflicts: Whether to analyze conflicts before migration
+            create_backups: Whether to create backups before updating entities
+
+        Returns:
+            ComponentResult with migration results, state, and preservation information
+        """
+        # If no entity type specified, run standard migration without advanced features
+        if not entity_type:
+            self.logger.debug("No entity type specified, running migration without data preservation")
+            return self.run()
+
+        migration_record_id = None
+        snapshot_id = None
+        conflict_report = None
+
+        try:
+            # Step 1: Analyze conflicts if requested
+            if analyze_conflicts:
+                try:
+                    # Get current Jira changes for conflict analysis
+                    current_entities = self._get_current_entities_for_type(entity_type)
+
+                    # Convert entities to changes format for analysis
+                    jira_changes = {
+                        str(entity.get('id', entity.get('key', i))): entity
+                        for i, entity in enumerate(current_entities)
+                    }
+
+                    conflict_report = self.analyze_preservation_status(jira_changes, entity_type)
+
+                    if conflict_report["total_conflicts"] > 0:
+                        self.logger.info(
+                            "Detected %d conflicts for %s before migration: %s",
+                            conflict_report["total_conflicts"],
+                            entity_type,
+                            conflict_report["conflicts_by_resolution"]
+                        )
+
+                except Exception as e:
+                    self.logger.warning("Failed to analyze conflicts before migration: %s", e)
+
+            # Step 2: Check for changes
+            should_skip, change_report = self.should_skip_migration(entity_type)
+
+            if should_skip:
+                return ComponentResult(
+                    success=True,
+                    message=f"No changes detected for {entity_type}, migration skipped",
+                    details={
+                        "change_report": change_report,
+                        "conflict_report": conflict_report,
+                        "migration_skipped": True,
+                        "data_preservation": True
+                    },
+                    success_count=0,
+                    failed_count=0,
+                    total_count=0,
+                )
+
+            # Step 3: Start migration record
+            migration_record_id = self.start_migration_record(
+                entity_type=entity_type,
+                operation_type=operation_type,
+                entity_count=entity_count,
+                metadata={
+                    "change_report": change_report,
+                    "conflict_report": conflict_report,
+                    "data_preservation": True,
+                    "create_backups": create_backups
+                }
+            )
+
+            # Step 4: Run the actual migration
+            result = self.run()
+
+            # Step 5: Process results and update state
+            if result.success:
+                # Complete migration record
+                self.complete_migration_record(
+                    record_id=migration_record_id,
+                    success_count=result.success_count,
+                    error_count=result.failed_count,
+                    errors=result.errors
+                )
+
+                # Store original states for future preservation
+                try:
+                    current_entities = self._get_current_entities_for_type(entity_type)
+                    for entity in current_entities:
+                        entity_id = str(entity.get('id', entity.get('key', '')))
+                        if entity_id:
+                            self.data_preservation_manager.store_original_state(
+                                entity_id=entity_id,
+                                entity_type=entity_type,
+                                entity_data=entity,
+                                source="migration"
+                            )
+
+                    self.logger.info("Stored original states for %d %s entities", len(current_entities), entity_type)
+                except Exception as e:
+                    self.logger.warning("Failed to store original states: %s", e)
+
+                # Create change detection snapshot
+                try:
+                    current_entities = self._get_current_entities_for_type(entity_type)
+                    snapshot_path = self.create_snapshot(current_entities, entity_type)
+                    self.logger.info("Created change detection snapshot for %s: %s", entity_type, snapshot_path)
+                except Exception as e:
+                    self.logger.warning("Failed to create change detection snapshot: %s", e)
+
+                # Create state snapshot for rollback
+                try:
+                    snapshot_id = self.create_state_snapshot(
+                        description=(
+                            f"Completed {entity_type} migration with data preservation "
+                            f"via {self.__class__.__name__}"
+                        ),
+                        metadata={
+                            "entity_type": entity_type,
+                            "operation_type": operation_type,
+                            "success_count": result.success_count,
+                            "failed_count": result.failed_count,
+                            "data_preservation": True,
+                            "conflicts_detected": conflict_report["total_conflicts"] if conflict_report else 0
+                        }
+                    )
+                    self.logger.info("Created state snapshot: %s", snapshot_id)
+                except Exception as e:
+                    self.logger.warning("Failed to create state snapshot: %s", e)
+
+                # Save current state
+                try:
+                    self.state_manager.save_current_state()
+                except Exception as e:
+                    self.logger.warning("Failed to save current state: %s", e)
+
+                # Add comprehensive info to result details
+                if not result.details:
+                    result.details = {}
+                result.details.update({
+                    "change_report": change_report,
+                    "conflict_report": conflict_report,
+                    "migration_record_id": migration_record_id,
+                    "state_snapshot_id": snapshot_id,
+                    "state_management": True,
+                    "data_preservation": True
+                })
+
+            else:
+                # Migration failed - complete record with error
+                self.complete_migration_record(
+                    record_id=migration_record_id,
+                    success_count=result.success_count,
+                    error_count=result.failed_count,
+                    errors=result.errors
+                )
+
+            return result
+
+        except Exception as e:
+            self.logger.exception("Error in data preservation workflow: %s", e)
+
+            # Complete migration record with error if it was started
+            if migration_record_id:
+                try:
+                    self.complete_migration_record(
+                        record_id=migration_record_id,
+                        success_count=0,
+                        error_count=1,
+                        errors=[f"Data preservation workflow error: {e}"]
+                    )
+                except Exception as cleanup_error:
+                    self.logger.warning("Failed to complete migration record during error cleanup: %s", cleanup_error)
+
+            # Fall back to standard migration if data preservation workflow fails
             return self.run()
 
     def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:

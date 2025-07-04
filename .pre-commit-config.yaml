@@ -32,3 +32,27 @@ repos:
     hooks:
       - id: pyupgrade
         args: [--py312-plus]
+
+  # Test-related hooks for improved developer experience
+  - repo: local
+    hooks:
+      - id: quick-tests
+        name: Quick Unit Tests
+        entry: python scripts/test_helper.py quick
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+
+      - id: smoke-tests-on-commit
+        name: Smoke Tests (if tests changed)
+        entry: python scripts/test_helper.py smoke
+        language: system
+        files: ^tests/.*\.py$
+        pass_filenames: false
+
+      - id: test-coverage-check
+        name: Test Coverage Check
+        entry: bash -c 'python -m pytest --cov=src --cov-fail-under=80 tests/unit/'
+        language: system
+        stages: [pre-push]
+        pass_filenames: false

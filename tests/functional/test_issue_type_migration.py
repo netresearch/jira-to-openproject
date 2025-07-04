@@ -209,8 +209,6 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Configure mocks
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
-        mock_rails_instance = MagicMock()
-        mock_op_instance.rails_client = mock_rails_instance
 
         # Setup config paths
         mock_get_path.return_value = Path("/tmp/test_data")
@@ -222,13 +220,21 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Mock the mkdir operation to avoid permission errors
         mock_path_mkdir.return_value = None
 
-        # Mock the rails console client
-        mock_rails_instance.execute_query.return_value = {"status": "success", "output": "BULK_CREATE_SUCCESS: 1"}
-        mock_rails_instance.transfer_file_to_container.return_value = True
-        mock_rails_instance.transfer_file_from_container.return_value = True
+        # Mock the openproject client execute_query (this is called by
+        # check_existing_work_package_types and migrate_issue_types_via_rails)
+        mock_op_instance.execute_query.return_value = {"status": "success", "output": "===JSON_WRITE_SUCCESS==="}
+
+        # Mock the file transfer methods that are actually called
+        mock_op_instance.transfer_file_to_container.return_value = True
+        mock_op_instance.transfer_file_from_container.return_value = True
 
         # Mock subprocess run for any command execution
         mock_subprocess_run.return_value.returncode = 0
+        mock_subprocess_run.return_value.stdout = json.dumps([
+            {"id": 1, "name": "Bug", "color": "#FF0000"},
+            {"id": 2, "name": "Task", "color": "#00FF00"}
+        ])
+        mock_subprocess_run.return_value.stderr = ""
 
         # Create the migration instance with mocked components
         with patch.object(Path, "open", mock_open(read_data=json.dumps({
@@ -252,12 +258,16 @@ class TestIssueTypeMigration(unittest.TestCase):
             }
 
             # Call the method
-            result = migration.migrate_issue_types_via_rails()
+            migration.migrate_issue_types_via_rails()
 
-            # Verify results
-            assert result is True
-            mock_rails_instance.execute_query.assert_called()
-            mock_rails_instance.transfer_file_to_container.assert_called()
+            # Verify results - check that the mapping was updated with the new ID
+            assert migration.issue_type_mapping["Epic"]["openproject_id"] == 3
+            assert migration.issue_type_mapping["Epic"]["matched_by"] == "created"
+
+            # Verify the Rails client was called correctly
+            mock_op_instance.execute_query.assert_called()
+            mock_op_instance.transfer_file_to_container.assert_called()
+            mock_op_instance.transfer_file_from_container.assert_called()
 
     @patch("src.migrations.issue_type_migration.JiraClient")
     @patch("src.migrations.issue_type_migration.OpenProjectClient")
@@ -360,7 +370,7 @@ class TestIssueTypeMigration(unittest.TestCase):
         result = migration.update_mapping_file()
 
         # Verify results
-        assert result is True
+        assert result is None
         assert migration.issue_type_mapping["Bug"]["openproject_id"] == 1
         assert migration.issue_type_mapping["Task"]["openproject_id"] == 2
 

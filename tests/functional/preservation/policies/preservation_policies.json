@@ -1,0 +1,65 @@
+{
+  "users": {
+    "entity_type": "users",
+    "conflict_resolution": "openproject_wins",
+    "merge_strategy": "latest_timestamp",
+    "protected_fields": [
+      "password",
+      "last_login",
+      "admin_status"
+    ],
+    "merge_fields": [
+      "firstname",
+      "lastname",
+      "mail"
+    ],
+    "track_changes": true,
+    "backup_before_update": true
+  },
+  "projects": {
+    "entity_type": "projects",
+    "conflict_resolution": "merge",
+    "merge_strategy": "custom",
+    "protected_fields": [
+      "created_on",
+      "updated_on",
+      "status"
+    ],
+    "merge_fields": [
+      "description",
+      "homepage"
+    ],
+    "track_changes": true,
+    "backup_before_update": true
+  },
+  "work_packages": {
+    "entity_type": "work_packages",
+    "conflict_resolution": "merge",
+    "merge_strategy": "latest_timestamp",
+    "protected_fields": [
+      "created_on",
+      "updated_on"
+    ],
+    "merge_fields": [
+      "subject",
+      "description",
+      "estimated_hours"
+    ],
+    "track_changes": true,
+    "backup_before_update": true
+  },
+  "custom_fields": {
+    "entity_type": "custom_fields",
+    "conflict_resolution": "jira_wins",
+    "merge_strategy": "latest_timestamp",
+    "protected_fields": [
+      "created_on"
+    ],
+    "merge_fields": [
+      "name",
+      "description"
+    ],
+    "track_changes": false,
+    "backup_before_update": false
+  }
+}
