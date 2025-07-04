@@ -45,13 +45,15 @@ class MarkdownConverter:
     def _compile_patterns(self) -> None:
         """Compile regex patterns for efficient text processing."""
         # Basic formatting patterns - be careful not to match markdown formatting
-        # Bold: require exactly one * on each side, not preceded/followed by *, and not in parentheses
+        # Bold text: *text* (but not if already inside markdown ** format)
         self.bold_pattern = re.compile(r'(?<!\*)\*([^*\n\(\)]+)\*(?!\*)')
-        # Italic: don't match text in parentheses (like migrated issue notes)
+        # Italic text: _text_ (but not if inside parentheses or already markdown)
         self.italic_pattern = re.compile(r'(?<!\()\b_([^_\n]+)_\b(?!\))')
+        # Underline: +text+ -> <u>text</u>
         self.underline_pattern = re.compile(r'\+([^+\n]+)\+')
-        # Strikethrough: don't match table separators or horizontal rules
+        # Strikethrough: -text- (but avoid table separators and bullets)
         self.strikethrough_pattern = re.compile(r'(?<![\|\s])-([^-\n\|]+)-(?![\|\s\-])')
+        # Monospace: {{text}} -> `text`
         self.monospace_pattern = re.compile(r'\{\{([^}]+)\}\}')
 
         # Heading patterns (h1-h6)
@@ -66,12 +68,15 @@ class MarkdownConverter:
         # Block quote pattern
         self.blockquote_pattern = re.compile(r'^bq\.\s*(.+)$', re.MULTILINE)
 
+        # Horizontal rule pattern
+        self.hr_pattern = re.compile(r'^----+$', re.MULTILINE)
+
         # Code block patterns
         self.code_block_pattern = re.compile(r'\{code(?::([^}]*))?\}(.*?)\{code\}', re.DOTALL)
         self.noformat_pattern = re.compile(r'\{noformat\}(.*?)\{noformat\}', re.DOTALL)
 
-        # Link patterns
-        self.link_pattern = re.compile(r'\[([^|\]]*)\|?([^\]]*)\]')
+        # Link patterns - avoid matching markdown images and user mentions
+        self.link_pattern = re.compile(r'(?<!\!)\[([^|\]~][^|\]]*)\|?([^\]]*)\]')
 
         # Issue reference patterns
         self.issue_ref_pattern = re.compile(r'\b([A-Z][A-Z0-9_]*-\d+)\b')
@@ -79,10 +84,16 @@ class MarkdownConverter:
         # User mention patterns
         self.user_mention_pattern = re.compile(r'\[~([^]]+)\]')
 
-        # Horizontal rule pattern
-        self.hr_pattern = re.compile(r'^----+$', re.MULTILINE)
+        # Attachment and embedded content patterns
+        self.image_pattern = re.compile(r'!([^!|\s]+)(?:\|([^!]*))?!')
+        self.attachment_pattern = re.compile(
+            r'\[([^\|\]]+)\|([^\]]*\.'
+            r'(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip|rar|7z))\]',
+            re.IGNORECASE
+        )
 
         # Table patterns
+        self.table_header_pattern = re.compile(r'^\|\|(.+)\|\|$', re.MULTILINE)
         self.table_row_pattern = re.compile(r'^\|(.+)\|$', re.MULTILINE)
 
         # Panel and macro patterns
@@ -123,9 +134,11 @@ class MarkdownConverter:
         text = self._convert_lists(text)  # Convert lists before headings to avoid conflicts
         text = self._convert_headings(text)
         text = self._convert_block_quotes(text)
-        text = self._convert_user_mentions(text)  # Convert user mentions before links
         text = self._convert_issue_references(text)
+        text = self._convert_user_mentions(text)  # Convert user mentions before links
+        text = self._convert_images(text)
         text = self._convert_links(text)
+        text = self._convert_attachments(text)
         text = self._convert_horizontal_rules(text)
         text = self._convert_text_formatting(text)
         text = self._cleanup_whitespace(text)
@@ -250,17 +263,33 @@ class MarkdownConverter:
     def _convert_user_mentions(self, text: str) -> str:
         """Convert Jira user mentions to OpenProject user mentions."""
         def replace_user_mention(match: re.Match[str]) -> str:
-            username = match.group(1)
-
-            # Look up the user ID if mapping is available
+            username = match.group(1).strip()
             if self.user_mapping and username in self.user_mapping:
                 user_id = self.user_mapping[username]
                 return f"@{user_id}"
             else:
-                # Fallback: preserve username in readable format
-                return f"@{username}"
+                # Return original format if no mapping exists or user not found
+                return match.group(0)  # Return the original [~username] format
 
         return self.user_mention_pattern.sub(replace_user_mention, text)
+
+    def _convert_images(self, text: str) -> str:
+        """Convert Jira images to markdown images."""
+        def replace_image(match: re.Match[str]) -> str:
+            image_url = match.group(1).strip()
+            alt_text = match.group(2).strip() if match.group(2) else ""
+            return f"![{alt_text}]({image_url})"
+
+        return self.image_pattern.sub(replace_image, text)
+
+    def _convert_attachments(self, text: str) -> str:
+        """Convert Jira attachments to markdown links."""
+        def replace_attachment(match: re.Match[str]) -> str:
+            title = match.group(1).strip()
+            filename = match.group(2).strip()
+            return f"[{title}]({filename})"
+
+        return self.attachment_pattern.sub(replace_attachment, text)
 
     def _convert_horizontal_rules(self, text: str) -> str:
         """Convert Jira horizontal rules to markdown horizontal rules."""
@@ -338,16 +367,12 @@ class MarkdownConverter:
     def _convert_panels_and_macros(self, text: str) -> str:
         """Convert Jira panels and macros to markdown equivalents."""
 
-        def parse_title(params: str | None) -> str:
-            """Parse title from panel parameters like 'title=Important Info'."""
+        # Helper function to parse title parameter
+        def parse_title(params: str | None) -> str | None:
             if not params:
-                return ""
-
-            # Look for title=value pattern
+                return None
             title_match = re.search(r'title=([^|]+)', params)
-            if title_match:
-                return title_match.group(1).strip()
-            return params
+            return title_match.group(1).strip() if title_match else None
 
         # Info panels
         def replace_info(match: re.Match[str]) -> str:

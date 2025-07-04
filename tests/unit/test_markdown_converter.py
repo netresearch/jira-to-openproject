@@ -183,11 +183,11 @@ Plain text content
     def test_convert_user_mentions_without_mapping(self):
         """Test user mention conversion without user mapping."""
         converter = MarkdownConverter()
-
         text = "Hey [~john.doe], please review this"
-        expected = "Hey @john.doe, please review this"
-
-        assert converter.convert(text) == expected
+        result = converter.convert(text)
+        # Should preserve original format when no mapping exists
+        expected = "Hey [~john.doe], please review this"
+        assert result == expected
 
     def test_convert_horizontal_rules(self):
         """Test horizontal rule conversion."""
@@ -504,3 +504,47 @@ Content for option B with _italic_ text.
         text_mixed = "Line 1\r\nLine 2\nLine 3\r"
         result = converter.convert(text_mixed)
         assert "Line 1" in result and "Line 2" in result and "Line 3" in result
+
+    def test_convert_images(self):
+        """Test image conversion from Jira to markdown format."""
+        converter = MarkdownConverter()
+
+        # Test basic image
+        text = "Here is an image: !screenshot.png!"
+        result = converter.convert(text)
+        expected = "Here is an image: ![](screenshot.png)"
+        assert result == expected
+
+        # Test image with alt text
+        text = "Check this: !diagram.jpg|This is a diagram!"
+        result = converter.convert(text)
+        expected = "Check this: ![This is a diagram](diagram.jpg)"
+        assert result == expected
+
+        # Test multiple images
+        text = "See !before.png! and !after.png|After image!"
+        result = converter.convert(text)
+        expected = "See ![](before.png) and ![After image](after.png)"
+        assert result == expected
+
+    def test_convert_attachments(self):
+        """Test attachment conversion from Jira to markdown format."""
+        converter = MarkdownConverter()
+        
+        # Test PDF attachment
+        text = "Please review [Technical Spec|spec.pdf]"
+        result = converter.convert(text)
+        expected = "Please review [Technical Spec](spec.pdf)"
+        assert result == expected
+        
+        # Test various file types
+        text = "Files: [Report|report.docx] and [Data|data.xlsx]"
+        result = converter.convert(text)
+        expected = "Files: [Report](report.docx) and [Data](data.xlsx)"
+        assert result == expected
+        
+        # Test zip file
+        text = "Download [Source Code|source.zip]"
+        result = converter.convert(text)
+        expected = "Download [Source Code](source.zip)"
+        assert result == expected
