@@ -69,6 +69,9 @@ class WorkflowMigration:
         Returns:
             List of workflow definitions
 
+        Raises:
+            RuntimeError: When unable to retrieve workflows from Jira
+
         """
         try:
             url = f"{self.jira_client.base_url}/rest/api/2/workflow"
@@ -94,13 +97,16 @@ class WorkflowMigration:
             return workflows
         except Exception as e:
             logger.exception("Failed to get workflows from Jira: %s", e)
-            return []
+            raise RuntimeError(f"Unable to retrieve workflows from Jira: {e}") from e
 
     def extract_jira_statuses(self) -> list[dict[str, Any]]:
         """Extract workflow statuses from Jira.
 
         Returns:
             List of Jira status definitions
+
+        Raises:
+            RuntimeError: When unable to retrieve statuses from Jira
 
         """
         logger.info("Extracting statuses from Jira...")
@@ -119,7 +125,7 @@ class WorkflowMigration:
             return statuses
         except Exception as e:
             logger.exception("Failed to get statuses from Jira: %s", e)
-            return []
+            raise RuntimeError(f"Unable to retrieve statuses from Jira: {e}") from e
 
     def extract_openproject_statuses(self) -> list[dict[str, Any]]:
         """Extract workflow statuses from OpenProject.
@@ -127,19 +133,17 @@ class WorkflowMigration:
         Returns:
             List of OpenProject status definitions
 
+        Raises:
+            RuntimeError: When unable to retrieve statuses from OpenProject
+
         """
         logger.info("Extracting statuses from OpenProject...")
 
         try:
             self.op_statuses = self.op_client.get_statuses()
         except Exception as e:
-            logger.warning(
-                f"Failed to get statuses from OpenProject: {e}",
-            )
-            logger.warning(
-                "Using an empty list of statuses for OpenProject",
-            )
-            self.op_statuses = []
+            logger.exception("Failed to get statuses from OpenProject: %s", e)
+            raise RuntimeError(f"Unable to retrieve statuses from OpenProject: {e}") from e
 
         logger.info(
             f"Extracted {len(self.op_statuses)} statuses from OpenProject",

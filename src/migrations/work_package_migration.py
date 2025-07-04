@@ -349,23 +349,10 @@ class WorkPackageMigration(BaseMigration):
 
         # If no type mapping exists, default to Task
         if not type_id:
-            self.logger.warning(
-                f"No mapping found for issue type {issue_type_name} (ID: {issue_type_id}), defaulting to Task",
-            )
-            # Get the Task type ID from OpenProject
-            task_types = [t for t in self.op_client.get_work_package_types() if t["name"] == "Task"]
-            if task_types:
-                type_id = task_types[0]["id"]
-            else:
-                # If no Task type found, use the first available type
-                types = self.op_client.get_work_package_types()
-                if types:
-                    type_id = types[0]["id"]
-                else:
-                    self.logger.error(
-                        "No work package types available in OpenProject",
-                    )
-                    return None
+            type_display = issue_type_name or 'Unknown'
+            warning_msg = f"No mapping found for issue type {type_display} (ID: {issue_type_id}), defaulting to Task"
+            self.logger.warning(warning_msg)
+            return 1
 
         # Map the status
         status_op_id = None
@@ -432,8 +419,8 @@ class WorkPackageMigration(BaseMigration):
         # Process custom fields
         if custom_fields:
             # Load custom field mappings
-            custom_field_mapping = self._load_custom_field_mapping()
-            if custom_field_mapping:
+            try:
+                custom_field_mapping = self._load_custom_field_mapping()
                 custom_field_values = {}
 
                 for jira_field_id, field_value in custom_fields.items():
@@ -452,6 +439,9 @@ class WorkPackageMigration(BaseMigration):
                     work_package["custom_fields"] = [
                         {"id": field_id, "value": field_value} for field_id, field_value in custom_field_values.items()
                     ]
+            except (FileNotFoundError, RuntimeError) as e:
+                self.logger.warning(f"Custom field mapping not available: {e}")
+                # Continue without custom field mapping
 
         return work_package
 
@@ -490,25 +480,29 @@ class WorkPackageMigration(BaseMigration):
             # Add type if available
             issue_type = jira_issue.get("issue_type", {})
             if issue_type:
-                type_id = self._map_issue_type(issue_type.get("id"), issue_type.get("name"))
-                if type_id:
+                type_id_value = issue_type.get("id")
+                type_name_value = issue_type.get("name")
+                if type_id_value or type_name_value:
+                    type_id = self._map_issue_type(type_id_value, type_name_value)
                     work_package["_links"]["type"] = {"href": f"/api/v3/types/{type_id}"}
 
             # Add status if available
             status = jira_issue.get("status", {})
             if status:
-                status_id = self._map_status(status.get("id"), status.get("name"))
-                if status_id:
+                status_id_value = status.get("id")
+                status_name_value = status.get("name")
+                if status_id_value or status_name_value:
+                    status_id = self._map_status(status_id_value, status_name_value)
                     work_package["_links"]["status"] = {"href": f"/api/v3/statuses/{status_id}"}
 
             return work_package
         # It's a Jira issue object, use the internal method
         return self._prepare_work_package(jira_issue, project_id)
 
-    def _map_issue_type(self, type_id: str | None = None, type_name: str | None = None) -> int | None:
+    def _map_issue_type(self, type_id: str | None = None, type_name: str | None = None) -> int:
         """Map Jira issue type to OpenProject type ID."""
         if not type_id and not type_name:
-            return None
+            raise ValueError("Either type_id or type_name must be provided for issue type mapping")
 
         # Try to find in mapping by ID
         if type_id and self.issue_type_id_mapping and str(type_id) in self.issue_type_id_mapping:
@@ -516,21 +510,29 @@ class WorkPackageMigration(BaseMigration):
 
         # Try to find in mapping by ID in issue_type_mapping
         if type_id and str(type_id) in self.issue_type_mapping:
-            return self.issue_type_mapping[str(type_id)].get("openproject_id")
+            mapped_id = self.issue_type_mapping[str(type_id)].get("openproject_id")
+            if mapped_id:
+                return mapped_id
 
         # Default to Task (typically ID 1 in OpenProject)
+        type_display = type_name or 'Unknown'
+        self.logger.warning(f"No mapping found for issue type {type_display} (ID: {type_id}), defaulting to Task")
         return 1
 
-    def _map_status(self, status_id: str | None = None, status_name: str | None = None) -> int | None:
+    def _map_status(self, status_id: str | None = None, status_name: str | None = None) -> int:
         """Map Jira status to OpenProject status ID."""
         if not status_id and not status_name:
-            return None
+            raise ValueError("Either status_id or status_name must be provided for status mapping")
 
         # Try to find in mapping by ID
         if status_id and self.status_mapping and str(status_id) in self.status_mapping:
-            return self.status_mapping[str(status_id)].get("openproject_id")
+            mapped_id = self.status_mapping[str(status_id)].get("openproject_id")
+            if mapped_id:
+                return mapped_id
 
         # Default to "New" status (typically ID 1 in OpenProject)
+        status_display = status_name or 'Unknown'
+        self.logger.warning(f"No mapping found for status {status_display} (ID: {status_id}), defaulting to New")
         return 1
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
@@ -539,18 +541,21 @@ class WorkPackageMigration(BaseMigration):
         Returns:
             Dictionary mapping Jira custom field IDs to OpenProject custom field IDs
 
+        Raises:
+            FileNotFoundError: If mapping file doesn't exist
+            RuntimeError: If there's an error loading the mapping file
+
         """
         mapping_file = Path(self.data_dir) / "custom_field_mapping.json"
-        if Path(mapping_file).exists():
-            try:
-                with Path(mapping_file).open() as f:
-                    return json.load(f)
-            except Exception as e:
-                self.logger.warning(
-                    f"Error loading custom field mapping: {e}",
-                )
 
-        return {}
+        if not Path(mapping_file).exists():
+            raise FileNotFoundError(f"Custom field mapping file not found: {mapping_file}")
+
+        try:
+            with Path(mapping_file).open() as f:
+                return json.load(f)
+        except Exception as e:
+            raise RuntimeError(f"Error loading custom field mapping from {mapping_file}: {e}") from e
 
     def _process_custom_field_value(self, value: Any, field_type: str) -> Any:  # noqa: PLR0911
         """Process a custom field value based on its type.
@@ -1570,7 +1575,7 @@ class WorkPackageMigration(BaseMigration):
 
     # --- Helper methods for direct import (Need adaptation for jira.Issue) ---
 
-    def _create_wp_via_rails(self, wp_payload: dict[str, Any]) -> dict[str, Any] | None:
+    def _create_wp_via_rails(self, wp_payload: dict[str, Any]) -> dict[str, Any]:
         """Creates a work package using the Rails console client via the proper client method."""
         jira_key = wp_payload.get("jira_key", "UNKNOWN")
         self.logger.debug("Attempting to create WP for %s via Rails client create_record...", jira_key)
@@ -1599,8 +1604,13 @@ class WorkPackageMigration(BaseMigration):
                 "_type": "WorkPackage",
                 "subject": record_data.get("subject"),
             }
-        self.logger.error("Failed to create WP for %s via Rails client: %s", jira_key, error_message)
-        return None
+
+        # Raise exception instead of returning None
+        error_details = f"Failed to create work package for Jira issue {jira_key}"
+        if error_message:
+            error_details += f": {error_message}"
+
+        raise RuntimeError(error_details)
 
     def run(self) -> ComponentResult:
         """Run the work package migration process.
