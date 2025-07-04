@@ -8,6 +8,15 @@ from src.clients.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 
 
+class ComponentInitializationError(Exception):
+    """Raised when a migration component cannot be initialized.
+
+    This custom exception provides clear diagnostics when component
+    initialization fails, following proper exception-based error handling.
+    """
+    pass
+
+
 class BaseMigration:
     """Base class for all migration classes.
 
@@ -41,11 +50,14 @@ class BaseMigration:
 
         self.logger = config.logger
 
-        # Initialize config.mappings if not already set
-        if config.mappings is None:
-            from src.mappings.mappings import Mappings
-
-            config.mappings = Mappings(data_dir=self.data_dir)
+        # Initialize mappings using proper exception handling (compliance fix)
+        try:
+            # Optimistic execution: attempt to get mappings directly
+            self.mappings = config.get_mappings()
+        except config.MappingsInitializationError as e:
+            # Only perform diagnostics if mappings initialization fails
+            self.logger.exception("Failed to initialize mappings in %s: %s", self.__class__.__name__, e)
+            raise ComponentInitializationError(f"Cannot initialize {self.__class__.__name__}: {e}") from e
 
     def _load_from_json(self, filename: Path, default: Any = None) -> Any:
         """Load data from a JSON file in the data directory.

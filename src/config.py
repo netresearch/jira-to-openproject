@@ -2,12 +2,16 @@
 Provides a centralized configuration interface using ConfigLoader.
 """
 
+import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.config_loader import ConfigLoader
 from src.display import configure_logging
 from src.type_definitions import Config, DirType, LogLevel, SectionName
+
+if TYPE_CHECKING:
+    from src.mappings.mappings import Mappings
 
 # Create a singleton instance of ConfigLoader
 _config_loader = ConfigLoader()
@@ -59,6 +63,91 @@ logger = configure_logging(LOG_LEVEL, log_file)
 # Now log the directory creation messages
 for message in created_dirs:
     logger.debug(message)
+
+
+# ==================================================================================
+# MAPPINGS MANAGEMENT - Expert-validated solution for compliance violations
+# ==================================================================================
+
+# Global mappings state management with thread safety
+_mappings: "Mappings | None" = None
+_mappings_lock = threading.Lock()
+
+
+class MappingsInitializationError(Exception):
+    """Raised when mappings cannot be initialized.
+
+    This custom exception provides clear diagnostics when mappings initialization
+    fails, following proper exception-based error handling patterns.
+    """
+    pass
+
+
+def get_mappings() -> "Mappings":
+    """Get or initialize the global mappings instance.
+
+    Follows optimistic execution pattern - attempts operation directly,
+    only performs diagnostics if initialization fails.
+
+    Thread-safe implementation using double-checked locking pattern
+    to prevent race conditions during initialization.
+
+    Returns:
+        Mappings: The global mappings instance
+
+    Raises:
+        MappingsInitializationError: If mappings cannot be initialized
+    """
+    global _mappings
+    if _mappings is None:
+        with _mappings_lock:  # Thread safety per expert feedback
+            if _mappings is None:  # Double-check pattern
+                try:
+                    # Optimistic execution: attempt to create mappings directly
+                    from src.mappings.mappings import Mappings
+                    _mappings = Mappings(data_dir=get_path("data"))
+                    logger.debug("Successfully initialized global mappings instance")
+                except Exception as e:
+                    # Only perform diagnostics if initialization fails
+                    data_dir = get_path("data")
+                    logger.exception("Failed to initialize mappings with data_dir=%s: %s", data_dir, e)
+                    raise MappingsInitializationError(f"Cannot initialize mappings: {e}") from e
+    return _mappings
+
+
+def reset_mappings() -> None:
+    """Reset mappings cache for testing.
+
+    This helper function allows tests to clear the cached mappings state
+    to prevent cross-test leakage and ensure test isolation.
+
+    Note: This function is primarily intended for test usage.
+    """
+    global _mappings
+    with _mappings_lock:
+        _mappings = None
+        logger.debug("Reset mappings cache for testing")
+
+
+class _MappingsProxy:
+    """Proxy class for backward compatibility with config.mappings access pattern.
+
+    This proxy automatically delegates all attribute access to the actual
+    Mappings instance, providing seamless backward compatibility while
+    maintaining proper lazy initialization and exception handling.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate all attribute access to the actual Mappings instance."""
+        return getattr(get_mappings(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Delegate all attribute setting to the actual Mappings instance."""
+        setattr(get_mappings(), name, value)
+
+
+# Backward compatibility - seamless access for existing code using config.mappings
+mappings = _MappingsProxy()
 
 
 # Expose the function to get the full config
