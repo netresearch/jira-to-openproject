@@ -345,15 +345,17 @@ class AccountMigration(BaseMigration):
         )
 
         # First, check if field already exists
-        existing_id = self.get_existing_custom_field_id()
-
-        if existing_id:
+        try:
+            existing_id = self.get_existing_custom_field_id()
             self.logger.info(
                 "Found existing Tempo Account custom field with ID %d",
                 existing_id,
             )
             self.account_custom_field_id = existing_id
             return existing_id
+        except MigrationError:
+            # Field doesn't exist, proceed to create it
+            self.logger.info("Custom field doesn't exist, will create it")
 
         # Create the custom field using direct API
         self.logger.info("Creating Tempo Account custom field...")
@@ -402,11 +404,7 @@ class AccountMigration(BaseMigration):
                 raise MigrationError(msg)
 
         # Associate with all work package types
-        if not self.associate_field_with_work_package_types(
-            self.account_custom_field_id,
-        ):
-            msg = "Failed to associate custom field with work package types"
-            raise MigrationError(msg)
+        self.associate_field_with_work_package_types(self.account_custom_field_id)
 
         return self.account_custom_field_id
 
@@ -430,10 +428,7 @@ class AccountMigration(BaseMigration):
             self.create_account_mapping()
 
             # Ensure the custom field exists
-            custom_field_id = self.create_account_custom_field()
-            if not custom_field_id:
-                msg = "Failed to create or retrieve account custom field"
-                raise MigrationError(msg)
+            self.create_account_custom_field()
 
             # Analyze results
             analysis = self.analyze_account_mapping()
@@ -643,11 +638,14 @@ class AccountMigration(BaseMigration):
         # Return the mapping
         return self.account_mapping
 
-    def get_existing_custom_field_id(self) -> int | None:
+    def get_existing_custom_field_id(self) -> int:
         """Check if 'Tempo Account' custom field already exists.
 
         Returns:
-            ID of the existing custom field or None
+            ID of the existing custom field
+
+        Raises:
+            MigrationError: If custom field does not exist or cannot be retrieved
 
         """
         try:
@@ -656,24 +654,29 @@ class AccountMigration(BaseMigration):
 
             if existing_id is None:
                 self.logger.info("No existing 'Tempo Account' custom field found")
-                return None
+                raise MigrationError("Tempo Account custom field does not exist")
 
             self.logger.info(
                 "Found existing 'Tempo Account' custom field with ID: %d",
                 existing_id,
             )
             return existing_id
-        except Exception:
-            self.logger.warning(
-                "Error checking for existing custom field",
-            )
-            return None
+        except MigrationError:
+            # Re-raise migration errors
+            raise
+        except Exception as e:
+            error_msg = f"Error checking for existing custom field: {e}"
+            self.logger.warning(error_msg)
+            raise MigrationError(error_msg) from e
 
-    def create_custom_field_via_rails(self) -> int | None:
+    def create_custom_field_via_rails(self) -> int:
         """Create a custom field via Rails console commands.
 
         Returns:
-            ID of the created custom field or None if creation failed
+            ID of the created custom field
+
+        Raises:
+            MigrationError: If custom field creation fails
 
         """
         try:
@@ -714,23 +717,26 @@ class AccountMigration(BaseMigration):
 
                 return new_id
 
-            self.logger.warning("Failed to create custom field via Rails")
-            return None
+            error_msg = f"Failed to create custom field via Rails. Result: {result}"
+            self.logger.warning(error_msg)
+            raise MigrationError(error_msg)
 
-        except Exception:
-            self.logger.warning(
-                "Error creating custom field via Rails",
-            )
-            return None
+        except MigrationError:
+            # Re-raise migration errors
+            raise
+        except Exception as e:
+            error_msg = f"Error creating custom field via Rails: {e}"
+            self.logger.warning(error_msg)
+            raise MigrationError(error_msg) from e
 
-    def associate_field_with_work_package_types(self, field_id: int) -> bool:
+    def associate_field_with_work_package_types(self, field_id: int) -> None:
         """Make custom field available for all work package types.
 
         Args:
             field_id: ID of the custom field to associate
 
-        Returns:
-            True if successful, False otherwise
+        Raises:
+            MigrationError: If association fails
 
         """
         try:
@@ -753,25 +759,29 @@ class AccountMigration(BaseMigration):
             result = self.op_client.execute_query(activate_command)
 
             # Handle both string and dict results
+            success = False
             if isinstance(result, dict):
                 if result.get("status") == "success":
-                    self.logger.info("Custom field activated for all work package types")
-                    return True
+                    success = True
             elif isinstance(result, str):
                 # Check if the command executed successfully (no error output)
                 if "SUCCESS" in result or "=> nil" in result:
-                    self.logger.info("Custom field activated for all work package types")
-                    return True
+                    success = True
                 # If there's no error indication, assume success
-                if not any(error_word in result.lower() for error_word in ["error", "exception", "failed"]):
-                    self.logger.info("Custom field activation command executed (assuming success)")
-                    return True
+                elif not any(error_word in result.lower() for error_word in ["error", "exception", "failed"]):
+                    success = True
 
-            self.logger.warning("Failed to activate custom field for all types")
-            return False
+            if success:
+                self.logger.info("Custom field activated for all work package types")
+            else:
+                error_msg = f"Failed to activate custom field for all types. Result: {result}"
+                self.logger.warning(error_msg)
+                raise MigrationError(error_msg)
 
+        except MigrationError:
+            # Re-raise migration errors
+            raise
         except Exception as e:
-            self.logger.warning(
-                f"Error associating custom field with types: {e}",
-            )
-            return False
+            error_msg = f"Error associating custom field with types: {e}"
+            self.logger.warning(error_msg)
+            raise MigrationError(error_msg) from e
