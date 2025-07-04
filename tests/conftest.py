@@ -197,3 +197,142 @@ def ssh_client() -> Generator[SSHClient, None, None]:
     finally:
         # Cleanup will happen in the client's __del__ method
         pass
+
+
+# Monkeypatch helper functions for standardized mocking patterns
+class MonkeypatchHelpers:
+    """Helper class for standardized monkeypatch patterns."""
+
+    @staticmethod
+    def mock_method_return_value(
+        monkeypatch: pytest.MonkeyPatch, obj: object, method_name: str, return_value
+    ) -> None:
+        """Set a method's return value using monkeypatch.
+
+        Args:
+            monkeypatch: pytest monkeypatch fixture
+            obj: Object containing the method to patch
+            method_name: Name of the method to patch
+            return_value: Value to return when method is called
+
+        Example:
+            helpers.mock_method_return_value(monkeypatch, mock_client, "get_users", [{"id": 1}])
+        """
+        mock_method = MagicMock(return_value=return_value)
+        monkeypatch.setattr(obj, method_name, mock_method)
+
+    @staticmethod
+    def mock_method_side_effect(
+        monkeypatch: pytest.MonkeyPatch, obj: object, method_name: str, side_effect
+    ) -> None:
+        """Set a method's side effect using monkeypatch.
+
+        Args:
+            monkeypatch: pytest monkeypatch fixture
+            obj: Object containing the method to patch
+            method_name: Name of the method to patch
+            side_effect: Side effect function or exception to apply
+
+        Example:
+            helpers.mock_method_side_effect(monkeypatch, mock_client, "create_user", Exception("Failed"))
+        """
+        mock_method = MagicMock(side_effect=side_effect)
+        monkeypatch.setattr(obj, method_name, mock_method)
+
+    @staticmethod
+    def mock_class_return_value(
+        monkeypatch: pytest.MonkeyPatch, module_path: str, class_name: str, return_value
+    ) -> None:
+        """Set a class constructor's return value using monkeypatch.
+
+        Args:
+            monkeypatch: pytest monkeypatch fixture
+            module_path: Full module path where class is imported
+            class_name: Name of the class to patch
+            return_value: Instance to return when class is instantiated
+
+        Example:
+            helpers.mock_class_return_value(monkeypatch, "src.clients.jira_client", "JiraClient", mock_jira_instance)
+        """
+        mock_class = MagicMock(return_value=return_value)
+        monkeypatch.setattr(f"{module_path}.{class_name}", mock_class)
+
+    @staticmethod
+    def mock_path_exists(monkeypatch: pytest.MonkeyPatch, return_value: bool = True) -> None:
+        """Mock os.path.exists using monkeypatch.
+
+        Args:
+            monkeypatch: pytest monkeypatch fixture
+            return_value: Value to return for path existence checks
+        """
+        monkeypatch.setattr("os.path.exists", MagicMock(return_value=return_value))
+
+    @staticmethod
+    def mock_path_open(monkeypatch: pytest.MonkeyPatch, read_data: str = "") -> MagicMock:
+        """Mock file opening using monkeypatch.
+
+        Args:
+            monkeypatch: pytest monkeypatch fixture
+            read_data: Data to return when file is read
+
+        Returns:
+            MagicMock: The mock file object for additional configuration
+        """
+        from unittest.mock import mock_open
+        mock_file = mock_open(read_data=read_data)
+        monkeypatch.setattr("builtins.open", mock_file)
+        return mock_file
+
+    @staticmethod
+    def mock_config_get(monkeypatch: pytest.MonkeyPatch, config_values: dict) -> None:
+        """Mock configuration get method using monkeypatch.
+
+        Args:
+            monkeypatch: pytest monkeypatch fixture
+            config_values: Dictionary mapping config keys to their values
+
+        Example:
+            helpers.mock_config_get(monkeypatch, {"dry_run": True, "force": False})
+        """
+        def config_side_effect(key: str, default=None):
+            return config_values.get(key, default)
+
+        # Mock various config patterns found in tests
+        config_patterns = [
+            "src.migrations.base_migration.config.migration_config.get",
+            "src.migrations.user_migration.config.migration_config.get",
+            "src.migrations.project_migration.config.migration_config.get",
+            "src.migrations.issue_type_migration.config.migration_config.get",
+            "src.migrations.workflow_migration.config.migration_config.get",
+        ]
+
+        for pattern in config_patterns:
+            try:
+                monkeypatch.setattr(pattern, MagicMock(side_effect=config_side_effect))
+            except AttributeError:
+                # Pattern doesn't exist in current test context, skip
+                pass
+
+    @staticmethod
+    def mock_json_operations(monkeypatch: pytest.MonkeyPatch, load_data: dict = None, dump_data: dict = None) -> None:
+        """Mock JSON load and dump operations using monkeypatch.
+
+        Args:
+            monkeypatch: pytest monkeypatch fixture
+            load_data: Data to return when json.load is called
+            dump_data: Expected data when json.dump is called (for verification)
+        """
+        if load_data is not None:
+            monkeypatch.setattr("json.load", MagicMock(return_value=load_data))
+        if dump_data is not None:
+            monkeypatch.setattr("json.dump", MagicMock())
+
+
+@pytest.fixture
+def monkeypatch_helpers() -> MonkeypatchHelpers:
+    """Provide access to monkeypatch helper methods.
+
+    Returns:
+        MonkeypatchHelpers: Helper class instance with standardized monkeypatch patterns
+    """
+    return MonkeypatchHelpers()
