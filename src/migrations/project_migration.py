@@ -291,10 +291,20 @@ class ProjectMigration(BaseMigration):
             Exception: If Rails console query fails or times out
         """
         try:
-            # Single optimized query that returns consistent format for both cases
+            # Validate identifier is a string to prevent injection attacks
+            if not isinstance(identifier, str):
+                raise ValueError(f"Identifier must be a string, got {type(identifier)}")
+
+            # Sanitize identifier using Ruby %q{} literal syntax to prevent injection
+            # This ensures the identifier is treated as a literal string with no code interpolation
+            sanitized_identifier = identifier.replace("}", "\\}")  # Escape only the closing brace
+
+            # Single optimized query using safe Ruby string literal syntax
+            # Using %q{} prevents any Ruby code injection while preserving the identifier exactly
             check_query = (
-                f"p = Project.find_by(identifier: '{identifier}'); "
-                "if p; [true, p.id, p.name, p.identifier]; else; [false, nil, nil, nil]; end"
+                f"p = Project.find_by(identifier: %q{{{sanitized_identifier}}}); "
+                "if p; [true, p.id, p.name, p.identifier]; "
+                "else; [false, nil, nil, nil]; end"
             )
 
             # Execute with basic timeout protection
@@ -313,6 +323,9 @@ class ProjectMigration(BaseMigration):
             # Project doesn't exist or query returned unexpected format
             return None
 
+        except ValueError:
+            # Re-raise validation errors as-is (user input errors)
+            raise
         except Exception as e:
             logger.error("Project existence check failed for '%s': %s", identifier, e)
             # Re-raise to let caller handle the error appropriately

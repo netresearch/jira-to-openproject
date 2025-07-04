@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, mock_open, patch
 
+import pytest
+
 from src import config
 from src.migrations.project_migration import ProjectMigration
 
@@ -244,6 +246,232 @@ class TestProjectMigration(unittest.TestCase):
         assert parent is None
         # Should log a debug about missing account mapping
         assert any("No account mapping found for project UNKNOWN" in msg for msg in cm.output)
+
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
+    def test_get_existing_project_details_security_injection_prevention(
+        self, mock_op_client: MagicMock, mock_jira_client: MagicMock,
+    ) -> None:
+        """Test that _get_existing_project_details prevents Ruby code injection attacks."""
+        mock_jira_instance = mock_jira_client.return_value
+        mock_op_instance = mock_op_client.return_value
+
+        # Create migration instance
+        migration = ProjectMigration(mock_jira_instance, mock_op_instance)
+
+        # Test malicious identifiers that could execute code
+        malicious_identifiers = [
+            # Ruby string interpolation attacks
+            "#{system('rm -rf /')}",
+            "${system('rm -rf /')}",
+            "'; system('rm -rf /'); #",
+            # Ruby variable reference attacks
+            "#{Rails.application.secrets}",
+            "#{ENV['DATABASE_PASSWORD']}",
+            # Backtick command execution
+            "`rm -rf /`",
+            "test`whoami`",
+            # Method chaining attacks
+            "'}; User.delete_all; Project.create!({identifier: 'evil",
+            "'; Project.delete_all; '",
+            # Ruby code blocks
+            "proc { system('evil') }.call",
+            "lambda { |x| system(x) }.call('rm -rf /')",
+            # Special characters and escaping
+            "test\\\\; system('evil'); \\\"",
+            "test'; exec('evil'); #",
+            'test"; system("evil"); #',
+            # Bracket and brace attacks
+            "test}; system('evil'); {",
+            "test]; system('evil'); [",
+        ]
+
+        for malicious_id in malicious_identifiers:
+            with self.subTest(identifier=malicious_id):
+                # Mock the Rails query execution to return 'false' (project doesn't exist)
+                mock_op_instance.execute_query_to_json_file.return_value = [False, None, None, None]
+
+                # The method should not raise an exception and should handle the input safely
+                result = migration._get_existing_project_details(malicious_id)
+
+                # Should return None for non-existent project
+                assert result is None
+
+                # Verify the query was executed (proving the method didn't crash)
+                mock_op_instance.execute_query_to_json_file.assert_called()
+
+                # Get the actual query that was executed
+                call_args = mock_op_instance.execute_query_to_json_file.call_args[0][0]
+
+                # Verify the malicious content is properly escaped in %q{} literal
+                # The identifier should be sanitized (closing braces escaped) and wrapped in %q{}
+                sanitized = malicious_id.replace("}", "\\}")
+                expected_pattern = f"Project.find_by(identifier: %q{{{sanitized}}})"
+                assert expected_pattern in call_args
+
+                # Reset mock for next iteration
+                mock_op_instance.reset_mock()
+
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
+    def test_get_existing_project_details_input_validation(
+        self, mock_op_client: MagicMock, mock_jira_client: MagicMock,
+    ) -> None:
+        """Test that _get_existing_project_details validates input types."""
+        mock_jira_instance = mock_jira_client.return_value
+        mock_op_instance = mock_op_client.return_value
+
+        migration = ProjectMigration(mock_jira_instance, mock_op_instance)
+
+        # Test non-string inputs
+        invalid_inputs = [
+            123,
+            None,
+            [],
+            {},
+            True,
+            False,
+        ]
+
+        for invalid_input in invalid_inputs:
+            with self.subTest(input_value=invalid_input):
+                with pytest.raises(ValueError) as cm:
+                    migration._get_existing_project_details(invalid_input)
+
+                # Should raise ValueError with appropriate message
+                assert "Identifier must be a string" in str(cm.value)
+
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
+    def test_get_existing_project_details_special_characters(
+        self, mock_op_client: MagicMock, mock_jira_client: MagicMock,
+    ) -> None:
+        """Test that _get_existing_project_details handles special characters safely."""
+        mock_jira_instance = mock_jira_client.return_value
+        mock_op_instance = mock_op_client.return_value
+
+        migration = ProjectMigration(mock_jira_instance, mock_op_instance)
+
+        # Test identifiers with special characters that need proper escaping
+        special_identifiers = [
+            "project-with-dashes",
+            "project_with_underscores",
+            "project.with.dots",
+            "project with spaces",
+            "project\\with\\backslashes",
+            "project'with'quotes",
+            'project"with"double"quotes',
+            "project\nwith\nnewlines",
+            "project\rwith\rcarriagereturn",
+            "project}with}braces",
+            "project{with{open{braces",
+            "project[with]brackets",
+            "project(with)parentheses",
+            "project@with#special$chars%",
+            "αβγ-unicode-τεστ",
+            "🚀-emoji-project-⭐",
+        ]
+
+        for identifier in special_identifiers:
+            with self.subTest(identifier=identifier):
+                # Mock successful project lookup
+                mock_op_instance.execute_query_to_json_file.return_value = [
+                    True, 123, "Test Project", identifier,
+                ]
+
+                # Should handle special characters without error
+                result = migration._get_existing_project_details(identifier)
+
+                # Should return project details
+                assert result is not None
+                assert result["id"] == 123
+                assert result["name"] == "Test Project"
+                assert result["identifier"] == identifier
+
+                # Verify the query was executed with proper escaping
+                mock_op_instance.execute_query_to_json_file.assert_called()
+                call_args = mock_op_instance.execute_query_to_json_file.call_args[0][0]
+
+                # The identifier should be properly escaped (only closing braces need escaping)
+                sanitized = identifier.replace("}", "\\}")
+                expected_pattern = f"Project.find_by(identifier: %q{{{sanitized}}})"
+                assert expected_pattern in call_args
+
+                # Reset mock for next iteration
+                mock_op_instance.reset_mock()
+
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
+    def test_get_existing_project_details_query_failure_handling(
+        self, mock_op_client: MagicMock, mock_jira_client: MagicMock,
+    ) -> None:
+        """Test that _get_existing_project_details handles query failures appropriately."""
+        mock_jira_instance = mock_jira_client.return_value
+        mock_op_instance = mock_op_client.return_value
+
+        migration = ProjectMigration(mock_jira_instance, mock_op_instance)
+
+        # Test various failure scenarios
+        test_cases = [
+            # Rails console exception
+            Exception("Rails console connection failed"),
+            # Timeout exception
+            TimeoutError("Query timed out"),
+            # Invalid response format
+            "invalid_json_response",
+            # Empty response
+            [],
+            # Malformed response
+            [True],  # Missing required fields
+        ]
+
+        for exception_or_response in test_cases:
+            with self.subTest(scenario=type(exception_or_response).__name__):
+                if isinstance(exception_or_response, Exception):
+                    # Mock exception being raised
+                    mock_op_instance.execute_query_to_json_file.side_effect = exception_or_response
+
+                    # Should re-raise the exception
+                    with pytest.raises(Exception) as cm:
+                        migration._get_existing_project_details("test-project")
+
+                    assert "Rails query failed" in str(cm.value)
+                else:
+                    # Mock invalid response format
+                    mock_op_instance.execute_query_to_json_file.return_value = exception_or_response
+                    mock_op_instance.execute_query_to_json_file.side_effect = None
+
+                    # Should return None for invalid response
+                    result = migration._get_existing_project_details("test-project")
+                    assert result is None
+
+                # Reset mock for next iteration
+                mock_op_instance.reset_mock()
+                mock_op_instance.execute_query_to_json_file.side_effect = None
+
+    @patch("src.clients.jira_client.JiraClient")
+    @patch("src.clients.openproject_client.OpenProjectClient")
+    def test_get_existing_project_details_empty_identifier_handling(
+        self, mock_op_client: MagicMock, mock_jira_client: MagicMock,
+    ) -> None:
+        """Test that _get_existing_project_details handles empty identifiers safely."""
+        mock_jira_instance = mock_jira_client.return_value
+        mock_op_instance = mock_op_client.return_value
+
+        migration = ProjectMigration(mock_jira_instance, mock_op_instance)
+
+        # Test empty string (valid string type but empty content)
+        mock_op_instance.execute_query_to_json_file.return_value = [False, None, None, None]
+
+        result = migration._get_existing_project_details("")
+
+        # Should handle empty string gracefully
+        assert result is None
+
+        # Verify query was executed with empty identifier properly escaped
+        mock_op_instance.execute_query_to_json_file.assert_called()
+        call_args = mock_op_instance.execute_query_to_json_file.call_args[0][0]
+        assert "Project.find_by(identifier: %q{})" in call_args
 
 
 # Define testing steps for project migration validation
