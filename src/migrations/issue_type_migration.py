@@ -15,7 +15,7 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import console
 from src.migrations.base_migration import BaseMigration
-from src.models import ComponentResult
+from src.models import ComponentResult, MigrationError
 
 # Get logger from config
 logger = config.logger
@@ -112,8 +112,9 @@ class IssueTypeMigration(BaseMigration):
 
             return issue_types
         except Exception as e:
-            self.logger.exception("Failed to get issue types from Jira: %s", e)
-            return []
+            msg = f"Failed to get issue types from Jira: {e}"
+            self.logger.exception(msg)
+            raise MigrationError(msg) from e
 
     def extract_openproject_work_package_types(self) -> list[dict[str, Any]]:
         """Extract work package types from OpenProject.
@@ -389,19 +390,21 @@ class IssueTypeMigration(BaseMigration):
                     f"(type={type(write_result)}, value={write_result})"
                 )
                 self.logger.error(msg)
-                return []
+                raise MigrationError(msg)
 
             if (
                 write_result.get("status") == "success"
                 and write_result.get("output")
                 and "RAILS_EXEC_ERROR:" in write_result["output"]
             ):
-                self.logger.error("Rails command reported an error during execution: %s", write_result["output"])
-                return []
+                msg = f"Rails command reported an error during execution: {write_result['output']}"
+                self.logger.error(msg)
+                raise MigrationError(msg)
             if write_result.get("status") != "success":
                 error_msg = write_result.get("error", "Unknown error executing Rails command for file write")
-                self.logger.error("Failed to execute Rails command to write JSON file: %s", error_msg)
-                return []
+                msg = f"Failed to execute Rails command to write JSON file: {error_msg}"
+                self.logger.error(msg)
+                raise MigrationError(msg)
 
             self.logger.info("Rails command executed successfully. Checking existence of %s...", temp_file_path)
 
@@ -411,11 +414,12 @@ class IssueTypeMigration(BaseMigration):
             op_server: str = config.openproject_config.get("server", None)
 
             if not op_server:
-                self.logger.error(
+                msg = (
                     "OpenProject server hostname is not configured "
-                    "(J2O_OPENPROJECT_SERVER). Cannot run remote docker commands.",
+                    "(J2O_OPENPROJECT_SERVER). Cannot run remote docker commands."
                 )
-                return []
+                self.logger.error(msg)
+                raise MigrationError(msg)
 
             ssh_base_cmd = ["ssh", op_server, "--"]
             docker_base_cmd = ["docker", "exec", container_name]
@@ -426,15 +430,17 @@ class IssueTypeMigration(BaseMigration):
                 ls_result = subprocess.run(ls_command, capture_output=True, text=True, check=False)
                 if ls_result.returncode != 0:
                     error_details = ls_result.stderr.strip()
-                    self.logger.error(
+                    msg = (
                         f"File {temp_file_path} check failed (exit code {ls_result.returncode}). "
-                        f"ls stderr: {error_details}; stdout: {ls_result.stdout}",
+                        f"ls stderr: {error_details}; stdout: {ls_result.stdout}"
                     )
-                    return []
+                    self.logger.error(msg)
+                    raise MigrationError(msg)
                 self.logger.info("File %s confirmed to exist in container.", temp_file_path)
             except subprocess.SubprocessError as e:
-                self.logger.exception("Error running docker exec ls command: %s", e)
-                return []
+                msg = f"Error running docker exec ls command: {e}"
+                self.logger.exception(msg)
+                raise MigrationError(msg) from e
 
             self.logger.info("Reading %s using ssh + docker exec...", temp_file_path)
             cat_command = ssh_base_cmd + docker_base_cmd + ["cat", temp_file_path]
@@ -442,8 +448,9 @@ class IssueTypeMigration(BaseMigration):
             read_result = subprocess.run(cat_command, capture_output=True, text=True, check=False)
 
             if read_result.returncode != 0:
-                self.logger.error("Failed to read %s via docker exec: %s", temp_file_path, read_result.stderr)
-                return []
+                msg = f"Failed to read {temp_file_path} via docker exec: {read_result.stderr}"
+                self.logger.error(msg)
+                raise MigrationError(msg)
 
             json_content = read_result.stdout.strip()
             self.logger.debug("Content read from %s:\\n%s", temp_file_path, json_content)
@@ -453,16 +460,19 @@ class IssueTypeMigration(BaseMigration):
                 self.logger.info("Successfully parsed %s work package types from file", len(types))
                 return types
             except json.JSONDecodeError as e:
-                self.logger.exception("Could not parse work package types JSON read from file: %s", e)
+                msg = f"Could not parse work package types JSON read from file: {e}"
+                self.logger.exception(msg)
                 self.logger.debug("Invalid JSON content: %s", json_content)
-                return []
+                raise MigrationError(msg) from e
 
         except subprocess.SubprocessError as e:
-            self.logger.exception("Error running docker exec command: %s", e)
-            return []
+            msg = f"Error running docker exec command: {e}"
+            self.logger.exception(msg)
+            raise MigrationError(msg) from e
         except Exception as e:
-            self.logger.exception("Unexpected error during work package type retrieval: %s", e)
-            return []
+            msg = f"Unexpected error during work package type retrieval: {e}"
+            self.logger.exception(msg)
+            raise MigrationError(msg) from e
         finally:
             try:
                 if "container_name" in locals() and container_name:
@@ -613,7 +623,7 @@ class IssueTypeMigration(BaseMigration):
         # If we reached here without returning, assume success but couldn't get ID
         return {"status": "success", "name": type_name}
 
-    def migrate_issue_types_via_rails(self, window: int = 0, pane: int = 0) -> bool:
+    def migrate_issue_types_via_rails(self, window: int = 0, pane: int = 0) -> None:
         """Migrate issue types directly via the Rails console using a bulk operation.
 
         This method creates all required work package types at once via a single Rails script,
@@ -623,8 +633,8 @@ class IssueTypeMigration(BaseMigration):
             window: tmux window number (default: 0)
             pane: tmux pane number (default: 0)
 
-        Returns:
-            bool: True if migration was successful, False otherwise
+        Raises:
+            MigrationError: If migration fails
 
         """
         if not self.issue_type_mapping:
@@ -667,7 +677,7 @@ class IssueTypeMigration(BaseMigration):
 
         if not types_to_create:
             self.logger.info("No new work package types to create")
-            return True
+            return
 
         self.logger.info("Preparing to create %s work package types in bulk", len(types_to_create))
 
@@ -687,12 +697,9 @@ class IssueTypeMigration(BaseMigration):
 
         # Transfer the file to the container
         if not self.op_client.transfer_file_to_container(temp_file, container_temp_path):
-            self.logger.error(
-                "Failed to transfer types file to container from %s to %s",
-                temp_file,
-                container_temp_path,
-            )
-            return False
+            msg = f"Failed to transfer types file to container from {temp_file} to {container_temp_path}"
+            self.logger.error(msg)
+            raise MigrationError(msg)
 
         # Generate Rails script to create all types at once with proper separation
         # 1. Header section with Python variable interpolation
@@ -837,54 +844,63 @@ class IssueTypeMigration(BaseMigration):
         result = self.op_client.execute_query(bulk_create_script)
         self.logger.debug(f"bulk_create_script result type: {type(result)}, value: {result}")
         if not isinstance(result, dict):
-            self.logger.error(f"Expected dict from execute_query, got {type(result)}: {result}")
-            return False
+            msg = f"Expected dict from execute_query, got {type(result)}: {result}"
+            self.logger.error(msg)
+            raise MigrationError(msg)
 
         if result["status"] != "success":
-            self.logger.error("Failed to execute bulk creation script: %s", result.get("error", "Unknown error"))
-            return False
+            error_msg = result.get("error", "Unknown error")
+            msg = f"Failed to execute bulk creation script: {error_msg}"
+            self.logger.error(msg)
+            raise MigrationError(msg)
 
         # Check for specific error markers in the output
         output = result.get("output", "")
         if output is None:
-            self.logger.error("No output returned from Rails console")
-            return False
+            msg = "No output returned from Rails console"
+            self.logger.error(msg)
+            raise MigrationError(msg)
 
         if "BULK_CREATE_FAILED" in output:
             error_match = re.search(r"BULK_CREATE_FAILED: (.*)", output)
             error_message = error_match.group(1) if error_match else "Unknown error"
-            self.logger.error("Bulk creation failed: %s", error_message)
-            return False
+            msg = f"Bulk creation failed: {error_message}"
+            self.logger.error(msg)
+            raise MigrationError(msg)
 
         # Parse results
         try:
             # Try to get the result file from the container
             if not self.op_client.transfer_file_from_container(container_results_path, results_file):
-                self.logger.error("Failed to retrieve results file from container: %s", container_results_path)
+                msg = f"Failed to retrieve results file from container: {container_results_path}"
+                self.logger.error(msg)
                 # Dump the entire output for debugging
                 self.logger.debug("Rails console output: %s", output)
-                return False
+                raise MigrationError(msg)
 
             if not results_file.exists():
-                self.logger.error("Results file %s was not created", results_file)
+                msg = f"Results file {results_file} was not created"
+                self.logger.error(msg)
                 # Dump the entire output for debugging
                 self.logger.debug("Rails console output: %s", output)
-                return False
+                raise MigrationError(msg)
 
             with results_file.open() as f:
                 result_content = f.read()
                 if not result_content.strip():
-                    self.logger.error("Results file %s is empty", results_file)
+                    msg = f"Results file {results_file} is empty"
+                    self.logger.error(msg)
                     self.logger.debug("Rails console output: %s", output)
-                    return False
+                    raise MigrationError(msg)
 
                 try:
                     creation_results = json.loads(result_content)
                 except json.JSONDecodeError as e:
-                    self.logger.exception("Failed to parse results file content: %s", e)
+                    msg = f"Failed to parse results file content: {e}"
+                    self.logger.exception(msg)
                     self.logger.debug("Results file content: %s", result_content)
                     self.logger.debug("Rails console output: %s", output)
-                    return False
+                    raise MigrationError(msg) from e
 
             created_count = len(creation_results.get("created", []))
             error_count = len(creation_results.get("errors", []))
@@ -918,15 +934,16 @@ class IssueTypeMigration(BaseMigration):
                 self.logger.warning("Some work package types failed to create:")
                 for error in creation_results.get("errors", []):
                     self.logger.warning("  - %s: %s", error.get("name"), error.get("error"))
-
-            return error_count == 0
+                msg = f"Failed to create {error_count} work package types"
+                raise MigrationError(msg)
 
         except Exception as e:
-            self.logger.exception("Error processing creation results: %s", e)
+            msg = f"Error processing creation results: {e}"
+            self.logger.exception(msg)
             import traceback
 
             self.logger.debug(traceback.format_exc())
-            return False
+            raise MigrationError(msg) from e
 
     def migrate_issue_types(self) -> dict[str, Any]:
         """Prepare for migrating issue types from Jira to OpenProject.
@@ -1062,14 +1079,14 @@ class IssueTypeMigration(BaseMigration):
                 return default
         return default
 
-    def update_mapping_file(self) -> bool:
+    def update_mapping_file(self) -> None:
         """Update the issue type mapping file with IDs from OpenProject.
 
         This method is useful when work package types were created manually via a Ruby script
         execution and the mapping file needs to be updated with the created type IDs.
 
-        Returns:
-            True if mapping was updated successfully, False otherwise
+        Raises:
+            MigrationError: If mapping update fails
 
         """
         self.logger.info("Updating issue type mapping file with IDs from OpenProject...")
@@ -1077,8 +1094,9 @@ class IssueTypeMigration(BaseMigration):
         # Get all work package types from OpenProject
         op_types = self.op_client.get_work_package_types()
         if not op_types:
-            self.logger.error("Failed to retrieve work package types from OpenProject")
-            return False
+            msg = "Failed to retrieve work package types from OpenProject"
+            self.logger.error(msg)
+            raise MigrationError(msg)
 
         # Create a dictionary of name to type mapping for easy lookup
         op_types_by_name = {type_data.get("name"): type_data for type_data in op_types}
@@ -1128,12 +1146,11 @@ class IssueTypeMigration(BaseMigration):
             missing_count,
         )
 
-        # Return success only if we have more matches than misses
+        # Check if too many types are missing
         if missing_count > updated_count and missing_count > 0:
-            self.logger.warning("Migration partially failed: %s types were not found in OpenProject", missing_count)
-            return False
-
-        return updated_count > 0 or already_mapped_count > 0
+            msg = f"Migration partially failed: {missing_count} types were not found in OpenProject"
+            self.logger.warning(msg)
+            raise MigrationError(msg)
 
     def run(self) -> ComponentResult:
         """Run the issue type migration.
@@ -1169,71 +1186,18 @@ class IssueTypeMigration(BaseMigration):
             )
         else:
             # Migrate issue types
-            self.migrate_issue_types()
+            self.logger.info("Starting migration via Rails...")
+            self.migrate_issue_types_via_rails()
 
-            # Attempt to create work package types via Rails console
-            types_to_create = sum(
-                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is None
-            )
+            # Update mapping file with created types
+            self.logger.info("Updating mapping file...")
+            self.update_mapping_file()
 
-            rails_migration_success = False
-            if types_to_create > 0:
-                self.logger.info("Attempting to create %s work package types via Rails console", types_to_create)
-                rails_migration_success = self.migrate_issue_types_via_rails()
-                if rails_migration_success:
-                    self.logger.info("Successfully created work package types via Rails console")
-                else:
-                    self.logger.error("Failed to create some work package types via Rails console")
-
-            # Update the mapping file with any newly created types
-            mapping_updated = self.update_mapping_file()
-
-            # Check if we're in a good state despite potential errors
-            final_types_to_create = sum(
-                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is None
-            )
-
-            # Success if mappings updated and most types were created
-            migration_success = mapping_updated and (
-                final_types_to_create == 0 or final_types_to_create < types_to_create * 0.2
-            )
-
-            if mapping_updated:
-                if migration_success:
-                    self.logger.info("Successfully updated issue type mappings with newly created types")
-                else:
-                    self.logger.warning(
-                        "Updated issue type mappings but %s types still need creation",
-                        final_types_to_create,
-                    )
-
-            # Get final counts after all operations
-            created_types = sum(
-                1 for mapping in self.issue_type_mapping.values() if mapping.get("matched_by") == "created"
-            )
-
+            self.logger.info("Issue type migration completed successfully")
             results = ComponentResult(
-                success=migration_success,
-                total_types=len(self.issue_type_mapping),
-                matched_types=sum(
-                    1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is not None
-                ),
-                normalized_types=sum(
-                    1
-                    for mapping in self.issue_type_mapping.values()
-                    if mapping.get("matched_by", "").startswith("normalized_to_")
-                    or mapping.get("matched_by") == "fallback_to_task"
-                ),
-                created_types=created_types,
-                existing_types=sum(
-                    1 for mapping in self.issue_type_mapping.values() if mapping.get("matched_by") == "exact_match"
-                ),
-                failed_types=final_types_to_create,
-                message=(
-                    f"Created {created_types} types, {final_types_to_create} failed"
-                    if final_types_to_create > 0
-                    else ""
-                ),
+                success=True,
+                message="Issue types migrated successfully",
+                modified_files=["issue_type_mapping.json"],
             )
 
         return results
