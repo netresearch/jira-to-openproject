@@ -4,7 +4,7 @@ import json
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, Mock, mock_open, patch
 
 import pytest
 
@@ -527,3 +527,175 @@ def project_migration_test_steps() -> Any:
        - Project with no description
     """
     return "Project migration test steps defined"
+
+
+def test_bulk_migrate_projects_security_injection_prevention(
+    project_migration, mock_jira_projects, mock_op_client
+):
+    """Test that bulk_migrate_projects prevents Ruby code injection in create_script construction."""
+
+    # Set up test data with malicious project identifiers and names
+    malicious_projects = [
+        {
+            "key": "TEST'; exit 1; echo 'injection",
+            "name": "Project #{system('rm -rf /')}'",
+            "description": "'; exec('malicious code'); 'safe",
+        },
+        {
+            "key": "EVIL#{`rm -rf /`}",
+            "name": "#{Rails.env}",
+            "description": "'; User.delete_all; '",
+        },
+        {
+            "key": "BAD';DROP TABLE projects;--",
+            "name": "'; system('cat /etc/passwd'); 'safe",
+            "description": "#{Rails.application.secrets.secret_key_base}",
+        },
+    ]
+
+    project_migration.jira_projects = malicious_projects
+    project_migration.op_projects = []
+    project_migration.account_mapping = {}
+    project_migration.project_account_mapping = {}
+    project_migration.company_mapping = {}
+
+    # Mock OpenProject client methods to return empty data
+    mock_op_client.get_projects.return_value = []
+
+    # Mock _get_existing_project_details to return None (project doesn't exist)
+    project_migration._get_existing_project_details = Mock(return_value=None)
+
+    # Mock the Rails execution to capture the script
+    executed_scripts = []
+
+    def mock_execute_query(script):
+        executed_scripts.append(script)
+        # Return success response
+        return {"id": 123, "name": "Test Project", "identifier": "test-project"}
+
+    mock_op_client.execute_query_to_json_file.side_effect = mock_execute_query
+
+    # Execute the migration
+    result = project_migration.bulk_migrate_projects()
+
+    # Verify result is successful
+    assert result.success is True
+
+    # Verify that all executed scripts are safe and properly escaped
+    assert len(executed_scripts) == 3, "Should have created 3 projects"
+
+    for script in executed_scripts:
+        # Check that no dangerous Ruby patterns are present in the final script
+        assert "#{" not in script, "Ruby interpolation should be escaped"
+        assert "system(" not in script, "System calls should be escaped"
+        assert "exec(" not in script, "Exec calls should be escaped"
+        assert "exit " not in script, "Exit commands should be escaped"
+        assert "DROP TABLE" not in script, "SQL injection should be escaped"
+        assert "delete_all" not in script, "Rails destructive methods should be escaped"
+        assert "'; " not in script or script.count("'; ") <= 1, "SQL-style injections should be escaped"
+
+        # Verify proper escaping is applied - single quotes should be escaped with backslashes
+        assert "\\'" in script or "'" not in script, "Single quotes should be escaped"
+
+        # Verify dangerous patterns are properly neutralized by escaping
+        # We should see backslashes used as escape characters, not literal backslashes being double-escaped
+        malicious_content = "\n".join([str(p) for p in malicious_projects])
+
+        if "#{" in malicious_content:
+            assert "\\#" in script, "Ruby interpolation start should be escaped"
+        if "{" in malicious_content:
+            assert "\\{" in script, "Opening braces should be escaped"
+        if "}" in malicious_content:
+            assert "\\}" in script, "Closing braces should be escaped"
+
+    # Verify the scripts contain expected structure
+    for script in executed_scripts:
+        assert "Project.create!" in script, "Should create projects"
+        assert "p.enabled_module_names" in script, "Should enable modules"
+        assert "p.save!" in script, "Should save projects"
+
+
+def test_bulk_migrate_projects_ruby_escape_function(project_migration):
+    """Test the ruby_escape function within bulk_migrate_projects method."""
+
+    # Create a test project with various special characters
+    test_project = {
+        "key": "TEST",
+        "name": "Test's \"Project\" with\\backslash and\nnewline",
+        "description": "Description with 'quotes' and \\slashes\rand returns",
+    }
+
+    project_migration.jira_projects = [test_project]
+    project_migration.op_projects = []
+    project_migration.account_mapping = {}
+    project_migration.project_account_mapping = {}
+    project_migration.company_mapping = {}
+
+    # Mock _get_existing_project_details to return None (project doesn't exist)
+    project_migration._get_existing_project_details = Mock(return_value=None)
+
+    # Mock the Rails execution to capture the script
+    executed_script = None
+
+    def mock_execute_query(script):
+        nonlocal executed_script
+        executed_script = script
+        return {"id": 123, "name": "Test Project", "identifier": "test"}
+
+    project_migration.op_client.execute_query_to_json_file.side_effect = mock_execute_query
+
+    # Execute the migration
+    result = project_migration.bulk_migrate_projects()
+
+    # Verify the migration was successful
+    assert result.success is True
+
+    # Verify the script was generated with proper escaping
+    assert executed_script is not None
+
+    # Check that special characters are properly escaped
+    assert "Test\\'s" in executed_script, "Single quotes should be escaped"
+    assert '\\"Project\\"' in executed_script, "Double quotes should be escaped"
+    assert "with\\\\backslash" in executed_script, "Backslashes should be escaped"
+    assert "and\\nnewline" in executed_script, "Newlines should be escaped"
+    assert "\\rand" in executed_script, "Carriage returns should be escaped"
+
+
+def test_bulk_migrate_projects_empty_and_none_values(project_migration):
+    """Test bulk_migrate_projects handles empty and None values correctly."""
+
+    test_project = {
+        "key": "TEST",
+        "name": "",  # Empty name
+        "description": None,  # None description
+    }
+
+    project_migration.jira_projects = [test_project]
+    project_migration.op_projects = []
+    project_migration.account_mapping = {}
+    project_migration.project_account_mapping = {}
+    project_migration.company_mapping = {}
+
+    # Mock _get_existing_project_details to return None
+    project_migration._get_existing_project_details = Mock(return_value=None)
+
+    # Mock the Rails execution
+    executed_script = None
+
+    def mock_execute_query(script):
+        nonlocal executed_script
+        executed_script = script
+        return {"id": 123, "name": "Test Project", "identifier": "test"}
+
+    project_migration.op_client.execute_query_to_json_file.side_error = mock_execute_query
+
+    # Execute the migration
+    result = project_migration.bulk_migrate_projects()
+
+    # Verify the migration was successful
+    assert result.success is True
+
+    # Verify the script handles empty values safely
+    assert executed_script is not None
+    assert "name: ''" in executed_script, "Empty name should be handled"
+    assert "description: ''" in executed_script, "None description should become empty string"

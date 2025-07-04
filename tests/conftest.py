@@ -336,3 +336,35 @@ def monkeypatch_helpers() -> MonkeypatchHelpers:
         MonkeypatchHelpers: Helper class instance with standardized monkeypatch patterns
     """
     return MonkeypatchHelpers()
+
+
+@pytest.fixture
+def project_migration(mock_jira_client, mock_op_client):
+    """Create a ProjectMigration instance for testing.
+
+    Returns:
+        ProjectMigration: A ProjectMigration instance with mocked clients
+    """
+    from src.migrations.project_migration import ProjectMigration
+    return ProjectMigration(mock_jira_client, mock_op_client)
+
+
+@pytest.fixture
+def mock_jira_projects():
+    """Provide mock Jira project data for testing.
+
+    Returns:
+        list: List of mock Jira project dictionaries
+    """
+    return [
+        {
+            "key": "TEST1",
+            "name": "Test Project 1",
+            "description": "First test project"
+        },
+        {
+            "key": "TEST2",
+            "name": "Test Project 2",
+            "description": "Second test project"
+        }
+    ]

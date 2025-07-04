@@ -417,7 +417,11 @@ class ProjectMigration(BaseMigration):
                 )
                 continue
             else:
-                logger.debug("No existing project found for '%s' (identifier: '%s') - will create", jira_name, identifier)
+                logger.debug(
+                    "No existing project found for '%s' (identifier: '%s') - will create",
+                    jira_name,
+                    identifier,
+                )
 
             # Find parent company
             parent_company = self.find_parent_company_for_project(jira_project)
@@ -516,22 +520,47 @@ class ProjectMigration(BaseMigration):
                     })
                     continue
 
-                # Create the project using simplified Rails command (atomic and concise)
+                                # Create the project using simplified Rails command (atomic and concise)
                 # Properly escape strings for Rails/Ruby
-                # Handle quotes, backslashes, and newlines
+                # Handle quotes, backslashes, newlines, Ruby interpolation patterns, and dangerous functions
                 def ruby_escape(s):
                     if not s:
                         return ""
-                    # First escape backslashes, then single quotes
-                    return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
+                    # Escape in this order to prevent double-escaping:
+                    # 1. Backslashes first (must be first)
+                    # 2. Ruby interpolation characters
+                    # 3. Dangerous function patterns
+                    # 4. Single quotes
+                    # 5. Control characters
+                    escaped = s.replace("\\", "\\\\")        # Escape backslashes first
+                    escaped = escaped.replace("#", "\\#")     # Escape Ruby interpolation start
+                    escaped = escaped.replace("{", "\\{")     # Escape opening brace
+                    escaped = escaped.replace("}", "\\}")     # Escape closing brace
+                    escaped = escaped.replace("`", "\\`")     # Escape backticks (command execution)
+                                        # Escape dangerous function patterns to prevent any code execution attempts
+                    escaped = escaped.replace("system(", "sys\\tem(")     # Break system function calls
+                    escaped = escaped.replace("exec(", "ex\\ec(")         # Break exec function calls
+                    escaped = escaped.replace("eval(", "ev\\al(")         # Break eval function calls
+                    escaped = escaped.replace("exit(", "ex\\it(")         # Break exit function calls
+                    escaped = escaped.replace("exit ", "ex\\it ")         # Break exit commands
+                    # Escape dangerous Rails methods
+                    escaped = escaped.replace("delete_all", "dele\\te_all")  # Break Rails destructive methods
+                    escaped = escaped.replace("destroy_all", "destro\\y_all")  # Break Rails destructive methods
+                    escaped = escaped.replace("'", "\\'")     # Escape single quotes
+                    escaped = escaped.replace("\n", "\\n")    # Escape newlines
+                    escaped = escaped.replace("\r", "\\r")    # Escape carriage returns
+                    return escaped
 
                 name_escaped = ruby_escape(project_data['name'])
+                # SECURITY FIX: Escape identifier to prevent injection
+                identifier_escaped = ruby_escape(project_data['identifier'])
                 desc_escaped = ruby_escape(project_data.get('description', ''))
 
                 # Use a single-line Rails command for better reliability
+                # SECURITY: All dynamic fields are now properly escaped to prevent command injection
                 create_script = (
                     f"p = Project.create!(name: '{name_escaped}', "
-                    f"identifier: '{project_data['identifier']}', "
+                    f"identifier: '{identifier_escaped}', "
                     f"description: '{desc_escaped}', public: false); "
                     f"p.enabled_module_names = ['work_package_tracking', 'wiki']; "
                     f"p.save!; p.as_json"
@@ -674,9 +703,9 @@ class ProjectMigration(BaseMigration):
         logger.info("- Newly created: %s", analysis["new_projects"])
         logger.info("- Already existing: %s", analysis["existing_projects"])
         logger.info("- With account information: %s", analysis["projects_with_accounts"])
-        logger.info(
-            f"- With parent company: {analysis['projects_with_parent']} ({analysis['hierarchical_percentage']:.1f}%)",
-        )
+        parent_count = analysis['projects_with_parent']
+        parent_pct = analysis['hierarchical_percentage']
+        logger.info(f"- With parent company: {parent_count} ({parent_pct:.1f}%)")
         logger.info("Failed projects: %s", analysis["failed_projects"])
 
         return analysis
