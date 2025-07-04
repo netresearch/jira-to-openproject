@@ -13,7 +13,7 @@ from src.clients.openproject_client import OpenProjectClient
 from src.display import console
 from src.migrations.base_migration import BaseMigration
 from src.migrations.custom_field_migration import CustomFieldMigration
-from src.models import ComponentResult
+from src.models import ComponentResult, MigrationError
 
 # Get logger from config
 logger = config.logger
@@ -102,19 +102,8 @@ class LinkTypeMigration(BaseMigration):
                 self.op_link_types, Path("openproject_relation_types.json"),
             )
 
-            if not self.jira_link_types:
-                result.success = False
-                result.message = "Failed to extract Jira link types."
-                result.details["time"] = time.time() - start_time
-                return result
-
             # 2. Create mapping
             self.create_link_type_mapping()
-            if not self.link_type_mapping:
-                result.success = False
-                result.message = "Failed to create link type mapping."
-                result.details["time"] = time.time() - start_time
-                return result
 
             # Analyze mapping to identify which link types need custom fields
             unmapped_link_types = [
@@ -149,7 +138,10 @@ class LinkTypeMigration(BaseMigration):
                         "DRY RUN: Would create custom fields for unmapped link types",
                     )
                     result.details["success_count"] = total_link_types
-                    result.message = f"DRY RUN: {len(unmapped_link_types)} link types would be created as custom fields."
+                    result.message = (
+                        f"DRY RUN: {len(unmapped_link_types)} link types would be "
+                        "created as custom fields."
+                    )
                     result.details["status"] = "success"
                 else:
                     # Create custom fields for unmapped link types
@@ -211,11 +203,14 @@ class LinkTypeMigration(BaseMigration):
         )
         return result
 
-    def extract_jira_link_types(self) -> list[dict[str, Any]] | None:
+    def extract_jira_link_types(self) -> list[dict[str, Any]]:
         """Extract link types from Jira.
 
         Returns:
-            List of Jira link type dictionaries or None if extraction fails.
+            List of Jira link type dictionaries
+
+        Raises:
+            MigrationError: If extraction fails
 
         """
         filepath = self.data_dir / "jira_link_types.json"
@@ -240,23 +235,22 @@ class LinkTypeMigration(BaseMigration):
                 )
                 self._save_to_json(self.jira_link_types, Path("jira_link_types.json"))
                 return self.jira_link_types
-            self.logger.error(
-                "Failed to extract link types from Jira (API returned None)",
-            )
-            self.jira_link_types = []
-            return None
+            msg = "Failed to extract link types from Jira (API returned None)"
+            self.logger.error(msg)
+            raise MigrationError(msg)
         except Exception as e:
-            self.logger.error(
-                f"Error extracting link types from Jira: {e}", exc_info=True,
-            )
-            self.jira_link_types = []
-            return None
+            msg = f"Error extracting link types from Jira: {e}"
+            self.logger.error(msg, exc_info=True)
+            raise MigrationError(msg) from e
 
-    def create_link_type_mapping(self) -> dict[str, Any] | None:
+    def create_link_type_mapping(self) -> dict[str, Any]:
         """Create a mapping between Jira link types and OpenProject relation types.
 
         Returns:
-            Dictionary representing the mapping or None if creation fails.
+            Dictionary representing the mapping
+
+        Raises:
+            MigrationError: If mapping creation fails
 
         """
         filepath = self.data_dir / "link_type_mapping.json"
@@ -288,8 +282,9 @@ class LinkTypeMigration(BaseMigration):
             self.extract_jira_link_types()
 
         if not self.jira_link_types:
-            self.logger.error("Cannot create mapping: Jira link types are missing.")
-            return None
+            msg = "Cannot create mapping: Jira link types are missing"
+            self.logger.error(msg)
+            raise MigrationError(msg)
 
         self.logger.info("Creating link type mapping...")
         mapping = {}
@@ -580,18 +575,22 @@ class LinkTypeMigration(BaseMigration):
 
     def generate_user_mapping_template(
         self, output_path: str | None = None,
-    ) -> str | None:
+    ) -> str:
         """Generate a template for user-defined mappings.
 
         Args:
             output_path: Path to save the template file.
 
         Returns:
-            Path to the generated template file or None if generation fails.
+            Path to the generated template file
+
+        Raises:
+            MigrationError: If template generation fails
 
         """
         # This is a stub to satisfy type checking. We don't need the implementation.
-        return None
+        msg = "User mapping template generation not implemented"
+        raise MigrationError(msg)
 
     def create_custom_fields_for_link_types(
         self,
