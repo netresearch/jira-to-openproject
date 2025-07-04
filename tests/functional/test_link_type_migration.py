@@ -415,21 +415,19 @@ class TestLinkTypeMigration(unittest.TestCase):
 
         # 5. Check the result
         assert result["success"]
-        assert result["created_count"] == 1
-        assert result["error_count"] == 0
+        assert result["success_count"] == 1
+        assert result["failure_count"] == 0
 
     @patch("src.migrations.link_type_migration.JiraClient")
     @patch("src.migrations.link_type_migration.OpenProjectClient")
     @patch("src.migrations.link_type_migration.config.get_path")
     @patch("src.migrations.link_type_migration.config.migration_config")
-    @patch("src.migrations.link_type_migration.CustomFieldMigration")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_run_with_custom_field_creation(
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
-        mock_custom_field_migration_class: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
         mock_op_client: MagicMock,
@@ -500,8 +498,9 @@ class TestLinkTypeMigration(unittest.TestCase):
                 )
             return {
                 "success": True,
-                "created_count": len(unmapped_link_types),
-                "error_count": 0,
+                "success_count": len(unmapped_link_types),
+                "failure_count": 0,
+                "errors": [],
                 "message": f"Created {len(unmapped_link_types)} custom fields for link types (0 errors)",
             }
 
@@ -525,6 +524,88 @@ class TestLinkTypeMigration(unittest.TestCase):
 
             # Verify the message indicates custom fields were created
             assert "custom fields" in result.message
+
+    @patch("src.migrations.link_type_migration.JiraClient")
+    @patch("src.migrations.link_type_migration.OpenProjectClient")
+    @patch("src.migrations.link_type_migration.config.get_path")
+    @patch("src.migrations.link_type_migration.config.migration_config")
+    @patch("os.path.exists")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_none_guards_prevent_attribute_error(
+        self,
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_migration_config: MagicMock,
+        mock_get_path: MagicMock,
+        mock_op_client: MagicMock,
+        mock_jira_client: MagicMock,
+    ) -> None:
+        """Test that None guards prevent AttributeError when fields are None."""
+        # Setup mocks
+        mock_jira_instance = mock_jira_client.return_value
+        mock_op_instance = mock_op_client.return_value
+
+        mock_get_path.return_value = Path("/tmp/test_data")
+        mock_exists.return_value = False
+
+        # Mock the config to return force=True
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+
+        # Create Jira link types with None values
+        jira_link_types_with_none = [
+            {
+                "id": "10100",
+                "name": None,  # None name
+                "inward": "is blocked by",
+                "outward": "blocks",
+                "self": "https://jira.local/rest/api/2/issueLinkType/10100",
+            },
+            {
+                "id": "10101",
+                "name": "Custom Link",
+                "inward": None,  # None inward
+                "outward": "custom links to",
+                "self": "https://jira.local/rest/api/2/issueLinkType/10101",
+            },
+            {
+                "id": "10102",
+                "name": "Another Link",
+                "inward": "is connected to",
+                "outward": None,  # None outward
+                "self": "https://jira.local/rest/api/2/issueLinkType/10102",
+            },
+        ]
+
+        # Create instance and set data
+        migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
+        migration.jira_link_types = jira_link_types_with_none
+        migration.op_link_types = [
+            {
+                "id": "relates",
+                "name": "relates to",
+                "reverseName": "relates to",
+                "_type": "RelationType",
+            },
+        ]
+
+        # Call method - this should not raise AttributeError due to None guards
+        try:
+            result = migration.create_link_type_mapping()
+            # If we get here, the None guards worked
+            assert result is not None
+            assert len(result) == 3  # Should have processed all 3 link types
+
+            # The key test is that no AttributeError was raised when dealing with None values
+            # The matching logic may still find some matches through similarity, which is fine
+            # We just need to verify that each entry has valid data structure
+            for jira_id, mapping in result.items():
+                assert mapping["jira_id"] == jira_id
+                assert "matched_by" in mapping
+                assert "status" in mapping
+                # None guards should ensure the processing completed without AttributeError
+        except AttributeError as e:
+            # If we get AttributeError, the None guards failed
+            self.fail(f"None guards failed to prevent AttributeError: {e}")
 
 
 # Define testing steps for link type migration validation
