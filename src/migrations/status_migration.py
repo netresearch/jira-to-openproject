@@ -20,6 +20,7 @@ from src.display import ProgressTracker
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult
+from src.models.migration_error import MigrationError
 
 # Get logger from config
 logger = config.logger
@@ -101,8 +102,9 @@ class StatusMigration(BaseMigration):
         try:
             # Check if jira_client and jira attribute exist
             if self.jira_client is None or not hasattr(self.jira_client, "jira") or self.jira_client.jira is None:
-                logger.error("Jira client is not properly initialized")
-                return []
+                msg = "Jira client is not properly initialized"
+                logger.error(msg)
+                raise MigrationError(msg)
 
             # Use the REST API endpoint for status retrieval
             response = self.jira_client.jira._get_json("status")
@@ -119,8 +121,9 @@ class StatusMigration(BaseMigration):
 
             return statuses
         except Exception as e:
-            logger.exception("Failed to extract statuses from Jira: %s", e)
-            return []
+            msg = f"Failed to extract statuses from Jira: {e}"
+            logger.exception(msg)
+            raise MigrationError(msg) from e
 
     def extract_status_categories(self) -> list[dict[str, Any]]:
         """Extract status categories from Jira.
@@ -152,8 +155,9 @@ class StatusMigration(BaseMigration):
 
             return categories
         except Exception as e:
-            logger.exception("Failed to extract status categories from Jira: %s", e)
-            return []
+            msg = f"Failed to extract status categories from Jira: {e}"
+            logger.exception(msg)
+            raise MigrationError(msg) from e
 
     def get_openproject_statuses(self) -> list[dict[str, Any]]:
         """Get all statuses from OpenProject.
@@ -174,8 +178,9 @@ class StatusMigration(BaseMigration):
 
         try:
             if self.op_client is None:
-                logger.error("OpenProject client is not initialized")
-                return []
+                msg = "OpenProject client is not initialized"
+                logger.error(msg)
+                raise MigrationError(msg)
 
             # Check if get_statuses method exists on the client
             if hasattr(self.op_client, "get_statuses"):
@@ -184,8 +189,9 @@ class StatusMigration(BaseMigration):
                 # Use a direct query to get statuses if method is not available
                 result = self.op_client.execute_query("Status.all.as_json")
                 if result["status"] != "success":
-                    logger.error("Failed to get statuses from OpenProject")
-                    return []
+                    msg = "Failed to get statuses from OpenProject"
+                    logger.error(msg)
+                    raise MigrationError(msg)
                 statuses = result["output"]
 
                 # Convert output to proper format if needed
@@ -193,9 +199,10 @@ class StatusMigration(BaseMigration):
                     try:
                         # Handle Ruby output format
                         statuses = json.loads(statuses.replace("=>", ":").replace("nil", "null"))
-                    except json.JSONDecodeError:
-                        logger.exception("Failed to parse statuses from OpenProject")
-                        return []
+                    except json.JSONDecodeError as e:
+                        msg = "Failed to parse statuses from OpenProject"
+                        logger.exception(msg)
+                        raise MigrationError(msg) from e
 
             # Ensure statuses is a list of dictionaries
             if not isinstance(statuses, list):
@@ -225,8 +232,9 @@ class StatusMigration(BaseMigration):
 
             return result_statuses
         except Exception as e:
-            logger.exception("Failed to get statuses from OpenProject: %s", e)
-            return []
+            msg = f"Failed to get statuses from OpenProject: {e}"
+            logger.exception(msg)
+            raise MigrationError(msg) from e
 
     def create_statuses_bulk_via_rails(self, statuses_to_create: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         """Create multiple statuses in OpenProject using a single Rails console command.
@@ -356,14 +364,16 @@ class StatusMigration(BaseMigration):
 
                 return typed_statuses
             error_msg = result.get("message", "Unknown error")
-            logger.error("Failed to create statuses: %s", error_msg)
+            msg = f"Failed to create statuses: {error_msg}"
+            logger.error(msg)
             if "output" in result:
                 logger.debug("Rails output: %s...", result["output"][:500])
-            return {}
+            raise MigrationError(msg)
 
         except Exception as e:
-            logger.exception("Exception during Rails bulk execution: %s", e)
-            return {}
+            msg = f"Exception during Rails bulk execution: {e}"
+            logger.exception(msg)
+            raise MigrationError(msg) from e
 
     def create_status_mapping(self) -> dict[str, Any]:
         """Create a mapping between Jira statuses and OpenProject statuses.
@@ -383,10 +393,10 @@ class StatusMigration(BaseMigration):
         logger.info("Creating status mapping...")
 
         if not self.jira_statuses:
-            self.extract_jira_statuses()
+            self.jira_statuses = self.extract_jira_statuses()
 
         if not self.op_statuses:
-            self.get_openproject_statuses()
+            self.op_statuses = self.get_openproject_statuses()
 
         # Create mapping based on name
         mapping: dict[str, dict[str, Any]] = {}
@@ -443,7 +453,9 @@ class StatusMigration(BaseMigration):
             self.jira_statuses = self.extract_jira_statuses()
 
         if not self.jira_statuses:
-            return {"status": "error", "message": "No Jira statuses to migrate"}
+            msg = "No Jira statuses to migrate"
+            logger.error(msg)
+            raise MigrationError(msg)
 
         # Get existing OpenProject statuses if not already done
         if not self.op_statuses:
