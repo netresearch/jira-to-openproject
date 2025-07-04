@@ -589,36 +589,84 @@ volumes:
 
 ### Network Security
 
-**Intelligent Port Exposure - SECURE BY DEFAULT**
-```yaml
-# ✅ SECURE: Services use intelligent exposure strategy
-services:
-  # Internal services - no external port exposure
-  redis:
-    # Accessible via hostname 'redis:6379' on Docker network only
-  postgres:
-    # Accessible via hostname 'postgres:5432' on Docker network only
+**Docker Container Binding vs Host Access Control**
 
-  # Dev services - exposed only with --profile dev
+Understanding the difference between internal container binding and host port mapping is crucial for secure development:
+
+**Internal Container Binding (0.0.0.0)**
+```yaml
+# Inside containers, services bind to 0.0.0.0 to enable:
+# - Cross-container communication (app → postgres)
+# - Docker network connectivity
+# - Service discovery by hostname
+services:
   app:
-    ports:
-      - "127.0.0.1:8000:8000"  # Only accessible from localhost
-  mock-jira:
-    ports:
-      - "127.0.0.1:4010:4010"  # Only accessible from localhost
+    # Container process: python -m uvicorn --host=0.0.0.0 --port=8000
+    # Binds to all interfaces INSIDE the container network
+  postgres:
+    # Container process: postgres listening on 0.0.0.0:5432
+    # Available to other containers via hostname 'postgres:5432'
 ```
 
-**Why localhost-only binding matters:**
-- Prevents external network access to development services
-- Services remain accessible from browser (localhost:8000) and containers
-- Eliminates security risk of exposing databases on public interfaces
-- Consistent with security-first development principles
+**Host Port Mapping (127.0.0.1 only)**
+```yaml
+# Docker port mapping controls HOST access:
+services:
+  app:
+    ports:
+      - "127.0.0.1:8000:8000"  # HOST:CONTAINER mapping
+      # Host binding: Only 127.0.0.1 (localhost) can access
+      # Container binding: Still 0.0.0.0 internally
 
-**Implementation details:**
-- **Port mapping**: `127.0.0.1:HOST_PORT:CONTAINER_PORT` format
-- **Container binding**: Services bind to `0.0.0.0` inside containers for Docker networking
-- **Host access**: Services only accessible via `localhost` or `127.0.0.1` on host
-- **Browser access**: Full functionality preserved (localhost:8000, localhost:4010, etc.)
+  postgres:
+    # NO ports section = No host access
+    # Still accessible to containers via Docker network
+```
+
+**Security Model Diagram:**
+```
+┌─────────────────── HOST SYSTEM ──────────────────┐
+│ Browser → 127.0.0.1:8000 ✓ (localhost only)     │
+│ Network → 192.168.1.x:8000 ✗ (blocked)          │
+│ ┌─────────── DOCKER NETWORK ──────────────┐     │
+│ │  app:8000 ←→ postgres:5432             │     │
+│ │  (0.0.0.0 binding enables              │     │
+│ │   cross-container communication)        │     │
+│ └─────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────┘
+```
+
+**Why this design is secure:**
+- **Host Protection**: External networks cannot access development services
+- **Container Functionality**: Internal 0.0.0.0 binding preserves Docker networking
+- **Developer Access**: Browser and tools work normally via localhost
+- **Service Isolation**: Databases remain internal-only, unexposed to host
+
+**Port Mapping Strategy:**
+```yaml
+# ✅ SECURE: Intelligent exposure strategy
+services:
+  # Internal services - no host exposure
+  redis:
+    # Internal: redis:6379 (containers only)
+    # Host: No access (secure)
+  postgres:
+    # Internal: postgres:5432 (containers only)
+    # Host: No access (secure)
+
+  # Development services - localhost-only host access
+  app:
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Internal: app:8000 (+ 0.0.0.0 binding)
+    # Host: localhost:8000 only
+
+  mock-jira:
+    ports:
+      - "127.0.0.1:4010:4010"
+    # Internal: mock-jira:4010 (+ 0.0.0.0 binding)
+    # Host: localhost:4010 only
+```
 
 **Testing network security:**
 ```bash
@@ -628,6 +676,11 @@ ss -tulnp | grep -E "(8000|4010|4011)"
 # Should show only 127.0.0.1:PORT bindings for exposed services
 # Internal services (Redis, PostgreSQL) should not appear in results
 ```
+
+**Further Reading:**
+- [Docker Networking Overview](https://docs.docker.com/network/)
+- [Docker Compose Port Mapping](https://docs.docker.com/compose/networking/#specify-custom-networks)
+- [Container Network Security](https://docs.docker.com/engine/security/#docker-daemon-attack-surface)
 
 **Cross-reference**: See `compose.yml` for complete implementation and `test-specs/README.md` for mock service security configuration.
 
@@ -651,15 +704,49 @@ cp .env .env.example
 # Remove actual secrets from .env.example
 ```
 
-**Resource Limits** (TODO: See security task list)
+**Resource Limits**
+
+Implement container resource constraints to prevent resource exhaustion attacks and ensure stable development:
+
 ```yaml
-# Add to compose.yml services
-deploy:
-  resources:
-    limits:
-      memory: 512M
-      cpus: '0.5'
+# Example: Add to compose.yml services
+services:
+  app:
+    deploy:
+      resources:
+        limits:
+          memory: 1G        # Limit memory usage
+          cpus: '1.0'       # Limit CPU usage
+        reservations:
+          memory: 256M      # Reserve minimum memory
+          cpus: '0.25'      # Reserve minimum CPU
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
 ```
+
+**Resource Guidelines:**
+- **Development**: Generous limits to avoid disrupting workflows
+- **CI/CD**: Stricter limits to ensure tests run in constrained environments
+- **Production**: Resource limits based on capacity planning and monitoring
+
+**Further Reading:**
+- [Docker Compose Resource Constraints](https://docs.docker.com/compose/compose-file/deploy/#resources)
+- [Container Resource Management](https://docs.docker.com/config/containers/resource_constraints/)
 
 ### Security Review Checklist
 
@@ -708,14 +795,21 @@ docker context create remote --docker "host=ssh://user@remote-host"
 
 **Regular Security Checks:**
 ```bash
-# Scan for vulnerabilities
-make security-scan  # TODO: Implement
-
 # Audit container configuration
 docker compose config | grep -E "(privileged|volumes|ports)"
 
-# Check for exposed secrets
-git secrets --scan  # TODO: Setup
+# Check for security issues in Docker configuration
+docker compose config --quiet && echo "✓ Compose configuration valid"
+
+# Verify localhost-only bindings
+ss -tulnp | grep -E "(8000|4010|4011)" | grep "127.0.0.1"
+
+# Scan for vulnerabilities (requires setup)
+# docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+#   aquasec/trivy image your-image-name
+
+# Check for exposed secrets (requires git-secrets installation)
+# git secrets --scan
 ```
 
 ## 📄 **License**
