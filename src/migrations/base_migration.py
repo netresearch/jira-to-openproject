@@ -7,6 +7,7 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 from src.utils.change_detector import ChangeDetector, ChangeReport
+from src.utils.state_manager import StateManager
 
 
 class ComponentInitializationError(Exception):
@@ -33,6 +34,7 @@ class BaseMigration:
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
         change_detector: ChangeDetector | None = None,
+        state_manager: StateManager | None = None,
     ) -> None:
         """Initialize the base migration with common attributes.
 
@@ -42,12 +44,14 @@ class BaseMigration:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
             change_detector: Initialized change detector for idempotent operations
+            state_manager: Initialized state manager for entity mapping and history
 
         """
         # Initialize clients using dependency injection
         self.jira_client = jira_client or JiraClient()
         self.op_client = op_client or OpenProjectClient()
         self.change_detector = change_detector or ChangeDetector()
+        self.state_manager = state_manager or StateManager()
 
         self.data_dir: Path = config.get_path("data")
         self.output_dir: Path = config.get_path("output")
@@ -62,6 +66,122 @@ class BaseMigration:
             # Only perform diagnostics if mappings initialization fails
             self.logger.exception("Failed to initialize mappings in %s: %s", self.__class__.__name__, e)
             raise ComponentInitializationError(f"Cannot initialize {self.__class__.__name__}: {e}") from e
+
+    def register_entity_mapping(
+        self,
+        jira_entity_type: str,
+        jira_entity_id: str,
+        openproject_entity_type: str,
+        openproject_entity_id: str,
+        metadata: dict[str, Any] | None = None
+    ) -> str:
+        """Register a mapping between Jira and OpenProject entities.
+
+        Args:
+            jira_entity_type: Type of Jira entity (e.g., 'project', 'issue', 'user')
+            jira_entity_id: Jira entity identifier
+            openproject_entity_type: Type of OpenProject entity
+            openproject_entity_id: OpenProject entity identifier
+            metadata: Additional metadata about the mapping
+
+        Returns:
+            Mapping ID for future reference
+        """
+        migration_component = self.__class__.__name__
+        return self.state_manager.register_entity_mapping(
+            jira_entity_type=jira_entity_type,
+            jira_entity_id=jira_entity_id,
+            openproject_entity_type=openproject_entity_type,
+            openproject_entity_id=openproject_entity_id,
+            migration_component=migration_component,
+            metadata=metadata
+        )
+
+    def get_entity_mapping(
+        self,
+        jira_entity_type: str,
+        jira_entity_id: str
+    ) -> dict[str, Any] | None:
+        """Get entity mapping by Jira entity information.
+
+        Args:
+            jira_entity_type: Type of Jira entity
+            jira_entity_id: Jira entity identifier
+
+        Returns:
+            Entity mapping or None if not found
+        """
+        return self.state_manager.get_entity_mapping(jira_entity_type, jira_entity_id)
+
+    def start_migration_record(
+        self,
+        entity_type: str,
+        operation_type: str = "migrate",
+        entity_count: int = 0,
+        metadata: dict[str, Any] | None = None
+    ) -> str:
+        """Start a new migration record for tracking progress.
+
+        Args:
+            entity_type: Type of entities being migrated
+            operation_type: Type of operation being performed
+            entity_count: Number of entities to be processed
+            metadata: Additional metadata
+
+        Returns:
+            Record ID for future reference
+        """
+        migration_component = self.__class__.__name__
+        return self.state_manager.start_migration_record(
+            migration_component=migration_component,
+            entity_type=entity_type,
+            operation_type=operation_type,
+            entity_count=entity_count,
+            metadata=metadata
+        )
+
+    def complete_migration_record(
+        self,
+        record_id: str,
+        success_count: int,
+        error_count: int = 0,
+        errors: list[str] | None = None
+    ) -> None:
+        """Complete a migration record.
+
+        Args:
+            record_id: Migration record ID
+            success_count: Number of successfully processed entities
+            error_count: Number of entities that failed
+            errors: List of error messages
+        """
+        self.state_manager.complete_migration_record(
+            record_id=record_id,
+            success_count=success_count,
+            error_count=error_count,
+            errors=errors
+        )
+
+    def create_state_snapshot(
+        self,
+        description: str,
+        metadata: dict[str, Any] | None = None
+    ) -> str:
+        """Create a complete state snapshot for rollback purposes.
+
+        Args:
+            description: Description of the snapshot
+            metadata: Additional metadata
+
+        Returns:
+            Snapshot ID
+        """
+        migration_component = self.__class__.__name__
+        return self.state_manager.create_state_snapshot(
+            description=description,
+            user=migration_component,
+            metadata=metadata
+        )
 
     def detect_changes(self, current_entities: list[dict[str, Any]], entity_type: str) -> ChangeReport:
         """Detect changes in entities since the last migration run.
@@ -151,6 +271,145 @@ class BaseMigration:
             f"Subclass {self.__class__.__name__} must implement _get_current_entities_for_type() "
             f"to support change detection for entity type: {entity_type}"
         )
+
+    def run_with_state_management(
+        self,
+        entity_type: str | None = None,
+        operation_type: str = "migrate",
+        entity_count: int = 0
+    ) -> ComponentResult:
+        """Run migration with complete state management and change detection.
+
+        This method provides the full idempotent migration workflow:
+        1. Check for changes before migration
+        2. Start migration record tracking
+        3. Run the actual migration if changes are detected
+        4. Register entity mappings during migration
+        5. Create snapshots after successful migration
+        6. Complete migration record tracking
+        7. Save state and create snapshot for rollback
+
+        Args:
+            entity_type: Type of entities being migrated (required for change detection)
+            operation_type: Type of operation being performed
+            entity_count: Number of entities to be processed
+
+        Returns:
+            ComponentResult with migration results and state information
+        """
+        # If no entity type specified, run standard migration without change detection
+        if not entity_type:
+            self.logger.debug("No entity type specified, running migration without change detection")
+            return self.run()
+
+        migration_record_id = None
+        snapshot_id = None
+
+        try:
+            # Step 1: Check for changes
+            should_skip, change_report = self.should_skip_migration(entity_type)
+
+            if should_skip:
+                return ComponentResult(
+                    success=True,
+                    message=f"No changes detected for {entity_type}, migration skipped",
+                    details={
+                        "change_report": change_report,
+                        "migration_skipped": True
+                    },
+                    success_count=0,
+                    failed_count=0,
+                    total_count=0,
+                )
+
+            # Step 2: Start migration record
+            migration_record_id = self.start_migration_record(
+                entity_type=entity_type,
+                operation_type=operation_type,
+                entity_count=entity_count,
+                metadata={"change_report": change_report}
+            )
+
+            # Step 3: Run the actual migration
+            result = self.run()
+
+            # Step 4: Process results and update state
+            if result.success:
+                # Complete migration record
+                self.complete_migration_record(
+                    record_id=migration_record_id,
+                    success_count=result.success_count,
+                    error_count=result.failed_count,
+                    errors=result.errors
+                )
+
+                # Create change detection snapshot
+                try:
+                    current_entities = self._get_current_entities_for_type(entity_type)
+                    snapshot_path = self.create_snapshot(current_entities, entity_type)
+                    self.logger.info("Created change detection snapshot for %s: %s", entity_type, snapshot_path)
+                except Exception as e:
+                    self.logger.warning("Failed to create change detection snapshot: %s", e)
+
+                # Create state snapshot for rollback
+                try:
+                    snapshot_id = self.create_state_snapshot(
+                        description=f"Completed {entity_type} migration via {self.__class__.__name__}",
+                        metadata={
+                            "entity_type": entity_type,
+                            "operation_type": operation_type,
+                            "success_count": result.success_count,
+                            "failed_count": result.failed_count
+                        }
+                    )
+                    self.logger.info("Created state snapshot: %s", snapshot_id)
+                except Exception as e:
+                    self.logger.warning("Failed to create state snapshot: %s", e)
+
+                # Save current state
+                try:
+                    self.state_manager.save_current_state()
+                except Exception as e:
+                    self.logger.warning("Failed to save current state: %s", e)
+
+                # Add state info to result details
+                if not result.details:
+                    result.details = {}
+                result.details.update({
+                    "change_report": change_report,
+                    "migration_record_id": migration_record_id,
+                    "state_snapshot_id": snapshot_id,
+                    "state_management": True
+                })
+
+            else:
+                # Migration failed - complete record with error
+                self.complete_migration_record(
+                    record_id=migration_record_id,
+                    success_count=result.success_count,
+                    error_count=result.failed_count,
+                    errors=result.errors
+                )
+
+            return result
+
+        except Exception as e:
+            self.logger.exception("Error in state management workflow: %s", e)
+
+            # Complete migration record with error if it was started
+            if migration_record_id:
+                try:
+                    self.complete_migration_record(
+                        record_id=migration_record_id,
+                        success_count=0,
+                        error_count=1,
+                        errors=[f"State management workflow error: {e}"]
+                    )
+                except Exception as cleanup_error:
+                    self.logger.warning("Failed to complete migration record during error cleanup: %s", cleanup_error)
+
+            # Fall back to standard migration if state management fails
+            return self.run()
 
     def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:
         """Run migration with change detection support.
