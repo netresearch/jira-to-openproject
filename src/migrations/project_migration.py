@@ -356,6 +356,20 @@ class ProjectMigration(BaseMigration):
         if not self.company_mapping:
             self.load_company_mapping()
 
+        # Create lookup dictionaries for O(1) access instead of O(n) linear search
+        # This optimizes the algorithm from O(n²) to O(n)
+        op_projects_by_name = {}
+        op_projects_by_identifier = {}
+
+        for op_project in self.op_projects:
+            op_name = op_project.get("name", "").lower()
+            op_identifier = op_project.get("identifier", "")
+
+            if op_name:
+                op_projects_by_name[op_name] = op_project
+            if op_identifier:
+                op_projects_by_identifier[op_identifier] = op_project
+
         # Prepare project data for bulk creation
         projects_data = []
         for i, jira_project in enumerate(self.jira_projects):
@@ -365,6 +379,19 @@ class ProjectMigration(BaseMigration):
                     "Refreshing OpenProject projects list after %d projects", i
                 )
                 self.extract_openproject_projects()
+
+                # Rebuild lookup dictionaries after refresh
+                op_projects_by_name = {}
+                op_projects_by_identifier = {}
+
+                for op_project in self.op_projects:
+                    op_name = op_project.get("name", "").lower()
+                    op_identifier = op_project.get("identifier", "")
+
+                    if op_name:
+                        op_projects_by_name[op_name] = op_project
+                    if op_identifier:
+                        op_projects_by_identifier[op_identifier] = op_project
 
             jira_key = jira_project.get("key", "")
             jira_name = jira_project.get("name", "")
@@ -376,8 +403,9 @@ class ProjectMigration(BaseMigration):
                 identifier = "p-" + identifier
             identifier = identifier[:100]
 
-            # Find if it already exists
+            # Find if it already exists using O(1) dictionary lookups
             existing_project = None
+            jira_name_lower = jira_name.lower()
 
             # Log the current project being checked
             logger.debug("Checking existence for project: '%s' with identifier: '%s'", jira_name, identifier)
@@ -394,20 +422,18 @@ class ProjectMigration(BaseMigration):
                         op_project.get("identifier", "")
                     )
 
-            for op_project in self.op_projects:
-                op_name = op_project.get("name", "").lower()
-                op_identifier = op_project.get("identifier", "")
+            # Check for existing project using O(1) lookups instead of O(n) linear search
+            name_match_project = op_projects_by_name.get(jira_name_lower)
+            identifier_match_project = op_projects_by_identifier.get(identifier)
 
-                # Check for match
-                name_match = op_name == jira_name.lower()
-                identifier_match = op_identifier == identifier
-
-                if name_match or identifier_match:
-                    logger.debug("Found existing project match:")
-                    logger.debug("  Name match: %s ('%s' vs '%s')", name_match, op_name, jira_name.lower())
-                    logger.debug("  Identifier match: %s ('%s' vs '%s')", identifier_match, op_identifier, identifier)
-                    existing_project = op_project
-                    break
+            if name_match_project:
+                logger.debug("Found existing project by name match:")
+                logger.debug("  Name: '%s' vs '%s'", name_match_project.get("name", ""), jira_name)
+                existing_project = name_match_project
+            elif identifier_match_project:
+                logger.debug("Found existing project by identifier match:")
+                logger.debug("  Identifier: '%s' vs '%s'", identifier_match_project.get("identifier", ""), identifier)
+                existing_project = identifier_match_project
 
             if existing_project:
                 logger.info(
@@ -520,7 +546,7 @@ class ProjectMigration(BaseMigration):
                     })
                     continue
 
-                                # Create the project using simplified Rails command (atomic and concise)
+                # Create the project using simplified Rails command (atomic and concise)
                 # Properly escape strings for Rails/Ruby
                 # Handle quotes, backslashes, newlines, Ruby interpolation patterns, and dangerous functions
                 def ruby_escape(s):
@@ -537,7 +563,7 @@ class ProjectMigration(BaseMigration):
                     escaped = escaped.replace("{", "\\{")     # Escape opening brace
                     escaped = escaped.replace("}", "\\}")     # Escape closing brace
                     escaped = escaped.replace("`", "\\`")     # Escape backticks (command execution)
-                                        # Escape dangerous function patterns to prevent any code execution attempts
+                    # Escape dangerous function patterns to prevent any code execution attempts
                     escaped = escaped.replace("system(", "sys\\tem(")     # Break system function calls
                     escaped = escaped.replace("exec(", "ex\\ec(")         # Break exec function calls
                     escaped = escaped.replace("eval(", "ev\\al(")         # Break eval function calls

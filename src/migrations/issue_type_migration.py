@@ -647,23 +647,31 @@ class IssueTypeMigration(BaseMigration):
         existing_types = self.check_existing_work_package_types()
         existing_names = [type_data.get("name", "").lower() for type_data in existing_types]
 
+        # Create lookup dictionary for O(1) access instead of O(n) linear search
+        # This optimizes the algorithm from O(n²) to O(n)
+        existing_types_by_name = {}
+        for type_data in existing_types:
+            type_name_lower = type_data.get("name", "").lower()
+            if type_name_lower:
+                existing_types_by_name[type_name_lower] = type_data
+
         # Collect types to create
         types_to_create: list[dict[str, str | bool]] = []
         for type_name, type_data in self.issue_type_mapping.items():
             if type_data.get("openproject_id") is None:
                 op_type_name = type_data.get("openproject_name", "")
+                op_type_name_lower = op_type_name.lower()
 
                 # Skip if already exists (case insensitive check)
-                if op_type_name.lower() in existing_names:
-                    # Try to update mapping with existing ID
-                    existing_id = next(
-                        (t["id"] for t in existing_types if t.get("name", "").lower() == op_type_name.lower()),
-                        None,
-                    )
-                    if existing_id:
-                        self.logger.info("Work package type '%s' already exists, updating mapping", op_type_name)
-                        self.issue_type_mapping[type_name]["openproject_id"] = existing_id
-                        self.issue_type_mapping[type_name]["matched_by"] = "found_existing"
+                if op_type_name_lower in existing_names:
+                    # Try to update mapping with existing ID using O(1) lookup
+                    existing_type_data = existing_types_by_name.get(op_type_name_lower)
+                    if existing_type_data:
+                        existing_id = existing_type_data.get("id")
+                        if existing_id:
+                            self.logger.info("Work package type '%s' already exists, updating mapping", op_type_name)
+                            self.issue_type_mapping[type_name]["openproject_id"] = existing_id
+                            self.issue_type_mapping[type_name]["matched_by"] = "found_existing"
                     continue
 
                 # Only add unique type names to prevent duplicates
