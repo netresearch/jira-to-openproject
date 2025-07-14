@@ -525,7 +525,9 @@ class IssueTypeMigration(BaseMigration):
         self.logger.info("Creating work package type '%s' via Rails console...", type_name)
 
         # Check if the type already exists to avoid duplicates
-        check_command = f'existing_type = Type.where("name ilike ?", "{type_name}").first'
+        # Use parameterized query to prevent Rails injection
+        safe_type_name = self.ruby_escape(type_name)
+        check_command = f'existing_type = Type.where("name ilike ?", \'{safe_type_name}\').first'
         check_result = self.op_client.execute_query(check_command)
         self.logger.debug(f"check_result type: {type(check_result)}, value: {check_result}")
         if not isinstance(check_result, dict):
@@ -557,14 +559,15 @@ class IssueTypeMigration(BaseMigration):
                 }
             self.logger.warning("Failed to retrieve ID for existing type '%s'", type_name)
 
-        # Create the type
+        # Create the type with proper escaping to prevent Rails injection
         milestone_flag = "true" if is_milestone else "false"
+        safe_type_color = self.ruby_escape(type_color)
 
         command = f"""
         begin
           type = Type.create!(
-            name: '{type_name}',
-            color: '{type_color}',
+            name: '{safe_type_name}',
+            color: '{safe_type_color}',
             is_milestone: {milestone_flag},
             is_default: false,
             is_standard: true,
@@ -602,7 +605,7 @@ class IssueTypeMigration(BaseMigration):
             type_id = int(id_match.group(1))
             self.logger.info("Created work package type '%s' with ID %s", type_name, type_id)
 
-            # Verify the type exists by querying it
+            # Verify the type exists by querying it (type_id is safe as it's an integer)
             verify_command = f"Type.find({type_id}).present? rescue false"
             verify_result = self.op_client.execute_query(verify_command)
             self.logger.debug(f"verify_result type: {type(verify_result)}, value: {verify_result}")
