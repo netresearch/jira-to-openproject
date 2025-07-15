@@ -56,3 +56,10 @@ repos:
         language: system
         stages: [pre-push]
         pass_filenames: false
+
+      - id: check-tasks-json
+        name: Check tasks.json for valid JSON
+        entry: python -c "import json; f=open('.taskmaster/tasks/tasks.json'); json.load(f)"
+        language: python
+        files: ^\.taskmaster/tasks/tasks\.json$
+        stages: [commit]
