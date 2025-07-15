@@ -10,6 +10,7 @@ from jira import JIRA, Issue
 from requests import Response
 
 from src import config
+from src.utils.rate_limiter import create_jira_rate_limiter
 
 # Get logger
 logger = config.logger
@@ -78,6 +79,9 @@ class JiraClient:
 
         # Initialize client
         self.jira: JIRA | None = None
+
+        # Initialize rate limiter
+        self.rate_limiter = create_jira_rate_limiter()
         self.request_count = 0
         self.period_start = time.time()
         self.base_url = self.jira_url.rstrip("/")
@@ -1195,8 +1199,17 @@ class JiraClient:
                 )
 
                 if has_work_logs or include_empty:
+                    # Apply adaptive rate limiting before request
+                    self.rate_limiter.wait_if_needed(f"get_work_logs_{project_key}")
+
                     try:
+                        request_start = time.time()
                         work_logs = self.get_work_logs_for_issue(issue_key)
+                        response_time = time.time() - request_start
+
+                        # Record successful response for rate limiting adaptation
+                        self.rate_limiter.record_response(response_time, 200)
+
                         if work_logs or include_empty:
                             work_logs_by_issue[issue_key] = work_logs
                             if work_logs:
@@ -1209,6 +1222,8 @@ class JiraClient:
                             "Issue %s not found when fetching work logs",
                             issue_key,
                         )
+                        # Record 404 response
+                        self.rate_limiter.record_response(time.time() - request_start, 404)
                         continue
                     except JiraApiError as e:
                         logger.warning(
@@ -1216,10 +1231,9 @@ class JiraClient:
                             issue_key,
                             e,
                         )
+                        # Record error response (assuming 500 for API errors)
+                        self.rate_limiter.record_response(time.time() - request_start, 500)
                         continue
-
-                # Rate limiting - small delay between requests
-                time.sleep(0.1)
 
             logger.info(
                 "Work log extraction complete for project '%s': "
@@ -1468,6 +1482,9 @@ class JiraClient:
             offset = 0
 
             while True:
+                # Apply adaptive rate limiting before request
+                self.rate_limiter.wait_if_needed(f"get_tempo_work_logs_{project_key}")
+
                 # Build query parameters
                 params = {
                     "project": project_key,
@@ -1480,10 +1497,16 @@ class JiraClient:
                     params["dateTo"] = date_to
 
                 path = "/rest/tempo-timesheets/3/worklogs"
+
+                request_start = time.time()
                 response = self.jira._session.get(
                     f"{self.base_url}{path}",
                     params=params,
                 )
+                response_time = time.time() - request_start
+
+                # Record response for rate limiting adaptation
+                self.rate_limiter.record_response(response_time, response.status_code)
 
                 if response.status_code != 200:
                     msg = f"Failed to retrieve Tempo work logs for project {project_key}: HTTP {response.status_code}"
@@ -1528,8 +1551,6 @@ class JiraClient:
                     break
 
                 offset += limit
-                # Rate limiting
-                time.sleep(0.1)
 
             logger.info(
                 "Tempo work log extraction complete for project '%s': %s total work logs",

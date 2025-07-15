@@ -33,6 +33,7 @@ from src.clients.docker_client import DockerClient
 from src.clients.rails_console_client import RailsConsoleClient, RubyError
 from src.clients.ssh_client import SSHClient
 from src.utils.file_manager import FileManager
+from src.utils.rate_limiter import create_openproject_rate_limiter
 
 logger = config.logger
 
@@ -130,6 +131,9 @@ class OpenProjectClient:
         if not self.ssh_host:
             msg = "SSH host is required"
             raise ValueError(msg)
+
+        # Initialize rate limiter
+        self.rate_limiter = create_openproject_rate_limiter()
 
         # Initialize file manager
         self.file_manager = FileManager()
@@ -467,13 +471,22 @@ class OpenProjectClient:
             offset = 0
 
             while True:
+                # Apply adaptive rate limiting before Rails console operation
+                self.rate_limiter.wait_if_needed(f"batched_query_{model_name}")
+
                 # Use a more reliable query pattern that works with Rails scopes
                 # Use order by id to ensure consistent pagination
                 query = f"{model_name}.unscoped.order(:id).offset({offset}).limit({batch_size}).to_json"
+
+                operation_start = time.time()
                 result_output = self.execute_query(query, timeout=timeout)
+                operation_time = time.time() - operation_start
 
                 try:
                     batch_data = self._parse_rails_output(result_output)
+
+                    # Record successful operation for rate limiting adaptation
+                    self.rate_limiter.record_response(operation_time, 200)
 
                     # If we get no data or empty array, we're done
                     if not batch_data or (isinstance(batch_data, list) and len(batch_data) == 0):
@@ -501,11 +514,10 @@ class OpenProjectClient:
                         logger.warning("Reached safety limit of 5000 records, stopping")
                         break
 
-                    # Small delay to avoid overwhelming the console
-                    time.sleep(0.05)  # Reduced delay for better performance
-
                 except Exception as e:
                     logger.error("Failed to parse batch at offset %d: %s", offset, e)
+                    # Record error for rate limiting adaptation
+                    self.rate_limiter.record_response(operation_time, 500)
                     break
 
             logger.debug("Retrieved %d total records using batched approach", len(all_results))
