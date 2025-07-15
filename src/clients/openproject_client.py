@@ -556,77 +556,63 @@ class OpenProjectClient:
             # Clean up the output by removing tmux markers and Rails prompts
             clean_output = result_output.strip()
 
-            # First, try to extract content between TMUX markers
+            # Split output into lines for processing
             lines = clean_output.split('\n')
+
+            # Look for TMUX command markers to extract content between them
             tmux_start_idx = -1
             tmux_end_idx = -1
 
-            logger.debug("Looking for TMUX markers in %d lines", len(lines))
             for i, line in enumerate(lines):
-                line = line.strip()
-                logger.debug("Line %d: %s", i, repr(line))
-                if line.startswith('TMUX_CMD_START_'):
-                    logger.debug("Found start marker at line %d: %s", i, repr(line))
+                # Look for various start patterns
+                if ('TMUX_CMD_START' in line or
+                    line.strip().startswith('[{') or  # Start of JSON array
+                    (line.strip().startswith('[') and '"id":' in line)):  # JSON array with id field
                     tmux_start_idx = i
-                elif line.startswith('TMUX_CMD_END_'):
-                    logger.debug("Found end marker at line %d: %s", i, repr(line))
+                    logger.debug("Found start marker at line %d: %s", i, repr(line[:100]))
+                    break
+                elif (line.strip().startswith('open-project(') and
+                      i < len(lines) - 1 and
+                      (lines[i+1].strip().startswith('[') or lines[i+1].strip().startswith('{"'))):
+                    # Rails prompt followed by JSON
+                    tmux_start_idx = i
+                    logger.debug("Found Rails prompt + JSON start at line %d: %s", i, repr(line[:100]))
+                    break
+
+            # Look for end markers
+            for i, line in enumerate(lines):
+                if 'TMUX_CMD_END' in line or line.strip().endswith('}]'):
                     tmux_end_idx = i
+                    logger.debug("Found end marker at line %d: %s", i, repr(line[:100]))
                     break
 
             logger.debug("TMUX marker indices: start=%d, end=%d", tmux_start_idx, tmux_end_idx)
 
-            # If we found TMUX markers, extract content between them
-            if tmux_start_idx != -1 and tmux_end_idx != -1:
-                logger.debug("Found TMUX markers, extracting content between them")
-                tmux_content_lines = lines[tmux_start_idx + 1:tmux_end_idx]
-                logger.debug("TMUX content lines: %s", repr(tmux_content_lines))
-                clean_lines = []
-
-                for line in tmux_content_lines:
-                    original_line = line
-                    line = line.strip()
-                    logger.debug("Processing line: original=%s, stripped=%s", repr(original_line), repr(line))
-                    # Skip Rails prompts and empty lines
-                    if (line.startswith('open-project(') or
-                        line.startswith('irb(') or
-                        line == ''):
-                        logger.debug("Skipping line: %s", repr(line))
-                        continue
-                    logger.debug("Keeping line: %s", repr(line))
-                    clean_lines.append(line)
-
-                logger.debug("Clean lines after filtering: %s", repr(clean_lines))
-                if clean_lines:
-                    # Join all clean lines together to reconstruct potentially multi-line JSON
-                    # For large JSON arrays, we need to join without any separators
-                    clean_output = ''.join(clean_lines).strip()
-                    logger.debug("Extracted TMUX content: %s", repr(clean_output)[:200] + "...")
+            # Extract between markers
+            content_lines = []
+            if tmux_start_idx >= 0:
+                start_line = tmux_start_idx + 1
+                if tmux_end_idx >= 0:
+                    end_line = tmux_end_idx
                 else:
-                    logger.debug("No content found between TMUX markers")
-                    return None
+                    end_line = len(lines)
+
+                # Extract all content lines between markers
+                content_lines = lines[start_line:end_line]
             else:
-                # Fallback to original cleaning logic if no TMUX markers found
-                clean_lines = []
+                # No markers found, use all lines
+                content_lines = lines
 
-                for line in lines:
-                    line = line.strip()
-
-                    # Skip tmux markers and Rails prompts - but NOT TMUX_CMD markers as they might contain useful info
-                    if (line.startswith('open-project(') or
-                        line.startswith('irb(') or
-                        line == '' or
-                        'eval(<<' in line or
-                        'SCRIPT_END' in line):
-                        continue
-
-                    clean_lines.append(line)
-
-                # Join clean lines
-                clean_output = '\n'.join(clean_lines).strip()
-
-            if not clean_output:
-                logger.debug("No clean output after filtering")
+            if not content_lines:
+                logger.debug("No content found between markers")
                 return None
+
+            # Join all content lines to form complete JSON/output
+            clean_output = " ".join(line.strip() for line in content_lines if line.strip())
+
+            # Log the cleaned output for debugging
+            logger.debug("Clean output length: %d characters", len(clean_output))
+            logger.debug("Clean output preview: %s", clean_output[:200])
 
             # Handle Rails console responses with => prefix first (before other parsing)
             for line in clean_output.split('\n'):
@@ -654,13 +640,35 @@ class OpenProjectClient:
                         logger.debug("Found Rails console response: %s", value_part)
                         return value_part
 
-            # Try to parse as JSON first
+            # Try parsing as JSON first (arrays, objects)
             try:
-                data = json.loads(clean_output)
-                logger.debug("Successfully parsed JSON from clean output")
-                return data
-            except json.JSONDecodeError:
-                logger.debug("Could not parse clean output as JSON")
+                logger.debug("Attempting to parse as JSON")
+
+                # For mixed console output, look for JSON patterns within the text
+                json_patterns = [
+                    r'\{[^{}]*\}',  # Simple objects like {"error":["..."]}
+                    r'\[[^\[\]]*\]',  # Simple arrays
+                ]
+
+                for pattern in json_patterns:
+                    import re
+                    matches = re.findall(pattern, clean_output)
+                    for match in matches:
+                        try:
+                            parsed = json.loads(match)
+                            logger.debug("Successfully parsed embedded JSON: %s", match[:100])
+                            return parsed
+                        except json.JSONDecodeError:
+                            continue
+
+                # Try parsing the entire clean output as JSON
+                parsed_data = json.loads(clean_output)
+                logger.debug("Successfully parsed as JSON")
+                return parsed_data
+
+            except json.JSONDecodeError as e:
+                logger.debug("Could not parse clean output as JSON: %s", e)
+                logger.debug("Failed to parse extracted JSON: %s", e)
 
             # Look for JSON content in individual lines
             json_lines = []
@@ -755,24 +763,21 @@ class OpenProjectClient:
                 logger.debug("Found scalar string value: %s", clean_output)
                 return clean_output[1:-1]  # Remove quotes
 
-            # Final fallback - log the issue and return the raw clean output if it seems meaningful
-            logger.warning("Could not parse Rails console output as JSON or scalar")
-            logger.debug("Full clean output: %s", clean_output[:500])
+            # Final fallback - instead of returning unparsed strings, log error and return None
+            logger.error("Could not parse Rails console output as JSON or scalar value")
+            logger.error("Full clean output: %s", clean_output[:500])
 
-            # If the clean output looks like it might be meaningful (not empty, not just whitespace)
-            # return it as a string rather than None
-            if clean_output and clean_output != "nil":
-                logger.debug("Returning clean output as string: %s", clean_output[:100])
-                return clean_output
+            # Raise an exception instead of returning unparsed strings to force proper error handling
+            raise JsonParseError(f"Failed to parse Rails console output: {clean_output[:100]}...")
 
-            # For migration purposes, return None rather than fail
-            # This allows the migration to continue and properly handle nil responses
-            return None
-
-        except Exception:
-            logger.error("Failed to process query result: %s", result_output[:200])
-            # Return None rather than raise exception to allow migration to continue
-            return None
+        except JsonParseError:
+            # Re-raise JsonParseError
+            raise
+        except Exception as e:
+            logger.error("Failed to process query result: %s", repr(e))
+            logger.error("Raw output: %s", result_output[:200])
+            # Raise an exception instead of returning None to ensure proper error handling
+            raise QueryExecutionError(f"Failed to parse Rails console output: {e}") from e
 
     def execute_json_query(self, query: str, timeout: int | None = None) -> Any:
         """Execute a Rails query and return parsed JSON result.
@@ -883,18 +888,22 @@ class OpenProjectClient:
         # Convert Python dict to Ruby hash format
         ruby_hash = json.dumps(attributes).replace('"', "'")
 
-        # Build command to create the record and return as JSON
-        command = f"""
-        record = {model}.new({ruby_hash})
-        if record.save
-          puts record.as_json.to_json
-        else
-          raise "Failed to create record: #{{record.errors.full_messages.join(', ')}}"
-        end
-        """
+        # Build Rails command for creating a record
+        # Use a simple, single-line approach that works well with tmux console
+        # Convert Python boolean values to Ruby equivalents
+        def format_value(v):
+            if isinstance(v, bool):
+                return 'true' if v else 'false'
+            elif isinstance(v, str):
+                return f"'{v}'"
+            else:
+                return str(v)
+
+        attributes_str = ', '.join([f"'{k}' => {format_value(v)}" for k, v in attributes.items()])
+        command = f"record = {model}.new({{{attributes_str}}}); record.save ? record.as_json : {{'error' => record.errors.full_messages}}"
 
         try:
-            # Try execute_query_to_json_file first for better JSON parsing
+            # Try execute_query_to_json_file first for better output handling
             result = self.execute_query_to_json_file(command)
 
             # Check if we got a valid dictionary
@@ -1170,148 +1179,54 @@ class OpenProjectClient:
             return self._users_cache
 
         try:
-            import subprocess
+            # Use pure file-based approach - write to file and read directly from filesystem
+            file_path = '/tmp/users.json'
 
-            # Use direct tmux approach to avoid Rails console client timing issues
-            # Reduce to just 2 users to minimize JSON output size and avoid paging
-            query = "User.all.limit(2).to_json"
+            # Execute command to write JSON to file - use a simple command that returns minimal output
+            # Split into Python variable interpolation (f-string) and Ruby script (raw string)
+            file_path_interpolated = f"'{file_path}'"
+            write_query = f"users = User.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(users)); puts \"Users data written to {file_path} (#{{users.count}} users)\"; nil"
 
-            # Send the command directly to tmux
-            target = f"{self.rails_client.tmux_session_name}:{self.rails_client.window}.{self.rails_client.pane}"
+            # Execute the write command with suppressed output to avoid console spam
+            try:
+                # Try to execute - if it fails on output parsing, we'll catch it but still check the file
+                self.rails_client.execute(write_query, suppress_output=True)
+                logger.debug("Successfully executed users write command")
+            except Exception as e:
+                # Don't fail here - the command might have worked even if output parsing failed
+                logger.warning("Rails console output parsing issue (this may be okay): %s", e)
+                # We'll check if the file was actually written below
 
-            # Send the command
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, query, "Enter"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            # Read the JSON directly from the Docker container file system via SSH
+            try:
+                # Use SSH to read the file from the Docker container
+                ssh_command = f"docker exec {self.container_name} cat {file_path}"
+                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
 
-            # Wait for execution to complete
-            time.sleep(5)
+                if returncode != 0:
+                    logger.error("Failed to read file from container, stderr: %s", stderr)
+                    raise QueryExecutionError(f"SSH command failed with code {returncode}: {stderr}")
 
-            # Send multiple 'q' keys to exit any pager mode - be more aggressive
-            for _ in range(5):
-                subprocess.run(
-                    ["tmux", "send-keys", "-t", target, "q"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                time.sleep(0.3)
+                file_content = stdout.strip()
+                logger.debug("Successfully read users file from container, content length: %d", len(file_content))
 
-            # Send Escape key to exit any mode
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "Escape"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            time.sleep(0.5)
+                # Parse the JSON content
+                json_data = json.loads(file_content)
+                logger.info("Successfully loaded %d users from container file", len(json_data) if isinstance(json_data, list) else 0)
+            except (json.JSONDecodeError, Exception) as e:
+                logger.error("Failed to read users from container file %s: %s", file_path, e)
+                raise QueryExecutionError(f"Failed to read users from container file: {e}")
 
-            # Send Ctrl+C to break any running operation
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "C-c"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            time.sleep(0.5)
-
-            # Capture a much larger scrollback buffer
-            capture = subprocess.run(
-                ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", target],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
-            result_output = capture.stdout
-
-            # Extract JSON from the tmux output
-            json_data = None
-            if result_output.strip():
-                # Look for JSON content in the entire output
-                # The JSON might be spread across multiple lines or in escaped format
-
-                # First, try to find the => "JSON" pattern
-                lines = result_output.strip().split("\n")
-                for line in lines:
-                    line = line.strip()
-                    if line.startswith("=>") and '"[{' in line:
-                        # Extract and unescape the JSON string
-                        json_start = line.find('"[{')
-                        if json_start != -1:
-                            json_str = line[json_start:]
-                            if json_str.startswith('"') and json_str.endswith('"'):
-                                json_str = json_str[1:-1]  # Remove quotes
-                                # Unescape the JSON string
-                                json_str = json_str.replace('\\"', '"').replace("\\\\", "\\")
-
-                                try:
-                                    import json
-                                    json_data = json.loads(json_str)
-                                    logger.debug("Successfully parsed JSON from => line")
-                                    break
-                                except json.JSONDecodeError as e:
-                                    logger.debug("Failed to parse JSON from => line: %s", e)
-                                    continue
-
-                # If that didn't work, try to reconstruct JSON from the raw output
-                if json_data is None:
-                    # Look for JSON patterns in the raw output
-                    full_text = result_output.replace("\n", "")
-
-                    # Find JSON array start
-                    json_start = full_text.find("[{")
-                    if json_start != -1:
-                        # Find the matching closing bracket
-                        bracket_count = 0
-                        json_end = -1
-                        for i in range(json_start, len(full_text)):
-                            if full_text[i] == "[":
-                                bracket_count += 1
-                            elif full_text[i] == "]":
-                                bracket_count -= 1
-                                if bracket_count == 0:
-                                    json_end = i + 1
-                                    break
-
-                        if json_end != -1:
-                            json_str = full_text[json_start:json_end]
-                            # Clean up escaped quotes
-                            json_str = json_str.replace('\\"', '"').replace("\\\\", "\\")
-
-                            try:
-                                import json
-                                json_data = json.loads(json_str)
-                                logger.debug("Successfully parsed JSON from raw output")
-                            except json.JSONDecodeError as e:
-                                logger.warning("Failed to parse reconstructed JSON: %s", e)
-                                logger.debug("JSON string: %s", json_str[:200])
-
-                if json_data is None:
-                    logger.warning("No valid JSON found in tmux output")
-                    logger.debug("Raw output: %s", result_output[:500])
-                    json_data = []
-            else:
-                logger.warning("Empty output from tmux")
-                json_data = []
+            # Validate that we got a list
+            if not isinstance(json_data, list):
+                logger.error("Expected list of users, got %s: %s", type(json_data), str(json_data)[:200])
+                raise QueryExecutionError(f"Invalid users data format - expected list, got {type(json_data)}")
 
             # Update cache
             self._users_cache = json_data or []
             self._users_cache_time = current_time
 
-            # Update email lookup cache too
-            self._users_by_email_cache = {}
-            for user in self._users_cache:
-                if isinstance(user, dict):
-                    email = user.get("mail", "")  # OpenProject uses 'mail' not 'email'
-                    if email:  # Check if email is not None and not empty
-                        email_lower = email.lower()
-                        self._users_by_email_cache[email_lower] = user
-
-            logger.debug("Retrieved %d users from OpenProject", len(self._users_cache))
+            logger.info("Retrieved %d users from OpenProject", len(self._users_cache))
             return self._users_cache
 
         except Exception as e:
@@ -1454,19 +1369,48 @@ class OpenProjectClient:
             return self._custom_fields_cache
 
         try:
-            # Query to get all custom fields with their essential properties
-            # Use puts to get clean JSON output without escape characters
-            query = "puts CustomField.all.limit(5).to_json"
+            # Use pure file-based approach - write to file and read directly from filesystem
+            file_path = '/tmp/custom_fields.json'
 
-            # Use execute_query_to_json_file which handles puts output better
-            custom_fields = self.execute_query_to_json_file(query)
+            # Execute command to write JSON to file - use a simple command that returns minimal output
+            # Split into Python variable interpolation (f-string) and Ruby script (raw string)
+            file_path_interpolated = f"'{file_path}'"
+            write_query = f"custom_fields = CustomField.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(custom_fields)); puts \"Custom fields data written to {file_path} (#{{custom_fields.count}} fields)\"; nil"
 
-            # Update cache
-            self._custom_fields_cache = custom_fields or []
-            self._custom_fields_cache_time = current_time
+            # Execute the write command - we only care that it succeeds, ignore output parsing issues
+            try:
+                # Try to execute - if it fails on output parsing, we'll catch it but still check the file
+                self.rails_client.execute(write_query)
+                logger.debug("Successfully executed custom fields write command")
+            except Exception as e:
+                logger.warning("Rails command may have failed on output parsing, but checking file anyway: %s", e)
 
-            logger.debug("Retrieved %d custom fields from OpenProject", len(self._custom_fields_cache))
-            return self._custom_fields_cache
+            # Read the JSON directly from the Docker container file system via SSH
+            try:
+                # Use SSH to read the file from the Docker container
+                ssh_command = f"docker exec {self.container_name} cat {file_path}"
+                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+
+                if returncode != 0:
+                    logger.error("Failed to read file from container, stderr: %s", stderr)
+                    raise QueryExecutionError(f"SSH command failed with code {returncode}: {stderr}")
+
+                file_content = stdout.strip()
+                logger.debug("Successfully read custom fields file from container, content length: %d", len(file_content))
+
+                # Parse the JSON content
+                custom_fields = json.loads(file_content)
+                logger.info("Successfully loaded %d custom fields from container file", len(custom_fields) if isinstance(custom_fields, list) else 0)
+
+                # Update cache
+                self._custom_fields_cache = custom_fields or []
+                self._custom_fields_cache_time = current_time
+
+                return custom_fields
+
+            except (json.JSONDecodeError, Exception) as e:
+                logger.error("Failed to read custom fields from container file: %s", e)
+                raise QueryExecutionError(f"Failed to read/parse custom fields from file: {e}")
 
         except Exception as e:
             msg = "Failed to get custom fields."
@@ -1515,80 +1459,52 @@ class OpenProjectClient:
 
         """
         try:
-            import subprocess
-            import time as time_module
+            # Use pure file-based approach - write to file and read directly from filesystem
+            file_path = '/tmp/projects.json'
 
-            # Use direct tmux approach to avoid Rails console client timing issues
-            # Query actual Project records with proper attributes - get ALL projects for migration
-            query = "puts Project.all.select(:id, :name, :identifier, :description, :status_code).to_json"
+            # Execute command to write JSON to file - use a simple command that returns minimal output
+            # Split into Python variable interpolation (f-string) and Ruby script (raw string)
+            file_path_interpolated = f"'{file_path}'"
+            write_query = f"projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json; File.write({file_path_interpolated}, JSON.pretty_generate(projects)); puts \"Projects data written to {file_path} (#{{projects.count}} projects)\"; nil"
 
-            # Send the command directly to tmux
-            target = f"{self.rails_client.tmux_session_name}:{self.rails_client.window}.{self.rails_client.pane}"
+            # Execute the write command with suppressed output to avoid console spam
+            try:
+                # Try to execute - if it fails on output parsing, we'll catch it but still check the file
+                self.rails_client.execute(write_query, suppress_output=True)
+                logger.debug("Successfully executed projects write command")
+            except Exception as e:
+                # Don't fail here - the command might have worked even if output parsing failed
+                logger.warning("Rails console output parsing issue (this may be okay): %s", e)
+                # We'll check if the file was actually written below
 
-            # Send the command
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, query, "Enter"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            # Read the JSON directly from the Docker container file system via SSH
+            try:
+                # Use SSH to read the file from the Docker container
+                ssh_command = f"docker exec {self.container_name} cat {file_path}"
+                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
 
-            # Wait for execution to complete
-            time_module.sleep(5)
+                if returncode != 0:
+                    logger.error("Failed to read file from container, stderr: %s", stderr)
+                    raise QueryExecutionError(f"SSH command failed with code {returncode}: {stderr}")
 
-            # Exit any pager mode by sending multiple 'q' keys
-            for _ in range(3):
-                subprocess.run(
-                    ["tmux", "send-keys", "-t", target, "q"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                time_module.sleep(0.5)
+                file_content = stdout.strip()
+                logger.debug("Successfully read projects file from container, content length: %d", len(file_content))
 
-            # Send Escape and Ctrl+C to ensure we're out of any pager
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "Escape"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            time_module.sleep(0.5)
+                # Parse the JSON content
+                result = json.loads(file_content)
+                logger.info("Successfully loaded %d projects from container file", len(result) if isinstance(result, list) else 0)
+            except (json.JSONDecodeError, Exception) as e:
+                logger.error("Failed to read projects from container file %s: %s", file_path, e)
+                raise QueryExecutionError(f"Failed to read projects from container file: {e}")
 
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "C-c"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            time_module.sleep(0.5)
-
-            # Capture a much larger scrollback buffer
-            capture = subprocess.run(
-                ["tmux", "capture-pane", "-p", "-S", "-500", "-t", target],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
-            result_output = capture.stdout
-
-            # Extract JSON from the tmux output using the _parse_rails_output method
-            json_data = self._parse_rails_output(result_output)
-
-            if json_data is None:
-                logger.warning("No valid JSON found in tmux output for projects")
-                logger.debug("Raw output: %s", result_output[:500])
-                return []
-
-            # Ensure we have a list
-            if not isinstance(json_data, list):
-                logger.warning("Expected list of projects, got %s", type(json_data))
-                return []
+            # The execute_query_to_json_file method should return the parsed JSON
+            if not isinstance(result, list):
+                logger.error("Expected list of projects, got %s: %s", type(result), str(result)[:200])
+                raise QueryExecutionError(f"Invalid projects data format - expected list, got {type(result)}")
 
             # Validate and clean project data
             validated_projects = []
-            for project in json_data:
+            for project in result:
                 if isinstance(project, dict) and project.get("id"):
                     # For OpenProject projects, identifier might be optional or missing
                     # Accept projects with at least an ID and name
@@ -1605,11 +1521,11 @@ class OpenProjectClient:
                 else:
                     logger.debug("Skipping invalid project data (missing ID): %s", project)
 
-            logger.info("Retrieved %d projects using direct tmux method", len(validated_projects))
+            logger.info("Retrieved %d projects using file-based method", len(validated_projects))
             return validated_projects
 
         except Exception as e:
-            logger.error("Failed to get projects using direct tmux: %s", e)
+            logger.error("Failed to get projects using file-based method: %s", e)
             raise QueryExecutionError(f"Failed to retrieve projects: {e}") from e
 
     def get_project_by_identifier(self, identifier: str) -> dict[str, Any]:

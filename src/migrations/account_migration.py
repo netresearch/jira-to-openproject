@@ -372,36 +372,49 @@ class AccountMigration(BaseMigration):
         # Create the field
         result = self.op_client.create_record("CustomField", field_options)
         self.logger.debug(f"Result from create_record: type={type(result)}, value={result}")
-        if not isinstance(result, dict) or "id" not in result:
+
+        # Check if field was created successfully or already exists
+        if isinstance(result, dict) and "id" in result:
+            # Check if this is an existing field
+            if result.get("status") == "existing":
+                self.account_custom_field_id = result["id"]
+                self.logger.info(
+                    "Found existing Tempo Account custom field with ID %d",
+                    self.account_custom_field_id,
+                )
+            else:
+                # New field was created
+                self.account_custom_field_id = result["id"]
+                self.logger.info(
+                    "Created Tempo Account custom field with ID %d",
+                    self.account_custom_field_id,
+                )
+        # Check if field already exists (expected error)
+        elif isinstance(result, dict) and "error" in result:
+            error_messages = result.get("error", [])
+            if any("already been taken" in str(msg) for msg in error_messages):
+                self.logger.info("Tempo Account custom field already exists, attempting to find existing field...")
+                # Try to get the existing field ID
+                try:
+                    field_id = self.get_account_custom_field_id()
+                    if field_id:
+                        self.account_custom_field_id = field_id
+                        self.logger.info("Found existing Tempo Account custom field with ID %d", field_id)
+                    else:
+                        self.logger.warning("Custom field already exists but couldn't retrieve its ID")
+                except Exception as e:
+                    self.logger.warning("Failed to retrieve existing custom field ID: %s", e)
+            else:
+                msg = (
+                    f"Failed to create custom field: OpenProject error: {error_messages}"
+                )
+                raise MigrationError(msg)
+        else:
             msg = (
                 f"Failed to create custom field: Invalid response from OpenProject "
                 f"(type={type(result)}, value={result})"
             )
             raise MigrationError(msg)
-
-        self.account_custom_field_id = result["id"]
-        if self.account_custom_field_id is not None:
-            self.logger.info(
-                "Created Tempo Account custom field with ID %d",
-                self.account_custom_field_id,
-            )
-        else:
-            self.logger.warning(
-                "Custom field was created but ID is None"
-            )
-            # If ID is None, this means the create_record method couldn't parse the response
-            # but the field may have been created. Let's try to find it.
-            self.logger.info("Attempting to find the created custom field...")
-            existing_id = self.get_existing_custom_field_id()
-            if existing_id:
-                self.account_custom_field_id = existing_id
-                self.logger.info(
-                    "Found the created custom field with ID %d",
-                    self.account_custom_field_id,
-                )
-            else:
-                msg = "Failed to create custom field and could not find it afterwards"
-                raise MigrationError(msg)
 
         # Associate with all work package types
         self.associate_field_with_work_package_types(self.account_custom_field_id)

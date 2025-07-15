@@ -440,6 +440,10 @@ class CompanyMigration(BaseMigration):
             identifier = base_identifier[:100]
             identifier_to_tempo_id[identifier] = tempo_id
 
+            # Generate the Jira URL for this Tempo company
+            jira_base_url = config.jira_config.get("url", "").rstrip("/")
+            jira_url = f"{jira_base_url}/rest/tempo-accounts/1/customer/{tempo_id}"
+
             # Add to the companies data for bulk creation
             companies_data.append(
                 {
@@ -451,6 +455,7 @@ class CompanyMigration(BaseMigration):
                     "description": description,
                     "status": company.get("status", "ACTIVE"),
                     "public": False,
+                    "jira_url": jira_url,  # Add Jira URL for tracking
                 },
             )
 
@@ -541,204 +546,71 @@ class CompanyMigration(BaseMigration):
             # Copy the file to the container
             self.op_client.transfer_file_to_container(temp_file_path, container_temp_path)
 
-            # Prepare and execute the Ruby script
-            self.logger.info(
-                "Executing Rails script to create %d companies", len(companies_to_create),
-            )
-
-            # Ruby script to create companies
-            ruby_script = """
-            container_temp_path = '/tmp/tempo_companies.json'
-
-            require 'json'
-
-            # Load the data from the JSON file
-            companies_data = JSON.parse(File.read(container_temp_path))
-            companies_count = companies_data.size
-            puts "Loaded #{companies_count} companies from JSON file"
-
+            # Process companies in smaller batches to avoid console crashes
+            batch_size = 10  # Process companies in batches of 10 to avoid large script issues
+            total_companies = len(companies_to_create)
             created_companies = []
             errors = []
 
-            # Create each company project
-            companies_data.each do |company|
-              begin
-                # Store Tempo data for mapping
-                tempo_id = company['tempo_id']
-                tempo_key = company['tempo_key']
-                tempo_name = company['tempo_name']
-                tempo_status = company['status'] || 'ACTIVE'
+            for i in range(0, total_companies, batch_size):
+                batch_end = min(i + batch_size, total_companies)
+                batch_companies = companies_to_create[i:batch_end]
 
-                # Map Tempo status to OpenProject status code
-                status_code = 'on_track'  # Default status
-                if ['CLOSED', 'ARCHIVED'].include?(tempo_status)
-                  status_code = 'finished'
-                end
-
-                # Create project object with only the needed attributes
-                project = Project.new(
-                  name: company['name'],
-                  identifier: company['identifier'],
-                  description: company['description'],
-                  public: false
+                self.logger.info(
+                    "Processing batch %d-%d of %d companies", i + 1, batch_end, total_companies
                 )
 
-                # Save the project
-                if project.save
-                  # Set the project status using appropriate model
-                  begin
-                    if defined?(Status)  # Try Status model first (older OpenProject)
-                      begin
-                        # Map status code to name
-                        status_name = 'On track'
-                        if status_code == 'finished'
-                          status_name = 'Finished'
-                        end
+                # Create a smaller JSON file for this batch
+                batch_file_path = Path(self.data_dir).joinpath(f"tempo_companies_batch_{i}.json")
+                with batch_file_path.open("w") as f:
+                    json.dump(batch_companies, f, indent=2)
 
-                        status = Status.find_or_create_by(name: status_name)
-                        if project.respond_to?(:status=)
-                          project.status = status
-                          project.save
-                          puts "Set project status to #{status_name} using Status model"
-                        else
-                          puts "Project does not respond to status="
-                        end
-                      rescue => e1
-                        puts "Status model error: #{e1.message}"
+                # Copy batch file to container
+                batch_container_path = Path(f"/tmp/tempo_companies_batch_{i}.json")
+                self.op_client.transfer_file_to_container(batch_file_path, batch_container_path)
 
-                        # Try ProjectStatus instead
-                        if defined?(ProjectStatus)
-                          begin
-                            ps = ProjectStatus.find_or_create_by(project_id: project.id)
-                            ps.code = status_code
-                            ps.save
-                            puts "Set project status to #{status_code} using ProjectStatus model"
-                          rescue => e2
-                            puts "ProjectStatus error: #{e2.message}"
-                          end
-                        else
-                          puts "Neither Status nor ProjectStatus models available"
-                        end
-                      end
-                    elsif defined?(ProjectStatus)  # Try ProjectStatus model directly
-                      begin
-                        ps = ProjectStatus.find_or_create_by(project_id: project.id)
-                        ps.code = status_code
-                        ps.save
-                        puts "Set project status to #{status_code} using ProjectStatus model"
-                      rescue => e
-                        puts "ProjectStatus error: #{e.message}"
-                      end
-                    else
-                      puts "No status models available"
-                    end
-                  rescue => status_error
-                    puts "Error setting project status for #{project.name}: #{status_error.message}"
-                  end
+                # Prepare smaller Ruby script for this batch
+                batch_result = self._create_companies_batch(batch_container_path, i)
 
-                  created_companies << {
-                    'tempo_id' => tempo_id,
-                    'tempo_key' => tempo_key,
-                    'tempo_name' => tempo_name,
-                    'openproject_id' => project.id,
-                    'openproject_identifier' => project.identifier,
-                    'openproject_name' => project.name,
-                    'status' => status_code
-                  }
-                  puts "Created project #{project.id}: #{project.name} with status #{status_code}"
-                else
-                  errors << {
-                    'tempo_id' => tempo_id,
-                    'tempo_key' => tempo_key,
-                    'tempo_name' => tempo_name,
-                    'identifier' => company['identifier'],
-                    'errors' => project.errors.full_messages,
-                    'error_type' => 'validation_error'
-                  }
-                  puts "Error creating project: #{project.errors.full_messages.join(', ')}"
-                end
-              rescue => e
-                errors << {
-                  'tempo_id' => company['tempo_id'],
-                  'tempo_key' => company['tempo_key'],
-                  'tempo_name' => company['tempo_name'],
-                  'identifier' => company['identifier'],
-                  'errors' => [e.message],
-                  'error_type' => 'exception'
-                }
-                puts "Exception: #{e.message}"
-              end
-            end
+                if batch_result:
+                    batch_companies = batch_result.get("created", [])
+                    created_companies.extend(batch_companies)
+                    errors.extend(batch_result.get("errors", []))
 
-            # Write results to result file
-            result = {
-              'status' => 'success',
-              'created' => created_companies,
-              'errors' => errors,
-              'created_count' => created_companies.size,
-              'error_count' => errors.size,
-              'total' => companies_count
+                    # Update company mapping with both existing and newly created companies
+                    for company in batch_companies:
+                        tempo_id = company.get("tempo_id")
+                        if tempo_id:
+                            self.company_mapping[str(tempo_id)] = {
+                                "tempo_id": tempo_id,
+                                "tempo_key": company.get("tempo_key"),
+                                "tempo_name": company.get("tempo_name"),
+                                "openproject_id": company.get("openproject_id"),
+                                "openproject_identifier": company.get("openproject_identifier"),
+                                "openproject_name": company.get("openproject_name"),
+                                "matched_by": company.get("status", "created"),  # "existing" or "created"
+                            }
+
+                # Clean up batch file
+                try:
+                    batch_file_path.unlink()
+                except OSError:
+                    pass
+
+            # Prepare summary result
+            output = {
+                "status": "success",
+                "created": created_companies,
+                "errors": errors,
+                "created_count": len(created_companies),
+                "error_count": len(errors),
+                "total": total_companies
             }
 
-            # Write the result to the expected file
-            File.write('/tmp/result.json', result.to_json)
-            """
 
-            output = self.op_client.execute_query_to_json_file(ruby_script)
-
-            created_count = 0
-            errors = []
-
-            # Handle case where output is a string instead of dict (parsing issue)
-            if isinstance(output, str):
-                self.logger.warning(
-                    "Could not parse JSON output from companies migration, but Ruby script executed. Assuming success."
-                )
-                # Try to extract any meaningful information from the string output
-                if "Error creating project:" in output or "Exception:" in output:
-                    self.logger.warning("Detected errors in output, but continuing")
-                # Assume success for now - the Ruby script likely executed
-                created_count = 0  # We can't determine the actual count
-            elif isinstance(output, dict) and output.get("status") == "success":
-                created_companies = output.get("created", [])
-                created_count = len(created_companies)
-                errors = output.get("errors", [])
-
-                # Update the mapping
-                for company in created_companies:
-                    tempo_id = company.get("tempo_id")
-                    if tempo_id:
-                        self.company_mapping[tempo_id] = {
-                            "tempo_id": tempo_id,
-                            "tempo_key": company.get("tempo_key"),
-                            "tempo_name": company.get("tempo_name"),
-                            "openproject_id": company.get("openproject_id"),
-                            "openproject_identifier": company.get("openproject_identifier"),
-                            "openproject_name": company.get("openproject_name"),
-                            "matched_by": "created",
-                        }
-                        self._created_companies += 1
-
-                # Handle errors
-                for error in errors:
-                    tempo_id = error.get("tempo_id")
-                    if tempo_id:
-                        self.company_mapping[tempo_id] = {
-                            "tempo_id": tempo_id,
-                            "tempo_key": error.get("tempo_key"),
-                            "tempo_name": error.get("tempo_name"),
-                            "openproject_id": None,
-                            "openproject_identifier": error.get("identifier"),
-                            "openproject_name": None,
-                            "matched_by": "error",
-                            "error": ", ".join(error.get("errors", [])),
-                            "error_type": error.get("error_type"),
-                        }
-            else:
-                self.logger.warning("Unexpected output format from companies migration: %s", type(output))
 
             self.logger.info(
-                "Created %d company projects (errors: %d)", created_count, len(errors),
+                "Created %d company projects (errors: %d)", output.get("created_count", 0), output.get("error_count", 0),
             )
 
             # Refresh cached projects from OpenProject
@@ -753,6 +625,149 @@ class CompanyMigration(BaseMigration):
             error_msg = f"Failed to migrate companies: {e}"
             self.logger.exception(error_msg)
             raise MigrationError(error_msg) from e
+
+    def _create_companies_batch(self, batch_file_path: Path, batch_index: int) -> dict[str, Any] | None:
+        """Create a batch of companies using a smaller Ruby script to avoid console crashes.
+
+        Args:
+            batch_file_path: Path to the JSON file containing the batch of companies
+            batch_index: Index of this batch for logging
+
+        Returns:
+            Dictionary with created companies and errors, or None if execution failed
+        """
+        try:
+            # Create a compact Ruby script for this batch
+            ruby_script = f"""
+            require 'json'
+
+            # Load batch data
+            companies_data = JSON.parse(File.read('{batch_file_path}'))
+            puts "Processing batch with #{{companies_data.size}} companies"
+
+            created_companies = []
+            errors = []
+
+            # Get custom fields
+            jira_url_cf = CustomField.find_by(type: 'ProjectCustomField', name: 'Jira URL')
+            tempo_id_cf = CustomField.find_by(type: 'ProjectCustomField', name: 'Tempo ID')
+
+            companies_data.each do |company|
+              begin
+                tempo_id = company['tempo_id']
+                tempo_name = company['tempo_name']
+                jira_url = company['jira_url']
+
+                # Check for existing project by URL first
+                existing_project = nil
+                if jira_url && jira_url_cf
+                  existing_project = Project.joins(:custom_values)
+                    .where(custom_values: {{ custom_field_id: jira_url_cf.id, value: jira_url }})
+                    .first
+                end
+
+                # Check by Tempo ID if not found by URL
+                if !existing_project && tempo_id && tempo_id_cf
+                  existing_project = Project.joins(:custom_values)
+                    .where(custom_values: {{ custom_field_id: tempo_id_cf.id, value: tempo_id.to_s }})
+                    .first
+                end
+
+                # Check by identifier as last resort
+                if !existing_project
+                  existing_project = Project.find_by(identifier: company['identifier'])
+                end
+
+                if existing_project
+                  created_companies << {{
+                    'tempo_id' => tempo_id,
+                    'tempo_key' => company['tempo_key'],
+                    'tempo_name' => tempo_name,
+                    'openproject_id' => existing_project.id,
+                    'openproject_identifier' => existing_project.identifier,
+                    'openproject_name' => existing_project.name,
+                    'status' => 'existing'
+                  }}
+                  next
+                end
+
+                # Create new project
+                project = Project.new(
+                  name: company['name'],
+                  identifier: company['identifier'],
+                  description: company['description'],
+                  public: false
+                )
+
+                if project.save
+                  # Set custom fields
+                  if tempo_id_cf && tempo_id
+                    cv = project.custom_values.find_or_initialize_by(custom_field_id: tempo_id_cf.id)
+                    cv.value = tempo_id.to_s
+                    cv.save
+                  end
+
+                  if jira_url_cf && jira_url
+                    cv = project.custom_values.find_or_initialize_by(custom_field_id: jira_url_cf.id)
+                    cv.value = jira_url
+                    cv.save
+                  end
+
+                  created_companies << {{
+                    'tempo_id' => tempo_id,
+                    'tempo_key' => company['tempo_key'],
+                    'tempo_name' => tempo_name,
+                    'openproject_id' => project.id,
+                    'openproject_identifier' => project.identifier,
+                    'openproject_name' => project.name,
+                    'status' => 'created'
+                  }}
+                else
+                  errors << {{
+                    'tempo_id' => tempo_id,
+                    'tempo_key' => company['tempo_key'],
+                    'tempo_name' => tempo_name,
+                    'identifier' => company['identifier'],
+                    'errors' => project.errors.full_messages
+                  }}
+                end
+              rescue => e
+                errors << {{
+                  'tempo_id' => company['tempo_id'],
+                  'tempo_key' => company['tempo_key'],
+                  'tempo_name' => company['tempo_name'],
+                  'identifier' => company['identifier'],
+                  'errors' => [e.message]
+                }}
+              end
+            end
+
+            result = {{
+              'created' => created_companies,
+              'errors' => errors,
+              'created_count' => created_companies.size,
+              'error_count' => errors.size
+            }}
+
+            File.write('/tmp/batch_result_{batch_index}.json', result.to_json)
+            result
+            """
+
+            # Execute the batch script with shorter timeout
+            result = self.op_client.execute_json_query(ruby_script, timeout=30)
+
+            if isinstance(result, dict):
+                return result
+            else:
+                self.logger.error("Batch %d: Expected dict result, got %s: %s", batch_index, type(result), str(result)[:200])
+                raise ValueError(f"Batch {batch_index}: Invalid result format - expected dict, got {type(result)}")
+
+        except (ValueError, Exception) as e:
+            self.logger.error("Failed to create companies batch %d: %s", batch_index, e)
+            # For batch processing, we want to stop on error to avoid data corruption
+            if self.config.migration_config.get("stop_on_error", False):
+                raise
+            return None
 
     def migrate_customer_metadata(self) -> ComponentResult:
         """Migrate customer metadata (address, contact info, etc.) to OpenProject projects.
@@ -901,6 +916,12 @@ class CompanyMigration(BaseMigration):
               cf.field_format = 'string'
               cf.is_required = false
               puts "Created 'Tempo ID' custom field"
+            end
+
+            jira_url_cf = CustomField.where(type: 'ProjectCustomField', name: 'Jira URL').first_or_create do |cf|
+              cf.field_format = 'text'
+              cf.is_required = false
+              puts "Created 'Jira URL' custom field"
             end
           end
         rescue => cf_error

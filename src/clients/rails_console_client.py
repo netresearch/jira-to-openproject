@@ -200,12 +200,13 @@ class RailsConsoleClient:
         """
         return command.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
 
-    def execute(self, command: str, timeout: int | None = None) -> str:
+    def execute(self, command: str, timeout: int | None = None, suppress_output: bool = False) -> str:
         """Execute a command in the Rails console and wait for completion.
 
         Args:
             command: Ruby command to execute
             timeout: Command timeout in seconds (default: self.command_timeout)
+            suppress_output: If True, don't print the result to console (for file-based operations)
 
         Returns:
             Extracted command output as a string
@@ -235,6 +236,9 @@ class RailsConsoleClient:
         error_marker_cmd = f'puts "--EXEC_ERROR--" "{marker_id}"'
         error_marker_out = f"--EXEC_ERROR--{marker_id}"
 
+        # Conditionally include result printing based on suppress_output flag
+        result_print_line = "" if suppress_output else "puts result.inspect"
+
         template = """
         # Print start marker
         %s
@@ -244,8 +248,8 @@ class RailsConsoleClient:
           result = nil  # Initialize result variable
           result = %s  # Assign the actual result
 
-          # Print the result and end marker
-          puts result.inspect
+          # Print the result and end marker (conditionally)
+          %s
           %s
         rescue => e
           # Print error marker and details
@@ -256,7 +260,7 @@ class RailsConsoleClient:
         end
         """
 
-        wrapped_command = template % (start_marker_cmd, command, end_marker_cmd, error_marker_cmd, end_marker_cmd)
+        wrapped_command = template % (start_marker_cmd, command, result_print_line, end_marker_cmd, error_marker_cmd, end_marker_cmd)
 
         command_path = self.file_manager.join(debug_session_dir, "ruby_command.rb")
         with command_path.open("w") as f:

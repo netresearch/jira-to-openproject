@@ -160,7 +160,8 @@ class WorkPackageMigration(BaseMigration):
                 f"Found {total_issues} issues to extract from project {project_key}",
             )
 
-            total_issues = min(10, total_issues)
+            # Remove artificial testing limit - process all issues
+            # total_issues = min(10, total_issues)  # Commented out for full migration
             batch_size = min(batch_size, total_issues)
 
             # Get issues in batches with progress tracking

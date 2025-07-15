@@ -12,6 +12,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
+import os
 
 from rich.console import Console
 
@@ -225,40 +226,68 @@ def run_migration(
         # Debug: print available config keys to help identify the correct ones
         config.logger.info("Available OpenProject config keys: %s", list(config.openproject_config.keys()))
 
+        # Check if we're running in mock mode
+        mock_mode = os.environ.get("J2O_TEST_MOCK_MODE", "false").lower() == "true"
+        if mock_mode:
+            config.logger.info("Running in MOCK MODE - using mock clients instead of real connections")
+
         # Create clients in the correct hierarchical order
-        # 1. First, create the SSH client which is the foundation
-        ssh_client = SSHClient(
-            host=str(
-                config.openproject_config.get("server", "openproject.local"),
-            ),
-            user=config.openproject_config.get("user", None),
-            key_file=str(config.openproject_config.get("key_file", "")) if config.openproject_config.get("key_file") else None,
-        )
+        if mock_mode:
+            # Create mock clients that don't require real connections
+            from tests.integration.test_file_transfer_chain import MockSSHClient, MockDockerClient, MockRailsConsoleClient
 
-        # 2. Next, create the Docker client using the SSH client
-        DockerClient(
-            container_name=str(
-                config.openproject_config.get(
-                    "container_name",
-                    config.openproject_config.get("container", "openproject"),
+            ssh_client = MockSSHClient()
+            docker_client = MockDockerClient()
+            rails_client = MockRailsConsoleClient()
+
+            config.logger.info("Mock clients initialized successfully")
+        else:
+            # 1. First, create the SSH client which is the foundation
+            ssh_client = SSHClient(
+                host=str(
+                    config.openproject_config.get("server", "openproject.local"),
                 ),
-            ),
-            ssh_client=ssh_client,
-        )
+                user=config.openproject_config.get("user", None),
+                key_file=str(config.openproject_config.get("key_file", "")) if config.openproject_config.get("key_file") else None,
+            )
 
-        # 3. Create the Rails console client
-        RailsConsoleClient(
-            tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console"),
-        )
+            # 2. Next, create the Docker client using the SSH client
+            docker_client = DockerClient(
+                container_name=str(
+                    config.openproject_config.get(
+                        "container_name",
+                        config.openproject_config.get("container", "openproject"),
+                    ),
+                ),
+                ssh_client=ssh_client,
+            )
+
+            # 3. Create the Rails console client
+            rails_client = RailsConsoleClient(
+                tmux_session_name=config.openproject_config.get("tmux_session_name", "rails_console"),
+            )
 
         # 4. Finally, create the Jira client and OpenProject client (which uses the other clients)
         jira_client = JiraClient()
-        op_client = OpenProjectClient(
-            container_name=config.openproject_config.get("container", None),
-            ssh_host=config.openproject_config.get("server", None),
-            ssh_user=config.openproject_config.get("user", None),
-            tmux_session_name=config.openproject_config.get("tmux_session_name", None),
-        )
+
+        if mock_mode:
+            # For mock mode, create a simplified OpenProject client that doesn't require real connections
+            op_client = OpenProjectClient(
+                container_name=config.openproject_config.get("container", "mock_container"),
+                ssh_host=config.openproject_config.get("server", "mock_server"),
+                ssh_user=config.openproject_config.get("user", "mock_user"),
+                tmux_session_name=config.openproject_config.get("tmux_session_name", "mock_session"),
+                ssh_client=ssh_client,
+                docker_client=docker_client,
+                rails_client=rails_client,
+            )
+        else:
+            op_client = OpenProjectClient(
+                container_name=config.openproject_config.get("container", None),
+                ssh_host=config.openproject_config.get("server", None),
+                ssh_user=config.openproject_config.get("user", None),
+                tmux_session_name=config.openproject_config.get("tmux_session_name", None),
+            )
 
         config.logger.success("All clients initialized successfully")
 

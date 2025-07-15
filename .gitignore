@@ -69,6 +69,8 @@ node_modules/
 *.sln
 *.sw?
 # OS specific
-# Task files
-
 .cursor/mcp.json
+
+# Task files
+# tasks.json
+# tasks/ 
