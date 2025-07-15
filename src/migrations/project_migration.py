@@ -736,6 +736,26 @@ class ProjectMigration(BaseMigration):
 
         return analysis
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        Args:
+            entity_type: Type of entities to retrieve
+
+        Returns:
+            List of current entities from Jira
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+        """
+        if entity_type == "projects":
+            return self.jira_client.get_projects()
+        else:
+            raise ValueError(
+                f"ProjectMigration does not support entity type: {entity_type}. "
+                f"Supported types: ['projects']"
+            )
+
     def run(self) -> ComponentResult:
         """Run the project migration.
 

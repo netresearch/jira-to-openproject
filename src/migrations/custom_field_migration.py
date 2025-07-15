@@ -1048,6 +1048,26 @@ SCRIPT_END
         self.extract_jira_custom_fields()
         return self.create_custom_field_mapping() is not None
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        Args:
+            entity_type: Type of entities to retrieve
+
+        Returns:
+            List of current entities from Jira
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+        """
+        if entity_type == "custom_fields":
+            return self.jira_client.get_custom_fields()
+        else:
+            raise ValueError(
+                f"CustomFieldMigration does not support entity type: {entity_type}. "
+                f"Supported types: ['custom_fields']"
+            )
+
     def run(self) -> ComponentResult:
         """Run the custom field migration process.
 

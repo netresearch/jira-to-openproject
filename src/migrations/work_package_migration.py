@@ -1647,6 +1647,34 @@ class WorkPackageMigration(BaseMigration):
 
         raise RuntimeError(error_details)
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        Args:
+            entity_type: Type of entities to retrieve
+
+        Returns:
+            List of current entities from Jira
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+        """
+        if entity_type == "work_packages" or entity_type == "issues":
+            # Get issues from all configured projects
+            all_issues = []
+            projects = self.jira_client.get_projects()
+            for project in projects:
+                project_key = project.get("key")
+                if project_key:
+                    issues = self.jira_client.get_issues_for_project(project_key)
+                    all_issues.extend(issues)
+            return all_issues
+        else:
+            raise ValueError(
+                f"WorkPackageMigration does not support entity type: {entity_type}. "
+                f"Supported types: ['work_packages', 'issues']"
+            )
+
     def run(self) -> ComponentResult:
         """Run the work package migration process.
 

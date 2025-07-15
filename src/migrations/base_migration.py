@@ -791,6 +791,65 @@ class BaseMigration:
             # Fall back to standard migration if change detection fails
             return self.run()
 
+    def run_idempotent(
+        self,
+        entity_type: str | None = None,
+        operation_type: str = "migrate",
+        entity_count: int = 0
+    ) -> ComponentResult:
+        """Run migration with full idempotent capabilities (recommended method).
+
+        This is a convenience method that automatically uses the complete workflow:
+        - Change detection to skip unnecessary migrations
+        - Data preservation with conflict resolution
+        - State management with entity mapping
+        - Snapshot creation for rollback capability
+
+        This method should be used instead of run() for production migrations.
+
+        Args:
+            entity_type: Type of entities being migrated (auto-detected if not provided)
+            operation_type: Type of operation being performed
+            entity_count: Number of entities to be processed
+
+        Returns:
+            ComponentResult with full migration, state, and preservation information
+        """
+        # Auto-detect entity type if not provided
+        if not entity_type:
+            # Try to infer from class name
+            class_name = self.__class__.__name__.lower()
+            if "user" in class_name:
+                entity_type = "users"
+            elif "project" in class_name:
+                entity_type = "projects"
+            elif "workpackage" in class_name or "issue" in class_name:
+                entity_type = "work_packages"
+            elif "customfield" in class_name:
+                entity_type = "custom_fields"
+            elif "status" in class_name:
+                entity_type = "statuses"
+            else:
+                # Fall back to basic state management if we can't detect
+                self.logger.warning(
+                    "Could not auto-detect entity type for %s, using basic state management",
+                    self.__class__.__name__
+                )
+                return self.run_with_state_management(
+                    entity_type=None,
+                    operation_type=operation_type,
+                    entity_count=entity_count
+                )
+
+        # Use the full data preservation workflow
+        return self.run_with_data_preservation(
+            entity_type=entity_type,
+            operation_type=operation_type,
+            entity_count=entity_count,
+            analyze_conflicts=True,
+            create_backups=True
+        )
+
     def _load_from_json(self, filename: Path, default: Any = None) -> Any:
         """Load data from a JSON file in the data directory.
 
