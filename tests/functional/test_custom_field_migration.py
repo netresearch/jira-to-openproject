@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Test suite for the custom field migration component."""
 
+import json
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, mock_open
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
@@ -320,11 +321,13 @@ class TestCustomFieldMigration(unittest.TestCase):
 
         # Mock the file transfer and execute methods directly
         self.mock_op_client.transfer_file_to_container = Mock()
+        self.mock_op_client.execute_query = Mock()
+        self.mock_op_client.transfer_file_from_container = Mock()
 
-        # Mock the execute_query_to_json_file method to return success
-        self.mock_op_client.execute_query_to_json_file.return_value = {
+        # Mock the result file content
+        result_data = {
             "status": "success",
-            "created_fields": [
+            "created": [
                 {
                     "name": "Test Text Field",
                     "status": "created",
@@ -332,22 +335,28 @@ class TestCustomFieldMigration(unittest.TestCase):
                     "jira_id": "customfield_10001",
                 },
             ],
-            "existing_fields": [],
-            "error_fields": [],
+            "existing": [],
+            "errors": [],
             "created_count": 1,
             "existing_count": 0,
             "error_count": 0,
         }
 
-        # Call migrate_custom_fields_via_json directly
-        result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
+        # Mock Path.exists to return True for result file and json.load for reading it
+        with patch("pathlib.Path.exists", return_value=True), \
+             patch("json.load", return_value=result_data), \
+             patch("pathlib.Path.open", mock_open(read_data=json.dumps(result_data))):
 
-        # Verify the migration succeeded
-        assert result
+            # Call migrate_custom_fields_via_json directly
+            result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
 
-        # Verify that file transfer and execute were called
-        self.mock_op_client.transfer_file_to_container.assert_called_once()
-        self.mock_op_client.execute_query_to_json_file.assert_called_once()
+            # Verify the migration succeeded
+            assert result
+
+            # Verify that file transfer and execute were called
+            self.mock_op_client.transfer_file_to_container.assert_called_once()
+            self.mock_op_client.execute_query.assert_called_once()
+            self.mock_op_client.transfer_file_from_container.assert_called_once()
 
     def test_migrate_custom_fields_with_error(self) -> None:
         """Test migrating custom fields when an error occurs."""
@@ -362,9 +371,10 @@ class TestCustomFieldMigration(unittest.TestCase):
 
         # Ensure file transfer succeeds but execution fails
         self.mock_op_client.transfer_file_to_container = Mock()
+        self.mock_op_client.execute_query = Mock()
 
-        # Mock the execute_query_to_json_file method to raise an exception
-        self.mock_op_client.execute_query_to_json_file.side_effect = Exception("Test error message")
+        # Mock the execute_query method to raise an exception
+        self.mock_op_client.execute_query.side_effect = Exception("Test error message")
 
         # Call migrate_custom_fields_via_json directly
         result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
@@ -374,7 +384,7 @@ class TestCustomFieldMigration(unittest.TestCase):
 
         # Verify that transfer and execute were called
         self.mock_op_client.transfer_file_to_container.assert_called_once()
-        self.mock_op_client.execute_query_to_json_file.assert_called_once()
+        self.mock_op_client.execute_query.assert_called_once()
 
     def test_container_file_transfer_failure(self) -> None:
         """Test handling of container file transfer failures."""
@@ -400,7 +410,7 @@ class TestCustomFieldMigration(unittest.TestCase):
         self.mock_op_client.transfer_file_to_container.assert_called_once()
 
         # Verify execute was not called (since transfer failed)
-        self.mock_op_client.execute_query_to_json_file.assert_not_called()
+        self.mock_op_client.execute_query.assert_not_called()
 
     def test_json_file_handling(self) -> None:
         """Test the handling of JSON files for custom field migration."""
@@ -415,25 +425,35 @@ class TestCustomFieldMigration(unittest.TestCase):
 
         # Replace json.dump to capture the data being written
         json_dump_mock = Mock()
-        with patch("json.dump", json_dump_mock):
-            # Replace tempfile.NamedTemporaryFile to return a controlled temp file
-            temp_file_mock = Mock()
-            temp_file_mock.name = "/tmp/test_json_file.json"
 
-            with patch("tempfile.NamedTemporaryFile", return_value=temp_file_mock):
-                # Mock the file transfer and execute methods
-                self.mock_op_client.transfer_file_to_container = Mock()
+        # Mock the result file content
+        result_data = {
+            "status": "success",
+            "created": [{"name": "Test Field", "id": 1, "jira_id": "customfield_10001", "status": "created"}],
+            "existing": [],
+            "errors": [],
+            "created_count": 1,
+            "existing_count": 0,
+            "error_count": 0,
+        }
 
-                # Mock successful return for execute_query_to_json_file method
-                self.mock_op_client.execute_query_to_json_file.return_value = {
-                    "status": "success",
-                    "created_count": 1,
-                    "existing_count": 0,
-                    "error_count": 0,
-                }
+        with patch("json.dump", json_dump_mock), \
+             patch("json.load", return_value=result_data):
+
+            # Mock the file transfer and execute methods
+            self.mock_op_client.transfer_file_to_container = Mock()
+            self.mock_op_client.execute_query = Mock()
+            self.mock_op_client.transfer_file_from_container = Mock()
+
+            # Mock Path.exists to return True for result file
+            with patch("pathlib.Path.exists", return_value=True), \
+                 patch("pathlib.Path.open", mock_open(read_data=json.dumps(result_data))):
 
                 # Call migrate_custom_fields_via_json directly
-                self.migration.migrate_custom_fields_via_json(fields_to_migrate)
+                result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
+
+                # Verify the migration succeeded
+                assert result
 
                 # Verify json.dump was called - multiple calls are expected due to update_mapping_file
                 assert json_dump_mock.call_count >= 1
@@ -447,10 +467,10 @@ class TestCustomFieldMigration(unittest.TestCase):
                         # Verify it's the correct structure
                         assert len(args[0]) > 0, "Expected at least one field in the data"
 
-                # Verify that transfer_file_to_container was called at least once
+                # Verify that the new methods were called
                 self.mock_op_client.transfer_file_to_container.assert_called_once()
-                # Verify the execute_query_to_json_file method was called
-                self.mock_op_client.execute_query_to_json_file.assert_called_once()
+                self.mock_op_client.execute_query.assert_called_once()
+                self.mock_op_client.transfer_file_from_container.assert_called_once()
 
     def test_ruby_script_generation(self) -> None:
         """Test the generation of Ruby script with proper structure."""

@@ -660,6 +660,7 @@ class CustomFieldMigration(BaseMigration):
 
         # Transfer the file to the container
         container_data_path = Path(f"/tmp/custom_fields_batch_{timestamp}.json")
+        container_result_path = Path(f"/tmp/custom_fields_result_{timestamp}.json")
 
         # Use op_client for file transfers
         try:
@@ -672,15 +673,22 @@ class CustomFieldMigration(BaseMigration):
             )
             return False
 
-        # Ruby query to create custom fields from the JSON file
-        # This will be executed via execute_query_to_json_file which handles file-based execution
-        ruby_query = f"""
-eval(<<'SCRIPT_END')
-# Load the JSON data
+        # Split Ruby script into f-string header and static body
+        # F-string header for dynamic paths
+        ruby_header = f"""
 require 'json'
-json_data = File.read('{container_data_path}')
-custom_fields_data = JSON.parse(json_data)
 
+# File paths
+input_file = '{container_data_path}'
+output_file = '{container_result_path}'
+
+# Load the JSON data
+json_data = File.read(input_file)
+custom_fields_data = JSON.parse(json_data)
+"""
+
+        # Static Ruby body
+        ruby_body = """
 # Initialize counters
 created_fields = []
 existing_fields = []
@@ -697,12 +705,12 @@ custom_fields_data.each do |field_data|
     existing_field = CustomField.find_by(name: field_name)
 
     if existing_field
-      existing_fields << {{
+      existing_fields << {
         name: field_name,
         id: existing_field.id,
         jira_id: jira_id,
         status: 'existing'
-      }}
+      }
       next
     end
 
@@ -719,7 +727,7 @@ custom_fields_data.each do |field_data|
     if field_format == 'list'
       if field_data['possible_values'] && !field_data['possible_values'].empty?
         values = field_data['possible_values']
-        cf.possible_values = values.map {{ |value| value.to_s.strip }}
+        cf.possible_values = values.map { |value| value.to_s.strip }
       else
         cf.possible_values = ['Default option']
       end
@@ -740,32 +748,32 @@ custom_fields_data.each do |field_data|
         end
       end
 
-      created_fields << {{
+      created_fields << {
         name: field_name,
         id: cf.id,
         jira_id: jira_id,
         status: 'created'
-      }}
+      }
     else
-      error_fields << {{
+      error_fields << {
         name: field_name,
         jira_id: jira_id,
         status: 'error',
         errors: cf.errors.full_messages
-      }}
+      }
     end
   rescue => e
-    error_fields << {{
+    error_fields << {
       name: field_data['name'],
       jira_id: field_data['jira_id'],
       status: 'error',
       errors: [e.message]
-    }}
+    }
   end
 end
 
-# Output the result as JSON using puts
-puts({{
+# Write the result as JSON to file
+result = {
   status: 'success',
   created: created_fields,
   existing: existing_fields,
@@ -773,88 +781,49 @@ puts({{
   created_count: created_fields.length,
   existing_count: existing_fields.length,
   error_count: error_fields.length
-}}.to_json)
-SCRIPT_END
+}
+
+File.write(output_file, result.to_json)
+puts "Custom field migration completed. Results written to #{output_file}"
 """
 
-        # Execute the Ruby query using execute_query_to_json_file
+        # Combine header and body
+        ruby_query = ruby_header + ruby_body
+
+        # Execute the Ruby query
         self.logger.info("Executing Ruby script for custom field creation")
         try:
-            result = self.op_client.execute_query_to_json_file(ruby_query, container_data_path)
+            # Execute the script (we don't need the return value since results are written to file)
+            self.op_client.execute_query(ruby_query)
 
-            # Check if result is a string (parsing failed) but custom fields were likely created
-            if isinstance(result, str):
-                # Check if custom fields were actually created by counting them
-                # Use a direct count query instead of relying on get_custom_fields which has a limit
-                # Add a small delay to ensure the previous command is fully processed
-                import time
-                time.sleep(1)
-                count_query = "CustomField.all.count"
-                current_count_raw = self.op_client.execute_query(count_query)
+            # Transfer the result file back and read it
+            local_result_path = self.data_dir / f"custom_fields_result_{timestamp}.json"
 
-                # Parse the Rails console output to extract the clean result
-                current_count_parsed = self.op_client._parse_rails_output(current_count_raw)
+            try:
+                self.op_client.transfer_file_from_container(
+                    container_result_path, local_result_path
+                )
+            except Exception as e:
+                self.logger.exception(
+                    "Failed to transfer result file from container: %s", str(e)
+                )
+                return False
 
-                # Convert to integer - handle the case where _parse_rails_output returns empty string
-                if isinstance(current_count_parsed, (int, str)):
-                    try:
-                        if current_count_parsed == "":
-                            # If _parse_rails_output returned empty string, try manual extraction
-                            import re
-                            numbers = re.findall(r'\b\d+\b', current_count_raw)
-                            if numbers:
-                                current_count = int(numbers[-1])  # Take the last number found
-                                self.logger.debug(f"Manually extracted count: {current_count} from {current_count_raw}")
-                            else:
-                                # If we can't parse the count but we attempted to create fields,
-                                # assume success since the Ruby script likely executed successfully
-                                self.logger.warning(
-                                    "Could not extract count from output, but Ruby script executed. Assuming success."
-                                )
-                                self.logger.debug(f"Raw count output: {current_count_raw}")
-                                return True
-                        else:
-                            current_count = int(str(current_count_parsed).strip())
-                    except ValueError:
-                        # If we can't parse the count but we attempted to create fields,
-                        # assume success since the Ruby script likely executed successfully
-                        self.logger.warning(
-                            "Could not parse count result, but Ruby script executed. Assuming success."
-                        )
-                        self.logger.debug(f"Raw count output: {current_count_raw}")
-                        return True
-                else:
-                    current_count = current_count_parsed
+            # Read and parse the result file
+            if not local_result_path.exists():
+                self.logger.error("Result file was not created: %s", local_result_path)
+                return False
 
-                expected_count = len(self.op_custom_fields) + len(fields_to_migrate)
+            with local_result_path.open("r", encoding="utf-8") as f:
+                result = json.load(f)
 
-                if current_count >= expected_count:
-                    # Custom fields were created successfully despite parsing issues
-                    self.logger.info(f"Custom fields created successfully. Current count: {current_count}")
-                    return True
-                else:
-                    # Even if the count doesn't match expectations, if we have a reasonable number of fields,
-                    # consider it a success (the fields might have been created in a previous run)
-                    if current_count > 0:
-                        self.logger.warning(
-                            f"Count mismatch (expected: {expected_count}, got: {current_count}), "
-                            "but fields exist. Assuming success."
-                        )
-                        return True
-                    else:
-                        self.logger.error(
-                            f"Custom field creation may have failed. Expected: {expected_count}, "
-                            f"Current: {current_count}"
-                        )
-                        return False
-
-            # Handle the normal dictionary result case
             if not isinstance(result, dict):
                 raise MigrationError(f"Unexpected result type: {type(result)}")
 
-            created_fields = result.get("created_fields", [])
-            existing_fields = result.get("existing_fields", [])
-            error_fields = result.get("error_fields", [])
+            # Extract results
+            created_fields = result.get("created", [])
+            existing_fields = result.get("existing", [])
+            error_fields = result.get("errors", [])
 
             if created_fields:
                 self.logger.info("Created %d custom fields", len(created_fields))
@@ -871,7 +840,9 @@ SCRIPT_END
                 for error in error_fields:
                     self.logger.error("Error for field '%s': %s", error["name"], error["errors"])
 
-            return len(created_fields) > 0 and not error_fields
+            # Consider it successful if either fields were created OR fields already exist (and no errors)
+            # This handles the case where custom fields from link types already exist
+            return (len(created_fields) > 0 or len(existing_fields) > 0) and not error_fields
         except Exception as e:
             self.logger.exception("Error executing Ruby script: %s", str(e))
             return False
@@ -880,6 +851,11 @@ SCRIPT_END
             try:
                 if data_file_path.exists():
                     data_file_path.unlink()
+
+                # Also clean up result file
+                local_result_path = self.data_dir / f"custom_fields_result_{timestamp}.json"
+                if local_result_path.exists():
+                    local_result_path.unlink()
             except Exception as e:
                 self.logger.warning("Failed to clean up temporary files: %s", str(e))
 
