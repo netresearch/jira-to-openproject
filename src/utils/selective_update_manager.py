@@ -17,6 +17,12 @@ from src.clients.openproject_client import OpenProjectClient
 from src.utils.change_detector import ChangeReport
 from src.utils.state_manager import StateManager
 
+# Import migration classes for handler delegation
+from src.migrations.user_migration import UserMigration
+from src.migrations.project_migration import ProjectMigration
+from src.migrations.work_package_migration import WorkPackageMigration
+from src.migrations.custom_field_migration import CustomFieldMigration
+
 
 # Type definitions for selective updates
 class UpdateStrategy(TypedDict):
@@ -108,6 +114,29 @@ class SelectiveUpdateManager:
         (self.update_dir / "plans").mkdir(exist_ok=True)
         (self.update_dir / "results").mkdir(exist_ok=True)
         (self.update_dir / "cache").mkdir(exist_ok=True)
+
+        # Initialize migration instances for delegation
+        self._migration_instances = {}
+        try:
+            self._migration_instances["users"] = UserMigration(
+                jira_client=self.jira_client,
+                op_client=self.op_client
+            )
+            self._migration_instances["projects"] = ProjectMigration(
+                jira_client=self.jira_client,
+                op_client=self.op_client
+            )
+            self._migration_instances["issues"] = WorkPackageMigration(
+                jira_client=self.jira_client,
+                op_client=self.op_client
+            )
+            self._migration_instances["customfields"] = CustomFieldMigration(
+                jira_client=self.jira_client,
+                op_client=self.op_client
+            )
+        except Exception as e:
+            self.logger.warning("Failed to initialize some migration instances: %s", e)
+            self._migration_instances = {}
 
         # Initialize update strategies registry
         self._update_strategies: dict[str, UpdateStrategy] = {}
@@ -663,39 +692,127 @@ class SelectiveUpdateManager:
         except Exception as e:
             self.logger.warning("Failed to save update result: %s", e)
 
-    # Entity-specific handler methods (placeholders for now)
+    # Entity-specific handler methods (delegating to migration classes)
     def _create_user(self, user_data: dict[str, Any]) -> dict[str, Any] | None:
         """Create a user in OpenProject."""
-        # Implementation will depend on specific user creation logic
         self.logger.debug("Creating user: %s", user_data.get("displayName", "unknown"))
-        # Placeholder - actual implementation would use op_client.create_record()
-        return {"id": "placeholder", "created": True}
+
+        user_migration = self._migration_instances.get("users")
+        if not user_migration:
+            self.logger.error("UserMigration instance not available")
+            return None
+
+        try:
+            # Use the UserMigration's processing logic for single user
+            result = user_migration.process_single_user(user_data)
+            if result and result.get("openproject_id"):
+                return {"id": result["openproject_id"], "created": True}
+            return None
+        except Exception as e:
+            self.logger.error("Failed to create user: %s", e)
+            return None
 
     def _update_user(self, new_data: dict[str, Any], old_data: dict[str, Any]) -> dict[str, Any] | None:
         """Update a user in OpenProject."""
         self.logger.debug("Updating user: %s", new_data.get("displayName", "unknown"))
-        # Placeholder - actual implementation would use op_client.update_record()
-        return {"id": "placeholder", "updated": True}
+
+        user_migration = self._migration_instances.get("users")
+        if not user_migration:
+            self.logger.error("UserMigration instance not available")
+            return None
+
+        try:
+            # Get the OpenProject user ID from old data or mapping
+            op_user_id = old_data.get("id") if old_data else None
+            if not op_user_id:
+                # Try to find mapping
+                jira_user_id = new_data.get("accountId") or new_data.get("key")
+                if jira_user_id:
+                    mapping = self.state_manager.get_entity_mapping("users", jira_user_id)
+                    op_user_id = mapping.get("openproject_entity_id") if mapping else None
+
+            if op_user_id:
+                # Update existing user
+                result = user_migration.update_user_in_openproject(new_data, op_user_id)
+                if result:
+                    return {"id": op_user_id, "updated": True}
+            else:
+                # If no mapping found, treat as creation
+                return self._create_user(new_data)
+
+            return None
+        except Exception as e:
+            self.logger.error("Failed to update user: %s", e)
+            return None
 
     def _delete_user(self, user_data: dict[str, Any]) -> bool:
         """Delete a user in OpenProject."""
         self.logger.debug("Deleting user: %s", user_data.get("displayName", "unknown"))
-        # Placeholder - actual implementation would use op_client.delete_record()
+
+        # Note: User deletion in OpenProject might not be desired
+        # as it could break references. Consider deactivation instead.
+        self.logger.warning("User deletion not implemented - users should be deactivated, not deleted")
         return True
 
     def _create_project(self, project_data: dict[str, Any]) -> dict[str, Any] | None:
         """Create a project in OpenProject."""
         self.logger.debug("Creating project: %s", project_data.get("name", "unknown"))
-        return {"id": "placeholder", "created": True}
+
+        project_migration = self._migration_instances.get("projects")
+        if not project_migration:
+            self.logger.error("ProjectMigration instance not available")
+            return None
+
+        try:
+            # Use the ProjectMigration's processing logic for single project
+            result = project_migration.process_single_project(project_data)
+            if result and result.get("openproject_id"):
+                return {"id": result["openproject_id"], "created": True}
+            return None
+        except Exception as e:
+            self.logger.error("Failed to create project: %s", e)
+            return None
 
     def _update_project(self, new_data: dict[str, Any], old_data: dict[str, Any]) -> dict[str, Any] | None:
         """Update a project in OpenProject."""
         self.logger.debug("Updating project: %s", new_data.get("name", "unknown"))
-        return {"id": "placeholder", "updated": True}
+
+        project_migration = self._migration_instances.get("projects")
+        if not project_migration:
+            self.logger.error("ProjectMigration instance not available")
+            return None
+
+        try:
+            # Get the OpenProject project ID from old data or mapping
+            op_project_id = old_data.get("id") if old_data else None
+            if not op_project_id:
+                # Try to find mapping
+                jira_project_id = new_data.get("id") or new_data.get("key")
+                if jira_project_id:
+                    mapping = self.state_manager.get_entity_mapping("projects", jira_project_id)
+                    op_project_id = mapping.get("openproject_entity_id") if mapping else None
+
+            if op_project_id:
+                # Update existing project
+                result = project_migration.update_project_in_openproject(new_data, op_project_id)
+                if result:
+                    return {"id": op_project_id, "updated": True}
+            else:
+                # If no mapping found, treat as creation
+                return self._create_project(new_data)
+
+            return None
+        except Exception as e:
+            self.logger.error("Failed to update project: %s", e)
+            return None
 
     def _delete_project(self, project_data: dict[str, Any]) -> bool:
         """Delete a project in OpenProject."""
         self.logger.debug("Deleting project: %s", project_data.get("name", "unknown"))
+
+        # Note: Project deletion is usually not desired as it removes all associated data
+        # Consider archiving/deactivating instead
+        self.logger.warning("Project deletion not implemented - projects should be archived, not deleted")
         return True
 
     def _create_custom_field(self, field_data: dict[str, Any]) -> dict[str, Any] | None:

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from typing import Any
+from datetime import UTC, datetime
 
 from src import config
 from src.clients.jira_client import JiraClient
@@ -849,6 +850,163 @@ class BaseMigration:
             analyze_conflicts=True,
             create_backups=True
         )
+
+    def run_selective_update(
+        self,
+        entity_type: str | None = None,
+        dry_run: bool = False,
+        update_settings: dict[str, Any] | None = None
+    ) -> ComponentResult:
+        """Run a selective update that only modifies changed entities.
+
+        This method performs change detection, creates an update plan,
+        and executes only the necessary updates using SelectiveUpdateManager.
+        This is more efficient than full re-migration for incremental updates.
+
+        Args:
+            entity_type: Type of entities to update (auto-detected if not provided)
+            dry_run: If True, plan and simulate updates without making changes
+            update_settings: Settings to control update behavior
+
+        Returns:
+            ComponentResult with selective update results
+
+        Raises:
+            ComponentError: If selective update fails
+        """
+        try:
+            # Import here to avoid circular imports
+            from src.utils.selective_update_manager import SelectiveUpdateManager
+
+            start_time = datetime.now(tz=UTC)
+            self.logger.info("Starting selective update for %s", self.__class__.__name__)
+
+            # Auto-detect entity type if not provided
+            if not entity_type:
+                entity_type = self._auto_detect_entity_type()
+                if not entity_type:
+                    raise ComponentError(
+                        "Could not determine entity type for selective update. "
+                        "Please specify entity_type parameter."
+                    )
+
+            # Step 1: Perform change detection
+            if not self.should_skip_migration(entity_type):
+                self.logger.info("Changes detected, proceeding with selective update")
+            else:
+                return ComponentResult(
+                    success=True,
+                    message="No changes detected - selective update skipped",
+                    data={
+                        "entity_type": entity_type,
+                        "changes_detected": False,
+                        "execution_time": 0
+                    },
+                    performance_metrics={}
+                )
+
+            # Step 2: Get change report from ChangeDetector
+            change_report = self.change_detector.detect_changes(
+                current_entities=self._get_current_entities_for_type(entity_type),
+                entity_type=entity_type
+            )
+
+            if not change_report["changes"]:
+                return ComponentResult(
+                    success=True,
+                    message="No specific changes found in change report",
+                    data={
+                        "entity_type": entity_type,
+                        "changes_detected": False,
+                        "change_report": change_report
+                    },
+                    performance_metrics={}
+                )
+
+            # Step 3: Initialize SelectiveUpdateManager
+            update_manager = SelectiveUpdateManager(
+                jira_client=self.jira_client,
+                op_client=self.op_client,
+                state_manager=self.state_manager
+            )
+
+            # Step 4: Create update plan
+            update_plan = update_manager.analyze_changes(change_report, update_settings)
+
+            self.logger.info(
+                "Created selective update plan with %d operations across %d entity types",
+                update_plan["total_operations"], len(update_plan["entity_types"])
+            )
+
+            # Step 5: Execute update plan
+            update_result = update_manager.execute_update_plan(update_plan, dry_run)
+
+            # Step 6: Calculate execution metrics
+            end_time = datetime.now(tz=UTC)
+            execution_time = (end_time - start_time).total_seconds()
+
+            # Step 7: Prepare result
+            success = update_result["status"] in ["completed"]
+            message = (
+                f"Selective update {'simulated' if dry_run else 'completed'}: "
+                f"{update_result['operations_completed']} successful, "
+                f"{update_result['operations_failed']} failed, "
+                f"{update_result['operations_skipped']} skipped"
+            )
+
+            result_data = {
+                "entity_type": entity_type,
+                "changes_detected": True,
+                "execution_time": execution_time,
+                "change_report": change_report,
+                "update_plan": update_plan,
+                "update_result": update_result,
+                "dry_run": dry_run
+            }
+
+            return ComponentResult(
+                success=success,
+                message=message,
+                data=result_data,
+                performance_metrics=update_result.get("performance_metrics", {}),
+                errors=update_result.get("errors", [])
+            )
+
+        except Exception as e:
+            error_msg = f"Selective update failed for {self.__class__.__name__}: {e}"
+            self.logger.exception(error_msg)
+            raise ComponentError(error_msg) from e
+
+    def _auto_detect_entity_type(self) -> str | None:
+        """Auto-detect entity type from migration class name.
+
+        Returns:
+            Entity type string, or None if cannot be detected
+        """
+        class_name = self.__class__.__name__.lower()
+
+        # Map class names to entity types
+        if "user" in class_name:
+            return "users"
+        elif "project" in class_name:
+            return "projects"
+        elif "workpackage" in class_name or "issue" in class_name:
+            return "issues"
+        elif "customfield" in class_name or "field" in class_name:
+            return "customfields"
+        elif "status" in class_name:
+            return "statuses"
+        elif "type" in class_name:
+            return "issuetypes"
+        elif "link" in class_name:
+            return "links"
+        else:
+            self.logger.warning(
+                "Could not auto-detect entity type for %s. "
+                "Please specify entity_type parameter explicitly.",
+                self.__class__.__name__
+            )
+            return None
 
     def _load_from_json(self, filename: Path, default: Any = None) -> Any:
         """Load data from a JSON file in the data directory.
