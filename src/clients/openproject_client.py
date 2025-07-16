@@ -1187,15 +1187,9 @@ class OpenProjectClient:
             file_path_interpolated = f"'{file_path}'"
             write_query = f"users = User.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(users)); puts \"Users data written to {file_path} (#{{users.count}} users)\"; nil"
 
-            # Execute the write command with suppressed output to avoid console spam
-            try:
-                # Try to execute - if it fails on output parsing, we'll catch it but still check the file
-                self.rails_client.execute(write_query, suppress_output=True)
-                logger.debug("Successfully executed users write command")
-            except Exception as e:
-                # Don't fail here - the command might have worked even if output parsing failed
-                logger.warning("Rails console output parsing issue (this may be okay): %s", e)
-                # We'll check if the file was actually written below
+            # Execute the write command - fail immediately if Rails console fails
+            self.rails_client.execute(write_query, suppress_output=True)
+            logger.debug("Successfully executed users write command")
 
             # Read the JSON directly from the Docker container file system via SSH
             try:
@@ -1344,28 +1338,21 @@ class OpenProjectClient:
         """Get all custom fields from OpenProject.
 
         Args:
-            force_refresh: If True, bypass cache and fetch fresh data
+            force_refresh: If True, force refresh from server, ignoring cache
 
         Returns:
-            List of custom field objects with their properties
+            List of custom field dictionaries
 
         Raises:
-            QueryExecutionError: If query fails
+            QueryExecutionError: If query execution fails
 
         """
-        # Check cache first (5 minutes validity) unless force_refresh is True
         current_time = time.time()
-        cache_valid = (
-            not force_refresh
-            and hasattr(self, "_custom_fields_cache")
-            and hasattr(self, "_custom_fields_cache_time")
-            and self._custom_fields_cache is not None
-            and self._custom_fields_cache_time is not None
-            and current_time - self._custom_fields_cache_time < 300
-        )
+        cache_timeout = 300  # 5 minutes
 
-        if cache_valid:
-            logger.debug("Using cached custom fields data (%d fields)", len(self._custom_fields_cache))
+        # Check cache first (unless force refresh)
+        if not force_refresh and self._custom_fields_cache and (current_time - self._custom_fields_cache_time) < cache_timeout:
+            logger.debug("Using cached custom fields (age: %.1fs)", current_time - self._custom_fields_cache_time)
             return self._custom_fields_cache
 
         try:
@@ -1377,13 +1364,9 @@ class OpenProjectClient:
             file_path_interpolated = f"'{file_path}'"
             write_query = f"custom_fields = CustomField.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(custom_fields)); puts \"Custom fields data written to {file_path} (#{{custom_fields.count}} fields)\"; nil"
 
-            # Execute the write command - we only care that it succeeds, ignore output parsing issues
-            try:
-                # Try to execute - if it fails on output parsing, we'll catch it but still check the file
-                self.rails_client.execute(write_query)
-                logger.debug("Successfully executed custom fields write command")
-            except Exception as e:
-                logger.warning("Rails command may have failed on output parsing, but checking file anyway: %s", e)
+            # Execute the write command - fail immediately if Rails console fails
+            self.rails_client.execute(write_query, suppress_output=True)
+            logger.debug("Successfully executed custom fields write command")
 
             # Read the JSON directly from the Docker container file system via SSH
             try:
@@ -1467,15 +1450,9 @@ class OpenProjectClient:
             file_path_interpolated = f"'{file_path}'"
             write_query = f"projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json; File.write({file_path_interpolated}, JSON.pretty_generate(projects)); puts \"Projects data written to {file_path} (#{{projects.count}} projects)\"; nil"
 
-            # Execute the write command with suppressed output to avoid console spam
-            try:
-                # Try to execute - if it fails on output parsing, we'll catch it but still check the file
-                self.rails_client.execute(write_query, suppress_output=True)
-                logger.debug("Successfully executed projects write command")
-            except Exception as e:
-                # Don't fail here - the command might have worked even if output parsing failed
-                logger.warning("Rails console output parsing issue (this may be okay): %s", e)
-                # We'll check if the file was actually written below
+            # Execute the write command - fail immediately if Rails console fails
+            self.rails_client.execute(write_query, suppress_output=True)
+            logger.debug("Successfully executed projects write command")
 
             # Read the JSON directly from the Docker container file system via SSH
             try:
