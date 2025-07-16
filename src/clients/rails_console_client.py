@@ -283,7 +283,7 @@ class RailsConsoleClient:
             # we can try to parse what's available
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
-                logger.warning("Console appears ready despite missing start marker - attempting to extract output")
+                logger.error("Console appears ready despite missing start marker - attempting to extract output")
 
                 # Look for any output that resembles our command's expected output
                 if "load" in tmux_output:
@@ -306,7 +306,7 @@ class RailsConsoleClient:
             # Check if the console is in a ready state, which indicates the command may have completed
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
-                logger.warning("Console appears ready despite missing end marker - attempting to extract output")
+                logger.error("Console appears ready despite missing end marker - attempting to extract output")
 
                 # Try to find the result in the output - it usually appears between the start marker and the prompt
                 # Look for either a nil, a hash output like {:key=>value}, or other standard Ruby output formats
@@ -454,7 +454,7 @@ class RailsConsoleClient:
                 msg = f"Error capturing tmux pane: {e}"
                 raise CommandExecutionError(msg) from e
 
-        logger.warning("Marker '%s' not found after %ss", marker, timeout)
+        logger.error("Marker '%s' not found after %ss", marker, timeout)
         return False, current_output
 
     def _wait_for_console_ready(self, target: str, timeout: int = 5) -> bool:
@@ -515,7 +515,7 @@ class RailsConsoleClient:
                 msg = f"Error checking console state: {e}"
                 raise ConsoleNotReadyError(msg) from e
 
-        logger.warning("Console not ready after %ss", timeout)
+        logger.error("Console not ready after %ss", timeout)
         return False
 
     def _send_command_to_tmux(self, command: str, timeout: int) -> str:
@@ -537,7 +537,7 @@ class RailsConsoleClient:
         target = self._get_target()
 
         if not self._wait_for_console_ready(target, timeout=10):
-            logger.warning("Console not ready, forcing full stabilization")
+            logger.error("Console not ready, forcing full stabilization")
             self._stabilize_console()
 
             if not self._wait_for_console_ready(target, timeout=5):
