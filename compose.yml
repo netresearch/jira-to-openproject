@@ -72,7 +72,7 @@ services:
   # SECURITY: Redis internal service - no external port exposure needed
   # Available to other services via hostname 'redis:6379' on Docker network
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     # REMOVED: External port mapping (was 127.0.0.1:6379:6379)
     # Service accessible internally via hostname 'redis' on port 6379
     networks:
