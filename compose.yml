@@ -41,7 +41,7 @@ services:
   # Default: No external port exposure (maximum security)
   # Dev mode: Accessible at localhost:4010 when using --profile dev
   mock-jira:
-    image: stoplight/prism:4
+    image: stoplight/prism:latest
     command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml
     ports:
       - "127.0.0.1:4010:4010"
@@ -57,7 +57,7 @@ services:
   # Default: No external port exposure (maximum security)
   # Dev mode: Accessible at localhost:4011 when using --profile dev
   mock-openproject:
-    image: stoplight/prism:4
+    image: stoplight/prism:latest
     command: mock -h 0.0.0.0 -p 4011 /specs/openproject-openapi.yml
     ports:
       - "127.0.0.1:4011:4011"
@@ -72,7 +72,7 @@ services:
   # SECURITY: Redis internal service - no external port exposure needed
   # Available to other services via hostname 'redis:6379' on Docker network
   redis:
-    image: redis:7-alpine
+    image: redis:8.0-alpine
     # REMOVED: External port mapping (was 127.0.0.1:6379:6379)
     # Service accessible internally via hostname 'redis' on port 6379
     networks:
@@ -86,7 +86,7 @@ services:
   # SECURITY: PostgreSQL internal service - no external port exposure needed
   # Available to other services via hostname 'postgres:5432' on Docker network
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-migration_test}
       POSTGRES_USER: ${POSTGRES_USER:-testuser}
