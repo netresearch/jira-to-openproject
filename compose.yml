@@ -86,7 +86,7 @@ services:
   # SECURITY: PostgreSQL internal service - no external port exposure needed
   # Available to other services via hostname 'postgres:5432' on Docker network
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-migration_test}
       POSTGRES_USER: ${POSTGRES_USER:-testuser}
