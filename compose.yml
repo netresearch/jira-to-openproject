@@ -18,94 +18,60 @@ services:
       # SECURITY: Docker socket mount removed to prevent container escape
       # This migration tool uses SSH-based remote Docker client - no local Docker daemon access needed
       # See src/clients/docker_client.py for SSH-based Docker operations
-    command: sleep infinity
-    user: vscode
     environment:
-      # Ensure Python can find user-installed packages
-      - PYTHONPATH=/app
-      # Load environment variables from .env file
-      - ENV_FILE=/app/.env
-    networks:
-      - dev_network
-    # SECURITY: App service exposed on localhost only via port mapping (127.0.0.1:port)
-    # Container binding uses 0.0.0.0 for Docker networking, but host access is localhost-only
-    # Primary web application port - accessible at localhost:8000
+      - DOCKER_HOST=ssh://user@remote-host
+      # Use SSH_AUTH_SOCK for key-based authentication
+      - SSH_AUTH_SOCK=/run/ssh-agent
     ports:
-      - "127.0.0.1:8000:8000"  # Primary web app port
-      # REMOVED: Secondary port 5000 (unnecessary duplication)
-    profiles:
-      - dev
+      - "8000:8000"
+    depends_on:
+      - redis
+      - postgres
+    restart: unless-stopped
 
-  # Mock Jira API server for testing
-  # SECURITY: Mock service ports only exposed with --profile dev for development convenience
-  # Default: No external port exposure (maximum security)
-  # Dev mode: Accessible at localhost:4010 when using --profile dev
+  # Mock Jira API server
   mock-jira:
-    image: stoplight/prism:latest
-    command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml
-    ports:
-      - "127.0.0.1:4010:4010"
+    image: stoplight/prism:5.14.2
+    command: mock -h 0.0.0.0 --cors /tmp/jira-api.yaml
     volumes:
-      - ./test-specs:/specs:ro
-    networks:
-      - dev_network
-    profiles:
-      - dev  # Changed from 'testing' to 'dev' for better integration
+      - ./tests/fixtures/jira-api.yaml:/tmp/jira-api.yaml
+    ports:
+      - "4010:4010"
+    restart: unless-stopped
 
-  # Mock OpenProject API server for testing
-  # SECURITY: Mock service ports only exposed with --profile dev for development convenience
-  # Default: No external port exposure (maximum security)
-  # Dev mode: Accessible at localhost:4011 when using --profile dev
+  # Mock OpenProject API server
   mock-openproject:
-    image: stoplight/prism:latest
-    command: mock -h 0.0.0.0 -p 4011 /specs/openproject-openapi.yml
-    ports:
-      - "127.0.0.1:4011:4011"
+    image: stoplight/prism:5.14.2
+    command: mock -h 0.0.0.0 --cors /tmp/openproject-api.yaml
     volumes:
-      - ./test-specs:/specs:ro
-    networks:
-      - dev_network
-    profiles:
-      - dev  # Changed from 'testing' to 'dev' for better integration
+      - ./tests/fixtures/openproject-api.yaml:/tmp/openproject-api.yaml
+    ports:
+      - "4011:4010"
+    restart: unless-stopped
 
-  # Redis for caching (optional)
-  # SECURITY: Redis internal service - no external port exposure needed
-  # Available to other services via hostname 'redis:6379' on Docker network
+  # Redis for caching and task queues
   redis:
-    image: redis:8.0-alpine
-    # REMOVED: External port mapping (was 127.0.0.1:6379:6379)
-    # Service accessible internally via hostname 'redis' on port 6379
-    networks:
-      - dev_network
-    profiles:
-      - services
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
     volumes:
       - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-defaultpassword}
 
-  # PostgreSQL for testing migration state tracking (optional)
-  # SECURITY: PostgreSQL internal service - no external port exposure needed
-  # Available to other services via hostname 'postgres:5432' on Docker network
+  # PostgreSQL for data storage
   postgres:
-    image: postgres:17-alpine
+    image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-migration_test}
-      POSTGRES_USER: ${POSTGRES_USER:-testuser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?POSTGRES_PASSWORD must be set in .env file}
-    # REMOVED: External port mapping (was 127.0.0.1:5432:5432)
-    # Service accessible internally via hostname 'postgres' on port 5432
-    networks:
-      - dev_network
-    profiles:
-      - services
+      POSTGRES_DB: ${POSTGRES_DB:-jira_migration}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-defaultpassword}
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
-networks:
-  dev_network:
-    driver: bridge
+    restart: unless-stopped
 
 volumes:
   redis_data:
-    driver: local
   postgres_data:
-    driver: local
