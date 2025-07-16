@@ -52,12 +52,12 @@ class Mappings:
 
         # Check essential mappings
         if not self.project_mapping:
-            logger.warning(
+            logger.notice(
                 "Project mapping (%s) is missing or empty!",
                 self.PROJECT_MAPPING_FILE,
             )
         if not self.issue_type_mapping:
-            logger.warning(
+            logger.notice(
                 "Issue type mapping (%s) is missing or empty!",
                 self.ISSUE_TYPE_MAPPING_FILE,
             )
@@ -97,7 +97,7 @@ class Mappings:
         file_path = self.data_dir / filename
         mapping = data_handler.load_dict(file_path)
         if mapping is None:
-            logger.warning("Mapping file not found or invalid: %s", filename)
+            logger.notice("Mapping file not found or invalid: %s", filename)
             return {}
         logger.notice("Loaded mapping '%s' with %d entries.", filename, len(mapping))
         return mapping
@@ -177,7 +177,7 @@ class Mappings:
         mapping_attr = f"{mapping_name}_mapping"
         if hasattr(self, mapping_attr):
             return getattr(self, mapping_attr)
-        logger.warning("Mapping '%s' not found", mapping_name)
+        logger.notice("Mapping '%s' not found", mapping_name)
         return {}
 
     def set_mapping(self, mapping_name: str, mapping_data: dict[str, Any]) -> None:
