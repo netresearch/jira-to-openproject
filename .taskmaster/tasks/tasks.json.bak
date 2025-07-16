@@ -1,0 +1,882 @@
+{
+  "tasks": [
+    {
+      "id": "1",
+      "title": "Project Setup and Foundation",
+      "description": "Set up the project structure, environment, and foundational components",
+      "status": "done",
+      "priority": "high",
+      "dependencies": [],
+      "details": "Create basic project structure including src/, tests/, scripts/, and docs/ directories. Set up virtual environment (.venv), Docker environment (Dockerfile, compose.yaml), and configure Git repository.",
+      "testStrategy": "Verify that the project structure exists and the environment can be set up correctly. Ensure Docker containers build and run successfully."
+    },
+    {
+      "id": "2",
+      "title": "Configuration System",
+      "description": "Design and implement the configuration system for the migration tool",
+      "status": "done",
+      "priority": "high",
+      "dependencies": [],
+      "details": "Implement configuration loading (YAML + Environment Variables), create ConfigLoader, and set up initial config/config.yaml, .env, and .env.local examples. Handle connection details, API credentials, and SSL verification settings.",
+      "testStrategy": "Test that configuration can be loaded from files and environment variables, and that settings are correctly applied."
+    },
+    {
+      "id": "3",
+      "title": "API Client Development",
+      "description": "Implement clients for Jira and OpenProject APIs",
+      "status": "done",
+      "priority": "high",
+      "dependencies": [],
+      "details": "Create clients for both Jira and OpenProject APIs. Include methods for authentication, rate limiting, and error handling. Implement basic CRUD operations for both systems.",
+      "testStrategy": "Test connectivity to both systems, verify authentication works, and ensure basic operations function correctly."
+    },
+    {
+      "id": "4",
+      "title": "Rails Console Integration",
+      "description": "Develop the layered integration with OpenProject Rails console",
+      "status": "done",
+      "priority": "high",
+      "dependencies": [],
+      "details": "Implement the layered architecture to interact with OpenProject Rails console. Create FileManager, SSHClient, DockerClient, and RailsConsoleClient classes with clear separation of concerns.",
+      "testStrategy": "Verify connection to Rails console, test command execution, and ensure file transfers work correctly."
+    },
+    {
+      "id": "5",
+      "title": "User Migration",
+      "description": "Implement migration of users from Jira to OpenProject",
+      "status": "done",
+      "priority": "medium",
+      "dependencies": [],
+      "details": "Extract Jira users, map them to OpenProject users based on email/username, and create non-existent users in OpenProject. Generate user mapping for reference by other components.",
+      "testStrategy": "Test user extraction, mapping strategy, and creation in OpenProject. Verify user counts match expected values."
+    },
+    {
+      "id": "6",
+      "title": "Custom Field Migration",
+      "description": "Implement migration of custom fields from Jira to OpenProject",
+      "status": "done",
+      "priority": "medium",
+      "dependencies": [],
+      "details": "Extract Jira custom field metadata, map to OpenProject equivalents, and create custom fields via Rails console. Handle custom field options and types correctly.",
+      "testStrategy": "Verify custom field count and attributes match expected values. Test field creation and type mapping."
+    },
+    {
+      "id": "7",
+      "title": "Tempo Data Migration",
+      "description": "Migrate Tempo account and company data to OpenProject",
+      "status": "done",
+      "priority": "medium",
+      "dependencies": [],
+      "details": "Extract Tempo accounts and company data, map to OpenProject custom fields and projects, and create appropriate structures in OpenProject. Map Tempo companies to top-level OpenProject projects.",
+      "testStrategy": "Verify Tempo accounts are correctly migrated as custom fields. Test company/project structure creation."
+    },
+    {
+      "id": "8",
+      "title": "Project Migration",
+      "description": "Implement migration of projects from Jira to OpenProject",
+      "status": "done",
+      "priority": "high",
+      "dependencies": [],
+      "details": "Extract Jira projects, map project attributes and hierarchy, and create/update projects in OpenProject. Create Jira projects as sub-projects under respective company projects.",
+      "testStrategy": "Test project extraction, mapping strategy, and creation/update in OpenProject. Verify project hierarchy."
+    },
+    {
+      "id": "9",
+      "title": "Issue Type Migration",
+      "description": "Migrate issue types from Jira to OpenProject work package types",
+      "status": "done",
+      "priority": "medium",
+      "dependencies": [],
+      "details": "Extract Jira issue types, map to OpenProject work package types, and create work package types via Rails console. Normalize sub-task types as needed.",
+      "testStrategy": "Verify issue type count and attributes match expected values. Test type creation and mapping."
+    },
+    {
+      "id": "10",
+      "title": "Status and Workflow Migration",
+      "description": "Migrate statuses and workflows from Jira to OpenProject",
+      "status": "done",
+      "priority": "medium",
+      "dependencies": [],
+      "details": "Extract Jira statuses and workflows, map to OpenProject statuses and workflows, and configure OpenProject accordingly. Analyze Jira workflows to preserve basic lifecycle.",
+      "testStrategy": "Test status mapping and configuration. Verify workflow transitions function correctly."
+    },
+    {
+      "id": "11",
+      "title": "Link Type Migration",
+      "description": "Migrate issue link types from Jira to OpenProject relation types",
+      "status": "pending",
+      "priority": "high",
+      "dependencies": [],
+      "details": "Extract Jira issue link types, map to OpenProject relation types, and handle unmapped link types. Create custom fields for unmapped link types that cannot be represented with standard relation types.",
+      "testStrategy": "Test relation type mapping and usage in work package migration. Verify custom field implementation for unmapped link types."
+    },
+    {
+      "id": "12",
+      "title": "Work Package Migration",
+      "description": "Implement comprehensive work package migration with all attributes",
+      "status": "pending",
+      "priority": "high",
+      "dependencies": [],
+      "details": "Extract Jira issues, map all fields, statuses, types, and relationships, and create work packages in OpenProject. Preserve hierarchy (epics, sub-tasks), migrate custom field values, handle attachments and comments, and establish relations between work packages.",
+      "testStrategy": "Test field mapping, hierarchy creation, relation establishment, and attachment/comment migration. Verify counts match expected values."
+    },
+    {
+      "id": "13",
+      "title": "Performance Optimization",
+      "description": "Optimize migration performance for large datasets",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": [],
+      "details": "Implement efficient batching for API calls, optimize data extraction and processing, and provide progress indicators for long-running operations. Handle rate limiting and implement retry mechanisms.",
+      "testStrategy": "Test with large datasets to verify performance improvements. Measure extraction and migration times."
+    },
+    {
+      "id": "14",
+      "title": "Error Handling and Reporting",
+      "description": "Enhance error handling, logging, and reporting across all components",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": [],
+      "details": "Improve error handling and reporting across all components. Implement comprehensive logging, error recovery strategies, and detailed progress reporting.",
+      "testStrategy": "Test error recovery by simulating various failure scenarios. Verify log output and error reporting."
+    },
+    {
+      "id": "15",
+      "title": "Documentation and User Guides",
+      "description": "Create comprehensive documentation and user guides",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": [],
+      "details": "Create detailed documentation including setup instructions, configuration options, usage examples, and troubleshooting guides. Document manual steps required for migration clearly.",
+      "testStrategy": "Verify that documentation is complete and accurate by following the instructions from scratch."
+    },
+    {
+      "id": 16,
+      "title": "Implement Idempotent Operation",
+      "description": "Develop idempotent operation capability that allows running the migration tool multiple times to synchronize changes from Jira to OpenProject over time.",
+      "details": "Implement the following features:\n1. Change detection and tracking to identify modifications in Jira since last run\n2. State preservation of previous migration runs\n3. Selective update of only changed entities\n4. Safeguards to preserve manually imported or modified data in OpenProject\n5. Resumable operations in case of interruptions\n6. Conflict resolution mechanisms when data has been modified in both systems",
+      "testStrategy": "Test with repeated migrations of the same data with controlled changes to verify:\n1. Only changed items are updated\n2. Manually modified data in OpenProject is preserved\n3. No duplicate entities are created\n4. Proper handling of deleted items in Jira\n5. Performance remains consistent across multiple executions",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Change Detection System",
+          "description": "Implement a system to detect changes in Jira since the last migration run",
+          "details": "Develop mechanisms to:\n1. Store a snapshot of Jira entities after each successful migration\n2. Compare current Jira state with the stored snapshot\n3. Identify created, updated, and deleted entities\n4. Generate a detailed change report\n5. Prioritize changes based on entity type and dependencies",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 16
+        },
+        {
+          "id": 2,
+          "title": "State Preservation Mechanism",
+          "description": "Implement mechanisms to preserve the state of previous migration runs",
+          "details": "Develop a robust state tracking system that:\n1. Records the state of each entity after migration\n2. Maintains a mapping between Jira and OpenProject entities\n3. Preserves historical migration information (timestamps, user, versions)\n4. Implements versioned state storage with rollback capability\n5. Provides tools for state inspection and verification",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 16
+        },
+        {
+          "id": 3,
+          "title": "Selective Update System",
+          "description": "Implement functionality to selectively update only changed entities",
+          "details": "Create a system that:\n1. Analyzes detected changes to determine update requirements\n2. Implements differential update strategies for each entity type\n3. Handles entity dependencies during selective updates\n4. Provides granular control over what gets updated\n5. Optimizes updates to minimize API calls and processing",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 16
+        },
+        {
+          "id": 4,
+          "title": "Data Preservation Safeguards",
+          "description": "Implement safeguards to preserve manually imported or modified data in OpenProject",
+          "details": "Develop protection mechanisms that:\n1. Detect manually added or modified data in OpenProject\n2. Implement conflict detection between Jira changes and OpenProject changes\n3. Create rules to determine precedence in conflict situations\n4. Provide merge capabilities for conflicting changes\n5. Allow configuration of preservation policies per entity type",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 16
+        },
+        {
+          "id": 5,
+          "title": "Recovery and Resilience Features",
+          "description": "Implement recovery mechanisms for handling interruptions and failures during migration",
+          "details": "Create resilience features that:\n1. Track migration progress at a granular level\n2. Implement checkpointing during long-running operations\n3. Provide the ability to resume interrupted migrations\n4. Create rollback capabilities for failed migrations\n5. Implement robust error handling with clear remediation steps",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 16
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Enhanced Meta Information Migration",
+      "description": "Ensure complete preservation of all meta information during the migration process.",
+      "details": "Implement comprehensive migration of all meta information including:\n1. Watchers\n2. Authors and creators\n3. Assignees\n4. Creation dates\n5. Modification dates\n6. Reporter information\n7. Audit trail data\n8. Time tracking information\n\nUse Rails console integration to set fields that cannot be modified via the API, ensuring all metadata is properly preserved during migration.",
+      "testStrategy": "Test by:\n1. Verify all meta information fields are correctly migrated\n2. Compare creation/modification dates for accuracy\n3. Ensure user associations (author, assignee, watchers) are preserved\n4. Validate time tracking and audit information is intact\n5. Test with a variety of edge cases (deleted users, special characters, etc.)",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "User Association Migration",
+          "description": "Implement migration of all user associations (authors, creators, assignees, watchers)",
+          "details": "Develop comprehensive user association migration that:\n1. Maps all Jira user references to OpenProject users\n2. Preserves creator/author information using Rails console when API limitations exist\n3. Transfers assignee relationships with proper mapping\n4. Migrates watchers and subscribers with all metadata\n5. Handles edge cases like deleted users or missing references",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 17
+        },
+        {
+          "id": 2,
+          "title": "Timestamp Preservation",
+          "description": "Implement migration of all timestamp metadata (creation dates, modification dates)",
+          "details": "Develop timestamp preservation mechanisms that:\n1. Extract all timestamp metadata from Jira entities\n2. Use Rails console integration to set immutable timestamp fields in OpenProject\n3. Preserve creation dates exactly as they were in Jira\n4. Maintain modification history and last updated dates\n5. Create proper audit trail entries in OpenProject with original timestamps",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 17
+        },
+        {
+          "id": 3,
+          "title": "Audit and History Information",
+          "description": "Implement migration of audit trails, history, and activity streams",
+          "details": "Develop comprehensive audit and history migration that:\n1. Extracts activity history from Jira entities\n2. Converts history entries to OpenProject format\n3. Preserves the complete audit trail of changes\n4. Migrates activity streams with proper user attribution\n5. Creates equivalent history records in OpenProject with original metadata",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 17
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Markdown Syntax Conversion",
+      "description": "Develop robust conversion of Jira wiki markup to OpenProject markdown format.",
+      "details": "Implement a comprehensive syntax converter that handles:\n1. Jira wiki markup to OpenProject markdown transformation\n2. Inline issue references and links (PROJ-123 → #123)\n3. User @mentions mapping to OpenProject users\n4. Code blocks with language-specific syntax highlighting\n5. Complex table structures\n6. Embedded images and attachments\n7. Jira-specific macros (with appropriate fallbacks)\n8. Rich content elements (diagrams, panels, etc.)\n9. Preservation of formatting and layout\n\nThe conversion must maintain the visual fidelity and functionality of the original content while adapting to OpenProject's markdown dialect.",
+      "testStrategy": "Test with:\n1. A comprehensive set of markup test cases covering all syntax elements\n2. Complex real-world examples from production Jira instances\n3. Content with embedded macros, attachments, and special formatting\n4. Visual comparison of rendered output in both systems\n5. Verification of link functionality and reference integrity",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Basic Markup Conversion",
+          "description": "Implement conversion of basic Jira wiki markup to OpenProject markdown",
+          "details": "Develop conversion for basic markup elements:\n1. Headings (h1, h2, h3, etc.)\n2. Text formatting (bold, italic, underline, strikethrough)\n3. Lists (ordered, unordered, nested)\n4. Block quotes and citations\n5. Horizontal rules and separators\n6. Line breaks and paragraphs\n\nEnsure proper handling of nested and combined formatting while maintaining visual fidelity.",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 18
+        },
+        {
+          "id": 2,
+          "title": "Advanced Markup Conversion",
+          "description": "Implement conversion of advanced Jira markup to OpenProject markdown",
+          "details": "Develop conversion for advanced markup elements:\n1. Tables with complex formatting\n2. Code blocks with syntax highlighting\n3. Collapsible sections and details\n4. Panel and info/warning/note macros\n5. Tabs and dynamic content\n6. Color formatting and styling\n\nHandle Jira-specific macros that have no direct equivalent in OpenProject by creating appropriate fallback representations.",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 18
+        },
+        {
+          "id": 3,
+          "title": "Issue Reference Conversion",
+          "description": "Implement conversion of Jira issue references to OpenProject work package references",
+          "details": "Develop a robust system for converting issue references:\n1. Transform Jira issue keys (PROJECT-123) to OpenProject work package references (#123)\n2. Update all inline issue links in text content\n3. Maintain bidirectional traceability between original references and new ones\n4. Handle cross-project references correctly\n5. Preserve context and meaning in complex reference patterns\n6. Manage references to issues that might not exist in OpenProject",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 18
+        },
+        {
+          "id": 4,
+          "title": "User Mention Conversion",
+          "description": "Implement conversion of Jira @username mentions to OpenProject user mentions",
+          "details": "Develop a comprehensive user mention conversion system that:\n1. Identifies all @username mentions in Jira text content\n2. Maps Jira usernames to OpenProject user identifiers\n3. Converts mentions to the proper OpenProject format\n4. Handles group mentions and special user references\n5. Preserves mention functionality in comments and descriptions\n6. Gracefully handles mentions of users that don't exist in OpenProject",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 18
+        },
+        {
+          "id": 5,
+          "title": "Attachment and Embedded Content Handling",
+          "description": "Implement conversion of Jira embedded attachments and content to OpenProject format",
+          "details": "Develop a system to handle embedded content:\n1. Migrate and reference inline images with proper sizing and alignment\n2. Convert file attachment references with correct links\n3. Handle embedded media (videos, audio) appropriately\n4. Process embedded documents and office files\n5. Maintain visual layout and positioning of embedded content\n6. Ensure all embedded content is properly accessible after migration",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 18
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Data Preservation and Offline Operation",
+      "description": "Implement mechanisms to preserve existing OpenProject data and support operation when direct Rails console access is unavailable.",
+      "details": "Develop features to:\n1. Detect and preserve manually imported or modified data in OpenProject\n2. Generate executable Ruby scripts for manual execution when direct Rails console access is unavailable\n3. Implement transaction-like operations with rollback capabilities\n4. Create data snapshots before migration operations\n5. Provide conflict detection and resolution mechanisms\n6. Support out-of-band execution of Rails console commands\n7. Generate comprehensive reports on preserved data and manual steps required\n\nThis system must work reliably both with direct Rails console access and when operating in a disconnected/offline mode.",
+      "testStrategy": "Test by:\n1. Simulate environments without direct Rails console access\n2. Verify generated Ruby scripts execute correctly when run manually\n3. Confirm no data loss occurs when manual data exists in OpenProject\n4. Test conflict detection with deliberately conflicting data\n5. Validate rollback mechanisms restore system to previous state",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 20,
+      "title": "Work Log and Time Entry Migration",
+      "description": "Implement comprehensive migration of work logs and time entries from Jira/Tempo to OpenProject.",
+      "details": "Develop a system to migrate all time tracking data:\n1. Jira work logs with all metadata (author, date, description)\n2. Tempo time entries with account associations\n3. Time tracking summaries and totals\n4. Associated comments and descriptions\n5. Links to related work packages\n6. Custom attributes on time entries\n7. Billing and accounting information\n8. Approval status and history\n\nEnsure all time entry information is properly associated with the correct work packages, users, and projects in OpenProject.",
+      "testStrategy": "Test by:\n1. Verify time totals match between systems\n2. Confirm all work log metadata is preserved\n3. Validate that time entries maintain associations with correct entities\n4. Check billing information accuracy\n5. Test time reporting functions using migrated data",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Jira Work Log Extraction",
+          "description": "Implement extraction of work logs from Jira with all associated metadata",
+          "details": "Develop a comprehensive work log extraction system that:\n1. Retrieves all work logs associated with Jira issues\n2. Captures complete metadata (author, timestamp, description, duration)\n3. Preserves association with the correct issue\n4. Handles pagination for issues with many work logs\n5. Optimizes API usage through efficient batching\n6. Extracts any custom fields or attributes on work logs",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 20
+        },
+        {
+          "id": 2,
+          "title": "Tempo Time Entry Extraction",
+          "description": "Implement extraction of Tempo time entries with account and billing information",
+          "details": "Develop extraction mechanisms for Tempo data that:\n1. Retrieve all Tempo time entries with their full metadata\n2. Extract Tempo account associations and hierarchies\n3. Capture billing and cost information\n4. Preserve all custom fields and attributes\n5. Handle Tempo-specific properties like billable flag, account ID\n6. Extract approval status and workflow information",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 20
+        },
+        {
+          "id": 3,
+          "title": "Time Entry Mapping and Transformation",
+          "description": "Implement mapping and transformation of Jira/Tempo time entries to OpenProject format",
+          "details": "Develop transformation logic that:\n1. Maps Jira work log fields to OpenProject time entry fields\n2. Converts Tempo-specific attributes to appropriate OpenProject fields\n3. Handles custom fields and special attributes\n4. Maintains all temporal information (date, duration, timestamps)\n5. Preserves associations with work packages, users, and projects\n6. Transforms comments and descriptions with proper formatting",
+          "status": "pending",
+          "dependencies": [],
+          "parentTaskId": 20
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "Refactor SSHClient for Single Responsibility and Base Functionality",
+      "description": "Refactor SSHClient to serve as the centralized base component for all SSH operations—including connection management, command execution, and file transfers—while removing direct SSH logic from any other clients.",
+      "details": "1. Create/Update SSHClient class:\n   • Define core methods: connect(host, port, credentials), executeCommand(command, options), uploadFile(localPath, remotePath), downloadFile(remotePath, localPath), and close().\n   • Implement connection pooling and automatic reconnect logic in connect/close to support long-running operations.\n   • Add configurable timeouts, logging hooks, and retry policies for commands and transfers.\n   • Ensure thread safety if used concurrently.\n2. Refactor Dependent Clients:\n   • Identify all existing clients that perform SSH operations directly (e.g., RemoteWorkerClient, DeploymentClient).\n   • Remove any direct SSH logic from those classes and update them to depend on SSHClient via constructor or factory injection.\n   • Expose only high-level methods (e.g., runDeployment(), syncArtifacts()) in dependent clients, delegating SSH calls to SSHClient.\n3. Backward Compatibility & Deprecation:\n   • Mark any legacy SSH utilities or methods for deprecation and schedule removal in a future release.\n   • Provide migration guide/comments in code to assist future maintainers.\n4. Documentation & Examples:\n   • Update README or internal docs with usage examples for SSHClient and refactored client patterns.\n   • Include code snippets for connection setup, command execution, and file transfer.\n5. Code Quality & Standards:\n   • Adhere to existing project style guides and linting rules.\n   • Write comprehensive Javadoc or docstrings on all public methods of SSHClient.\n",
+      "testStrategy": "1. Unit Tests:\n   • Mock SSH server library (e.g., using Paramiko’s `Transport` mocks) to simulate successful/failed connections.\n   • Test connect/disconnect workflows, including timeouts and retry behavior.\n   • Validate executeCommand returns correct stdout, stderr, and handles non-zero exit codes with exceptions.\n   • Verify uploadFile/downloadFile correctly streams data and handles partial transfers or network errors.\n   • Ensure thread-safety by running concurrent operations on the same SSHClient instance.\n2. Integration Tests:\n   • Spin up a local SSH server container (e.g., via Docker) in CI, run end-to-end tests for connecting, running commands, and transferring files.\n   • Test edge cases: authentication failures, network interruptions, large file transfers.\n3. Static Analysis:\n   • Run a grep or AST-based scan to confirm no `ssh`, `exec_command`, or SFTP calls remain outside the SSHClient class.\n   • Enforce code coverage thresholds (e.g., 90%+) on SSHClient module.\n4. Code Review & Documentation Validation:\n   • Peer review to confirm separation of concerns and proper dependency injection.\n   • Verify updated documentation matches the implemented API.\n",
+      "status": "done",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": []
+    },
+    {
+      "id": 22,
+      "title": "Enhance DockerClient Constructor to Accept SSHClient Dependency",
+      "description": "Modify DockerClient to accept an optional ssh_client parameter in its constructor and delegate SSH operations to the injected client, enabling proper dependency injection and adherence to the layered architecture.",
+      "details": "1. Update DockerClient __init__ signature to include ssh_client: Optional[SSHClient] = None.\n2. Remove any internal instantiation of SSHClient (e.g., self.ssh_client = SSHClient()) and replace it with assignment of the provided ssh_client or a default when None is passed.\n3. Ensure all SSH-related methods within DockerClient (command execution, connection setup, file transfers) use self.ssh_client exclusively.\n4. Add type hints and input validation to verify ssh_client implements the expected interface (e.g., connect, execute, upload/download).\n5. Update and refactor any factory or dependency injection container configurations to pass the SSHClient instance into DockerClient.\n6. Adjust constructor documentation and README to reflect the new parameter and usage guidelines.\n7. Ensure backward compatibility by providing default behavior if no ssh_client is supplied, with deprecation warnings if necessary.",
+      "testStrategy": "1. Unit Tests:\n   a. Create a mock or stub implementing the SSHClient interface and inject it into DockerClient.\n   b. Verify that methods like run_container, pull_image, and exec return values from mock.ssh_client.execute and do not instantiate a new SSHClient.\n   c. Test constructor fallback: initialize DockerClient without ssh_client and assert it constructs a default SSHClient instance.\n2. Integration Tests:\n   a. Use a real SSHClient connected to a controlled test VM and inject it into DockerClient.\n   b. Execute a sequence of Docker operations (e.g., pull, run, inspect) and confirm they succeed over SSH.\n3. Regression Testing:\n   a. Run existing DockerClient test suite to ensure no regressions.\n4. Code Review:\n   a. Confirm no residual direct SSHClient instantiation remains and that layering boundaries are respected.",
+      "status": "done",
+      "dependencies": [
+        21
+      ],
+      "priority": "high",
+      "subtasks": []
+    },
+    {
+      "id": 23,
+      "title": "Update RailsConsoleClient to accept DockerClient dependency",
+      "description": "Modify RailsConsoleClient to accept an optional docker_client parameter in its constructor and use the provided client instead of instantiating its own, continuing the dependency injection pattern.",
+      "details": "In rails_console_client.rb, change the constructor signature to accept docker_client = nil. Assign @docker_client = docker_client || DockerClient.new. Refactor all internal calls (e.g., run_console, execute_script) to use @docker_client instead of creating a new client. Ensure that documentation and comments reflect the new optional parameter. Maintain backward compatibility by defaulting to a new DockerClient when none is provided. Audit usages of RailsConsoleClient across the codebase (factory methods, service initializers, CLI entry points) and update them to pass in an existing DockerClient where appropriate (for example, in tests or higher-level service classes). Add constructor parameter to any factory or helper methods that build a RailsConsoleClient.",
+      "testStrategy": "1. Unit tests: create a mock or stub DockerClient, pass it into RailsConsoleClient, and verify that all methods delegate to the injected client (e.g., expect(mock_client).to receive(:run_container) when calling run_console). 2. Default behavior: instantiate RailsConsoleClient without parameters and assert @docker_client is a real DockerClient. 3. Integration test: spin up a lightweight Docker container, inject a real DockerClient, and run a sample Rails console command to confirm end-to-end behavior. 4. Negative case: passing an invalid object (e.g., nil or wrong type) should still fallback to default or raise a clear ArgumentError. 5. Regression: ensure no existing higher-level functionality (e.g., Rails deployment tasks) breaks by running the full test suite and smoke tests in a staging environment.",
+      "status": "done",
+      "dependencies": [
+        22
+      ],
+      "priority": "high",
+      "subtasks": []
+    },
+    {
+      "id": 24,
+      "title": "Enhance RailsConsoleClient.execute with Direct Output Capture",
+      "description": "Refactor the execute method to capture command output using unique start/end markers instead of writing to temporary files, and properly handle both success and error cases.",
+      "details": "• Wrap each command in unique markers (e.g. START_CMD_<UUID> and END_CMD_<UUID>) before sending it to the Rails console. Generate a cryptographically secure UUID per invocation to avoid marker collisions.\n• Concatenate the wrapped command into a single invocation call via the DockerClient (injected per Task 23). Drop the old file‐based approach entirely.\n• After execution, read the full standard output stream and locate the content between the start and end markers. Strip any extraneous console noise, coloring, or debug logs outside the markers.\n• If the content between markers contains an exception signature or a non‐zero exit code is returned, raise a descriptive RailsConsoleClient::ExecutionError including the extracted error message.\n• On success, return the raw output string between the markers to the caller.\n• Ensure to timeout or abort gracefully if markers are not found within a configurable interval to prevent hangs.\n• Address edge cases: nested marker strings in user output, extremely large outputs, intermittent DockerClient failures, and proper cleanup of any in‐memory buffers.\n\nConsiderations:\n- Reuse existing dependency injection from Task 23 to supply the DockerClient.\n- Follow project RuboCop and RSpec conventions.\n- Document the new behavior in the class and update README accordingly.",
+      "testStrategy": "Unit Tests:\n1. Stub the DockerClient to return a synthetic stdout containing start/end markers around a known payload. Verify that execute returns exactly the payload and does not include markers.\n2. Simulate an error: stub DockerClient to return markers around a Ruby exception backtrace. Expect RailsConsoleClient::ExecutionError with the backtrace in its message.\n3. Test missing markers: stub DockerClient to return output without markers. Expect a timeout or parse‐error exception.\n4. Simulate nested marker sequences inside payload and ensure the first matching start/end pair is extracted.\n5. Verify timeout behavior by stubbing a delay in DockerClient.response and ensuring execution aborts after the configured threshold.\n\nIntegration Tests:\n- Launch a real Rails console via DockerClient and execute a simple Ruby expression (e.g. 1+1). Confirm execute( ) returns \"2\".\n- Trigger a known Rails exception (e.g. call undefined method). Confirm error is raised and message matches console output.\n\nCI Validation:\n- Ensure no file artifacts remain after execution.\n- Validate coverage for both success and failure code paths above 95%.",
+      "status": "done",
+      "dependencies": [
+        23
+      ],
+      "priority": "high",
+      "subtasks": []
+    },
+    {
+      "id": 25,
+      "title": "Update OpenProjectClient to Own and Initialize All Clients",
+      "description": "Modify the OpenProjectClient to act as the top-level component that initializes and owns SSHClient, DockerClient, and RailsConsoleClient in the correct hierarchical order.",
+      "details": "• Refactor OpenProjectClient constructor (or initialization method) to remove any external client instantiation and instead manage its own instances.\n• Step 1: Instantiate SSHClient with the existing configuration parameters and assign it to a private member (e.g. this.sshClient).\n• Step 2: Instantiate DockerClient, passing the previously created SSHClient as a dependency (e.g. new DockerClient(this.sshClient)), and store it (e.g. this.dockerClient).\n• Step 3: Instantiate RailsConsoleClient, passing the DockerClient instance (e.g. new RailsConsoleClient({ docker_client: this.dockerClient })), and store it (e.g. this.railsConsoleClient).\n• Remove any fallback logic inside dependent clients for self-instantiation to avoid duplication; ensure they rely solely on the injected dependencies.\n• Update OpenProjectClient public API as needed to expose or proxy calls to these owned clients.\n• Ensure configuration loading and error handling occur at each step, with clear failure messages if a dependency fails to initialize.\n• Document the new ownership hierarchy in code comments and update any architectural diagrams or README sections related to client initialization.",
+      "testStrategy": "1. Unit Tests:\n   a. Mock SSHClient, DockerClient, and RailsConsoleClient constructors to verify OpenProjectClient calls them in the correct order with expected parameters.\n   b. Assert that OpenProjectClient holds references to each client as private members.\n   c. Simulate failures in SSHClient initialization and verify OpenProjectClient propagates or handles errors appropriately.\n2. Integration Tests:\n   a. Use real client implementations against a test environment to ensure SSHClient connects, DockerClient can perform basic image operations, and RailsConsoleClient can execute a trivial Rails command.\n   b. Verify method calls on OpenProjectClient delegate to the correct underlying client.\n3. Regression Tests:\n   a. Confirm existing functionality that depended on direct instantiation of DockerClient and RailsConsoleClient still works through the new hierarchy.\n4. Code Review & Documentation:\n   a. Perform peer review focusing on dependency injection correctness and absence of circular dependencies.\n   b. Validate that architectural documentation is updated to reflect this new ownership model.",
+      "status": "done",
+      "dependencies": [
+        23
+      ],
+      "priority": "high",
+      "subtasks": []
+    },
+    {
+      "id": 26,
+      "title": "Refactor OpenProjectClient File Transfer Methods to Use SSHClient and DockerClient",
+      "description": "Update OpenProjectClient’s file transfer methods to leverage SSHClient for remote host transfers and DockerClient for container transfers, ensuring consistent and reliable file handling.",
+      "details": "1. Identify existing file transfer methods in OpenProjectClient (e.g., uploadFile, downloadFile).\n2. Remove any direct file copy or transport logic and replace with calls to the initialized SSHClient and DockerClient instances from Task 25.\n3. For remote host transfers, use SSHClient’s SFTP or SCP features; for container transfers, use DockerClient’s copy methods or tar streaming.\n4. Ensure proper path resolution: convert local paths to remote host paths and container paths as needed.\n5. Implement error handling and retries for transient network or I/O failures.\n6. Add detailed logging for each step (start, success, failure) including file names, sizes, and transfer durations.\n7. Update method signatures and documentation to reflect the new client-based approach.\n8. Ensure cleanup of temporary files or streams after transfer.",
+      "testStrategy": "1. Unit Tests: Mock SSHClient and DockerClient to verify that file transfer methods invoke the correct client methods with expected parameters and handle errors properly.\n2. Integration Tests: \n   a. Set up a test SSH server and Docker container; attempt to transfer a sample file via OpenProjectClient and verify file presence and integrity on both host and container.\n   b. Test failure scenarios (e.g., non-existent file, permission denied) and confirm proper error propagation and retry behavior.\n3. Logging Verification: Capture and assert log entries for each transfer step, ensuring messages include file details and statuses.\n4. Performance Smoke Test: Transfer a large file to measure transfer duration and validate that retry logic doesn’t cause excessive delays.",
+      "status": "done",
+      "dependencies": [
+        25
+      ],
+      "priority": "high",
+      "subtasks": []
+    },
+    {
+      "id": 27,
+      "title": "Create client architecture documentation",
+      "description": "Draft a comprehensive document in the docs/ directory explaining the new client architecture, including component relationships, responsibilities, and data flow patterns.",
+      "details": "1. Create a new file docs/client-architecture.md (or docs/client-architecture.adoc) following project documentation conventions.\n2. Provide an overview section describing the purpose of the client layer and how it fits into the overall system.\n3. Document the key components introduced in Tasks 25 and 26 (OpenProjectClient, SSHClient, DockerClient, RailsConsoleClient), detailing their responsibilities and relationships.\n4. Include a visual diagram (e.g., Mermaid or embedded SVG/PNG) illustrating component hierarchy, initialization order (OpenProjectClient → SSHClient, DockerClient, RailsConsoleClient), and data flow patterns for common operations (file transfers, console commands).\n5. Outline sequence diagrams or flowcharts for critical interactions (e.g., remote file transfer via SSHClient vs. container transfer via DockerClient).\n6. Add code snippets or configuration examples to show how clients are instantiated and used.\n7. Reference existing code in src/clients and link to relevant sections in the API reference.\n8. Ensure the document adheres to the project’s style guide (headings, formatting, link conventions) and includes a changelog entry.\n9. Include a “Further Reading” section linking to Issues/Tickets for Tasks 25 and 26 and any related RFCs or design discussions.",
+      "testStrategy": "1. Verify that docs/client-architecture.md exists in the repository and is included in the docs navigation (e.g., sidebar configuration).\n2. Render the Markdown/AsciiDoc to confirm the visual diagram displays correctly (automated check via CI for Mermaid rendering or image availability).\n3. Review the document against a checklist: overview present, each client component documented, diagram matches actual code structure, data flow patterns clearly explained.\n4. Conduct a peer review: assign the document to at least one backend and one frontend engineer to confirm clarity and accuracy.\n5. Update documentation links in README or project site and verify broken link checks in CI pass.\n6. Cross-reference code: ensure code examples in the document compile without errors and reflect the current implementation of Tasks 25 and 26.\n7. Sign off by documentation owner after addressing all review comments.",
+      "status": "done",
+      "dependencies": [
+        25,
+        26
+      ],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 28,
+      "title": "Update main README.md with new client architecture overview",
+      "description": "Modify the main README.md file to reflect the new client architecture by updating the architecture overview, diagram, and adding links to the client architecture documentation.",
+      "details": "1. Open the root-level README.md file.  \n2. Replace the existing architecture overview section with a concise description of the new client architecture, summarizing component responsibilities and data flows.  \n3. Update or replace the existing architecture diagram image:  \n   • Export the latest diagram (e.g., architecture-client.png) to the assets/images (or docs/images) directory.  \n   • Reference the updated image with correct relative path and include descriptive alt text.  \n4. Add a new subsection titled “Client Architecture Details” with a Markdown link to the Task 27 deliverable (e.g., docs/client-architecture.md).  \n5. Ensure all headings, code blocks, link styles, and list formatting adhere to the project’s Markdown style guide (line lengths, heading levels, bullet characters).  \n6. Validate that image paths, links, and section anchors function correctly on GitHub and in any local preview tooling.  \n7. Proofread for typos or inconsistent terminology, ensuring the documentation tone matches the existing style sheet.",
+      "testStrategy": "1. Render the updated README.md in a local Markdown viewer and on GitHub to confirm the new architecture section and diagram appear correctly.  \n2. Click the link to docs/client-architecture.md to verify it navigates to the correct documentation.  \n3. Run a Markdown linter (e.g., markdownlint) to ensure no style violations.  \n4. Perform a visual check of the architecture diagram: image loads, displays at proper resolution, alt text is present.  \n5. Conduct a peer review, asking at least one team member to review the changes for clarity, consistency, and adherence to style guidelines.  \n6. Confirm no broken links or missing assets remain by checking CI logs or GitHub Actions documentation build step, if available.",
+      "status": "done",
+      "dependencies": [
+        27
+      ],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 29,
+      "title": "Comprehensive Testing for Refactored Client Architecture",
+      "description": "Develop a suite of tests to verify the functionality and interactions of all components in the refactored client architecture, including error handling, dependency injection, file transfers, and command execution workflows.",
+      "details": "Implement both unit and integration tests for all client classes (OpenProjectClient, SSHClient, DockerClient, RailsConsoleClient). Use mocking and test doubles to simulate SSH sessions, Docker container environments, and Rails console interactions. Verify dependency injection by instantiating OpenProjectClient with mocked clients and asserting correct delegation. Cover error paths such as network failures, permission issues, and container not found errors. Include end-to-end workflow tests for file transfers (local→remote host, remote host→container) and command execution sequences through OpenProjectClient. Ensure clean setup and teardown procedures for temporary files, SSH connections, and containers. Integrate tests into the CI pipeline for automatic execution.",
+      "testStrategy": "Use a testing framework (e.g., RSpec or Jest) with mocking libraries to isolate units. Write unit tests for each client class covering successful and failure scenarios (e.g., SSH connect failures, Docker copy errors, Rails command exceptions). Create integration tests using lightweight SSH/Docker stubs or ephemeral containers to validate end-to-end workflows. Inject faults to verify error handling and recovery logic. Assert that OpenProjectClient correctly delegates to underlying clients in hierarchical order. Measure code coverage to ensure all critical paths, including dependency injection wiring, are exercised. Maintain tests in CI so that any regression in client interactions or error handling causes build failures.",
+      "status": "done",
+      "dependencies": [
+        25,
+        26
+      ],
+      "priority": "high",
+      "subtasks": []
+    },
+    {
+      "id": 30,
+      "title": "Enhance and Fix cleanup_openproject.py for Refactored Client Architecture",
+      "description": "Revise the cleanup_openproject.py script to integrate directly with the refactored Rails console client, improve error handling, implement direct counting and batch processing, and add detailed logging for reliable large-scale cleanup operations.",
+      "details": "1. Replace temporary file transfers with direct calls to the Rails console client API for all read/write operations. \n2. Centralize error detection using try/except around each client invocation and file operation, categorizing errors (network, parsing, permission) and implementing retry logic with exponential backoff. \n3. Implement a direct counting method by querying the client’s count API endpoint instead of iterating over paginated resources. Ensure counts are accurate even under concurrent modifications. \n4. Design and integrate a batch-processing mechanism for custom fields: fetch field IDs in chunks (e.g., 100 at a time), process updates/deletions in bulk, and handle partial failures by rolling back or retrying specific batches. \n5. Embed structured logging at DEBUG, INFO, WARNING, and ERROR levels, outputting JSON-formatted entries with timestamps, operation names, parameters, execution time, and error details. \n6. Refactor the script into modular functions (connect_client, count_resources, process_custom_fields_batch, handle_errors, configure_logging) to improve testability and maintainability.",
+      "testStrategy": "• Unit Tests: Mock the Rails console client to simulate successful and failed API calls; validate error categorization, retry behavior, and direct counting logic.  \n• Integration Tests: Run the script against a staging OpenProject instance; verify data cleanup, custom-field batch updates, and counts match database state.  \n• Performance Tests: Simulate large datasets (10,000+ custom fields) and measure batch-processing throughput and memory usage.  \n• Error Injection: Introduce network timeouts, permission errors, and partial failures during batch operations to confirm error handling, retries, and logging are functioning correctly.  \n• Logging Verification: Parse log output for expected JSON structure, correct log levels, and presence of critical metadata (timestamps, durations, error stack traces).  \n• Rollback Simulation: Force a partial batch failure and ensure subsequent runs resume or rollback appropriately without data corruption.",
+      "status": "done",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 31,
+      "title": "Optimize Rails Console Interaction with Adaptive Polling and Prompt Detection",
+      "description": "Enhance the Rails console client by implementing prompt detection, adaptive polling intervals, and robust error/output parsing to reduce latency and improve reliability.",
+      "details": "1. Prompt Detection: Introduce regex-based detection of Rails console prompts (e.g., /\\[[^\\]]+\\] \\d+:\\d+>/ or default IRB prompt) to know precisely when console input is ready.\n2. Adaptive Polling: Replace fixed sleep loops with a dynamic polling strategy that begins at 0.05s and increases (linearly or exponentially) up to a maximum of 0.5s when awaiting console responses.\n3. Sleep Reduction: Lower the fallback sleep time from 0.5–1.0s to a consistent 0.1s for operations not covered by adaptive polling.\n4. Conditional Stabilization: Refactor `stabilize_console` so it only executes when prompt detection fails, preventing redundant stabilization calls.\n5. Error Detection: Embed clear start/end markers in console output and employ regex pattern matching to differentiate and capture error blocks (stack traces, exception messages).\n6. Output Parsing: Improve the parsing layer to handle multi‐line errors, escaped characters, and ensure clean extraction of both successful responses and error details.\n7. Test Updates: Revise existing test cases to align with the new marker format, validate polling intervals, prompt detection, and error extraction logic.",
+      "testStrategy": "Unit Tests:\n• Prompt Detection: Simulate console streams containing valid prompts, false positives, and edge cases; assert the detector returns true only when prompts are ready.\n• Polling Behavior: Mock timing functions to verify polling starts at 0.05s and scales up to 0.5s, and that total wait times match expected curves.\n• Stabilization Calls: Spy on `stabilize_console` and ensure it is invoked only when prompt detection reports readiness failure.\n• Error Parsing: Feed sample console outputs with the new markers and various error formats; assert that the full error block is extracted, with no data loss.\nIntegration Tests:\n• End-to-end: Execute real Rails console commands (e.g., `User.count`, invalid commands) and measure round-trip times; ensure no more than 0.1s sleep overhead when idle.\n• CI Pipeline: Run full test suite verifying updated marker format, polling adaptation under different simulated loads, and confirm zero regressions in existing functionality.",
+      "status": "done",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": []
+    },
+    {
+      "id": 32,
+      "title": "Link Type Migration: Jira to OpenProject",
+      "description": "Migrate Jira issue link types to their corresponding OpenProject relation types, handling unmapped types via custom fields.",
+      "details": "1. Extract issue link types from the Jira instance using the Jira REST API or direct DB queries, capturing issue IDs and link type names.\n2. Define a mapping table for standard link types (e.g., \"blocks\", \"is blocked by\", \"duplicates\", \"relates to\", etc.) to OpenProject relation types (\"precedes\", \"follows\", \"duplicates\", \"relates\").\n3. Implement the migration script to:\n   a. Read extracted link data.\n   b. For each link: look up the mapping table; if found, call the OpenProject API to create the corresponding relation.\n   c. If a link type is not in the mapping table, ensure a custom field exists in OpenProject: programmatically create a text or enum custom field named after the Jira link type and assign it to relevant trackers or project types.\n   d. For unmapped links, update the issue in OpenProject by setting the custom field value to the original Jira link type and related issue ID.\n4. Add logging and error handling: record successes, failures, and any link types skipped or requiring manual review.\n5. Organize code for maintainability: separate modules for extraction, mapping, API interaction, and custom field management.\n6. Document the mapping table and custom field definitions for future reference.\nPriority: High.",
+      "testStrategy": "1. Unit tests for mapping logic: verify that each Jira link type maps to the correct OpenProject relation and that unmapped types trigger custom field creation logic.\n2. Integration tests with a test Jira/OpenProject environment: create sample issues with all standard and a few custom link types in Jira; run the migration script; verify in OpenProject that:\n   a. Standard link relations are created with correct source/target and relation type.\n   b. Custom fields exist for each unmapped link type and are assigned to issues with the correct values.\n3. Edge case tests: handle circular links, duplicate migrations, missing permissions, network failures and ensure retry/logging.\n4. Manual verification: spot-check a subset of migrated relationships and custom field entries to ensure data integrity and completeness.",
+      "status": "done",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Analyze the LinkTypeMigration class",
+          "description": "Review the existing LinkTypeMigration implementation to understand the current logic and identify where custom field creation needs to be added",
+          "details": "",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 32
+        },
+        {
+          "id": 2,
+          "title": "Implement custom field creation method for link types",
+          "description": "Create a method in LinkTypeMigration class to leverage the CustomFieldMigration class for creating custom fields for unmapped link types",
+          "details": "",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 32
+        },
+        {
+          "id": 3,
+          "title": "Update the run method to use custom field creation",
+          "description": "Modify the run method in LinkTypeMigration to automatically create custom fields for unmapped link types instead of displaying a warning",
+          "details": "",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 32
+        },
+        {
+          "id": 4,
+          "title": "Test custom field creation for link types",
+          "description": "Develop and execute tests to verify that custom fields are created correctly for unmapped link types",
+          "details": "",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 32
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "title": "Update Migration Components to Use New Client Architecture",
+      "description": "Ensure all migration modules are refactored to leverage the dependency injection pattern and layered client architecture established in tasks #21-26.",
+      "details": "Identify every migration-related module (data migrations, schema updates, and one-off scripts) that currently instantiates SSHClient, DockerClient, RailsConsoleClient, or OpenProjectClient directly. Refactor each module to accept the appropriate client instances via constructor or factory injection, using the centralized DI container or ClientFactory from Task #21. Remove all direct new calls and replace them with injected dependencies. For migrations interacting with remote hosts or containers, route file transfers through the refactored OpenProjectClient, which now initializes SSHClient and DockerClient in the correct order (per Task #25) and uses SSHClient for remote operations and DockerClient for container operations (per Task #26). Ensure Rails console interactions use RailsConsoleClient via injection, and update any helper methods or utilities accordingly. Follow SOLID principles and maintain the layered architecture, keeping business logic separate from transport concerns. Update or add inline documentation and code comments to reflect the new architecture.",
+      "testStrategy": "Unit test each migration module in isolation by injecting mock client instances and asserting that the correct client methods (e.g., uploadFile, executeCommand) are called with expected parameters. Write integration tests that run the full migration suite against a staging database and container environment, verifying no failures and correct use of SSHClient and DockerClient (check logs or mock verifications). Perform a static code analysis or code review to confirm no direct instantiations of client classes remain. Finally, conduct a manual smoke test by executing a sample migration end-to-end on a replica environment to ensure the new DI and layered architecture functions as expected.",
+      "status": "done",
+      "dependencies": [
+        25,
+        26
+      ],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Update BaseMigration Class for Dependency Injection",
+          "description": "Refactor the BaseMigration class to properly accept client instances through constructor parameters and remove direct instantiation.",
+          "details": "Modify the BaseMigration.__init__ method to accept OpenProjectClient instance and only create a new instance if none is provided. Remove direct instantiation of JiraClient and OpenProjectClient. The constructor should follow the dependency injection pattern established in tasks #21-26, allowing all migration modules to benefit from this change automatically since they inherit from BaseMigration.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 33
+        },
+        {
+          "id": 2,
+          "title": "Test and Verify BaseMigration Dependency Injection",
+          "description": "Create unit tests to verify the BaseMigration class properly handles dependency injection and that migration modules inherit this functionality correctly.",
+          "details": "Create new test cases that verify BaseMigration correctly:\n1. Accepts an OpenProjectClient instance via constructor\n2. Only creates a default instance if none is provided\n3. Correctly passes the instance to child migration classes\n4. Test with mock clients to ensure proper method calls and behavior\n\nEnsure tests cover both scenarios: providing client instances and using defaults.",
+          "status": "done",
+          "dependencies": [
+            1
+          ],
+          "parentTaskId": 33
+        },
+        {
+          "id": 3,
+          "title": "Verify Migration Classes Use BaseMigration Properly",
+          "description": "Review and update all migration classes to ensure they correctly inherit and utilize the refactored BaseMigration.",
+          "details": "For each migration module in src/migrations/:\n1. Ensure they properly inherit from BaseMigration\n2. Verify they call super().__init__() in their constructors\n3. Check for any direct instantiation of client classes that should be removed\n4. Ensure they use the inherited client instances instead of creating new ones\n5. Update any client-specific method calls to match the new API if needed\n\nThis includes updating: user_migration.py, project_migration.py, custom_field_migration.py, work_package_migration.py, status_migration.py, link_type_migration.py, issue_type_migration.py, workflow_migration.py, company_migration.py, account_migration.py, and tempo_account_migration.py.",
+          "status": "done",
+          "dependencies": [
+            1
+          ],
+          "parentTaskId": 33
+        },
+        {
+          "id": 4,
+          "title": "Update main.py and Migration Factory to Support Client Injection",
+          "description": "Modify the migration initialization code in main.py and any factory methods to support the dependency injection pattern.",
+          "details": "Update the migration initialization code in src/main.py and any factory classes/methods to:\n1. Create the client instances in the correct hierarchical order (SSHClient → DockerClient → RailsConsoleClient → OpenProjectClient)\n2. Pass these instances to the migration classes during initialization\n3. Ensure proper resource cleanup when migrations are complete\n4. Update any factory classes or methods that create migration instances to support client injection\n\nThis ensures that the client instances are created once at the application level and properly passed down to all migration components.",
+          "status": "done",
+          "dependencies": [
+            1,
+            3
+          ],
+          "parentTaskId": 33
+        },
+        {
+          "id": 5,
+          "title": "Integration Testing of Updated Migration Architecture",
+          "description": "Perform integration tests to ensure the updated migration components work correctly with the refactored client architecture.",
+          "details": "Create and execute integration tests that verify:\n1. The entire migration process works end-to-end with the refactored client architecture\n2. Client instances are correctly shared across migration components\n3. File transfers and command executions follow the proper layered architecture\n4. No regressions are introduced in the migration functionality\n5. Error handling works correctly with the updated architecture\n\nThis should include setting up a test environment that mimics the production configuration and running a sample migration workflow to validate the changes.",
+          "status": "done",
+          "dependencies": [
+            2,
+            3,
+            4
+          ],
+          "parentTaskId": 33
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "title": "Split RailsConsoleClient into TmuxClient and RailsClient",
+      "description": "Refactor the existing RailsConsoleClient by extracting core tmux session management into a new TmuxClient and implementing a Rails-specific RailsClient to improve modularity and single responsibility.",
+      "details": "1. Create tmux_client.py containing all tmux session management functionality (session existence checks, command sending, output capture and parsing, and wait-for-completion logic) with no Rails or Ruby-specific code. 2. Create rails_client.py that composes or inherits from TmuxClient and implements Rails console configuration (IRB settings), Ruby output parsing and error handling, and Rails-specific command templating. 3. Update all imports and references in dependent modules to use the new TmuxClient and RailsClient classes. 4. Deprecate and remove rails_console_client.py once functionality is fully migrated. 5. Ensure documentation and inline comments clearly delineate responsibilities of each client. Maintain backward compatibility during transition and follow existing layered client patterns (SSHClient → DockerClient → TmuxClient → RailsClient → OpenProjectClient).",
+      "testStrategy": "• Unit test TmuxClient: simulate tmux sessions to verify session existence checks, command dispatch, output capture, parsing of stdout/stderr, and wait-for-completion behavior. • Unit test RailsClient: mock a TmuxClient to validate Rails console configuration (IRB init), templated command generation, proper error detection, and parsing of Ruby exceptions. • Integration test: spin up a real or simulated tmux session running a Rails console, execute sample commands, and assert correct end-to-end behavior. • Refactoring validation: run full test suite and CI pipeline ensuring no regressions, verify removal of rails_console_client.py and that no code references remain.",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 35,
+      "title": "Enhance Logging System with TRACE Level",
+      "description": "Introduce a new TRACE log level below DEBUG and refactor existing logs to improve observability while retaining backward compatibility and configurable controls.",
+      "details": "1. Define TRACE as the lowest severity in the logging enum/constant list and update the logger’s internal level hierarchy.  \n2. Refactor existing DEBUG statements: move verbose, step-by-step operational logs to TRACE; preserve higher-level troubleshooting messages at DEBUG. Ensure consistency across all client classes.  \n3. Update log formatting templates to include a clear TRACE indicator (e.g., color or prefix).  \n4. Enhance configuration: add a toggle to enable/disable TRACE globally; allow per-module or per-component TRACE filtering via configuration files or environment variables.  \n5. Apply the new TRACE level in low-level clients: TmuxClient, RailsClient, SSHClient, and DockerClient. Identify and migrate detailed internal state logs to TRACE.  \n6. Update wrapper methods in the logger utility to accept TRACE calls and maintain existing API signatures for backward compatibility.  \n7. Document usage: update developer documentation and code comment guidelines with examples on when to use TRACE vs DEBUG, configuration options, and best practices for granular logging.",
+      "testStrategy": "1. Unit Tests: verify the logger emits TRACE messages only when TRACE is enabled; assert formatting includes the TRACE marker.  \n2. Configuration Tests: programmatically load configs with TRACE disabled/enabled and confirm that TRACE-level logs appear or are suppressed.  \n3. Integration Tests: run sample workflows in TmuxClient, RailsClient, SSHClient, and DockerClient to ensure detailed steps are logged at TRACE and higher-level events at DEBUG.  \n4. Module Filtering: test selective enabling of TRACE for a single module and confirm other modules remain at DEBUG.  \n5. Backward Compatibility: run existing test suites to ensure no breaking changes in DEBUG and higher levels.  \n6. Documentation Review: include a step to verify that developer docs compile correctly and examples produce expected log output.",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 36,
+      "title": "Task #36: Refactor Client Architecture for YOLO Approach",
+      "description": "Refactor the client architecture to establish clear ownership relationships between JiraClient, OpenProjectClient, DockerClient, RailsConsoleClient, and SSHClient using the YOLO development approach, emphasizing exception-based error handling, proper dependency injection, and file-based imports to eliminate circular dependencies.",
+      "details": "1. Audit existing client modules to map current ownership and identify circular dependencies.\n2. Define ownership boundaries: assign each client its primary responsibilities and dependencies (e.g., DockerClient for container operations, SSHClient for remote command execution).\n3. Introduce dependency injection: refactor constructors of each client to accept their required dependencies rather than instantiating them internally. Consider using a simple DI container or manual injection at the application entry point.\n4. Replace dynamic or inline requires with explicit file-based imports: restructure modules into a flat file hierarchy (e.g., src/clients/jira_client.rb, src/clients/ssh_client.rb) to prevent circular requires.\n5. Implement exception-based error handling: remove return-code checks or silenced errors, raising domain-specific exceptions in each client and document error hierarchies.\n6. Follow the YOLO approach: commit incremental changes, write minimal tests for each refactor step, and continuously integrate to detect and address issues quickly.\n7. Update module documentation and code comments to reflect new ownership and injection patterns.\n8. Coordinate with the team to merge dependent branches and resolve any conflicts early.",
+      "testStrategy": "1. Unit tests: create isolated tests for each client, injecting mock dependencies to verify correct initialization, method calls, and exception raising on error conditions.\n2. Integration tests: set up end-to-end scenarios where multiple clients interact (e.g., JiraClient invoking DockerClient) and assert expected outcomes without circular require failures.\n3. Static analysis: run a dependency graph tool or linter to confirm no circular dependencies in the src/clients directory.\n4. Exception handling validation: simulate failure scenarios (network timeouts, invalid credentials) and assert that the appropriate custom exceptions are raised and propagated.\n5. Continuous Integration: ensure the build pipeline passes after each incremental commit, with coverage reports verifying that new code paths for dependency injection and error handling are exercised.",
+      "status": "done",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Define exception hierarchy and error handling patterns",
+          "description": "Create a cohesive exception hierarchy for client errors and define consistent error handling patterns across all client components.",
+          "details": "1. Create a base ClientException class that all client-specific exceptions inherit from.\\n2. Define specific exception types for different error categories (network, authentication, command execution, etc.).\\n3. Document when each exception type should be raised.\\n4. Establish patterns for exception propagation between client layers.\\n5. Remove all return-code based error handling and replace with proper exception raising.\n\n\nUpdated the SSHClient to replace dictionary-based status returns with exceptions.\nThe following changes were made:\n\n1. Refactored the `execute_command` method to return a tuple of (stdout, stderr, returncode)\n   and raise exceptions for errors\n2. Refactored the `copy_file_to_remote` method to return None on success and raise\n   appropriate exceptions for errors\n3. Refactored the `copy_file_from_remote` method to return the local file path on success\n   and raise exceptions for errors\n4. Refactored the `with_retry` utility method to work with the new exception-based approach\n5. Added a specific `SSHConnectionError` exception for connection failures\n6. Updated methods that used the result dictionaries to use the new return types\n\nThese changes implement a clean, exception-based error handling approach and remove all\nthe status dictionaries from the SSHClient class.\n",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 36
+        },
+        {
+          "id": 2,
+          "title": "Refactor SSHClient for YOLO compliance",
+          "description": "Refactor SSHClient to be exception-based, remove status dictionaries, and implement direct file-based imports.",
+          "details": "1. Refactor SSHClient constructor to accept clear parameters and validate them strictly\\n2. Replace all return-code and status dictionary patterns with appropriate exceptions\\n3. Implement file-based imports to eliminate any circular dependencies\\n4. Remove any OpenProject-specific code from this foundation layer\\n5. Add proper documentation for exception throwing scenarios\\n6. Ensure SSH operations handle authentication failures with specific exceptions\\n7. Simplify file transfer functions to use clean, consistent error handling\n\n\nCompleted the YOLO refactoring of SSHClient. The following improvements were made:\n\n1. Replaced all dictionary-based status returns with proper exceptions\n2. Created a hierarchy of SSH-specific exceptions:\n   - SSHConnectionError for connection issues\n   - SSHCommandError for command execution failures\n   - SSHFileTransferError for file transfer problems\n\n3. Updated method documentation to clearly indicate exception handling patterns\n4. Improved connection error handling with proper reconnection verification\n5. Enhanced error propagation in file transfer operations\n6. Simplified the API by returning direct values instead of dictionaries\n7. Added detailed error messages with relevant context\n\nThe refactored SSHClient now follows modern Python exception handling best practices, providing\na more reliable foundation for the client architecture and making error detection more robust.\n",
+          "status": "done",
+          "dependencies": [
+            "36.1"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 3,
+          "title": "Refactor DockerClient with dependency injection",
+          "description": "Refactor DockerClient to accept an SSHClient instance through constructor injection and implement exception-based error handling.",
+          "details": "1. Modify DockerClient constructor to require an SSHClient instance\\n2. Remove any code that creates SSHClient internally\\n3. Refactor all operations to propagate exceptions from SSHClient upward with proper context\\n4. Replace all status dictionary returns with exceptions\\n5. Remove any OpenProject-specific logic that doesn't belong in DockerClient\\n6. Simplify file transfer logic to rely on the injected SSHClient\\n7. Ensure consistent and clean error handling patterns across all methods\n\n\nCompleted the DockerClient refactoring with dependency injection and exception-based error handling. Changes made:\n\n1. Modified DockerClient constructor to require an SSHClient instance\n2. Removed all code that created SSHClient internally\n3. Updated all methods to work with SSHClient's new exception-based API\n4. Replaced status dictionary returns with proper return values and exceptions\n5. Improved error handling by properly propagating exceptions with appropriate context\n6. Added proper error reporting by being explicit about which exceptions can be thrown\n7. Simplified the file transfer code to work with the updated SSHClient interface\n\nThe refactored DockerClient now follows proper dependency injection patterns and propagates exceptions appropriately.\n",
+          "status": "done",
+          "dependencies": [
+            "36.2"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 4,
+          "title": "Refactor RailsConsoleClient for dependency injection",
+          "description": "Refactor RailsConsoleClient to properly accept a DockerClient through constructor injection, standardize command execution, and implement consistent error handling.",
+          "details": "1. Modify RailsConsoleClient constructor to accept a DockerClient instance\\n2. Refactor command execution to use exception-based error handling\\n3. Standardize output parsing with reliable marker-based approaches\\n4. Remove any dependencies on OpenProjectClient\\n5. Improve error detection and reporting with specific exception types\\n6. Ensure robust handling of tmux session interaction\\n7. Update documentation to reflect the new dependency pattern",
+          "status": "done",
+          "dependencies": [
+            "36.3"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 5,
+          "title": "Refactor OpenProjectClient as top-level coordinator",
+          "description": "Refactor OpenProjectClient to properly own and coordinate all other client components, following the hierarchical client architecture.",
+          "details": "1. Modify OpenProjectClient constructor to initialize components in the correct order\\n2. Own all client initialization while respecting dependency injection\\n3. Simplify client methods to use exception-based error handling consistently\\n4. Implement a standardized approach to parse Rails console responses\\n5. Add specific methods for large data operations\\n6. Implement caching mechanisms with configurable TTL\\n7. Update API methods to propagate appropriate exceptions\\n8. Ensure clean coordination of file transfers through the component hierarchy",
+          "status": "done",
+          "dependencies": [
+            "36.4"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 6,
+          "title": "Refactor JiraClient for consistency",
+          "description": "Refactor JiraClient to use consistent error handling patterns and file-based imports to match the refactored architecture.",
+          "details": "1. Update JiraClient to use the new exception hierarchy\\n2. Replace return-code and status dictionary patterns with exceptions\\n3. Implement file-based imports to avoid circular dependencies\\n4. Ensure consistent error propagation patterns\\n5. Add appropriate logging with contextual information\\n6. Maintain compatibility with the Jira API library while improving error handling\\n7. Update documentation to reflect the new error handling approach",
+          "status": "done",
+          "dependencies": [
+            "36.1"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 7,
+          "title": "Update tests for the refactored architecture",
+          "description": "Update existing tests and create new ones to verify the refactored client architecture with proper exception handling and dependency injection.",
+          "details": "1. Modify existing tests to account for exception-based error handling\\n2. Create unit tests for each client component with mocked dependencies\\n3. Implement integration tests that verify proper interaction between components\\n4. Add tests for exception propagation across client layers\\n5. Create tests for edge cases and error conditions\\n6. Ensure tests verify proper file-based imports\\n7. Update or create test fixtures as needed",
+          "status": "done",
+          "dependencies": [
+            "36.5",
+            "36.6"
+          ],
+          "parentTaskId": 36
+        },
+        {
+          "id": 8,
+          "title": "Document the new client architecture",
+          "description": "Create comprehensive documentation for the refactored client architecture, including component relationships, dependency flow, and exception handling patterns.",
+          "details": "1. Create a detailed architecture document describing component relationships\\n2. Update the main README with the new architecture diagram\\n3. Document exception hierarchy and when each exception is raised\\n4. Create code examples for proper component initialization\\n5. Update docstrings in client classes to reflect new patterns\\n6. Document file transfer workflows through the component hierarchy\\n7. Create a migration guide for any code using the old architecture",
+          "status": "done",
+          "dependencies": [
+            "36.7"
+          ],
+          "parentTaskId": 36
+        }
+      ]
+    },
+    {
+      "id": 37,
+      "title": "Verify Component Compliance with Refactored Clients and Project Rules",
+      "description": "Ensure all migration components correctly use the refactored client architecture and adhere to project-specific rules (YOLO, exception handling, etc.) after the completion of Task #36.",
+      "details": "This task involves a component-by-component review and testing phase following the client architecture refactor (Task #36). Each component needs to be individually tested and reviewed to ensure it integrates correctly with the new client setup and follows all established development guidelines.",
+      "testStrategy": "For each component, run integration tests using the command: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components [COMPONENT_NAME]. Verify logs for correct client interaction, exception handling, and adherence to YOLO principles. Perform manual code review of each component to confirm compliance with project rules.",
+      "status": "done",
+      "dependencies": [
+        36
+      ],
+      "priority": "high",
+      "subtasks": [
+        {
+          "id": 1,
+          "title": "Verify 'users' Component Compliance",
+          "description": "Verify the 'users' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'users' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components users. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 2,
+          "title": "Verify 'custom_fields' Component Compliance",
+          "description": "Verify the 'custom_fields' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'custom_fields' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components custom_fields. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 3,
+          "title": "Verify 'companies' Component Compliance",
+          "description": "Verify the 'companies' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'companies' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components companies. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 4,
+          "title": "Verify 'accounts' Component Compliance",
+          "description": "Verify the 'accounts' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'accounts' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components accounts. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 5,
+          "title": "Verify 'projects' Component Compliance",
+          "description": "Verify the 'projects' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'projects' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components projects. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 6,
+          "title": "Verify 'link_types' Component Compliance",
+          "description": "Verify the 'link_types' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'link_types' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components link_types. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 7,
+          "title": "Verify 'issue_types' Component Compliance",
+          "description": "Verify the 'issue_types' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'issue_types' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components issue_types. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 8,
+          "title": "Verify 'status_types' Component Compliance",
+          "description": "Verify the 'status_types' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'status_types' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components status_types. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        },
+        {
+          "id": 9,
+          "title": "Verify 'work_packages' Component Compliance",
+          "description": "Verify the 'work_packages' migration component for correct client usage and rule adherence.",
+          "details": "Test the 'work_packages' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components work_packages. Review logs and code for YOLO/exception/rule compliance.",
+          "status": "done",
+          "dependencies": [],
+          "parentTaskId": 37
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "title": "Enforce exception-based error handling throughout the codebase",
+      "description": "Refactor code to use exception-based error handling instead of return codes or error objects, covering subprocess.run() and all other Python modules/methods that support similar options.",
+      "details": "This task aims to make the codebase consistently follow the exception-oriented programming rule, where functions should raise appropriate exceptions rather than returning error codes or status values. This includes:\n\n1. Update subprocess.run() calls to use check=True to properly raise exceptions when execution fails\n2. Review and update file operations to use context managers and proper exception handling\n3. Ensure JSON parsing uses proper exception handling\n4. Update network request code to use raise_for_status() or similar exception-raising methods\n5. Review database operations for proper exception handling\n6. Identify and update any other methods that have options to raise exceptions instead of returning error codes\n7. Refactor any code that checks return values to instead use try/except blocks\n8. Ensure all error handling follows our exception-oriented approach throughout the codebase",
+      "testStrategy": "1. Add unit tests that verify exceptions are properly raised and caught\n2. Test both success and failure paths to ensure correct behavior\n3. Verify special cases like _session_exists() properly follow the exception pattern\n4. Run the full test suite to ensure these changes don't break existing functionality\n5. Add specific tests for each category of change (file operations, subprocess calls, etc.)\n6. Manually test critical paths to verify proper exception handling\n7. Review code coverage of exception handling branches",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 39,
+      "title": "Refactor File Operations to Optimistic Execution Pattern",
+      "description": "Update all file operations—particularly copy routines—to perform the action first and defer detailed validation checks to the failure path, improving performance on success while still providing rich diagnostics on errors.",
+      "details": "1. Identify and catalog every file operation in the codebase (copy, move, delete) focusing on routines that perform pre- and post-validation (e.g., os.path.exists checks, size comparisons, target existence checks).  \n2. Refactor each operation to follow an optimistic execution approach:  \n   a. Attempt the file operation immediately without pre-checks.  \n   b. On successful completion, return or propagate the result with minimal overhead.  \n   c. On failure (caught exception or non-zero return), trigger detailed diagnostics:  \n      - Verify source path existence and readability.  \n      - Validate permissions on source and target directories.  \n      - Check disk space availability on target.  \n      - Ensure the target path is valid and not locked by another process.  \n      - Provide clear, context-rich error messages including file paths, expected vs. actual sizes, and system error codes.  \n3. Remove or disable redundant pre- and post-checks on the success path to minimize latency.  \n4. Ensure all refactored code adheres to the existing exception-based error handling standard (Task #38).  \n5. Update documentation and inline comments to explain the optimistic execution pattern and how to extend it for new file operations.",
+      "testStrategy": "1. Unit Tests:  \n   - Success Path: Copy/move/delete small and large files under normal conditions, measuring that no validation functions are called before the operation.  \n   - Failure Path Simulations:  \n     • Source missing: Attempt to copy non-existent file and verify the error message includes source existence diagnostic.  \n     • Permission denied: Mock filesystem permissions to trigger permission errors and verify diagnostic details.  \n     • Insufficient disk space: Simulate low-disk scenarios and check for disk-space diagnostics.  \n     • Target locked/in-use: Simulate file locks and verify the appropriate error is reported.  \n2. Integration Tests:  \n   - Perform batch file operations in a staging environment to measure end-to-end performance before and after refactor, ensuring a measurable reduction in latency on success paths.  \n   - Run file operations against NFS or network-mounted drives to validate diagnostics across different filesystems.  \n3. Performance Benchmarking:  \n   - Automate benchmarks that record operation times for large file sets, comparing pre-refactor and post-refactor runs to confirm at least a 20% improvement on average.  \n4. Code Review Checklist:  \n   - Verify no preemptive os.path.exists or similar checks on the success path.  \n   - Confirm exception handlers trigger only on failure, performing all diagnostic steps.  \n   - Ensure compliance with project-wide exception-based error-handling guidelines.",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 40,
+      "title": "Implement Robust Temporary File Handling for File Transfers",
+      "description": "Develop a portable, secure, and atomic temporary file handling utility for file transfers that prevents race conditions, collisions, and ensures proper cleanup and error handling across operating systems.",
+      "details": "• Secure Temporary File Creation: Use platform-native APIs (e.g., Python’s tempfile.NamedTemporaryFile with delete=False) or generate UUID-based file names in a well-known temporary directory. Ensure names are unpredictable and collision-resistant.  \n• File Locking: Implement advisory locks (fcntl on Unix, msvcrt on Windows) around all read/write operations to serialize access. Provide a cross-platform lock abstraction.  \n• Atomic Writes: Write data to the temporary file in a write-only mode, fsync after write completion, and perform an atomic rename or replace operation (os.replace) to move the temp file to its final location.  \n• Cleanup Mechanisms: Register cleanup handlers (atexit or context managers) and catch exceptions during transfer to remove orphaned temp files. Provide a background sweep utility to purge stale files older than a configurable threshold.  \n• Cross-Platform Considerations: Detect OS at runtime to choose correct lock and filesystem calls; handle path encoding differences; ensure atomic rename semantics across Windows and POSIX.  \n• Error Handling: Wrap all file operations in try/except blocks, categorize errors (IOError, PermissionError, etc.), log diagnostics, and rethrow exceptions with contextual metadata.  \n• Documentation: Write usage guidelines and code examples; define best practices for using the utility, including recommended error handling patterns and configuration options.",
+      "testStrategy": "• Unit Tests: Validate unique name generation with 10,000 iterations to assert no collisions; simulate permission or disk-full errors and verify temp file cleanup.  \n• Concurrency Tests: Spawn multiple processes/threads to read/write the same target path concurrently; assert that locks serialize operations and no data corruption occurs.  \n• Atomicity Tests: During write, interrupt the process and verify that no partial files appear in the final directory; confirm that final file is either complete or absent.  \n• Cross-Platform Validation: Execute integration tests on Windows, Linux, and macOS agents; verify lock behavior, rename semantics, and path handling.  \n• Cleanup Verification: Create orphaned temp files older than threshold; run sweep utility and assert removal; test atexit handlers by simulating abnormal shutdown.  \n• Documentation Review: Peer-review documentation for clarity, accuracy, and completeness; ensure code examples compile and run as expected.",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "medium",
+      "subtasks": []
+    },
+    {
+      "id": 41,
+      "title": "Comprehensive Verification of Migration Components for Refactored Client Architecture",
+      "description": "Perform a high-priority audit and testing of all migration components to ensure they integrate correctly with the refactored client architecture and comply with our YOLO development approach, exception-based error handling, optimistic execution patterns, and strict Python typing rules.",
+      "details": "• Identify all migration components and list their entry points, public APIs, and dependencies.\n• For each component:\n  – Conduct a detailed code review to confirm:\n    • YOLO compliance: no legacy support hooks, single-responsibility design, minimal configuration.\n    • Exception-based error handling: no return codes or status dictionaries; ensure all error paths raise appropriate exceptions.\n    • Optimistic execution: operations execute first, with validation deferred to exception handling; remove any redundant precondition checks.\n    • Python typing: full coverage of type annotations (PEP 484) including function signatures, class attributes, and third-party interfaces.\n• Document any deviations and refactor code in-line or open follow-up issues for non-compliant patterns.\n• Maintain a migration compliance checklist and attach to each pull request for peer review.",
+      "testStrategy": "• Develop and run dedicated pytest modules for each migration component using commands like:\n     pytest tests/test_migration_<component>.py::Test<componentClass> --log-level=DEBUG\n• Enable detailed logging in tests (DEBUG level) to capture execution flow, exception stack traces, and type warnings.\n• Integrate mypy checks in the CI pipeline:\n     mypy src/migration_components/<component>.py\n• Automate a compliance report that aggregates:\n    – Test pass/fail results\n    – Logged exceptions and execution traces\n    – Mypy type-check summaries\n• Conduct a manual code review session for each component, verifying the compliance checklist and sign-off in pull request comments.\n• Mark the task complete only when all components pass automated tests, static analysis, and manual review criteria.",
+      "status": "pending",
+      "dependencies": [],
+      "priority": "high",
+      "subtasks": []
+    }
+  ],
+  "metadata": {
+    "created": "2024-06-22T12:00:00Z",
+    "updated": "2024-06-22T12:00:00Z",
+    "version": "1.0.0",
+    "projectName": "Jira to OpenProject Migration Tool",
+    "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15"
+  }
+}

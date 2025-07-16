@@ -1,0 +1,27 @@
+# Task ID: 22
+# Title: Enhance DockerClient Constructor to Accept SSHClient Dependency
+# Status: done
+# Dependencies: 21
+# Priority: high
+# Description: Modify DockerClient to accept an optional ssh_client parameter in its constructor and delegate SSH operations to the injected client, enabling proper dependency injection and adherence to the layered architecture.
+# Details:
+1. Update DockerClient __init__ signature to include ssh_client: Optional[SSHClient] = None.
+2. Remove any internal instantiation of SSHClient (e.g., self.ssh_client = SSHClient()) and replace it with assignment of the provided ssh_client or a default when None is passed.
+3. Ensure all SSH-related methods within DockerClient (command execution, connection setup, file transfers) use self.ssh_client exclusively.
+4. Add type hints and input validation to verify ssh_client implements the expected interface (e.g., connect, execute, upload/download).
+5. Update and refactor any factory or dependency injection container configurations to pass the SSHClient instance into DockerClient.
+6. Adjust constructor documentation and README to reflect the new parameter and usage guidelines.
+7. Ensure backward compatibility by providing default behavior if no ssh_client is supplied, with deprecation warnings if necessary.
+
+# Test Strategy:
+1. Unit Tests:
+   a. Create a mock or stub implementing the SSHClient interface and inject it into DockerClient.
+   b. Verify that methods like run_container, pull_image, and exec return values from mock.ssh_client.execute and do not instantiate a new SSHClient.
+   c. Test constructor fallback: initialize DockerClient without ssh_client and assert it constructs a default SSHClient instance.
+2. Integration Tests:
+   a. Use a real SSHClient connected to a controlled test VM and inject it into DockerClient.
+   b. Execute a sequence of Docker operations (e.g., pull, run, inspect) and confirm they succeed over SSH.
+3. Regression Testing:
+   a. Run existing DockerClient test suite to ensure no regressions.
+4. Code Review:
+   a. Confirm no residual direct SSHClient instantiation remains and that layering boundaries are respected.

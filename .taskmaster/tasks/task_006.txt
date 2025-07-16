@@ -1,0 +1,11 @@
+# Task ID: 6
+# Title: Custom Field Migration
+# Status: done
+# Dependencies: None
+# Priority: medium
+# Description: Implement migration of custom fields from Jira to OpenProject
+# Details:
+Extract Jira custom field metadata, map to OpenProject equivalents, and create custom fields via Rails console. Handle custom field options and types correctly.
+
+# Test Strategy:
+Verify custom field count and attributes match expected values. Test field creation and type mapping.

@@ -1,0 +1,69 @@
+# Task ID: 33
+# Title: Update Migration Components to Use New Client Architecture
+# Status: done
+# Dependencies: 25, 26
+# Priority: high
+# Description: Ensure all migration modules are refactored to leverage the dependency injection pattern and layered client architecture established in tasks #21-26.
+# Details:
+Identify every migration-related module (data migrations, schema updates, and one-off scripts) that currently instantiates SSHClient, DockerClient, RailsConsoleClient, or OpenProjectClient directly. Refactor each module to accept the appropriate client instances via constructor or factory injection, using the centralized DI container or ClientFactory from Task #21. Remove all direct new calls and replace them with injected dependencies. For migrations interacting with remote hosts or containers, route file transfers through the refactored OpenProjectClient, which now initializes SSHClient and DockerClient in the correct order (per Task #25) and uses SSHClient for remote operations and DockerClient for container operations (per Task #26). Ensure Rails console interactions use RailsConsoleClient via injection, and update any helper methods or utilities accordingly. Follow SOLID principles and maintain the layered architecture, keeping business logic separate from transport concerns. Update or add inline documentation and code comments to reflect the new architecture.
+
+# Test Strategy:
+Unit test each migration module in isolation by injecting mock client instances and asserting that the correct client methods (e.g., uploadFile, executeCommand) are called with expected parameters. Write integration tests that run the full migration suite against a staging database and container environment, verifying no failures and correct use of SSHClient and DockerClient (check logs or mock verifications). Perform a static code analysis or code review to confirm no direct instantiations of client classes remain. Finally, conduct a manual smoke test by executing a sample migration end-to-end on a replica environment to ensure the new DI and layered architecture functions as expected.
+
+# Subtasks:
+## 331. Update BaseMigration Class for Dependency Injection [done]
+### Dependencies: None
+### Description: Refactor the BaseMigration class to properly accept client instances through constructor parameters and remove direct instantiation.
+### Details:
+Modify the BaseMigration.__init__ method to accept OpenProjectClient instance and only create a new instance if none is provided. Remove direct instantiation of JiraClient and OpenProjectClient. The constructor should follow the dependency injection pattern established in tasks #21-26, allowing all migration modules to benefit from this change automatically since they inherit from BaseMigration.
+
+## 332. Test and Verify BaseMigration Dependency Injection [done]
+### Dependencies: 33.331
+### Description: Create unit tests to verify the BaseMigration class properly handles dependency injection and that migration modules inherit this functionality correctly.
+### Details:
+Create new test cases that verify BaseMigration correctly:
+1. Accepts an OpenProjectClient instance via constructor
+2. Only creates a default instance if none is provided
+3. Correctly passes the instance to child migration classes
+4. Test with mock clients to ensure proper method calls and behavior
+
+Ensure tests cover both scenarios: providing client instances and using defaults.
+
+## 333. Verify Migration Classes Use BaseMigration Properly [done]
+### Dependencies: 33.331
+### Description: Review and update all migration classes to ensure they correctly inherit and utilize the refactored BaseMigration.
+### Details:
+For each migration module in src/migrations/:
+1. Ensure they properly inherit from BaseMigration
+2. Verify they call super().__init__() in their constructors
+3. Check for any direct instantiation of client classes that should be removed
+4. Ensure they use the inherited client instances instead of creating new ones
+5. Update any client-specific method calls to match the new API if needed
+
+This includes updating: user_migration.py, project_migration.py, custom_field_migration.py, work_package_migration.py, status_migration.py, link_type_migration.py, issue_type_migration.py, workflow_migration.py, company_migration.py, account_migration.py, and tempo_account_migration.py.
+
+## 334. Update main.py and Migration Factory to Support Client Injection [done]
+### Dependencies: 33.331, 33.333
+### Description: Modify the migration initialization code in main.py and any factory methods to support the dependency injection pattern.
+### Details:
+Update the migration initialization code in src/main.py and any factory classes/methods to:
+1. Create the client instances in the correct hierarchical order (SSHClient → DockerClient → RailsConsoleClient → OpenProjectClient)
+2. Pass these instances to the migration classes during initialization
+3. Ensure proper resource cleanup when migrations are complete
+4. Update any factory classes or methods that create migration instances to support client injection
+
+This ensures that the client instances are created once at the application level and properly passed down to all migration components.
+
+## 335. Integration Testing of Updated Migration Architecture [done]
+### Dependencies: 33.332, 33.333, 33.334
+### Description: Perform integration tests to ensure the updated migration components work correctly with the refactored client architecture.
+### Details:
+Create and execute integration tests that verify:
+1. The entire migration process works end-to-end with the refactored client architecture
+2. Client instances are correctly shared across migration components
+3. File transfers and command executions follow the proper layered architecture
+4. No regressions are introduced in the migration functionality
+5. Error handling works correctly with the updated architecture
+
+This should include setting up a test environment that mimics the production configuration and running a sample migration workflow to validate the changes.
+

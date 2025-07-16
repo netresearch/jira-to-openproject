@@ -1,0 +1,35 @@
+# Task ID: 24
+# Title: Enhance RailsConsoleClient.execute with Direct Output Capture
+# Status: done
+# Dependencies: 23
+# Priority: high
+# Description: Refactor the execute method to capture command output using unique start/end markers instead of writing to temporary files, and properly handle both success and error cases.
+# Details:
+• Wrap each command in unique markers (e.g. START_CMD_<UUID> and END_CMD_<UUID>) before sending it to the Rails console. Generate a cryptographically secure UUID per invocation to avoid marker collisions.
+• Concatenate the wrapped command into a single invocation call via the DockerClient (injected per Task 23). Drop the old file‐based approach entirely.
+• After execution, read the full standard output stream and locate the content between the start and end markers. Strip any extraneous console noise, coloring, or debug logs outside the markers.
+• If the content between markers contains an exception signature or a non‐zero exit code is returned, raise a descriptive RailsConsoleClient::ExecutionError including the extracted error message.
+• On success, return the raw output string between the markers to the caller.
+• Ensure to timeout or abort gracefully if markers are not found within a configurable interval to prevent hangs.
+• Address edge cases: nested marker strings in user output, extremely large outputs, intermittent DockerClient failures, and proper cleanup of any in‐memory buffers.
+
+Considerations:
+- Reuse existing dependency injection from Task 23 to supply the DockerClient.
+- Follow project RuboCop and RSpec conventions.
+- Document the new behavior in the class and update README accordingly.
+
+# Test Strategy:
+Unit Tests:
+1. Stub the DockerClient to return a synthetic stdout containing start/end markers around a known payload. Verify that execute returns exactly the payload and does not include markers.
+2. Simulate an error: stub DockerClient to return markers around a Ruby exception backtrace. Expect RailsConsoleClient::ExecutionError with the backtrace in its message.
+3. Test missing markers: stub DockerClient to return output without markers. Expect a timeout or parse‐error exception.
+4. Simulate nested marker sequences inside payload and ensure the first matching start/end pair is extracted.
+5. Verify timeout behavior by stubbing a delay in DockerClient.response and ensuring execution aborts after the configured threshold.
+
+Integration Tests:
+- Launch a real Rails console via DockerClient and execute a simple Ruby expression (e.g. 1+1). Confirm execute( ) returns "2".
+- Trigger a known Rails exception (e.g. call undefined method). Confirm error is raised and message matches console output.
+
+CI Validation:
+- Ensure no file artifacts remain after execution.
+- Validate coverage for both success and failure code paths above 95%.
