@@ -97,14 +97,18 @@ class TestJiraClientIntegration(unittest.TestCase):
             with pytest.raises((JiraResourceNotFoundError, JiraApiError)):
                 jira_client.get_issue_count(invalid_project)
 
-            print(f"✅ Correctly raised exception for nonexistent project {invalid_project}")
+            print(
+                f"✅ Correctly raised exception for nonexistent project {invalid_project}"
+            )
 
             # Test resource not found handling - use a deliberately invalid issue key
             invalid_issue = "FAKE-12345"
             with pytest.raises((JiraResourceNotFoundError, JiraApiError)):
                 jira_client.get_issue_details(invalid_issue)
 
-            print(f"✅ Correctly raised exception for nonexistent issue {invalid_issue}")
+            print(
+                f"✅ Correctly raised exception for nonexistent issue {invalid_issue}"
+            )
 
         except JiraAuthenticationError:
             # Ignore authentication errors as they're expected if credentials are invalid

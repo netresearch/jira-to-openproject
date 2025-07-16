@@ -66,8 +66,12 @@ def test_openproject_client() -> None:
 
         # Convert result to string to handle different possible output formats
         result_str = str(result)
-        assert "Script executed in" in result_str, "Expected execution confirmation not found in output"
-        assert "environment" in result_str, "Expected environment message not found in output"
+        assert (
+            "Script executed in" in result_str
+        ), "Expected execution confirmation not found in output"
+        assert (
+            "environment" in result_str
+        ), "Expected environment message not found in output"
 
         print("✅ Successfully executed script via OpenProject client")
     except Exception as e:

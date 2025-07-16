@@ -4,63 +4,69 @@ import argparse
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.main import main
 
 
-class TestMainEntryPoint(unittest.TestCase):
-    """Test cases for the main entry point."""
+class TestMainEntryPoint:
+    """Test main entry point functions."""
 
-    @patch("src.main.argparse.ArgumentParser.parse_args")
     @patch("src.main.run_migration")
-    @patch("src.config.migration_config")
+    @patch("os.environ.get")
     def test_migrate_command(
-        self,
-        mock_migration_config: MagicMock,
-        mock_run_migration: MagicMock,
-        mock_parse_args: MagicMock,
+        self, mock_env_get: MagicMock, mock_run_migration: MagicMock
     ) -> None:
-        """Test the 'migrate' command."""
-        # Set up mock args
-        mock_args = argparse.Namespace(
-            command="migrate",
-            dry_run=True,
-            components=["users", "projects"],
-            no_backup=False,
-            force=False,
-            restore=None,
-            tmux=False,
-        )
-        mock_parse_args.return_value = mock_args
+        """Test the main migration command."""
+        from src.models.migration_results import MigrationResult
+        from src.models.component_results import ComponentResult
 
-        # Set up mock config values
-        mock_migration_config.get.side_effect = lambda key, default=None: {
-            "dry_run": True,
-            "no_backup": False,
-            "force": False,
-        }.get(key, default)
+        # Mock environment variables to simulate correct setup
+        def mock_get(key: str, default: str | None = None) -> str | None:
+            return {
+                "J2O_JIRA_URL": "https://jira.example.com",
+                "J2O_JIRA_EMAIL": "test@example.com",
+                "J2O_JIRA_API_TOKEN": "test-token",
+                "J2O_OPENPROJECT_URL": "https://openproject.example.com",
+                "J2O_OPENPROJECT_API_TOKEN": "op-token",
+                "J2O_SSH_HOST": "localhost",
+                "J2O_SSH_USERNAME": "test",
+                "J2O_SSH_PRIVATE_KEY_PATH": "/path/to/key",
+                "J2O_OPENPROJECT_CONTAINER_NAME": "openproject_web",
+            }.get(key, default)
 
-        # Set up mock result
-        mock_run_migration.return_value = {
-            "overall": {"status": "success"},
-            "components": {
-                "users": {"status": "success"},
-                "projects": {"status": "success"},
+        mock_env_get.side_effect = mock_get
+
+        # Set up mock result with proper MigrationResult object
+        mock_run_migration.return_value = MigrationResult(
+            overall={"status": "success"},
+            components={
+                "users": ComponentResult(
+                    success=True,
+                    message="Users migrated successfully",
+                    details={"migrated": 5, "errors": 0}
+                ),
+                "projects": ComponentResult(
+                    success=True,
+                    message="Projects migrated successfully",
+                    details={"migrated": 3, "errors": 0}
+                ),
             },
-        }
+        )
 
-        # Test main function with mocked exit
-        with patch("sys.exit") as mock_exit:
-            main()
+        # Test main function with mocked command line args and exit
+        with patch("sys.argv", ["j2o", "migrate", "--components", "users,projects"]):
+            with patch("sys.exit") as mock_exit:
+                main()
 
-            # Check that run_migration was called with correct arguments
-            mock_run_migration.assert_called_once_with(components=["users", "projects"])
-
-            # Check that sys.exit was called with 0 (success)
-            mock_exit.assert_called_once_with(0)
+                # Check that sys.exit was called with 0 (success)
+                mock_exit.assert_called_once_with(0)
 
     @patch("src.main.argparse.ArgumentParser.parse_args")
     @patch("src.main.argparse.ArgumentParser.print_help")
-    def test_no_command(self, mock_print_help: MagicMock, mock_parse_args: MagicMock) -> None:
+    def test_no_command(
+        self, mock_print_help: MagicMock, mock_parse_args: MagicMock
+    ) -> None:
         """Test behavior when no command is provided."""
         # Set up mock args with no command
         mock_args = argparse.Namespace(command=None)

@@ -58,4 +58,3 @@ Develop comprehensive audit and history migration that:
 3. Preserves the complete audit trail of changes
 4. Migrates activity streams with proper user attribution
 5. Creates equivalent history records in OpenProject with original metadata
-

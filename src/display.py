@@ -127,7 +127,10 @@ def configure_logging(
 
     # Define a success method for the logger
     def success(
-        self: logging.Logger, message: str, *args: object, **kwargs: object,
+        self: logging.Logger,
+        message: str,
+        *args: object,
+        **kwargs: object,
     ) -> None:
         if self.isEnabledFor(25):
             kwargs["extra"] = kwargs.get("extra", {})
@@ -136,7 +139,10 @@ def configure_logging(
 
     # Define a notice method for the logger (less prominent than INFO)
     def notice(
-        self: logging.Logger, message: str, *args: object, **kwargs: object,
+        self: logging.Logger,
+        message: str,
+        *args: object,
+        **kwargs: object,
     ) -> None:
         if self.isEnabledFor(21):
             kwargs["extra"] = kwargs.get("extra", {})

@@ -190,14 +190,14 @@ Update docstrings to reflect new exception behavior:
 ```python
 def extract_data(self) -> list[dict[str, Any]]:
     """Extract data from source system.
-    
+
     Returns:
         List of extracted data items
-        
+
     Raises:
         RuntimeError: When data extraction fails
         ConnectionError: When source system is unreachable
-        
+
     """
 ```
 
@@ -208,9 +208,9 @@ Create or update the compliance tracking record:
 ```markdown
 ## {component_name}_migration Compliance Status
 
-**Last Verified**: {date}  
-**Reviewer**: {reviewer_name}  
-**Status**: 🟢 Fully Compliant  
+**Last Verified**: {date}
+**Reviewer**: {reviewer_name}
+**Status**: 🟢 Fully Compliant
 
 ### Violations Fixed
 1. **Return-based Error Handling** (3 methods)
@@ -219,7 +219,7 @@ Create or update the compliance tracking record:
 
 ### Test Results
 - **Tests Run**: 7
-- **Tests Passed**: 7  
+- **Tests Passed**: 7
 - **Coverage**: 95%
 - **Execution Time**: 0.23s
 

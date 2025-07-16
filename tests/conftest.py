@@ -23,12 +23,20 @@ def pytest_configure(config: Config) -> None:
     """Register custom markers."""
     config.addinivalue_line("markers", "unit: mark a test as a unit test")
     config.addinivalue_line("markers", "functional: mark a test as a functional test")
-    config.addinivalue_line("markers", "integration: mark a test as an integration test")
+    config.addinivalue_line(
+        "markers", "integration: mark a test as an integration test"
+    )
     config.addinivalue_line("markers", "end_to_end: mark a test as an end-to-end test")
     config.addinivalue_line("markers", "slow: mark a test as slow-running")
-    config.addinivalue_line("markers", "requires_docker: test requires Docker to be available")
-    config.addinivalue_line("markers", "requires_ssh: test requires SSH connection to be available")
-    config.addinivalue_line("markers", "requires_rails: test requires Rails console to be available")
+    config.addinivalue_line(
+        "markers", "requires_docker: test requires Docker to be available"
+    )
+    config.addinivalue_line(
+        "markers", "requires_ssh: test requires SSH connection to be available"
+    )
+    config.addinivalue_line(
+        "markers", "requires_rails: test requires Rails console to be available"
+    )
 
 
 # Automatically detect when running in test mode
@@ -181,7 +189,9 @@ def mock_op_client() -> OpenProjectClient:
 def ssh_client() -> Generator[SSHClient, None, None]:
     """Create an SSH client instance."""
     # Only create the client if the required environment variables are set
-    if not os.environ.get("J2O_OPENPROJECT_SERVER") or not os.environ.get("J2O_OPENPROJECT_USER"):
+    if not os.environ.get("J2O_OPENPROJECT_SERVER") or not os.environ.get(
+        "J2O_OPENPROJECT_USER"
+    ):
         pytest.skip("Required SSH environment variables not set")
 
     try:
@@ -258,7 +268,9 @@ class MonkeypatchHelpers:
         monkeypatch.setattr(f"{module_path}.{class_name}", mock_class)
 
     @staticmethod
-    def mock_path_exists(monkeypatch: pytest.MonkeyPatch, return_value: bool = True) -> None:
+    def mock_path_exists(
+        monkeypatch: pytest.MonkeyPatch, return_value: bool = True
+    ) -> None:
         """Mock os.path.exists using monkeypatch.
 
         Args:
@@ -268,7 +280,9 @@ class MonkeypatchHelpers:
         monkeypatch.setattr("os.path.exists", MagicMock(return_value=return_value))
 
     @staticmethod
-    def mock_path_open(monkeypatch: pytest.MonkeyPatch, read_data: str = "") -> MagicMock:
+    def mock_path_open(
+        monkeypatch: pytest.MonkeyPatch, read_data: str = ""
+    ) -> MagicMock:
         """Mock file opening using monkeypatch.
 
         Args:
@@ -279,6 +293,7 @@ class MonkeypatchHelpers:
             MagicMock: The mock file object for additional configuration
         """
         from unittest.mock import mock_open
+
         mock_file = mock_open(read_data=read_data)
         monkeypatch.setattr("builtins.open", mock_file)
         return mock_file
@@ -294,6 +309,7 @@ class MonkeypatchHelpers:
         Example:
             helpers.mock_config_get(monkeypatch, {"dry_run": True, "force": False})
         """
+
         def config_side_effect(key: str, default=None):
             return config_values.get(key, default)
 
@@ -314,7 +330,9 @@ class MonkeypatchHelpers:
                 pass
 
     @staticmethod
-    def mock_json_operations(monkeypatch: pytest.MonkeyPatch, load_data: dict = None, dump_data: dict = None) -> None:
+    def mock_json_operations(
+        monkeypatch: pytest.MonkeyPatch, load_data: dict = None, dump_data: dict = None
+    ) -> None:
         """Mock JSON load and dump operations using monkeypatch.
 
         Args:
@@ -346,6 +364,7 @@ def project_migration(mock_jira_client, mock_op_client):
         ProjectMigration: A ProjectMigration instance with mocked clients
     """
     from src.migrations.project_migration import ProjectMigration
+
     return ProjectMigration(mock_jira_client, mock_op_client)
 
 
@@ -357,14 +376,10 @@ def mock_jira_projects():
         list: List of mock Jira project dictionaries
     """
     return [
-        {
-            "key": "TEST1",
-            "name": "Test Project 1",
-            "description": "First test project"
-        },
+        {"key": "TEST1", "name": "Test Project 1", "description": "First test project"},
         {
             "key": "TEST2",
             "name": "Test Project 2",
-            "description": "Second test project"
-        }
+            "description": "Second test project",
+        },
     ]

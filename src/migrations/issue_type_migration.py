@@ -77,13 +77,23 @@ class IssueTypeMigration(BaseMigration):
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
         self.jira_issue_types = self._load_from_json(Path("jira_issue_types.json"), [])
-        self.op_work_package_types = self._load_from_json(Path("op_work_package_types.json"), [])
-        self.issue_type_mapping = self._load_from_json(Path("issue_type_mapping.json"), {})
-        self.issue_type_id_mapping = self._load_from_json(Path("issue_type_id_mapping.json"), {})
+        self.op_work_package_types = self._load_from_json(
+            Path("op_work_package_types.json"), []
+        )
+        self.issue_type_mapping = self._load_from_json(
+            Path("issue_type_mapping.json"), {}
+        )
+        self.issue_type_id_mapping = self._load_from_json(
+            Path("issue_type_id_mapping.json"), {}
+        )
         self.logger.info("Loaded %s Jira issue types", len(self.jira_issue_types))
-        self.logger.info("Loaded %s OpenProject work package types", len(self.op_work_package_types))
+        self.logger.info(
+            "Loaded %s OpenProject work package types", len(self.op_work_package_types)
+        )
         self.logger.info("Loaded %s issue type mappings", len(self.issue_type_mapping))
-        self.logger.info("Loaded %s issue type ID mappings", len(self.issue_type_id_mapping))
+        self.logger.info(
+            "Loaded %s issue type ID mappings", len(self.issue_type_id_mapping)
+        )
 
     def extract_jira_issue_types(self) -> list[dict[str, Any]]:
         """Extract issue types from Jira.
@@ -94,8 +104,12 @@ class IssueTypeMigration(BaseMigration):
         """
         issue_types_file = self.data_dir / "jira_issue_types.json"
 
-        if issue_types_file.exists() and not config.migration_config.get("force", False):
-            self.logger.info("Jira issue types data already exists, skipping extraction (use --force to override)")
+        if issue_types_file.exists() and not config.migration_config.get(
+            "force", False
+        ):
+            self.logger.info(
+                "Jira issue types data already exists, skipping extraction (use --force to override)"
+            )
             with issue_types_file.open() as f:
                 self.jira_issue_types = json.load(f)
             return self.jira_issue_types
@@ -125,7 +139,9 @@ class IssueTypeMigration(BaseMigration):
         """
         work_package_types_file = self.data_dir / "openproject_work_package_types.json"
 
-        if work_package_types_file.exists() and not config.migration_config.get("force", False):
+        if work_package_types_file.exists() and not config.migration_config.get(
+            "force", False
+        ):
             self.logger.info(
                 "OpenProject work package types data already exists, skipping extraction (use --force to override)",
             )
@@ -138,13 +154,22 @@ class IssueTypeMigration(BaseMigration):
         try:
             self.op_work_package_types = self.op_client.get_work_package_types()
         except Exception as e:
-            self.logger.warning("Failed to get work package types from OpenProject: %s", e)
-            self.logger.warning("Using an empty list of work package types for OpenProject")
+            self.logger.warning(
+                "Failed to get work package types from OpenProject: %s", e
+            )
+            self.logger.warning(
+                "Using an empty list of work package types for OpenProject"
+            )
             self.op_work_package_types = []
 
-        self.logger.info("Extracted %s work package types from OpenProject", len(self.op_work_package_types))
+        self.logger.info(
+            "Extracted %s work package types from OpenProject",
+            len(self.op_work_package_types),
+        )
 
-        self._save_to_json(self.op_work_package_types, Path("openproject_work_package_types.json"))
+        self._save_to_json(
+            self.op_work_package_types, Path("openproject_work_package_types.json")
+        )
 
         return self.op_work_package_types
 
@@ -157,7 +182,9 @@ class IssueTypeMigration(BaseMigration):
         """
         mapping_file = self.data_dir / "issue_type_mapping_template.json"
         if mapping_file.exists() and not config.migration_config.get("force", False):
-            self.logger.info("Issue type mapping already exists, loading from file (use --force to recreate)")
+            self.logger.info(
+                "Issue type mapping already exists, loading from file (use --force to recreate)"
+            )
             with mapping_file.open() as f:
                 self.issue_type_mapping = json.load(f)
             return self.issue_type_mapping
@@ -170,7 +197,10 @@ class IssueTypeMigration(BaseMigration):
         if not self.op_work_package_types:
             self.extract_openproject_work_package_types()
 
-        op_types_by_name = {type_data.get("name", "").lower(): type_data for type_data in self.op_work_package_types}
+        op_types_by_name = {
+            type_data.get("name", "").lower(): type_data
+            for type_data in self.op_work_package_types
+        }
 
         mapping = {}
         for jira_type in self.jira_issue_types:
@@ -202,7 +232,9 @@ class IssueTypeMigration(BaseMigration):
                 )
                 continue
 
-            default_mapping: dict[str, str] | None = self.default_mappings.get(jira_type_name)
+            default_mapping: dict[str, str] | None = self.default_mappings.get(
+                jira_type_name
+            )
             if default_mapping:
                 default_name: str = default_mapping.get("name", "")
                 op_type = op_types_by_name.get(default_name.lower())
@@ -243,13 +275,23 @@ class IssueTypeMigration(BaseMigration):
         self._save_to_json(mapping, Path("issue_type_mapping_template.json"))
 
         total_types = len(mapping)
-        matched_types = sum(1 for type_data in mapping.values() if type_data["openproject_id"] is not None)
-        to_create_types = sum(1 for type_data in mapping.values() if type_data["openproject_id"] is None)
+        matched_types = sum(
+            1
+            for type_data in mapping.values()
+            if type_data["openproject_id"] is not None
+        )
+        to_create_types = sum(
+            1 for type_data in mapping.values() if type_data["openproject_id"] is None
+        )
         match_percentage = (matched_types / total_types) * 100 if total_types > 0 else 0
 
         self.logger.info("Issue type mapping created for %s types", total_types)
-        self.logger.info("Successfully matched %s types (%.1f%%)", matched_types, match_percentage)
-        self.logger.info("Need to create %s new work package types in OpenProject", to_create_types)
+        self.logger.info(
+            "Successfully matched %s types (%.1f%%)", matched_types, match_percentage
+        )
+        self.logger.info(
+            "Need to create %s new work package types in OpenProject", to_create_types
+        )
 
         return mapping
 
@@ -310,7 +352,9 @@ class IssueTypeMigration(BaseMigration):
                     },
                 )
                 normalizations_applied += 1
-                self.logger.info("Normalized '%s' to '%s'", jira_type_name, base_type_name)
+                self.logger.info(
+                    "Normalized '%s' to '%s'", jira_type_name, base_type_name
+                )
             else:
                 # If no corresponding normal type found, map it to a generic Task
                 normalized_mapping[jira_type_name].update(
@@ -324,23 +368,43 @@ class IssueTypeMigration(BaseMigration):
                     },
                 )
                 normalizations_applied += 1
-                self.logger.info("Could not find matching normal type for '%s', mapping to 'Task'", jira_type_name)
+                self.logger.info(
+                    "Could not find matching normal type for '%s', mapping to 'Task'",
+                    jira_type_name,
+                )
 
         # Save the normalized mapping
         self.issue_type_mapping = normalized_mapping
-        self._save_to_json(normalized_mapping, Path("issue_type_mapping_normalized.json"))
+        self._save_to_json(
+            normalized_mapping, Path("issue_type_mapping_normalized.json")
+        )
 
-        self.logger.info("Issue type normalization complete: %s types normalized", normalizations_applied)
+        self.logger.info(
+            "Issue type normalization complete: %s types normalized",
+            normalizations_applied,
+        )
 
         # Update stats after normalization
         total_types = len(normalized_mapping)
-        matched_types = sum(1 for type_data in normalized_mapping.values() if type_data["openproject_id"] is not None)
-        to_create_types = sum(1 for type_data in normalized_mapping.values() if type_data["openproject_id"] is None)
+        matched_types = sum(
+            1
+            for type_data in normalized_mapping.values()
+            if type_data["openproject_id"] is not None
+        )
+        to_create_types = sum(
+            1
+            for type_data in normalized_mapping.values()
+            if type_data["openproject_id"] is None
+        )
         match_percentage = (matched_types / total_types) * 100 if total_types > 0 else 0
 
         self.logger.info("After normalization: %s types total", total_types)
-        self.logger.info("Successfully matched %s types (%.1f%%)", matched_types, match_percentage)
-        self.logger.info("Need to create %s new work package types in OpenProject", to_create_types)
+        self.logger.info(
+            "Successfully matched %s types (%.1f%%)", matched_types, match_percentage
+        )
+        self.logger.info(
+            "Need to create %s new work package types in OpenProject", to_create_types
+        )
 
         return normalized_mapping
 
@@ -354,7 +418,9 @@ class IssueTypeMigration(BaseMigration):
             List of existing work package types
 
         """
-        self.logger.info("Checking existing work package types in OpenProject via Rails...")
+        self.logger.info(
+            "Checking existing work package types in OpenProject via Rails..."
+        )
 
         temp_file_path = "/tmp/op_work_package_types.json"
 
@@ -381,9 +447,14 @@ class IssueTypeMigration(BaseMigration):
         """
 
         try:
-            self.logger.info("Executing Rails command to write work package types to %s...", temp_file_path)
+            self.logger.info(
+                "Executing Rails command to write work package types to %s...",
+                temp_file_path,
+            )
             write_result = self.op_client.execute_query(command)
-            self.logger.debug(f"Result from work package type write: type={type(write_result)}, value={write_result}")
+            self.logger.debug(
+                f"Result from work package type write: type={type(write_result)}, value={write_result}"
+            )
             if not isinstance(write_result, dict):
                 msg = (
                     "Failed to run work package type write: Invalid response from OpenProject "
@@ -401,12 +472,17 @@ class IssueTypeMigration(BaseMigration):
                 self.logger.error(msg)
                 raise MigrationError(msg)
             if write_result.get("status") != "success":
-                error_msg = write_result.get("error", "Unknown error executing Rails command for file write")
+                error_msg = write_result.get(
+                    "error", "Unknown error executing Rails command for file write"
+                )
                 msg = f"Failed to execute Rails command to write JSON file: {error_msg}"
                 self.logger.error(msg)
                 raise MigrationError(msg)
 
-            self.logger.info("Rails command executed successfully. Checking existence of %s...", temp_file_path)
+            self.logger.info(
+                "Rails command executed successfully. Checking existence of %s...",
+                temp_file_path,
+            )
 
             time.sleep(0.5)
 
@@ -427,7 +503,9 @@ class IssueTypeMigration(BaseMigration):
             ls_command = ssh_base_cmd + docker_base_cmd + ["ls", temp_file_path]
             self.logger.debug("Executing command: %s", " ".join(ls_command))
             try:
-                ls_result = subprocess.run(ls_command, capture_output=True, text=True, check=False)
+                ls_result = subprocess.run(
+                    ls_command, capture_output=True, text=True, check=False
+                )
                 if ls_result.returncode != 0:
                     error_details = ls_result.stderr.strip()
                     msg = (
@@ -436,7 +514,9 @@ class IssueTypeMigration(BaseMigration):
                     )
                     self.logger.error(msg)
                     raise MigrationError(msg)
-                self.logger.info("File %s confirmed to exist in container.", temp_file_path)
+                self.logger.info(
+                    "File %s confirmed to exist in container.", temp_file_path
+                )
             except subprocess.SubprocessError as e:
                 msg = f"Error running docker exec ls command: {e}"
                 self.logger.exception(msg)
@@ -445,7 +525,9 @@ class IssueTypeMigration(BaseMigration):
             self.logger.info("Reading %s using ssh + docker exec...", temp_file_path)
             cat_command = ssh_base_cmd + docker_base_cmd + ["cat", temp_file_path]
             self.logger.debug("Executing command: %s", " ".join(cat_command))
-            read_result = subprocess.run(cat_command, capture_output=True, text=True, check=False)
+            read_result = subprocess.run(
+                cat_command, capture_output=True, text=True, check=False
+            )
 
             if read_result.returncode != 0:
                 msg = f"Failed to read {temp_file_path} via docker exec: {read_result.stderr}"
@@ -453,11 +535,15 @@ class IssueTypeMigration(BaseMigration):
                 raise MigrationError(msg)
 
             json_content = read_result.stdout.strip()
-            self.logger.debug("Content read from %s:\\n%s", temp_file_path, json_content)
+            self.logger.debug(
+                "Content read from %s:\\n%s", temp_file_path, json_content
+            )
 
             try:
                 types: list[dict[str, Any]] = json.loads(json_content)
-                self.logger.info("Successfully parsed %s work package types from file", len(types))
+                self.logger.info(
+                    "Successfully parsed %s work package types from file", len(types)
+                )
                 return types
             except json.JSONDecodeError as e:
                 msg = f"Could not parse work package types JSON read from file: {e}"
@@ -476,13 +562,30 @@ class IssueTypeMigration(BaseMigration):
         finally:
             try:
                 if "container_name" in locals() and container_name:
-                    self.logger.debug("Attempting final removal of remote temporary file %s...", temp_file_path)
-                    ssh_base_cmd = ["ssh", op_server, "--"] if "op_server" in locals() and op_server else []
-                    docker_base_cmd = ["docker", "exec", container_name] if container_name else []
+                    self.logger.debug(
+                        "Attempting final removal of remote temporary file %s...",
+                        temp_file_path,
+                    )
+                    ssh_base_cmd = (
+                        ["ssh", op_server, "--"]
+                        if "op_server" in locals() and op_server
+                        else []
+                    )
+                    docker_base_cmd = (
+                        ["docker", "exec", container_name] if container_name else []
+                    )
                     if ssh_base_cmd and docker_base_cmd:
-                        rm_command = ssh_base_cmd + docker_base_cmd + ["rm", "-f", temp_file_path]
-                        self.logger.debug("Executing final rm command: %s", " ".join(rm_command))
-                        subprocess.run(rm_command, check=False, capture_output=True, timeout=10)
+                        rm_command = (
+                            ssh_base_cmd
+                            + docker_base_cmd
+                            + ["rm", "-f", temp_file_path]
+                        )
+                        self.logger.debug(
+                            "Executing final rm command: %s", " ".join(rm_command)
+                        )
+                        subprocess.run(
+                            rm_command, check=False, capture_output=True, timeout=10
+                        )
                     else:
                         self.logger.warning(
                             f"Skipping final removal of temporary file {temp_file_path} "
@@ -500,7 +603,9 @@ class IssueTypeMigration(BaseMigration):
                     error_message = str(final_e)
                 except Exception as str_err:
                     error_type = "Unknown"
-                    error_message = f"Failed to convert finally exception to string: {str_err}"
+                    error_message = (
+                        f"Failed to convert finally exception to string: {str_err}"
+                    )
                 self.logger.warning(
                     "Failed during final removal of %s (Type: %s): %s",
                     temp_file_path,
@@ -508,7 +613,9 @@ class IssueTypeMigration(BaseMigration):
                     error_message,
                 )
 
-    def create_work_package_type_via_rails(self, type_data: dict[str, Any]) -> dict[str, Any]:
+    def create_work_package_type_via_rails(
+        self, type_data: dict[str, Any]
+    ) -> dict[str, Any]:
         """Create a work package type in OpenProject via Rails console.
 
         Args:
@@ -522,42 +629,72 @@ class IssueTypeMigration(BaseMigration):
         type_color = type_data.get("color", "#1A67A3")
         is_milestone = type_data.get("is_milestone", False)
 
-        self.logger.info("Creating work package type '%s' via Rails console...", type_name)
+        self.logger.info(
+            "Creating work package type '%s' via Rails console...", type_name
+        )
 
         # Check if the type already exists to avoid duplicates
         # Use parameterized query to prevent Rails injection
         safe_type_name = self.ruby_escape(type_name)
-        check_command = f'existing_type = Type.where("name ilike ?", \'{safe_type_name}\').first'
+        check_command = (
+            f"existing_type = Type.where(\"name ilike ?\", '{safe_type_name}').first"
+        )
         check_result = self.op_client.execute_query(check_command)
-        self.logger.debug(f"check_result type: {type(check_result)}, value: {check_result}")
+        self.logger.debug(
+            f"check_result type: {type(check_result)}, value: {check_result}"
+        )
         if not isinstance(check_result, dict):
-            self.logger.error(f"Expected dict from execute_query, got {type(check_result)}: {check_result}")
-            return {"status": "error", "error": "Invalid result type from execute_query (check_result)"}
+            self.logger.error(
+                f"Expected dict from execute_query, got {type(check_result)}: {check_result}"
+            )
+            return {
+                "status": "error",
+                "error": "Invalid result type from execute_query (check_result)",
+            }
 
         exists_command = "existing_type.present?"
         exists_result = self.op_client.execute_query(exists_command)
-        self.logger.debug(f"exists_result type: {type(exists_result)}, value: {exists_result}")
+        self.logger.debug(
+            f"exists_result type: {type(exists_result)}, value: {exists_result}"
+        )
         if not isinstance(exists_result, dict):
-            self.logger.error(f"Expected dict from execute_query, got {type(exists_result)}: {exists_result}")
-            return {"status": "error", "error": "Invalid result type from execute_query (exists_result)"}
+            self.logger.error(
+                f"Expected dict from execute_query, got {type(exists_result)}: {exists_result}"
+            )
+            return {
+                "status": "error",
+                "error": "Invalid result type from execute_query (exists_result)",
+            }
 
         if exists_result["status"] == "success" and "true" in exists_result["output"]:
-            self.logger.info("Work package type '%s' already exists, retrieving ID", type_name)
+            self.logger.info(
+                "Work package type '%s' already exists, retrieving ID", type_name
+            )
             id_command = "existing_type.id"
             id_result = self.op_client.execute_query(id_command)
             self.logger.debug(f"id_result type: {type(id_result)}, value: {id_result}")
             if not isinstance(id_result, dict):
-                self.logger.error(f"Expected dict from execute_query, got {type(id_result)}: {id_result}")
-                return {"status": "error", "error": "Invalid result type from execute_query (id_result)"}
+                self.logger.error(
+                    f"Expected dict from execute_query, got {type(id_result)}: {id_result}"
+                )
+                return {
+                    "status": "error",
+                    "error": "Invalid result type from execute_query (id_result)",
+                }
 
-            if id_result["status"] == "success" and id_result["output"].strip().isdigit():
+            if (
+                id_result["status"] == "success"
+                and id_result["output"].strip().isdigit()
+            ):
                 type_id = int(id_result["output"].strip())
                 return {
                     "status": "success",
                     "message": "Work package type already exists",
                     "id": type_id,
                 }
-            self.logger.warning("Failed to retrieve ID for existing type '%s'", type_name)
+            self.logger.warning(
+                "Failed to retrieve ID for existing type '%s'", type_name
+            )
 
         # Create the type with proper escaping to prevent Rails injection
         milestone_flag = "true" if is_milestone else "false"
@@ -584,8 +721,13 @@ class IssueTypeMigration(BaseMigration):
         result = self.op_client.execute_query(command)
         self.logger.debug(f"result type: {type(result)}, value: {result}")
         if not isinstance(result, dict):
-            self.logger.error(f"Expected dict from execute_query, got {type(result)}: {result}")
-            return {"status": "error", "error": "Invalid result type from execute_query (result)"}
+            self.logger.error(
+                f"Expected dict from execute_query, got {type(result)}: {result}"
+            )
+            return {
+                "status": "error",
+                "error": "Invalid result type from execute_query (result)",
+            }
 
         # Parse the result
         output = result.get("output", "")
@@ -596,25 +738,43 @@ class IssueTypeMigration(BaseMigration):
             if error_match:
                 error_msg = error_match.group(1)
 
-            self.logger.error("Error creating work package type '%s': %s", type_name, error_msg)
+            self.logger.error(
+                "Error creating work package type '%s': %s", type_name, error_msg
+            )
             return {"status": "error", "error": error_msg}
 
         # Extract ID if successful
         id_match = re.search(r"id: (\d+)", output)
         if id_match:
             type_id = int(id_match.group(1))
-            self.logger.info("Created work package type '%s' with ID %s", type_name, type_id)
+            self.logger.info(
+                "Created work package type '%s' with ID %s", type_name, type_id
+            )
 
             # Verify the type exists by querying it (type_id is safe as it's an integer)
             verify_command = f"Type.find({type_id}).present? rescue false"
             verify_result = self.op_client.execute_query(verify_command)
-            self.logger.debug(f"verify_result type: {type(verify_result)}, value: {verify_result}")
+            self.logger.debug(
+                f"verify_result type: {type(verify_result)}, value: {verify_result}"
+            )
             if not isinstance(verify_result, dict):
-                self.logger.error(f"Expected dict from execute_query, got {type(verify_result)}: {verify_result}")
-                return {"status": "error", "error": "Invalid result type from execute_query (verify_result)"}
+                self.logger.error(
+                    f"Expected dict from execute_query, got {type(verify_result)}: {verify_result}"
+                )
+                return {
+                    "status": "error",
+                    "error": "Invalid result type from execute_query (verify_result)",
+                }
 
-            if verify_result["status"] == "success" and "true" in verify_result["output"]:
-                self.logger.info("Verified work package type '%s' with ID %s exists", type_name, type_id)
+            if (
+                verify_result["status"] == "success"
+                and "true" in verify_result["output"]
+            ):
+                self.logger.info(
+                    "Verified work package type '%s' with ID %s exists",
+                    type_name,
+                    type_id,
+                )
                 return {"status": "success", "id": type_id, "name": type_name}
             self.logger.warning(
                 "Created type but failed verification: %s",
@@ -645,7 +805,9 @@ class IssueTypeMigration(BaseMigration):
 
         # Get existing types to avoid creating duplicates
         existing_types = self.check_existing_work_package_types()
-        existing_names = [type_data.get("name", "").lower() for type_data in existing_types]
+        existing_names = [
+            type_data.get("name", "").lower() for type_data in existing_types
+        ]
 
         # Create lookup dictionary for O(1) access instead of O(n) linear search
         # This optimizes the algorithm from O(n²) to O(n)
@@ -669,9 +831,16 @@ class IssueTypeMigration(BaseMigration):
                     if existing_type_data:
                         existing_id = existing_type_data.get("id")
                         if existing_id:
-                            self.logger.info("Work package type '%s' already exists, updating mapping", op_type_name)
-                            self.issue_type_mapping[type_name]["openproject_id"] = existing_id
-                            self.issue_type_mapping[type_name]["matched_by"] = "found_existing"
+                            self.logger.info(
+                                "Work package type '%s' already exists, updating mapping",
+                                op_type_name,
+                            )
+                            self.issue_type_mapping[type_name][
+                                "openproject_id"
+                            ] = existing_id
+                            self.issue_type_mapping[type_name][
+                                "matched_by"
+                            ] = "found_existing"
                     continue
 
                 # Only add unique type names to prevent duplicates
@@ -690,14 +859,20 @@ class IssueTypeMigration(BaseMigration):
             self.logger.info("No new work package types to create")
             return
 
-        self.logger.info("Preparing to create %s work package types in bulk", len(types_to_create))
+        self.logger.info(
+            "Preparing to create %s work package types in bulk", len(types_to_create)
+        )
 
         # Create a temporary JSON file to store the types
         temp_file = self.data_dir / "work_package_types_to_create.json"
         with temp_file.open("w") as f:
             json.dump(types_to_create, f, indent=2)
 
-        self.logger.info("Saved %s work package types to create to %s", len(types_to_create), temp_file)
+        self.logger.info(
+            "Saved %s work package types to create to %s",
+            len(types_to_create),
+            temp_file,
+        )
 
         # Define container paths
         container_temp_path = "/tmp/work_package_types_to_create.json"
@@ -707,7 +882,9 @@ class IssueTypeMigration(BaseMigration):
         results_file = self.data_dir / "work_package_types_created.json"
 
         # Transfer the file to the container
-        if not self.op_client.transfer_file_to_container(temp_file, container_temp_path):
+        if not self.op_client.transfer_file_to_container(
+            temp_file, container_temp_path
+        ):
             msg = f"Failed to transfer types file to container from {temp_file} to {container_temp_path}"
             self.logger.error(msg)
             raise MigrationError(msg)
@@ -729,23 +906,31 @@ class IssueTypeMigration(BaseMigration):
             # 3. Dangerous function patterns
             # 4. Single quotes
             # 5. Control characters
-            escaped = s.replace("\\", "\\\\")        # Escape backslashes first
-            escaped = escaped.replace("#", "\\#")     # Escape Ruby interpolation start
-            escaped = escaped.replace("{", "\\{")     # Escape opening brace
-            escaped = escaped.replace("}", "\\}")     # Escape closing brace
-            escaped = escaped.replace("`", "\\`")     # Escape backticks (command execution)
+            escaped = s.replace("\\", "\\\\")  # Escape backslashes first
+            escaped = escaped.replace("#", "\\#")  # Escape Ruby interpolation start
+            escaped = escaped.replace("{", "\\{")  # Escape opening brace
+            escaped = escaped.replace("}", "\\}")  # Escape closing brace
+            escaped = escaped.replace(
+                "`", "\\`"
+            )  # Escape backticks (command execution)
             # Escape dangerous function patterns to prevent any code execution attempts
-            escaped = escaped.replace("system(", "sys\\tem(")     # Break system function calls
-            escaped = escaped.replace("exec(", "ex\\ec(")         # Break exec function calls
-            escaped = escaped.replace("eval(", "ev\\al(")         # Break eval function calls
-            escaped = escaped.replace("exit(", "ex\\it(")         # Break exit function calls
-            escaped = escaped.replace("exit ", "ex\\it ")         # Break exit commands
+            escaped = escaped.replace(
+                "system(", "sys\\tem("
+            )  # Break system function calls
+            escaped = escaped.replace("exec(", "ex\\ec(")  # Break exec function calls
+            escaped = escaped.replace("eval(", "ev\\al(")  # Break eval function calls
+            escaped = escaped.replace("exit(", "ex\\it(")  # Break exit function calls
+            escaped = escaped.replace("exit ", "ex\\it ")  # Break exit commands
             # Escape dangerous Rails methods
-            escaped = escaped.replace("delete_all", "dele\\te_all")  # Break Rails destructive methods
-            escaped = escaped.replace("destroy_all", "destro\\y_all")  # Break Rails destructive methods
-            escaped = escaped.replace("'", "\\'")     # Escape single quotes
-            escaped = escaped.replace("\n", "\\n")    # Escape newlines
-            escaped = escaped.replace("\r", "\\r")    # Escape carriage returns
+            escaped = escaped.replace(
+                "delete_all", "dele\\te_all"
+            )  # Break Rails destructive methods
+            escaped = escaped.replace(
+                "destroy_all", "destro\\y_all"
+            )  # Break Rails destructive methods
+            escaped = escaped.replace("'", "\\'")  # Escape single quotes
+            escaped = escaped.replace("\n", "\\n")  # Escape newlines
+            escaped = escaped.replace("\r", "\\r")  # Escape carriage returns
             return escaped
 
         # SECURITY FIX: Escape paths to prevent injection
@@ -890,9 +1075,13 @@ class IssueTypeMigration(BaseMigration):
         bulk_create_script = header_script + main_script
 
         # Execute the bulk creation script
-        self.logger.info("Executing bulk creation of work package types via Rails console...")
+        self.logger.info(
+            "Executing bulk creation of work package types via Rails console..."
+        )
         result = self.op_client.execute_query(bulk_create_script)
-        self.logger.debug(f"bulk_create_script result type: {type(result)}, value: {result}")
+        self.logger.debug(
+            f"bulk_create_script result type: {type(result)}, value: {result}"
+        )
         if not isinstance(result, dict):
             msg = f"Expected dict from execute_query, got {type(result)}: {result}"
             self.logger.error(msg)
@@ -921,7 +1110,9 @@ class IssueTypeMigration(BaseMigration):
         # Parse results
         try:
             # Try to get the result file from the container
-            if not self.op_client.transfer_file_from_container(container_results_path, results_file):
+            if not self.op_client.transfer_file_from_container(
+                container_results_path, results_file
+            ):
                 msg = f"Failed to retrieve results file from container: {container_results_path}"
                 self.logger.error(msg)
                 # Dump the entire output for debugging
@@ -955,15 +1146,25 @@ class IssueTypeMigration(BaseMigration):
             created_count = len(creation_results.get("created", []))
             error_count = len(creation_results.get("errors", []))
 
-            self.logger.info("Bulk creation completed: %s types created, %s errors", created_count, error_count)
+            self.logger.info(
+                "Bulk creation completed: %s types created, %s errors",
+                created_count,
+                error_count,
+            )
 
             # Update mapping with created types
             for created_type in creation_results.get("created", []):
                 jira_type_name = created_type.get("jira_type_name")
                 if jira_type_name and jira_type_name in self.issue_type_mapping:
-                    self.issue_type_mapping[jira_type_name]["openproject_id"] = created_type.get("id")
+                    self.issue_type_mapping[jira_type_name]["openproject_id"] = (
+                        created_type.get("id")
+                    )
                     self.issue_type_mapping[jira_type_name]["matched_by"] = "created"
-                    self.logger.info("Updated mapping for '%s' with ID %s", jira_type_name, created_type.get("id"))
+                    self.logger.info(
+                        "Updated mapping for '%s' with ID %s",
+                        jira_type_name,
+                        created_type.get("id"),
+                    )
 
             # Save updated mapping
             self._save_to_json(self.issue_type_mapping, Path("issue_type_mapping.json"))
@@ -983,7 +1184,9 @@ class IssueTypeMigration(BaseMigration):
             if error_count > 0:
                 self.logger.warning("Some work package types failed to create:")
                 for error in creation_results.get("errors", []):
-                    self.logger.warning("  - %s: %s", error.get("name"), error.get("error"))
+                    self.logger.warning(
+                        "  - %s: %s", error.get("name"), error.get("error")
+                    )
                 msg = f"Failed to create {error_count} work package types"
                 raise MigrationError(msg)
 
@@ -1023,7 +1226,9 @@ class IssueTypeMigration(BaseMigration):
                     op_types_to_create[op_type_name] = mapping
 
         total_types_needing_creation = sum(
-            1 for mapping in self.issue_type_mapping.values() if mapping["openproject_id"] is None
+            1
+            for mapping in self.issue_type_mapping.values()
+            if mapping["openproject_id"] is None
         )
 
         if op_types_to_create:
@@ -1034,7 +1239,9 @@ class IssueTypeMigration(BaseMigration):
                 f"(This will map to {total_types_needing_creation} total Jira issue types after deduplication)",
             )
         else:
-            self.logger.info("No new work package types need to be created in OpenProject")
+            self.logger.info(
+                "No new work package types need to be created in OpenProject"
+            )
 
         final_mapping = {}
         for mapping in self.issue_type_mapping.values():
@@ -1061,10 +1268,14 @@ class IssueTypeMigration(BaseMigration):
         analysis: dict[str, Any] = {
             "total_jira_types": len(self.issue_type_mapping),
             "matched_op_types": sum(
-                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is not None
+                1
+                for mapping in self.issue_type_mapping.values()
+                if mapping.get("openproject_id") is not None
             ),
             "types_to_create": sum(
-                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is None
+                1
+                for mapping in self.issue_type_mapping.values()
+                if mapping.get("openproject_id") is None
             ),
             "mapping_details": self.issue_type_mapping,
             "unmatched_details": [
@@ -1139,7 +1350,9 @@ class IssueTypeMigration(BaseMigration):
             MigrationError: If mapping update fails
 
         """
-        self.logger.info("Updating issue type mapping file with IDs from OpenProject...")
+        self.logger.info(
+            "Updating issue type mapping file with IDs from OpenProject..."
+        )
 
         # Get all work package types from OpenProject
         op_types = self.op_client.get_work_package_types()
@@ -1161,7 +1374,10 @@ class IssueTypeMigration(BaseMigration):
             op_name = type_data.get("openproject_name", "")
 
             # Skip if already mapped
-            if type_data.get("openproject_id") and type_data.get("matched_by") != "default_mapping_to_create":
+            if (
+                type_data.get("openproject_id")
+                and type_data.get("matched_by") != "default_mapping_to_create"
+            ):
                 already_mapped_count += 1
                 continue
 
@@ -1171,14 +1387,20 @@ class IssueTypeMigration(BaseMigration):
                 op_id = op_type.get("id")
 
                 # Update the mapping
-                self.logger.info("Found work package type '%s' with ID %s", op_name, op_id)
+                self.logger.info(
+                    "Found work package type '%s' with ID %s", op_name, op_id
+                )
                 self.issue_type_mapping[jira_type_name]["openproject_id"] = op_id
                 self.issue_type_mapping[jira_type_name]["matched_by"] = (
-                    "created" if type_data.get("matched_by") == "default_mapping_to_create" else "exact_match"
+                    "created"
+                    if type_data.get("matched_by") == "default_mapping_to_create"
+                    else "exact_match"
                 )
                 updated_count += 1
             else:
-                self.logger.warning("Work package type '%s' not found in OpenProject", op_name)
+                self.logger.warning(
+                    "Work package type '%s' not found in OpenProject", op_name
+                )
                 missing_count += 1
 
         # Save the updated mapping
@@ -1225,11 +1447,16 @@ class IssueTypeMigration(BaseMigration):
             results = ComponentResult(
                 success=True,
                 total_types=len(self.issue_type_mapping),
-                matched_types=sum(1 for t in self.issue_type_mapping.values() if t.get("openproject_id") is not None),
+                matched_types=sum(
+                    1
+                    for t in self.issue_type_mapping.values()
+                    if t.get("openproject_id") is not None
+                ),
                 normalized_types=sum(
                     1
                     for t in self.issue_type_mapping.values()
-                    if t.get("matched_by", "").startswith("normalized_to_") or t.get("matched_by") == "fallback_to_task"
+                    if t.get("matched_by", "").startswith("normalized_to_")
+                    or t.get("matched_by") == "fallback_to_task"
                 ),
                 created_types=0,
                 dry_run=True,

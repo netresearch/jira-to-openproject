@@ -1068,11 +1068,222 @@
         ],
         "priority": "medium",
         "subtasks": []
+      },
+      {
+        "id": 51,
+        "title": "Fix PostgreSQL Volume Compatibility Issue",
+        "description": "Drop and recreate the PostgreSQL data volume to remove incompatible legacy data and ensure the database starts successfully under the new version.",
+        "details": "1. Create a backup of the existing volume (docker run --rm -v pg_data:/data -v $(pwd)/backup:/backup alpine tar czf /backup/pg_data_backup.tgz -C /data .).\n2. Stop all services depending on the database (docker-compose down).\n3. Remove the old volume (docker volume rm pg_data).\n4. Recreate the volume by running docker-compose up -d postgres, ensuring the init scripts directory (e.g. docker-entrypoint-initdb.d/) contains any required seed or migration SQL.\n5. Verify that the Postgres container initializes without errors and that the schema matches the expected version (check logs for \"database system is ready to accept connections\").\n6. Update any environment or orchestration scripts (docker-compose.yml, Helm charts) to pin the Postgres version and reference the recreated volume name if changed.\n7. Document the procedure in the project README or operations runbook for future upgrades.",
+        "testStrategy": "1. Bring up the full stack (docker-compose up) and confirm the Postgres container enters a healthy state (docker ps health status).\n2. Connect to the database and verify core tables exist and schema versions are correct (SELECT version FROM schema_migrations).\n3. Run the application’s integration test suite against the new database instance to ensure no regressions or startup failures.\n4. Attempt a smoke test by inserting and querying sample data.\n5. Simulate a minor version upgrade by repeating the drop/recreate steps and confirming consistent behavior.",
+        "status": "done",
+        "dependencies": [
+          26
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 52,
+        "title": "Fix mock service YAML file path issues for API specifications",
+        "description": "Correct the file paths and ensure presence of jira-api.yaml and openproject-api.yaml in the mock service configuration so the services can locate and load their API specification files on startup without errors.",
+        "details": "1. Audit the mock service configuration (e.g. mock-server config.json or environment variables) to locate where jira-api.yaml and openproject-api.yaml are expected.  \n2. Verify that the YAML files exist in the repository under the expected directory (e.g. `mock/services/specs/`). If missing, copy or generate them from the swagger/openapi definitions produced by the API clients.  \n3. Update relative or absolute path references in Dockerfiles, volume mounts, or startup scripts to point to the correct spec file locations.  \n4. Add a file-existence check in the mock service entrypoint script to fail fast with a clear error message if a required spec file is missing.  \n5. Ensure the CI/CD pipeline includes a step to sync or generate these spec files before the mock services startup stage.",
+        "testStrategy": "1. Unit Test: In a local environment, run `npm start` or `docker-compose up mock-services` and confirm that both mock services start without YAML-not-found errors.  \n2. Integration Test: Send a GET request to each mock service’s `/api-docs` or equivalent endpoint and verify that the returned OpenAPI spec matches the contents of jira-api.yaml and openproject-api.yaml.  \n3. CI Verification: Introduce a CI job step that triggers the mock services and fails the build if any startup logs contain file-not-found or path errors for the YAML specs.",
+        "status": "done",
+        "dependencies": [
+          3
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 53,
+        "title": "Restrict Redis and PostgreSQL ports to internal Docker network",
+        "description": "Remove external port mappings for Redis (6379) and PostgreSQL (5432) in the Docker Compose configuration so these services are only accessible within the internal Docker network.",
+        "details": "1. Open docker-compose.yml and locate the `redis` and `postgres` service definitions.\n2. Under each service, remove or comment out the `ports:` section that maps host ports to container ports (e.g., `- \"6379:6379\"` and `- \"5432:5432\"`).\n3. Add an `expose:` section under each service to make the ports available only on the internal network (e.g., `expose:\n   - \"6379\"` for Redis and `- \"5432\"` for PostgreSQL).\n4. Ensure both services are attached to the existing internal network (e.g., `networks:\n   internal:`) and not bound to the default `bridge` network with host access.\n5. Update any other service definitions (e.g., application containers) to reference the Redis and PostgreSQL services by service name over the internal network.\n6. Remove any firewall or host-level rules that were added to permit direct access.\n7. Document the change in the repository’s README or operations guide, noting that direct host access is no longer available and providing instructions for using `docker exec` or service-to-service communication.",
+        "testStrategy": "1. Bring up the stack with `docker-compose up -d`.\n2. Run `docker-compose ps` and verify that neither Redis nor PostgreSQL has host port mappings listed under the \"Ports\" column.\n3. On the host machine, run `netstat -tulpn | grep 6379` and `grep 5432` to confirm no listeners on those ports.\n4. From within the application container (`docker exec -it <app> sh`), verify you can connect to Redis (`redis-cli -h redis ping`) and to PostgreSQL (`psql -h postgres -U $PGUSER -c \"SELECT 1;\"`).\n5. From the host, attempt to connect to Redis or PostgreSQL on localhost and confirm that connections are refused.\n6. Add integration tests or CI steps that programmatically verify services are reachable only via the Docker network and not via host ports.",
+        "status": "done",
+        "dependencies": [
+          51
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 54,
+        "title": "Configure Docker containers to run as non-root user and enforce resource limits",
+        "description": "Update the Docker setup so that all containers use a dedicated non-root user account and define explicit CPU and memory limits in docker-compose.yml and via DockerClient to mitigate container escape risks.",
+        "details": "1. Dockerfile updates: \n   a. Create a dedicated user (e.g., appuser) with a fixed UID/GID. \n   b. Ensure all application files and mounted volumes are owned by this user. \n   c. Add `USER appuser` as the final Dockerfile directive.  \n2. docker-compose.yml changes:  \n   a. For each service, add `user: \"${UID}:${GID}\"` (or hard-coded UID:GID).  \n   b. Under each service’s `deploy.resources.limits`, set `cpus: \"0.50\"` and `memory: \"512M\"`.  \n   c. If not using Swarm, under `services.<name>.resources.limits`, define `cpus` and `memory`.  \n3. DockerClient enhancements:  \n   a. Extend `run_container` and related methods to accept optional `user`, `cpu_limit`, and `memory_limit` parameters.  \n   b. When invoking the Docker API (HostConfig), map these into `User`, `NanoCPUs`, and `Memory` fields. \n   c. Update any wrapper around `docker-compose up` to pass `--user` and `--memory/--cpus` flags if supported.  \n4. Volume and permission review:  \n   a. Verify that any host directory mounts are chowned to the non-root user inside the container at runtime.  \n   b. Add an `entrypoint` script if necessary to adjust permissions on startup.  \n5. Documentation:  \n   a. Update README and operator guides to reflect the new variables (UID, GID, CPU/MEM).  \n   b. Provide examples in `.env.example`.",
+        "testStrategy": "1. Automated unit tests for DockerClient:  \n   a. Mock the low-level Docker API to verify `HostConfig` includes correct `User`, `NanoCPUs`, and `Memory`.  \n   b. Test that default limits apply when parameters are omitted.  \n2. Integration test with docker-compose:  \n   a. Spin up each service, then run `docker inspect` and assert `Config.User` matches the non-root user.  \n   b. Check `HostConfig.NanoCPUs` and `HostConfig.Memory` against expected limits.  \n3. Runtime behavior tests:  \n   a. Inside a running container, execute `id -u` and confirm it is not `0`.  \n   b. Attempt to allocate more memory than `memory_limit` and observe an OOM kill event.  \n4. Security validation:  \n   a. Run DockerBench Security scan and verify that “Running as non-root user” and “Resource constraints” checks pass.  \n   b. Perform a manual audit of file permissions and mounted volumes.",
+        "status": "pending",
+        "dependencies": [
+          22
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 55,
+        "title": "Implement secure secret management for PostgreSQL credentials",
+        "description": "Replace the hard-coded POSTGRES_PASSWORD in docker-compose.yml with a secure mechanism using environment variables and Docker secrets to prevent credentials from being committed to VCS.",
+        "details": "1. Update docker-compose.yml:\n   a. Remove the hard-coded POSTGRES_PASSWORD entry.\n   b. Add an 'env_file' reference (e.g. .env) for development.\n   c. Configure Docker secrets for production: define a 'postgres_password' secret, and in the postgres service block, mount it under '/run/secrets/postgres_password', then set environment POSTGRES_PASSWORD=/run/secrets/postgres_password.\n2. Extend the existing ConfigLoader (from Task 2) to:\n   a. Load secrets from the environment or Docker secrets path.\n   b. Validate that POSTGRES_PASSWORD is present and non-empty.\n3. Create or update example files:\n   a. .env.example with a placeholder POSTGRES_PASSWORD entry.\n   b. secrets/postgres_password.txt.example (gitignored) with instructions.\n4. Update project documentation (README.md) with steps to:\n   a. Populate .env for local development.\n   b. Create Docker secrets via 'docker secret create' for production.\n   c. Run docker-compose with secrets enabled (swarm or standalone).\n5. Ensure backward compatibility: if neither env var nor secret exists, fail fast with a clear error message.\n",
+        "testStrategy": "1. Local Dev Test:\n   a. Populate .env with POSTGRES_PASSWORD and run 'docker-compose up'.\n   b. Verify the postgres container starts healthy and you can connect using the configured password.\n2. Secrets Test:\n   a. Create a Docker secret: 'echo \"mypassword\" | docker secret create postgres_password -'.\n   b. Deploy with 'docker stack deploy' or 'docker-compose --compatibility up'.\n   c. Exec into the postgres container and confirm '/run/secrets/postgres_password' contains the secret.\n   d. Connect to the database using psql and the password from the secret file.\n3. Negative Test:\n   a. Rename or remove .env and Docker secret.\n   b. Bring up the stack and confirm it fails with an explicit error indicating missing POSTGRES_PASSWORD.\n4. Security Audit:\n   a. Search VCS history and current files to ensure no plain-text password remains in compose.yml or code.\n",
+        "status": "pending",
+        "dependencies": [
+          2
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 56,
+        "title": "Resolve Docker Port Conflicts with Skopos Project Containers",
+        "description": "Adjust Redis and PostgreSQL host port mappings in the docker-compose configuration to avoid collisions with existing Skopos project containers, making ports configurable and documented.",
+        "details": "1. Audit current port usage by running `docker ps` and confirm that 6379 (Redis) and 5432 (PostgreSQL) are occupied by Skopos containers.\n2. Update docker-compose.yml:\n   a. For the Redis service, change the host binding from \"6379:6379\" to \"${REDIS_PORT:-16379}:6379\".\n   b. For the PostgreSQL service, change the host binding from \"5432:5432\" to \"${POSTGRES_PORT:-15432}:5432\".\n3. Add REDIS_PORT and POSTGRES_PORT to the .env.example file with default values.\n4. Modify the application’s ConfigLoader (from Task 2) to read these environment variables and fall back to defaults.\n5. Document the new configuration keys and default port values in README.md, and include a note about coordinating with Skopos team to choose non-conflicting ports.\n6. Ensure legacy configurations still work by supporting 6379 and 5432 if no conflict is detected at runtime.",
+        "testStrategy": "1. Local Integration Test:\n   a. Stop any Skopos containers.\n   b. Run `docker-compose up -d` and verify Redis listens on port 16379 (`redis-cli -p 16379 PING` returns PONG) and PostgreSQL on port 15432 (`psql -h localhost -p 15432 -U postgres -c '\\l'`).\n   c. Override ports via `.env` (e.g. REDIS_PORT=26379, POSTGRES_PORT=25432), rerun compose, and repeat connectivity checks.\n2. Conflict Simulation:\n   a. Start dummy containers listening on 6379 and 5432.\n   b. Run `docker-compose up` and confirm services still start on the configurable ports without error.\n3. End-to-End Smoke Test:\n   a. Run application migrations and basic queries against the remapped PostgreSQL and Redis instances to ensure the app connects correctly.\n4. Documentation Review: Verify README and .env.example accurately reflect the changes and instructions.",
+        "status": "pending",
+        "dependencies": [
+          1
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 57,
+        "title": "Synchronize Runtime Dependencies in pyproject.toml",
+        "description": "Ensure that all runtime dependencies listed in requirements.txt are declared in pyproject.toml to prevent packaging and distribution failures.",
+        "details": "1. Review requirements.txt and extract each package name and version specifier.\n2. Open pyproject.toml under [tool.poetry.dependencies] (or [project.dependencies] for PEP 621) and compare entries.  \n3. For any missing or mismatched dependency, add or update the entry in pyproject.toml, preserving environment markers and extras as needed.  \n4. If using Poetry, run `poetry lock --no-update` to regenerate the lockfile; if using PEP 621, run `python -m build` to ensure lock consistency.  \n5. Write a small helper script (e.g. scripts/sync_deps.py) that parses requirements.txt and pyproject.toml and reports discrepancies, to enable future automated checks.  \n6. Commit the updated pyproject.toml and lockfile, and document the synchronization process in CONTRIBUTING.md.",
+        "testStrategy": "1. Run `poetry check` (or `pip check` after installing from the built wheel) to validate pyproject.toml syntax and dependency resolution.  \n2. Build the package with `poetry build` (or `python -m build`) and inspect the generated METADATA file inside the wheel to verify that all expected runtime dependencies appear.  \n3. In a clean virtual environment, install the package (`pip install dist/*.whl`) and attempt to import modules from each dependency listed in requirements.txt.  \n4. Execute the helper script (`scripts/sync_deps.py`) against requirements.txt and pyproject.toml and assert that it exits with zero status and no discrepancy messages.  \n5. Add a CI pipeline step that runs the helper script and fails the build if new requirements are not synchronized.",
+        "status": "pending",
+        "dependencies": [
+          1
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 58,
+        "title": "Document PostgreSQL 15→16 Upgrade and Migration Procedure",
+        "description": "Create comprehensive migration and backup documentation to guide a safe upgrade from PostgreSQL 15 to 16 and minimize data loss risk.",
+        "details": "1. Inventory current environment: record PostgreSQL 15 version, extensions, custom configs, data directory layout, and active connections.  \n2. Identify breaking changes: list deprecated features, changed configuration parameters, and extension compatibility issues between 15 and 16.  \n3. Define backup strategy: include full physical backups (pg_basebackup or filesystem snapshot), logical dumps (pg_dumpall and individual pg_dump), and WAL archiving. Provide example commands (e.g., docker run … pg_dumpall > all.sql).  \n4. Outline upgrade steps:  \n  a. Quiesce writes and take final backup.  \n  b. Perform pg_upgrade with --link or --copy mode.  \n  c. Run post-upgrade analyze and test suite.  \n5. Roll-back plan: detail how to restore from backup, reapply WAL files, and revert containers/volumes.  \n6. Testing guidance: include how to validate schema versions, data integrity checks (row counts, checksums), and extension functionality on a staging cluster.  \n7. Maintenance window and downtime considerations: estimate timings and notify stakeholders.  \n8. Documentation format: markdown with code snippets, configuration diffs, and troubleshooting FAQ.",
+        "testStrategy": "1. Peer-review the documentation for completeness and clarity.  \n2. Execute the documented backup and restore steps on a staging environment: verify that backups can be restored and that data matches the original.  \n3. Follow the upgrade steps on a staging replica: confirm that the database starts under PostgreSQL 16 and passes integration tests.  \n4. Validate rollback: simulate a failed upgrade and restore from backups, ensuring application functionality is restored.  \n5. Confirm that all deprecated features are addressed and that extensions load correctly under version 16.",
+        "status": "pending",
+        "dependencies": [
+          51
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 59,
+        "title": "Implement Docker health checks for service dependencies",
+        "description": "Add comprehensive healthcheck configurations and dependency conditions to all Docker services to prevent crash-loop scenarios by ensuring services start only when their dependencies are healthy.",
+        "details": "1. Audit docker-compose.yml and identify each service and its direct dependencies (e.g., API → database, cache; mock-services → specs store).\n2. For each base service (PostgreSQL, Redis, mock-server, etc.), add a healthcheck section:\n   • test: use appropriate command (e.g., [\"CMD-SHELL\",\"pg_isready -U postgres\"] for PostgreSQL, [\"CMD\",\"redis-cli\",\"PING\"] for Redis, [\"CMD-SHELL\",\"curl -f http://localhost:3000/api-docs || exit 1\"] for mock services).\n   • interval: 30s, timeout: 10s, retries: 5 (configurable via environment variables if needed).\n3. Update each dependent service’s depends_on to use the health condition form:\n   depends_on:\n     database:\n       condition: service_healthy\n     redis:\n       condition: service_healthy\n     mock-server:\n       condition: service_healthy\n4. If any services start via custom entrypoint scripts, consider integrating a wait-for-it or wait-for-health wrapper that polls the Docker health status of dependencies.\n5. Review and align healthcheck intervals and retry policies across services to balance startup delay and responsiveness.\n6. Document new environment variables (e.g. HEALTHCHECK_INTERVAL) in .env.example and README.",
+        "testStrategy": "1. Configuration Validation: run docker-compose config to ensure syntactic correctness and that healthcheck and depends_on entries are recognized.\n2. Integration Test:\n   a. Bring up the full stack with docker-compose up -d.\n   b. Use docker inspect --format='{{.State.Health.Status}}' on each container to verify all services report HEALTHY within expected retries.\n   c. Introduce a controlled failure (e.g. stop PostgreSQL) and confirm dependent services do not proceed to \"running\" state until the dependency recovers and becomes healthy.\n3. End-to-End Smoke Test: simulate multi-service request (e.g., application GET request that hits database then cache) immediately after startup to ensure no  connection errors occur.\n4. Regression Check: verify no existing resource limits, user settings, or port mappings (from tasks 54 and 56) are broken by the new directives.",
+        "status": "pending",
+        "dependencies": [
+          54,
+          56
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 60,
+        "title": "Add dependency validation tests to CI/CD pipeline",
+        "description": "Implement automated CI/CD tests to ensure all project dependencies are up to date, compatible, and free of known issues.",
+        "details": "1. Update the CI/CD workflow (e.g., .github/workflows/ci.yml) to include a new job called `dependency-validation`.  \n2. In the job steps, install or refresh dependencies (e.g., `npm ci` / `pip install -r requirements.txt`).  \n3. Run dependency health checks using tools such as `npm audit --audit-level=moderate`, `pip-audit`, or `maven dependency:analyze`.  \n4. Compare installed versions against the lockfile or policy file and fail the build if mismatches or outdated packages are detected.  \n5. Integrate vulnerability scanners (e.g., OWASP Dependency-Check or GitHub’s Dependabot) to detect known CVEs and block pipeline progression on critical/high vulnerabilities.  \n6. Output a summary report in CI logs showing the status of each dependency, including version, latest available version, and vulnerability status.  \n7. Add configuration entries in the project config (leveraging the existing configuration system) to set acceptable version thresholds and exemptions.",
+        "testStrategy": "1. Modify the lockfile or requirements file in a test branch to intentionally use an outdated or incompatible version; push to trigger CI and verify that the `dependency-validation` job fails with the correct error message.  \n2. Introduce a known vulnerable dependency (with a seeded CVE) and confirm that the vulnerability scanner flags the issue and the build is blocked.  \n3. Run the pipeline on the main branch with all current dependencies and ensure the `dependency-validation` job passes with zero errors.  \n4. Validate that the summary report output in the CI logs correctly lists each dependency, its current and latest versions, and any vulnerabilities detected.",
+        "status": "pending",
+        "dependencies": [
+          2
+        ],
+        "priority": "low",
+        "subtasks": []
+      },
+      {
+        "id": 61,
+        "title": "Pin Docker Image References with SHA256 Digests in docker-compose.yml",
+        "description": "Replace floating version tags with immutable SHA256 digest pins for all Docker service images in docker-compose.yml to eliminate tag re-pointing vulnerability.",
+        "details": "1. Audit current service images in docker-compose.yml and identify all entries using version tags (e.g., image: myapp:1.2.3).\n2. For each image:\n   a. Pull the tagged image locally (docker pull myapp:1.2.3).\n   b. Retrieve its digest (docker inspect --format='{{index .RepoDigests 0}}' myapp:1.2.3).\n   c. Update docker-compose.yml image field to use the digest form (image: myapp@sha256:abcdef...).\n3. Support environment-based overrides: introduce a docker-compose.override.yml for development that allows version tags, and ensure the production compose file (or a CI script) enforces digest-only images.\n4. Optionally, create a helper script (scripts/pin-digests.sh) that automates steps 2a–2c for future images, and integrate it into the CI pipeline.\n5. Document the digest pinning process in README.md under “Deployment” and update any automation tooling to use the pinned compose file for production.",
+        "testStrategy": "1. Static Validation:\n   a. Write a lint script to parse docker-compose.yml and assert that no image fields contain ‘:’ followed by an alphanumeric tag without ‘@sha256’. Fail the build if any are found.\n2. Integration Test:\n   a. In a clean environment, run docker-compose pull and verify that each service image is pulled by digest (docker images --digests).\n   b. Bring up the stack in CI (docker-compose up -d) and confirm services start normally with the pinned images.\n3. Regression Check:\n   a. Simulate a tag re-pointing by re-tagging an image upstream, then run docker-compose pull; confirm the old image digest remains in use.\n4. Development Override:\n   a. Switch to the override compose file and assert that version tags are accepted and containers still run locally.",
+        "status": "pending",
+        "dependencies": [
+          54,
+          56
+        ],
+        "priority": "low",
+        "subtasks": []
+      },
+      {
+        "id": 62,
+        "title": "Regenerate Lockfile and Update CI Docker Builds with Upgraded Python Dependencies",
+        "description": "Update the project lockfile and CI Docker images to incorporate the newly upgraded Python packages and ensure consistency across all environments.",
+        "details": "1. Regenerate the lockfile: \n   a. If using Poetry, run `poetry lock --no-update` to merge existing versions, then `poetry lock --update` to pick up the new package versions.  \n   b. If using PEP 621, run `pip-compile requirements.in --output-file requirements.txt` or update `requirements.txt` and run `pip-compile`.  \n2. Commit and review the updated lockfile and/or requirements.txt.  \n3. Update the CI Dockerfile(s):  \n   a. In each Dockerfile, ensure the dependency installation step uses the updated lockfile (e.g., `COPY poetry.lock pyproject.toml .` and `RUN poetry install --no-dev --no-interaction --no-ansi`).  \n   b. Bump the base image tag if necessary to match the supported Python version.  \n4. Trigger CI pipeline to rebuild all Python-based images and verify that the new dependencies are correctly installed.  \n5. Update any documentation that pins package versions (e.g., CONTRIBUTING.md, docs/dependencies.md) to reflect the new minimum versions.",
+        "testStrategy": "1. Lockfile Verification: \n   a. Inspect the updated lockfile or requirements.txt to confirm entries for pandas 2.3.1, pytest-xdist 3.8.0, mypy 1.17.0, ruff 0.12.3, black 25.1.0, etc.  \n2. Local Docker Builds:  \n   a. Build each updated Docker image locally (`docker build`) and run a container.  \n   b. Inside the container, run `python -c \"import pandas; print(pandas.__version__)\"` and similar commands to confirm the correct versions.  \n3. CI Pipeline:  \n   a. Observe the CI logs for the dependency installation step to ensure no downgrades or conflicts occur.  \n   b. Run the full test suite (unit tests, linting, type checks) inside the CI container to verify compatibility.  \n4. Regression Smoke Test:  \n   a. Deploy the new image to a staging environment and perform basic functionality tests (e.g., start app, health checks, API smoke tests) to ensure nothing is broken.",
+        "status": "done",
+        "dependencies": [
+          57
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 63,
+        "title": "Integrate Automated Docker Image Vulnerability Scanning into CI Pipeline",
+        "description": "Add a CI step that automatically scans all project Docker images for known vulnerabilities and fails the build on unacceptable risk levels.",
+        "details": "1. Select and install a scanning tool (e.g., Aqua Trivy, Clair or Grype) in the CI environment.  \n2. Update the CI configuration (e.g., GitHub Actions, GitLab CI, Jenkinsfile) to include a new job that:  \n   a. Pulls each pinned image (stoplight/prism:5.14.2, redis:7.4-alpine, postgres:16-alpine).  \n   b. Runs the scanner against each image and outputs the results in JSON or HTML.  \n   c. Applies a policy that fails the build if vulnerabilities of severity CRITICAL or HIGH are detected.  \n3. Parameterize image names and thresholds via environment variables for future extensibility.  \n4. Store the raw scan reports as CI artifacts for audit and compliance review.  \n5. Document scanning steps, configurable thresholds, and how to interpret scan reports in the project README or a dedicated docs page.",
+        "testStrategy": "1. Merge the updated CI configuration into a test branch to trigger a pipeline run.  \n2. Verify that:  \n   a. The scanner tool is installed and invoked successfully.  \n   b. Each service image is pulled and scanned.  \n   c. No CRITICAL or HIGH vulnerabilities are found in the current images and the build passes.  \n3. Introduce a deliberately vulnerable image (e.g., alpine:3.4) in a temporary branch to confirm the job fails the build when vulnerabilities exceed the configured threshold.  \n4. Check that scan reports are correctly saved as artifacts and can be downloaded for review.  \n5. Review the documentation to ensure it accurately describes how to update image references, adjust thresholds, and locate reports.",
+        "status": "done",
+        "dependencies": [
+          62
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 64,
+        "title": "Configure Dependabot for automatic Python dependency updates",
+        "description": "Set up and configure GitHub Dependabot to monitor and propose updates for Python dependencies defined in pyproject.toml.",
+        "details": "1. Create a `.github/dependabot.yml` file with the following settings:\n   - `version: 2`\n   - `updates`:\n     - `package-ecosystem: \"pip\"`\n     - `directory: \"/\"`\n     - `schedule:\n         interval: \"weekly\"`\n         time: \"04:00\"\n     - `open-pull-requests-limit: 5`\n     - `allow`:\n         - `dependency-type: \"all\"`\n   - Configure labels (e.g., `dependencies`, `security`) and reviewers for Dependabot PRs.\n2. Ensure the repository contains both `pyproject.toml` and the corresponding lockfile (`poetry.lock` or `pipfile.lock`).\n3. Update CI workflow (`.github/workflows/ci.yml`) to automatically run dependency-validation tests on Dependabot PRs and enforce passing checks before merge.\n4. Document the process in `docs/dependency-management.md`, including how to approve or reject Dependabot PRs and resolve merge conflicts in the lockfile.\n5. Add a scheduled GitHub Action that runs a dry-run of `pip-audit` and dependency checks monthly to catch edge cases outside Dependabot updates.",
+        "testStrategy": "1. Push a test branch with an outdated dependency version in `pyproject.toml` to trigger Dependabot; verify a PR is created within the scheduled interval.\n2. Review the Dependabot PR to ensure the lockfile is updated correctly and that CI dependency-validation jobs pass.\n3. Merge the Dependabot PR into a feature branch and confirm that application import tests and environment validation continue to succeed.\n4. Introduce a known vulnerable dependency in a fork of the repo and confirm Dependabot flags it with `security` labels and that CI fails the PR if vulnerabilities remain unaddressed.\n5. Verify documentation accuracy by following the approval and merge steps outlined in `docs/dependency-management.md` on a test repository.",
+        "status": "done",
+        "dependencies": [
+          60
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 65,
+        "title": "Complete Batch A Phase 2 Safe Patch Upgrades for Remaining Packages",
+        "description": "Upgrade the remaining Batch A dependencies (coverage, huggingface-hub, transformers, uv) to their latest safe patch versions and verify end-to-end functionality.",
+        "details": "1. Determine the latest patch release for each package (coverage, huggingface-hub, transformers, uv) via PyPI or Dependabot suggestions.\n2. Update version specifiers in pyproject.toml or requirements.in accordingly.\n3. Run `poetry lock --no-update && poetry lock --update` (or `pip-compile`) to regenerate the lockfile.\n4. Commit the updated lockfile and bump changes.\n5. Update any code or configuration that relies on changed APIs (e.g., transformer model-loading calls, Hugging Face Hub authentication patterns, coverage reporting flags, uvicorn settings).\n6. Push changes to a feature branch and trigger the CI pipeline.\n7. Update CHANGELOG.md with the new versions and any noteworthy behavior changes.",
+        "testStrategy": "1. On a clean environment, install dependencies from the updated lockfile and verify that the specified patch versions are installed.\n2. Run the full test suite (unit, integration, and end-to-end tests) to ensure no regressions in coverage measurement, model loading, API calls to Hugging Face Hub, and UV-specific workflows.\n3. Manually start the application with `uvicorn` to confirm no startup or runtime errors.\n4. Verify coverage reports are generated as expected and review coverage thresholds.\n5. Confirm CI dependency-validation and vulnerability-scan jobs pass without errors.",
+        "status": "done",
+        "dependencies": [
+          62,
+          64
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 66,
+        "title": "Configure CI for Automated Dependency Management and GPU Test Environment",
+        "description": "Set up continuous integration workflows to automatically monitor and update dependencies based on pyproject.toml, run security vulnerability scans, and execute GPU-enabled test suites using the pinned CUDA stack.",
+        "details": "1. Choose a CI platform (e.g., GitHub Actions) and create two workflow files under .github/workflows:\n   a. dependency-updates.yml: Use a scheduled job that:\n      • Checks for new package versions (e.g., via Dependabot or poetry update --dry-run)\n      • Opens PRs to bump versions in pyproject.toml and poetry.lock\n      • Runs `poetry install --no-root` and `poetry run pip-audit --fail-on high`\n   b. gpu-tests.yml: Configure a job on a GPU-enabled runner or Docker container:\n      • Build a Docker image with the pinned CUDA stack from the project’s Dockerfile\n      • Cache pip dependencies across runs using actions/cache keyed by poetry.lock checksum\n      • Run unit and integration tests with pytest, marking GPU tests separately\n      • Collect and upload test artifacts and logs\n2. Securely store any secrets or credentials (e.g., PyPI token) in CI environment variables.\n3. Document the CI workflows and update CONTRIBUTING.md with instructions on how automated dependency PRs are generated and merged.\n4. Ensure that all workflows respect the single source of truth in pyproject.toml and do not override pinned versions.",
+        "testStrategy": "1. Dependency workflow:\n   • Verify a scheduled run detects outdated dependencies and opens a PR.\n   • Merge a test PR to ensure poetry.lock updates correctly and pip-audit passes/fails on known vulnerabilities.\n2. GPU test workflow:\n   • Run the GPU job on an actual or simulated GPU runner, confirm the Docker image builds with the pinned CUDA stack.\n   • Execute pytest with a marker for GPU tests, assert exit code zero and artifacts are uploaded.\n   • Introduce a deliberate test failure to verify the workflow fails appropriately.\n3. Confirm that both workflows trigger on push to main, pull requests, and on schedule as configured.",
+        "status": "done",
+        "dependencies": [
+          1
+        ],
+        "priority": "medium",
+        "subtasks": []
       }
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-15T11:43:28.854Z",
+      "updated": "2025-07-16T08:56:46.453Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",

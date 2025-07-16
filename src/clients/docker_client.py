@@ -89,7 +89,8 @@ class DockerClient:
 
             if returncode == 0 and self.container_name in stdout:
                 logger.warning(
-                    "Container exists but is not running: %s", self.container_name,
+                    "Container exists but is not running: %s",
+                    self.container_name,
                 )
                 return False
 
@@ -159,7 +160,9 @@ class DockerClient:
         return self.ssh_client.execute_command(docker_cmd_str, timeout=timeout)
 
     def copy_file_to_container(
-        self, local_path: Path | str, container_path: Path | str,
+        self,
+        local_path: Path | str,
+        container_path: Path | str,
     ) -> None:
         """Copy a file from local machine to the Docker container.
 
@@ -198,7 +201,8 @@ class DockerClient:
                 # Check if the file exists in the container
                 if not self.check_file_exists_in_container(container_path):
                     logger.error(
-                        "File not found in container after copy: %s", container_path,
+                        "File not found in container after copy: %s",
+                        container_path,
                     )
                     msg = f"File not found in container after copy: {container_path}"
                     raise ValueError(
@@ -234,7 +238,9 @@ class DockerClient:
             raise ValueError(msg) from e
 
     def copy_file_from_container(
-        self, container_path: Path | str, local_path: Path | str,
+        self,
+        container_path: Path | str,
+        local_path: Path | str,
     ) -> Path:
         """Copy a file from Docker container to local machine.
 
@@ -371,7 +377,9 @@ class DockerClient:
             return None
 
     def transfer_file_to_container(
-        self, local_path: Path | str, container_path: Path | str,
+        self,
+        local_path: Path | str,
+        container_path: Path | str,
     ) -> None:
         """Transfer a file directly from the local machine to the Docker container in one operation.
 
@@ -448,5 +456,6 @@ class DockerClient:
             except Exception:
                 # Non-critical error, just log it
                 logger.exception(
-                    "Failed to clean up temporary file: %s", remote_temp_path,
+                    "Failed to clean up temporary file: %s",
+                    remote_temp_path,
                 )

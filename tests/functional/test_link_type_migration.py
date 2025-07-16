@@ -129,7 +129,9 @@ class TestLinkTypeMigration(unittest.TestCase):
         mock_exists.return_value = False
 
         # Mock the config to return force=True
-        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+        mock_migration_config.get.side_effect = lambda key, default=None: (
+            True if key == "force" else default
+        )
 
         # Create instance and call method
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
@@ -167,7 +169,9 @@ class TestLinkTypeMigration(unittest.TestCase):
         mock_exists.return_value = False
 
         # Mock the config to return force=True
-        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+        mock_migration_config.get.side_effect = lambda key, default=None: (
+            True if key == "force" else default
+        )
 
         # Create instance and set data
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
@@ -232,7 +236,9 @@ class TestLinkTypeMigration(unittest.TestCase):
 
         # Mock ProgressTracker to avoid terminal output issues
         mock_progress_tracker_instance = mock_progress_tracker.return_value
-        mock_progress_tracker_instance.__enter__.return_value = mock_progress_tracker_instance
+        mock_progress_tracker_instance.__enter__.return_value = (
+            mock_progress_tracker_instance
+        )
 
         # Create instance
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
@@ -297,7 +303,9 @@ class TestLinkTypeMigration(unittest.TestCase):
                 "openproject_id": "4",
             },
         }
-        mock_file.return_value.__enter__.return_value.read.return_value = json.dumps(mock_mapping)
+        mock_file.return_value.__enter__.return_value.read.return_value = json.dumps(
+            mock_mapping
+        )
 
         # Create instance
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
@@ -346,7 +354,9 @@ class TestLinkTypeMigration(unittest.TestCase):
                 "type": "WorkPackageCustomField",
             },
         ]
-        mock_custom_field_migration.extract_openproject_custom_fields.return_value = mock_op_custom_fields
+        mock_custom_field_migration.extract_openproject_custom_fields.return_value = (
+            mock_op_custom_fields
+        )
 
         # Create a link type migration instance with our mocked dependencies
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
@@ -397,7 +407,9 @@ class TestLinkTypeMigration(unittest.TestCase):
 
         # 2. Check that migrate_custom_fields_via_json was called with correctly formatted data
         # Get the actual fields_to_create passed to migrate_custom_fields_via_json
-        call_args = mock_custom_field_migration.migrate_custom_fields_via_json.call_args[0][0]
+        call_args = (
+            mock_custom_field_migration.migrate_custom_fields_via_json.call_args[0][0]
+        )
 
         # Verify it contains the expected field definition
         assert len(call_args) == 1
@@ -484,7 +496,9 @@ class TestLinkTypeMigration(unittest.TestCase):
             return mapping
 
         # Mock the create_custom_fields_for_link_types method to return a success result
-        def mock_create_custom_fields(unmapped_link_types: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+        def mock_create_custom_fields(
+            unmapped_link_types: list[tuple[str, dict[str, Any]]],
+        ) -> dict[str, Any]:
             # Update the mapping to simulate successful custom field creation
             for jira_id, mapping in unmapped_link_types:
                 migration.link_type_mapping[jira_id].update(
@@ -506,8 +520,14 @@ class TestLinkTypeMigration(unittest.TestCase):
 
         # Patch the instance methods
         with (
-            patch.object(migration, "create_link_type_mapping", side_effect=mock_create_mapping),
-            patch.object(migration, "create_custom_fields_for_link_types", side_effect=mock_create_custom_fields),
+            patch.object(
+                migration, "create_link_type_mapping", side_effect=mock_create_mapping
+            ),
+            patch.object(
+                migration,
+                "create_custom_fields_for_link_types",
+                side_effect=mock_create_custom_fields,
+            ),
         ):
 
             # Call the run method
@@ -549,7 +569,9 @@ class TestLinkTypeMigration(unittest.TestCase):
         mock_exists.return_value = False
 
         # Mock the config to return force=True
-        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+        mock_migration_config.get.side_effect = lambda key, default=None: (
+            True if key == "force" else default
+        )
 
         # Create Jira link types with None values
         jira_link_types_with_none = [

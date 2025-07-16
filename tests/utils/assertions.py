@@ -4,7 +4,9 @@ import os
 from typing import Any
 
 
-def assert_projects_equivalent(op_project: dict[str, Any], jira_project: dict[str, Any]) -> None:
+def assert_projects_equivalent(
+    op_project: dict[str, Any], jira_project: dict[str, Any]
+) -> None:
     """Assert that an OpenProject project correctly represents a Jira project.
 
     Args:
@@ -120,7 +122,9 @@ def assert_lists_equal_unordered(list1: list[Any], list2: list[Any]) -> None:
         AssertionError: If lists don't contain the same elements
 
     """
-    assert len(list1) == len(list2), f"Lists have different lengths: {len(list1)} vs {len(list2)}"
+    assert len(list1) == len(
+        list2
+    ), f"Lists have different lengths: {len(list1)} vs {len(list2)}"
 
     # Convert to sets if elements are hashable, otherwise use a different approach
     try:
@@ -143,8 +147,12 @@ def assert_migration_complete(migration_result: dict[str, Any]) -> None:
         AssertionError: If the migration did not complete successfully
 
     """
-    assert migration_result["success"] is True, f"Migration failed: {migration_result.get('error', 'Unknown error')}"
-    assert "error" not in migration_result, f"Migration had errors: {migration_result.get('error')}"
+    assert (
+        migration_result["success"] is True
+    ), f"Migration failed: {migration_result.get('error', 'Unknown error')}"
+    assert (
+        "error" not in migration_result
+    ), f"Migration had errors: {migration_result.get('error')}"
 
     # Assert other expected result properties depending on your implementation
     assert "duration" in migration_result, "Migration result missing duration"

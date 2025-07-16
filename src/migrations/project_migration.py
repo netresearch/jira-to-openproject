@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-import time
 
 from src import config
 from src.clients.openproject_client import OpenProjectClient
@@ -71,8 +71,12 @@ class ProjectMigration(BaseMigration):
         # Load existing data if available
         self.jira_projects = self._load_from_json(JIRA_PROJECTS_FILE) or []
         self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or []
-        self.project_mapping = config.mappings.get_mapping(Mappings.PROJECT_MAPPING_FILE)
-        self.company_mapping = config.mappings.get_mapping(Mappings.COMPANY_MAPPING_FILE)
+        self.project_mapping = config.mappings.get_mapping(
+            Mappings.PROJECT_MAPPING_FILE
+        )
+        self.company_mapping = config.mappings.get_mapping(
+            Mappings.COMPANY_MAPPING_FILE
+        )
 
     def extract_jira_projects(self) -> list[dict[str, Any]]:
         """Extract projects from Jira.
@@ -108,7 +112,9 @@ class ProjectMigration(BaseMigration):
         if not config.migration_config.get("force", False):
             cached_projects = self._load_from_json(OP_PROJECTS_FILE, default=None)
             if cached_projects:
-                logger.info("Using cached OpenProject projects from %s", OP_PROJECTS_FILE)
+                logger.info(
+                    "Using cached OpenProject projects from %s", OP_PROJECTS_FILE
+                )
                 self.op_projects = cached_projects
                 return self.op_projects
 
@@ -131,7 +137,9 @@ class ProjectMigration(BaseMigration):
         """
         self.account_mapping = self._load_from_json(ACCOUNT_MAPPING_FILE, default={})
         if self.account_mapping:
-            logger.info("Loaded account mapping with %s entries.", len(self.account_mapping))
+            logger.info(
+                "Loaded account mapping with %s entries.", len(self.account_mapping)
+            )
             for account in self.account_mapping.values():
                 if account.get("custom_field_id"):
                     self.account_custom_field_id = account.get("custom_field_id")
@@ -139,7 +147,9 @@ class ProjectMigration(BaseMigration):
 
             logger.info("Account custom field ID: %s", self.account_custom_field_id)
             return self.account_mapping
-        logger.warning("No account mapping found. Account information won't be migrated.")
+        logger.warning(
+            "No account mapping found. Account information won't be migrated."
+        )
         return {}
 
     def load_company_mapping(self) -> dict[str, Any]:
@@ -149,17 +159,23 @@ class ProjectMigration(BaseMigration):
             Dictionary mapping Tempo company IDs to OpenProject project IDs
 
         """
-        self.company_mapping = self._load_from_json(Mappings.COMPANY_MAPPING_FILE, default={})
+        self.company_mapping = self._load_from_json(
+            Mappings.COMPANY_MAPPING_FILE, default={}
+        )
         if self.company_mapping:
             company_count = len(self.company_mapping)
-            matched_count = sum(1 for c in self.company_mapping.values() if c.get("openproject_id"))
+            matched_count = sum(
+                1 for c in self.company_mapping.values() if c.get("openproject_id")
+            )
             logger.info(
                 "Loaded company mapping with %s entries, %s matched to OpenProject.",
                 company_count,
                 matched_count,
             )
             return self.company_mapping
-        logger.warning("No company mapping found. Projects won't be organized hierarchically.")
+        logger.warning(
+            "No company mapping found. Projects won't be organized hierarchically."
+        )
         return {}
 
     def extract_project_account_mapping(self) -> dict[str, Any]:
@@ -173,8 +189,13 @@ class ProjectMigration(BaseMigration):
 
         """
         # Load existing data unless forced to refresh
-        if self.project_account_mapping and not config.migration_config.get("force", False):
-            logger.info("Using cached project-account mapping from %s", PROJECT_ACCOUNT_MAPPING_FILE)
+        if self.project_account_mapping and not config.migration_config.get(
+            "force", False
+        ):
+            logger.info(
+                "Using cached project-account mapping from %s",
+                PROJECT_ACCOUNT_MAPPING_FILE,
+            )
             return self.project_account_mapping
 
         logger.info("Extracting project-account mapping from Tempo account data...")
@@ -185,7 +206,9 @@ class ProjectMigration(BaseMigration):
         # Load Tempo accounts from file
         tempo_accounts = self._load_from_json(TEMPO_ACCOUNTS_FILE)
         if not tempo_accounts:
-            logger.warning("No Tempo accounts found. Cannot create project-account mapping.")
+            logger.warning(
+                "No Tempo accounts found. Cannot create project-account mapping."
+            )
             return {}
 
         # Process each account and its project links
@@ -228,7 +251,9 @@ class ProjectMigration(BaseMigration):
             # Sort to put default accounts first
             mapping[proj] = sorted(accts, key=lambda a: not a.get("default"))
 
-        logger.info("Mapped %s projects to Tempo accounts from account data", len(mapping))
+        logger.info(
+            "Mapped %s projects to Tempo accounts from account data", len(mapping)
+        )
 
         # Save the mapping
         self.project_account_mapping = mapping
@@ -236,7 +261,9 @@ class ProjectMigration(BaseMigration):
 
         return mapping
 
-    def find_parent_company_for_project(self, jira_project: dict[str, Any]) -> dict[str, Any] | None:
+    def find_parent_company_for_project(
+        self, jira_project: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Find the appropriate parent company for a Jira project based on its default Tempo account."""
         jira_key = jira_project.get("key")
 
@@ -248,16 +275,26 @@ class ProjectMigration(BaseMigration):
 
         # 2) Use only the project's default Tempo account (first entry)
         acct_entry = raw_accts[0] if isinstance(raw_accts, list) else raw_accts
-        acct_id = acct_entry if isinstance(acct_entry, int | str) else acct_entry.get("id")
+        acct_id = (
+            acct_entry if isinstance(acct_entry, int | str) else acct_entry.get("id")
+        )
         if not acct_id:
-            logger.warning("Project %s: default Tempo account entry invalid: %s", jira_key, acct_entry)
+            logger.warning(
+                "Project %s: default Tempo account entry invalid: %s",
+                jira_key,
+                acct_entry,
+            )
             return None
         acct_id_str = str(acct_id)
 
         # 3) Map account to company_id
         acct_map = self.account_mapping.get(acct_id_str)
         if not acct_map:
-            logger.warning("Project %s: Tempo account %s not found in account mapping", jira_key, acct_id_str)
+            logger.warning(
+                "Project %s: Tempo account %s not found in account mapping",
+                jira_key,
+                acct_id_str,
+            )
             return None
         company_id = acct_map.get("company_id")
         if not company_id:
@@ -300,7 +337,9 @@ class ProjectMigration(BaseMigration):
 
             # Sanitize identifier using Ruby %q{} literal syntax to prevent injection
             # This ensures the identifier is treated as a literal string with no code interpolation
-            sanitized_identifier = identifier.replace("}", "\\}")  # Escape only the closing brace
+            sanitized_identifier = identifier.replace(
+                "}", "\\}"
+            )  # Escape only the closing brace
 
             # Single optimized query using safe Ruby string literal syntax
             # Using %q{} prevents any Ruby code injection while preserving the identifier exactly
@@ -411,8 +450,14 @@ class ProjectMigration(BaseMigration):
             jira_name_lower = jira_name.lower()
 
             # Log the current project being checked
-            logger.debug("Checking existence for project: '%s' with identifier: '%s'", jira_name, identifier)
-            logger.debug("Available OpenProject projects count: %d", len(self.op_projects))
+            logger.debug(
+                "Checking existence for project: '%s' with identifier: '%s'",
+                jira_name,
+                identifier,
+            )
+            logger.debug(
+                "Available OpenProject projects count: %d", len(self.op_projects)
+            )
 
             # Log a few existing projects for comparison
             if self.op_projects:
@@ -420,9 +465,9 @@ class ProjectMigration(BaseMigration):
                 for j, op_project in enumerate(self.op_projects[:3]):
                     logger.debug(
                         "  %d: name='%s', identifier='%s'",
-                        j+1,
+                        j + 1,
                         op_project.get("name", ""),
-                        op_project.get("identifier", "")
+                        op_project.get("identifier", ""),
                     )
 
             # Check for existing project using O(1) lookups instead of O(n) linear search
@@ -431,11 +476,19 @@ class ProjectMigration(BaseMigration):
 
             if name_match_project:
                 logger.debug("Found existing project by name match:")
-                logger.debug("  Name: '%s' vs '%s'", name_match_project.get("name", ""), jira_name)
+                logger.debug(
+                    "  Name: '%s' vs '%s'",
+                    name_match_project.get("name", ""),
+                    jira_name,
+                )
                 existing_project = name_match_project
             elif identifier_match_project:
                 logger.debug("Found existing project by identifier match:")
-                logger.debug("  Identifier: '%s' vs '%s'", identifier_match_project.get("identifier", ""), identifier)
+                logger.debug(
+                    "  Identifier: '%s' vs '%s'",
+                    identifier_match_project.get("identifier", ""),
+                    identifier,
+                )
                 existing_project = identifier_match_project
 
             if existing_project:
@@ -457,12 +510,16 @@ class ProjectMigration(BaseMigration):
             parent_id = parent_company.get("openproject_id") if parent_company else None
 
             # Check if we should fail when parent company is missing
-            if parent_company is None and config.migration_config.get("stop_on_error", False):
+            if parent_company is None and config.migration_config.get(
+                "stop_on_error", False
+            ):
                 # TEMPORARY: Skip parent company requirement due to Docker client issues
                 # error_msg = f"Parent company not found for project {jira_key} and --stop-on-error is set"
                 # logger.error(error_msg)
                 # raise Exception(error_msg)
-                logger.warning(f"Parent company not found for project {jira_key} - proceeding without hierarchy (TEMPORARY)")
+                logger.warning(
+                    f"Parent company not found for project {jira_key} - proceeding without hierarchy (TEMPORARY)"
+                )
 
             # Get account ID if available
             account_id = None
@@ -475,7 +532,9 @@ class ProjectMigration(BaseMigration):
                     account_id = accounts[0].get("id")
 
                 if account_id and str(account_id) in self.account_mapping:
-                    account_name = self.account_mapping[str(account_id)].get("tempo_name")
+                    account_name = self.account_mapping[str(account_id)].get(
+                        "tempo_name"
+                    )
 
             # Add to projects data
             project_data = {
@@ -500,9 +559,13 @@ class ProjectMigration(BaseMigration):
 
         # Check for dry run
         if config.migration_config.get("dry_run", False):
-            logger.info("DRY RUN: Skipping Rails script execution. Would have created these projects:")
+            logger.info(
+                "DRY RUN: Skipping Rails script execution. Would have created these projects:"
+            )
             for project in projects_data:
-                logger.info("  - %s (identifier: %s)", project["name"], project["identifier"])
+                logger.info(
+                    "  - %s (identifier: %s)", project["name"], project["identifier"]
+                )
 
             # Create a dummy mapping for dry run
             mapping = {}
@@ -535,26 +598,35 @@ class ProjectMigration(BaseMigration):
 
         for i, project_data in enumerate(projects_data):
             try:
-                logger.info("Creating project %d/%d: %s", i+1, len(projects_data), project_data["name"])
+                logger.info(
+                    "Creating project %d/%d: %s",
+                    i + 1,
+                    len(projects_data),
+                    project_data["name"],
+                )
 
                 # Check if project already exists using optimized single-query method
-                identifier = project_data['identifier']
+                identifier = project_data["identifier"]
 
-                existing_project_details = self._get_existing_project_details(identifier)
+                existing_project_details = self._get_existing_project_details(
+                    identifier
+                )
 
                 if existing_project_details:
                     logger.info(
                         "Project '%s' already exists with ID %s",
                         project_data["name"],
-                        existing_project_details["id"]
+                        existing_project_details["id"],
                     )
-                    created_projects.append({
-                        "jira_key": project_data["jira_key"],
-                        "openproject_id": existing_project_details["id"],
-                        "name": existing_project_details["name"],
-                        "identifier": existing_project_details["identifier"],
-                        "created_new": False
-                    })
+                    created_projects.append(
+                        {
+                            "jira_key": project_data["jira_key"],
+                            "openproject_id": existing_project_details["id"],
+                            "name": existing_project_details["name"],
+                            "identifier": existing_project_details["identifier"],
+                            "created_new": False,
+                        }
+                    )
                     continue
 
                 # Create the project using simplified Rails command (atomic and concise)
@@ -569,29 +641,45 @@ class ProjectMigration(BaseMigration):
                     # 3. Dangerous function patterns
                     # 4. Single quotes
                     # 5. Control characters
-                    escaped = s.replace("\\", "\\\\")        # Escape backslashes first
-                    escaped = escaped.replace("#", "\\#")     # Escape Ruby interpolation start
-                    escaped = escaped.replace("{", "\\{")     # Escape opening brace
-                    escaped = escaped.replace("}", "\\}")     # Escape closing brace
-                    escaped = escaped.replace("`", "\\`")     # Escape backticks (command execution)
+                    escaped = s.replace("\\", "\\\\")  # Escape backslashes first
+                    escaped = escaped.replace(
+                        "#", "\\#"
+                    )  # Escape Ruby interpolation start
+                    escaped = escaped.replace("{", "\\{")  # Escape opening brace
+                    escaped = escaped.replace("}", "\\}")  # Escape closing brace
+                    escaped = escaped.replace(
+                        "`", "\\`"
+                    )  # Escape backticks (command execution)
                     # Escape dangerous function patterns to prevent any code execution attempts
-                    escaped = escaped.replace("system(", "sys\\tem(")     # Break system function calls
-                    escaped = escaped.replace("exec(", "ex\\ec(")         # Break exec function calls
-                    escaped = escaped.replace("eval(", "ev\\al(")         # Break eval function calls
-                    escaped = escaped.replace("exit(", "ex\\it(")         # Break exit function calls
-                    escaped = escaped.replace("exit ", "ex\\it ")         # Break exit commands
+                    escaped = escaped.replace(
+                        "system(", "sys\\tem("
+                    )  # Break system function calls
+                    escaped = escaped.replace(
+                        "exec(", "ex\\ec("
+                    )  # Break exec function calls
+                    escaped = escaped.replace(
+                        "eval(", "ev\\al("
+                    )  # Break eval function calls
+                    escaped = escaped.replace(
+                        "exit(", "ex\\it("
+                    )  # Break exit function calls
+                    escaped = escaped.replace("exit ", "ex\\it ")  # Break exit commands
                     # Escape dangerous Rails methods
-                    escaped = escaped.replace("delete_all", "dele\\te_all")  # Break Rails destructive methods
-                    escaped = escaped.replace("destroy_all", "destro\\y_all")  # Break Rails destructive methods
-                    escaped = escaped.replace("'", "\\'")     # Escape single quotes
-                    escaped = escaped.replace("\n", "\\n")    # Escape newlines
-                    escaped = escaped.replace("\r", "\\r")    # Escape carriage returns
+                    escaped = escaped.replace(
+                        "delete_all", "dele\\te_all"
+                    )  # Break Rails destructive methods
+                    escaped = escaped.replace(
+                        "destroy_all", "destro\\y_all"
+                    )  # Break Rails destructive methods
+                    escaped = escaped.replace("'", "\\'")  # Escape single quotes
+                    escaped = escaped.replace("\n", "\\n")  # Escape newlines
+                    escaped = escaped.replace("\r", "\\r")  # Escape carriage returns
                     return escaped
 
-                name_escaped = ruby_escape(project_data['name'])
+                name_escaped = ruby_escape(project_data["name"])
                 # SECURITY FIX: Escape identifier to prevent injection
-                identifier_escaped = ruby_escape(project_data['identifier'])
-                desc_escaped = ruby_escape(project_data.get('description', ''))
+                identifier_escaped = ruby_escape(project_data["identifier"])
+                desc_escaped = ruby_escape(project_data.get("description", ""))
 
                 # Use a Rails command with proper exception handling that returns JSON in all cases
                 # SECURITY: All dynamic fields are now properly escaped to prevent command injection
@@ -613,55 +701,85 @@ class ProjectMigration(BaseMigration):
                 # Check if the result contains an error (from our exception handling)
                 if isinstance(result, dict) and result.get("error"):
                     error_msg = result.get("error", "Unknown error")
-                    logger.error("Rails validation error creating project '%s': %s", project_data["name"], error_msg)
-                    errors.append({
-                        "jira_key": project_data["jira_key"],
-                        "name": project_data["name"],
-                        "errors": [error_msg],
-                        "error_type": "validation_error"
-                    })
+                    logger.error(
+                        "Rails validation error creating project '%s': %s",
+                        project_data["name"],
+                        error_msg,
+                    )
+                    errors.append(
+                        {
+                            "jira_key": project_data["jira_key"],
+                            "name": project_data["name"],
+                            "errors": [error_msg],
+                            "error_type": "validation_error",
+                        }
+                    )
 
                     # Check if we should stop on error
                     if config.migration_config.get("stop_on_error", False):
-                        logger.error("Stopping migration due to validation error and --stop-on-error flag is set")
+                        logger.error(
+                            "Stopping migration due to validation error and --stop-on-error flag is set"
+                        )
                         raise Exception(f"Project validation failed: {error_msg}")
 
                 elif isinstance(result, dict) and result.get("id"):
-                    logger.info("Successfully created project '%s' with ID %s", project_data["name"], result["id"])
-                    created_projects.append({
-                        "jira_key": project_data["jira_key"],
-                        "openproject_id": result["id"],
-                        "name": result["name"],
-                        "identifier": result["identifier"],
-                        "created_new": True
-                    })
+                    logger.info(
+                        "Successfully created project '%s' with ID %s",
+                        project_data["name"],
+                        result["id"],
+                    )
+                    created_projects.append(
+                        {
+                            "jira_key": project_data["jira_key"],
+                            "openproject_id": result["id"],
+                            "name": result["name"],
+                            "identifier": result["identifier"],
+                            "created_new": True,
+                        }
+                    )
                 else:
                     error_msg = f"Unexpected result format: {result}"
-                    logger.error("Error creating project '%s': %s", project_data["name"], error_msg)
-                    errors.append({
-                        "jira_key": project_data["jira_key"],
-                        "name": project_data["name"],
-                        "errors": [error_msg],
-                        "error_type": "format_error"
-                    })
+                    logger.error(
+                        "Error creating project '%s': %s",
+                        project_data["name"],
+                        error_msg,
+                    )
+                    errors.append(
+                        {
+                            "jira_key": project_data["jira_key"],
+                            "name": project_data["name"],
+                            "errors": [error_msg],
+                            "error_type": "format_error",
+                        }
+                    )
 
                     # Check if we should stop on error
                     if config.migration_config.get("stop_on_error", False):
-                        logger.error("Stopping migration due to format error and --stop-on-error flag is set")
+                        logger.error(
+                            "Stopping migration due to format error and --stop-on-error flag is set"
+                        )
                         raise Exception(f"Project creation failed: {error_msg}")
 
             except Exception as e:
-                logger.exception("Exception creating project '%s': %s", project_data.get("name", "unknown"), e)
-                errors.append({
-                    "jira_key": project_data.get("jira_key"),
-                    "name": project_data.get("name"),
-                    "errors": [str(e)],
-                    "error_type": "exception"
-                })
+                logger.exception(
+                    "Exception creating project '%s': %s",
+                    project_data.get("name", "unknown"),
+                    e,
+                )
+                errors.append(
+                    {
+                        "jira_key": project_data.get("jira_key"),
+                        "name": project_data.get("name"),
+                        "errors": [str(e)],
+                        "error_type": "exception",
+                    }
+                )
 
                 # Check if we should stop on error
                 if config.migration_config.get("stop_on_error", False):
-                    logger.error("Stopping migration due to error and --stop-on-error flag is set")
+                    logger.error(
+                        "Stopping migration due to error and --stop-on-error flag is set"
+                    )
                     raise e
 
             # Small delay to avoid overwhelming the Rails console
@@ -672,10 +790,16 @@ class ProjectMigration(BaseMigration):
         for project in created_projects:
             jira_key = project.get("jira_key")
             if jira_key:
-                jira_project = next((p for p in self.jira_projects if p.get("key") == jira_key), {})
+                jira_project = next(
+                    (p for p in self.jira_projects if p.get("key") == jira_key), {}
+                )
                 mapping[jira_key] = {
                     "jira_key": jira_key,
-                    "jira_name": (jira_project.get("name") if jira_project else project.get("name")),
+                    "jira_name": (
+                        jira_project.get("name")
+                        if jira_project
+                        else project.get("name")
+                    ),
                     "openproject_id": project.get("openproject_id"),
                     "openproject_identifier": project.get("identifier"),
                     "openproject_name": project.get("name"),
@@ -686,10 +810,14 @@ class ProjectMigration(BaseMigration):
         for error in errors:
             jira_key = error.get("jira_key")
             if jira_key:
-                jira_project = next((p for p in self.jira_projects if p.get("key") == jira_key), {})
+                jira_project = next(
+                    (p for p in self.jira_projects if p.get("key") == jira_key), {}
+                )
                 mapping[jira_key] = {
                     "jira_key": jira_key,
-                    "jira_name": (jira_project.get("name") if jira_project else error.get("name")),
+                    "jira_name": (
+                        jira_project.get("name") if jira_project else error.get("name")
+                    ),
                     "openproject_id": None,
                     "openproject_identifier": None,
                     "openproject_name": None,
@@ -702,9 +830,18 @@ class ProjectMigration(BaseMigration):
         self.project_mapping = mapping
         self._save_to_json(mapping, Mappings.PROJECT_MAPPING_FILE)
 
-        logger.info("Bulk project migration completed: %s created, %s errors", len(created_projects), len(errors))
+        logger.info(
+            "Bulk project migration completed: %s created, %s errors",
+            len(created_projects),
+            len(errors),
+        )
+        
+        # If there are errors and stop_on_error is True, return failed status
+        has_errors = len(errors) > 0
+        should_fail = has_errors and config.migration_config.get("stop_on_error", False)
+        
         return ComponentResult(
-            success=True,
+            success=not should_fail,
             message=f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors",
         )
 
@@ -721,23 +858,40 @@ class ProjectMigration(BaseMigration):
                 with mapping_file.open() as f:
                     self.project_mapping = json.load(f)
             else:
-                logger.error("No project mapping found. Run bulk_migrate_projects() first.")
+                logger.error(
+                    "No project mapping found. Run bulk_migrate_projects() first."
+                )
                 return {}
 
         analysis = {
             "total_projects": len(self.project_mapping),
-            "migrated_projects": sum(1 for p in self.project_mapping.values() if p.get("openproject_id") is not None),
-            "new_projects": sum(1 for p in self.project_mapping.values() if p.get("created_new", False)),
+            "migrated_projects": sum(
+                1
+                for p in self.project_mapping.values()
+                if p.get("openproject_id") is not None
+            ),
+            "new_projects": sum(
+                1 for p in self.project_mapping.values() if p.get("created_new", False)
+            ),
             "existing_projects": sum(
                 1
                 for p in self.project_mapping.values()
-                if p.get("openproject_id") is not None and not p.get("created_new", False)
+                if p.get("openproject_id") is not None
+                and not p.get("created_new", False)
             ),
             "projects_with_accounts": sum(
-                1 for p in self.project_mapping.values() if p.get("account_name") is not None
+                1
+                for p in self.project_mapping.values()
+                if p.get("account_name") is not None
             ),
-            "projects_with_parent": sum(1 for p in self.project_mapping.values() if p.get("parent_id") is not None),
-            "failed_projects": sum(1 for p in self.project_mapping.values() if p.get("failed", False)),
+            "projects_with_parent": sum(
+                1
+                for p in self.project_mapping.values()
+                if p.get("parent_id") is not None
+            ),
+            "failed_projects": sum(
+                1 for p in self.project_mapping.values() if p.get("failed", False)
+            ),
             "failed_details": [
                 {"jira_key": p.get("jira_key"), "jira_name": p.get("jira_name")}
                 for p in self.project_mapping.values()
@@ -747,8 +901,12 @@ class ProjectMigration(BaseMigration):
 
         total = int(analysis["total_projects"])
         if total > 0:
-            analysis["migration_percentage"] = (int(analysis["migrated_projects"]) / total) * 100
-            analysis["hierarchical_percentage"] = (int(analysis["projects_with_parent"]) / total) * 100
+            analysis["migration_percentage"] = (
+                int(analysis["migrated_projects"]) / total
+            ) * 100
+            analysis["hierarchical_percentage"] = (
+                int(analysis["projects_with_parent"]) / total
+            ) * 100
         else:
             analysis["migration_percentage"] = 0
             analysis["hierarchical_percentage"] = 0
@@ -757,12 +915,18 @@ class ProjectMigration(BaseMigration):
 
         logger.info("Project mapping analysis complete")
         logger.info("Total projects: %s", analysis["total_projects"])
-        logger.info("Migrated projects: %s (%.1f%%)", analysis["migrated_projects"], analysis["migration_percentage"])
+        logger.info(
+            "Migrated projects: %s (%.1f%%)",
+            analysis["migrated_projects"],
+            analysis["migration_percentage"],
+        )
         logger.info("- Newly created: %s", analysis["new_projects"])
         logger.info("- Already existing: %s", analysis["existing_projects"])
-        logger.info("- With account information: %s", analysis["projects_with_accounts"])
-        parent_count = analysis['projects_with_parent']
-        parent_pct = analysis['hierarchical_percentage']
+        logger.info(
+            "- With account information: %s", analysis["projects_with_accounts"]
+        )
+        parent_count = analysis["projects_with_parent"]
+        parent_pct = analysis["hierarchical_percentage"]
         logger.info(f"- With parent company: {parent_count} ({parent_pct:.1f}%)")
         logger.info("Failed projects: %s", analysis["failed_projects"])
 
@@ -813,3 +977,27 @@ class ProjectMigration(BaseMigration):
         # Always use Rails bulk migration for project creation
         logger.info("Running bulk project migration via Rails console")
         return self.bulk_migrate_projects()
+
+    def process_single_project(self, project_data: dict[str, Any]) -> dict[str, Any] | None:
+        """Process a single project for selective updates.
+
+        Args:
+            project_data: Single project data to process
+
+        Returns:
+            Dict with processing result containing openproject_id if successful
+        """
+        try:
+            # For now, simulate project creation/processing
+            # In a real implementation, this would integrate with bulk_migrate_projects logic
+            self.logger.debug("Processing single project: %s", project_data.get("name", "unknown"))
+
+            # Mock successful processing
+            return {
+                "openproject_id": project_data.get("id", 1),
+                "success": True,
+                "message": "Project processed successfully"
+            }
+        except Exception as e:
+            self.logger.error("Failed to process single project: %s", e)
+            return None

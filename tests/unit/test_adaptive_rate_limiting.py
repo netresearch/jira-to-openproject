@@ -4,11 +4,11 @@ import unittest
 from unittest.mock import patch
 
 from src.utils.rate_limiter import (
-    RateLimiter,
     RateLimitConfig,
+    RateLimiter,
     RateLimitStrategy,
     create_jira_rate_limiter,
-    create_openproject_rate_limiter
+    create_openproject_rate_limiter,
 )
 
 
@@ -22,7 +22,7 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
             base_delay=0.1,
             max_delay=1.0,
             min_delay=0.01,
-            adaptive_threshold=0.5
+            adaptive_threshold=0.5,
         )
         self.rate_limiter = RateLimiter(self.config)
 
@@ -40,7 +40,7 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
     def test_429_error_handling(self):
         """Test handling of 429 rate limit exceeded errors."""
         # Mock time.sleep to avoid actual delays in tests
-        with patch('time.sleep') as mock_sleep:
+        with patch("time.sleep") as mock_sleep:
             # Record a 429 error
             self.rate_limiter.record_response(0.5, 429)
 
@@ -48,7 +48,9 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
             mock_sleep.assert_called()
 
             # Current delay should be increased
-            self.assertGreater(self.rate_limiter.state.current_delay, self.config.base_delay)
+            self.assertGreater(
+                self.rate_limiter.state.current_delay, self.config.base_delay
+            )
 
     def test_adaptive_delay_adjustment(self):
         """Test that delay adapts based on response times."""
@@ -88,10 +90,7 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
 
     def test_rate_limit_header_parsing(self):
         """Test parsing of rate limit headers."""
-        headers = {
-            'X-RateLimit-Remaining': '10',
-            'X-RateLimit-Limit': '100'
-        }
+        headers = {"X-RateLimit-Remaining": "10", "X-RateLimit-Limit": "100"}
 
         # Record response with rate limit headers
         self.rate_limiter.record_response(0.3, 200, headers)
@@ -102,9 +101,7 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
     def test_burst_strategy(self):
         """Test burst rate limiting strategy."""
         config = RateLimitConfig(
-            strategy=RateLimitStrategy.BURST,
-            burst_capacity=5,
-            burst_recovery_rate=1.0
+            strategy=RateLimitStrategy.BURST, burst_capacity=5, burst_recovery_rate=1.0
         )
         burst_limiter = RateLimiter(config)
 
@@ -135,20 +132,24 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
 
         # Should contain expected keys
         expected_keys = [
-            'strategy', 'current_delay', 'consecutive_failures',
-            'circuit_breaker_open', 'avg_response_time', 'config'
+            "strategy",
+            "current_delay",
+            "consecutive_failures",
+            "circuit_breaker_open",
+            "avg_response_time",
+            "config",
         ]
 
         for key in expected_keys:
             self.assertIn(key, stats)
 
         # Should have calculated average response time
-        self.assertGreater(stats['avg_response_time'], 0)
+        self.assertGreater(stats["avg_response_time"], 0)
 
     def test_retry_after_header(self):
         """Test handling of Retry-After header."""
-        with patch('time.sleep') as mock_sleep:
-            headers = {'Retry-After': '2'}
+        with patch("time.sleep") as mock_sleep:
+            headers = {"Retry-After": "2"}
 
             # Record 429 with Retry-After header
             self.rate_limiter.record_response(0.5, 429, headers)
@@ -159,9 +160,7 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
     def test_exponential_backoff(self):
         """Test exponential backoff strategy."""
         config = RateLimitConfig(
-            strategy=RateLimitStrategy.EXPONENTIAL,
-            base_delay=0.1,
-            exponential_base=2.0
+            strategy=RateLimitStrategy.EXPONENTIAL, base_delay=0.1, exponential_base=2.0
         )
         exp_limiter = RateLimiter(config)
 
@@ -169,15 +168,15 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
         exp_limiter.state.consecutive_failures = 3
 
         # Calculate expected delay
-        expected_delay = 0.1 * (2.0 ** 3)  # 0.8 seconds
+        expected_delay = 0.1 * (2.0**3)  # 0.8 seconds
 
         # Test delay calculation
-        with patch('time.sleep') as mock_sleep:
+        with patch("time.sleep") as mock_sleep:
             exp_limiter.wait_if_needed("test")
 
             # Should have used exponential backoff
             mock_sleep.assert_called_with(expected_delay)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

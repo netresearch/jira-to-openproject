@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Tests for the batch processor system."""
 
-import pytest
 import time
 from unittest.mock import patch
+
+import pytest
+
 from src.utils.batch_processor import (
-    BatchProcessor,
-    BatchStrategy,
     BatchConfig,
     BatchMetrics,
     BatchOperation,
+    BatchProcessor,
+    BatchStrategy,
     create_api_batch_processor,
     create_database_batch_processor,
     create_memory_intensive_batch_processor,
@@ -110,7 +112,10 @@ class TestBatchProcessor:
             return [f"processed_{item}" for item in batch]
 
         result = processor.process_items(
-            items, dummy_processor, strategy=BatchStrategy.PERFORMANCE_ADAPTIVE, batch_size=5
+            items,
+            dummy_processor,
+            strategy=BatchStrategy.PERFORMANCE_ADAPTIVE,
+            batch_size=5,
         )
 
         assert len(result) == 25
@@ -129,10 +134,7 @@ class TestBatchProcessor:
 
         with processor:
             result = processor.process_items(
-                items,
-                dummy_processor,
-                strategy=BatchStrategy.HYBRID,
-                batch_size=10
+                items, dummy_processor, strategy=BatchStrategy.HYBRID, batch_size=10
             )
 
         assert len(result) == 30
@@ -152,7 +154,10 @@ class TestBatchProcessor:
 
         with pytest.raises(RuntimeError):
             processor.process_items(
-                items, failing_processor, strategy=BatchStrategy.SEQUENTIAL, batch_size=5
+                items,
+                failing_processor,
+                strategy=BatchStrategy.SEQUENTIAL,
+                batch_size=5,
             )
 
     def test_retry_logic(self):
@@ -263,10 +268,7 @@ class TestBatchProcessor:
         with processor:
             with pytest.raises(RuntimeError):
                 processor.process_items(
-                    items,
-                    slow_processor,
-                    strategy=BatchStrategy.PARALLEL,
-                    batch_size=2
+                    items, slow_processor, strategy=BatchStrategy.PARALLEL, batch_size=2
                 )
 
     def test_metrics_collection(self):
@@ -331,7 +333,7 @@ class TestBatchProcessor:
             items=[1, 2, 3],
             processor_func=lambda x: x,
             strategy=BatchStrategy.SEQUENTIAL,
-            batch_size=10
+            batch_size=10,
         )
 
         assert operation.operation_id == "test_op"
@@ -349,7 +351,7 @@ class TestBatchProcessor:
             return batch
 
         # Mock an unknown strategy
-        with patch.object(processor, 'process_items') as mock_process:
+        with patch.object(processor, "process_items") as mock_process:
             mock_process.side_effect = ValueError("Unknown batch strategy: unknown")
 
             with pytest.raises(ValueError):
@@ -373,10 +375,7 @@ class TestBatchConfig:
     def test_custom_config(self):
         """Test custom configuration values."""
         config = BatchConfig(
-            base_batch_size=50,
-            max_batch_size=500,
-            timeout_seconds=60,
-            retry_attempts=2
+            base_batch_size=50, max_batch_size=500, timeout_seconds=60, retry_attempts=2
         )
         assert config.base_batch_size == 50
         assert config.max_batch_size == 500

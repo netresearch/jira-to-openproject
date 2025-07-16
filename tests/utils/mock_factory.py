@@ -17,10 +17,12 @@ def create_mock_jira_client() -> JiraClient:
         JiraClient: A configured mock JiraClient
 
     """
-    mock_client = MagicMock(spec=JiraClient)
+    mock_client = MagicMock()
 
     # Configure common mock behaviors
     mock_client.get_projects.return_value = []
+    mock_client.get_custom_fields.return_value = []
+    mock_client.get_all_issues_for_project.return_value = []
 
     return mock_client
 
@@ -32,10 +34,14 @@ def create_mock_openproject_client() -> OpenProjectClient:
         OpenProjectClient: A configured mock OpenProjectClient
 
     """
-    mock_client = MagicMock(spec=OpenProjectClient)
+    mock_client = MagicMock()
 
     # Configure common mock behaviors
     mock_client.get_projects.return_value = []
+    mock_client.create_user.return_value = {"id": 1, "login": "test.user"}
+
+    # Add rails_client attribute
+    mock_client.rails_client = create_mock_rails_client()
 
     return mock_client
 
@@ -47,7 +53,7 @@ def create_mock_docker_client() -> DockerClient:
         DockerClient: A configured mock DockerClient
 
     """
-    mock_client = MagicMock(spec=DockerClient)
+    mock_client = MagicMock()
 
     # Configure common mock behaviors
     mock_client.is_connected.return_value = True
@@ -63,7 +69,7 @@ def create_mock_ssh_client() -> SSHClient:
         SSHClient: A configured mock SSHClient
 
     """
-    mock_client = MagicMock(spec=SSHClient)
+    mock_client = MagicMock()
 
     # Configure common mock behaviors
     mock_client.is_connected.return_value = True
@@ -79,7 +85,7 @@ def create_mock_rails_client() -> RailsConsoleClient:
         RailsConsoleClient: A configured mock RailsConsoleClient
 
     """
-    mock_client = MagicMock(spec=RailsConsoleClient)
+    mock_client = MagicMock()
 
     # Configure common mock behaviors
     mock_client.is_connected.return_value = True

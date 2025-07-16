@@ -39,7 +39,9 @@ class TestOpenProjectClient(unittest.TestCase):
         self.mock_ssh_client_class.return_value = self.mock_ssh_client
 
         # 2. DockerClient patcher
-        self.docker_client_patcher = patch("src.clients.openproject_client.DockerClient")
+        self.docker_client_patcher = patch(
+            "src.clients.openproject_client.DockerClient"
+        )
         self.mock_docker_client_class = self.docker_client_patcher.start()
         self.mock_docker_client = MagicMock(spec=DockerClient)
         # Set the return value for the execute_command method to ensure it returns 3 values
@@ -49,7 +51,9 @@ class TestOpenProjectClient(unittest.TestCase):
         self.mock_docker_client_class.return_value = self.mock_docker_client
 
         # 3. RailsConsoleClient patcher
-        self.rails_client_patcher = patch("src.clients.openproject_client.RailsConsoleClient")
+        self.rails_client_patcher = patch(
+            "src.clients.openproject_client.RailsConsoleClient"
+        )
         self.mock_rails_client_class = self.rails_client_patcher.start()
         self.mock_rails_client = MagicMock(spec=RailsConsoleClient)
         self.mock_rails_client_class.return_value = self.mock_rails_client
@@ -80,11 +84,17 @@ class TestOpenProjectClient(unittest.TestCase):
         self.mock_os.path.basename.side_effect = os.path.basename  # Use real basename
         self.mock_os.path.getsize.return_value = 1024
         self.mock_os.path.join.side_effect = os.path.join  # Use real join function
-        self.mock_os.path.abspath.side_effect = lambda x: x  # Simplify abspath for testing
-        self.mock_os.makedirs.side_effect = lambda path, exist_ok=False: None  # Do nothing but don't raise error
+        self.mock_os.path.abspath.side_effect = (
+            lambda x: x
+        )  # Simplify abspath for testing
+        self.mock_os.makedirs.side_effect = (
+            lambda path, exist_ok=False: None
+        )  # Do nothing but don't raise error
         self.mock_os.access.return_value = True
         self.mock_os.unlink = MagicMock()
-        self.mock_os.urandom.return_value = b"1234"  # Mock urandom for deterministic testing
+        self.mock_os.urandom.return_value = (
+            b"1234"  # Mock urandom for deterministic testing
+        )
 
         # Initialize OpenProjectClient after all mocks are set up
         self.op_client = OpenProjectClient()
@@ -202,8 +212,10 @@ class TestOpenProjectClient(unittest.TestCase):
     def test_transfer_and_execute_script_ssh_failure(self) -> None:
         """Test script execution failing during SSH transfer."""
         # Mock the rails_client._send_command_to_tmux to throw a CommandExecutionError
-        self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError(
-            "SSH transfer failed: Connection refused",
+        self.mock_rails_client._send_command_to_tmux.side_effect = (
+            CommandExecutionError(
+                "SSH transfer failed: Connection refused",
+            )
         )
 
         # Execute the test with expected exception
@@ -216,8 +228,10 @@ class TestOpenProjectClient(unittest.TestCase):
     def test_transfer_and_execute_script_docker_failure(self) -> None:
         """Test script execution failing during Docker transfer."""
         # Mock the rails_client._send_command_to_tmux to throw a CommandExecutionError
-        self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError(
-            "Failed to copy script to container",
+        self.mock_rails_client._send_command_to_tmux.side_effect = (
+            CommandExecutionError(
+                "Failed to copy script to container",
+            )
         )
 
         # Execute the test with expected exception
@@ -246,7 +260,9 @@ class TestOpenProjectClient(unittest.TestCase):
     def test_execute_query_error(self) -> None:
         """Test query execution with error."""
         # Mock rails_client._send_command_to_tmux to raise an exception
-        self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError("Query execution failed")
+        self.mock_rails_client._send_command_to_tmux.side_effect = (
+            CommandExecutionError("Query execution failed")
+        )
 
         # Execute the query with error expected
         with pytest.raises(CommandExecutionError) as context:
@@ -284,7 +300,9 @@ class TestOpenProjectClient(unittest.TestCase):
         self.op_client.transfer_file_to_container(local_path, container_path)
 
         # Verify docker_client.transfer_file_to_container was called with the correct paths
-        self.mock_docker_client.transfer_file_to_container.assert_called_once_with(local_path, container_path)
+        self.mock_docker_client.transfer_file_to_container.assert_called_once_with(
+            local_path, container_path
+        )
 
         # Reset the mock for the next test
         self.mock_docker_client.transfer_file_to_container.reset_mock()
@@ -293,10 +311,14 @@ class TestOpenProjectClient(unittest.TestCase):
         self.op_client.transfer_file_from_container(container_path, local_path)
 
         # Verify docker_client.copy_file_from_container was called with the correct paths
-        self.mock_docker_client.copy_file_from_container.assert_called_once_with(container_path, local_path)
+        self.mock_docker_client.copy_file_from_container.assert_called_once_with(
+            container_path, local_path
+        )
 
         # Test failing transfer (to container)
-        self.mock_docker_client.transfer_file_to_container.side_effect = Exception("Connection refused")
+        self.mock_docker_client.transfer_file_to_container.side_effect = Exception(
+            "Connection refused"
+        )
 
         with pytest.raises(FileTransferError):
             self.op_client.transfer_file_to_container(local_path, container_path)
@@ -306,8 +328,12 @@ class TestOpenProjectClient(unittest.TestCase):
         # Patch random.randint to return a fixed value
         with patch("src.clients.openproject_client.random.randint", return_value=12345):
             # Configure mock for successful validation
-            self.mock_rails_client.execute.side_effect = None  # Clear any previous side effects
-            self.mock_rails_client.execute.return_value = "OPENPROJECT_CONNECTION_TEST_12345"
+            self.mock_rails_client.execute.side_effect = (
+                None  # Clear any previous side effects
+            )
+            self.mock_rails_client.execute.return_value = (
+                "OPENPROJECT_CONNECTION_TEST_12345"
+            )
 
             # Test is_connected
             result = self.op_client.is_connected()
@@ -322,7 +348,9 @@ class TestOpenProjectClient(unittest.TestCase):
 
             # Test with a failed execution
             self.mock_rails_client.execute.reset_mock()
-            self.mock_rails_client.execute.side_effect = Exception("Connection to Rails console failed")
+            self.mock_rails_client.execute.side_effect = Exception(
+                "Connection to Rails console failed"
+            )
 
             result = self.op_client.is_connected()
 

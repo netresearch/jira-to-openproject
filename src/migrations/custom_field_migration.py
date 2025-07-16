@@ -58,7 +58,9 @@ class CustomFieldMigration(BaseMigration):
 
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
-        self.jira_custom_fields = self._load_from_json(Path("jira_custom_fields.json"), [])
+        self.jira_custom_fields = self._load_from_json(
+            Path("jira_custom_fields.json"), []
+        )
         self.op_custom_fields = self._load_from_json(Path("op_custom_fields.json"), [])
         self.mapping = self._load_from_json(Path("custom_field_mapping.json"), {})
 
@@ -96,7 +98,8 @@ class CustomFieldMigration(BaseMigration):
         custom_fields_file = self.data_dir / "jira_custom_fields.json"
 
         if custom_fields_file.exists() and not config.migration_config.get(
-            "force", False,
+            "force",
+            False,
         ):
             self.logger.info(
                 "Jira custom fields data already exists, skipping extraction (use --force to override)",
@@ -216,7 +219,8 @@ class CustomFieldMigration(BaseMigration):
                 json.dump(custom_fields, f, indent=2, ensure_ascii=False)
 
             self.logger.info(
-                "Saved Jira custom fields data (%d fields)", len(custom_fields),
+                "Saved Jira custom fields data (%d fields)",
+                len(custom_fields),
             )
             self.jira_custom_fields = custom_fields
             return custom_fields
@@ -244,7 +248,8 @@ class CustomFieldMigration(BaseMigration):
         # Check if the data already exists
         if output_file.exists() and not config.migration_config.get("force", False):
             self.logger.info(
-                "Using existing OpenProject custom field data from %s", output_file,
+                "Using existing OpenProject custom field data from %s",
+                output_file,
             )
             try:
                 with output_file.open(encoding="utf-8") as f:
@@ -253,11 +258,13 @@ class CustomFieldMigration(BaseMigration):
                     return data
             except json.JSONDecodeError:
                 self.logger.warning(
-                    "Existing file %s is invalid. Re-extracting data.", output_file,
+                    "Existing file %s is invalid. Re-extracting data.",
+                    output_file,
                 )
             except Exception as e:
                 self.logger.exception(
-                    "Error reading existing data: %s. Re-extracting data.", e,
+                    "Error reading existing data: %s. Re-extracting data.",
+                    e,
                 )
 
         self.logger.info(
@@ -396,7 +403,8 @@ class CustomFieldMigration(BaseMigration):
         }
 
         def process_field(
-            jira_field: dict[str, Any], context: dict[str, Any],
+            jira_field: dict[str, Any],
+            context: dict[str, Any],
         ) -> str | None:
             jira_id = jira_field.get("id")
             jira_name = jira_field.get("name", "")
@@ -486,7 +494,8 @@ class CustomFieldMigration(BaseMigration):
         return mapping
 
     def create_custom_field_via_rails(
-        self, field_data: dict[str, Any],
+        self,
+        field_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Create a custom field in OpenProject via Rails console.
 
@@ -499,7 +508,8 @@ class CustomFieldMigration(BaseMigration):
         """
         field_type = field_data.get("openproject_type", "string")
         field_name = field_data.get(
-            "openproject_name", field_data.get("jira_name", "Unnamed Field"),
+            "openproject_name",
+            field_data.get("jira_name", "Unnamed Field"),
         )
 
         field_name = field_name.replace('"', '\\"')
@@ -585,7 +595,9 @@ class CustomFieldMigration(BaseMigration):
                 error_info = f"Field validation failed: {result['validation_errors']}"
 
             self.logger.error(
-                "Error creating custom field '%s': %s", field_name, error_info,
+                "Error creating custom field '%s': %s",
+                field_name,
+                error_info,
             )
 
             if isinstance(result.get("errors"), list) and any(
@@ -601,7 +613,8 @@ class CustomFieldMigration(BaseMigration):
         return result
 
     def migrate_custom_fields_via_json(
-        self, fields_to_migrate: list[dict[str, Any]],
+        self,
+        fields_to_migrate: list[dict[str, Any]],
     ) -> bool:
         """Migrate custom fields by creating a JSON file and processing it in a Ruby script.
 
@@ -647,6 +660,7 @@ class CustomFieldMigration(BaseMigration):
 
         # Generate a timestamp for uniqueness
         import time as time_module
+
         timestamp = int(time_module.time())
 
         # Write the custom fields data to a JSON file
@@ -655,7 +669,9 @@ class CustomFieldMigration(BaseMigration):
             json.dump(custom_fields_data, f, indent=2, ensure_ascii=False)
 
         self.logger.info(
-            "Writing %d custom fields to %s", len(custom_fields_data), data_file_path,
+            "Writing %d custom fields to %s",
+            len(custom_fields_data),
+            data_file_path,
         )
 
         # Transfer the file to the container
@@ -665,11 +681,13 @@ class CustomFieldMigration(BaseMigration):
         # Use op_client for file transfers
         try:
             self.op_client.transfer_file_to_container(
-                data_file_path, container_data_path,
+                data_file_path,
+                container_data_path,
             )
         except Exception as e:
             self.logger.exception(
-                "Failed to transfer custom fields data to container: %s", str(e),
+                "Failed to transfer custom fields data to container: %s",
+                str(e),
             )
             return False
 
@@ -831,18 +849,26 @@ puts "Custom field migration completed. Results written to #{output_file}"
                 self.logger.info("No custom fields created")
 
             if existing_fields:
-                self.logger.info("Found %d existing custom fields", len(existing_fields))
+                self.logger.info(
+                    "Found %d existing custom fields", len(existing_fields)
+                )
             else:
                 self.logger.info("No existing custom fields found")
 
             if error_fields:
-                self.logger.error("Failed to create %d custom fields", len(error_fields))
+                self.logger.error(
+                    "Failed to create %d custom fields", len(error_fields)
+                )
                 for error in error_fields:
-                    self.logger.error("Error for field '%s': %s", error["name"], error["errors"])
+                    self.logger.error(
+                        "Error for field '%s': %s", error["name"], error["errors"]
+                    )
 
             # Consider it successful if either fields were created OR fields already exist (and no errors)
             # This handles the case where custom fields from link types already exist
-            return (len(created_fields) > 0 or len(existing_fields) > 0) and not error_fields
+            return (
+                len(created_fields) > 0 or len(existing_fields) > 0
+            ) and not error_fields
         except Exception as e:
             self.logger.exception("Error executing Ruby script: %s", str(e))
             return False
@@ -853,7 +879,9 @@ puts "Custom field migration completed. Results written to #{output_file}"
                     data_file_path.unlink()
 
                 # Also clean up result file
-                local_result_path = self.data_dir / f"custom_fields_result_{timestamp}.json"
+                local_result_path = (
+                    self.data_dir / f"custom_fields_result_{timestamp}.json"
+                )
                 if local_result_path.exists():
                     local_result_path.unlink()
             except Exception as e:

@@ -36,12 +36,16 @@ class TestDataHandler(unittest.TestCase):
         )
 
         # Save the model
-        success = data_handler.save(test_result, self.test_filename, directory=self.temp_dir)
+        success = data_handler.save(
+            test_result, self.test_filename, directory=self.temp_dir
+        )
         assert success
         assert self.test_filepath.exists()
 
         # Load the model
-        loaded_result = data_handler.load(ComponentResult, self.test_filename, directory=self.temp_dir)
+        loaded_result = data_handler.load(
+            ComponentResult, self.test_filename, directory=self.temp_dir
+        )
 
         # Verify loaded model matches original
         assert loaded_result is not None
@@ -54,11 +58,15 @@ class TestDataHandler(unittest.TestCase):
         test_data = {"key1": "value1", "key2": 123, "nested": {"a": 1, "b": 2}}
 
         # Save the dictionary
-        success = data_handler.save(test_data, self.test_filename, directory=self.temp_dir)
+        success = data_handler.save(
+            test_data, self.test_filename, directory=self.temp_dir
+        )
         assert success
 
         # Load as a dictionary
-        loaded_data = data_handler.load_dict(self.test_filename, directory=self.temp_dir)
+        loaded_data = data_handler.load_dict(
+            self.test_filename, directory=self.temp_dir
+        )
 
         # Verify loaded data matches original
         assert loaded_data == test_data
@@ -68,11 +76,15 @@ class TestDataHandler(unittest.TestCase):
         test_data = [1, 2, 3, {"key": "value"}, [4, 5, 6]]
 
         # Save the list
-        success = data_handler.save(test_data, self.test_filename, directory=self.temp_dir)
+        success = data_handler.save(
+            test_data, self.test_filename, directory=self.temp_dir
+        )
         assert success
 
         # Load as a list
-        loaded_data = data_handler.load_list(self.test_filename, directory=self.temp_dir)
+        loaded_data = data_handler.load_list(
+            self.test_filename, directory=self.temp_dir
+        )
 
         # Verify loaded data matches original
         assert loaded_data == test_data
@@ -80,12 +92,19 @@ class TestDataHandler(unittest.TestCase):
     def test_load_nonexistent_file(self) -> None:
         """Test loading a file that doesn't exist."""
         # Try to load a nonexistent file
-        result = data_handler.load(ComponentResult, "nonexistent.json", directory=self.temp_dir)
+        result = data_handler.load(
+            ComponentResult, "nonexistent.json", directory=self.temp_dir
+        )
         assert result is None
 
         # Try with a default value
         default = ComponentResult(success=False, message="Default")
-        result = data_handler.load(ComponentResult, "nonexistent.json", directory=self.temp_dir, default=default)
+        result = data_handler.load(
+            ComponentResult,
+            "nonexistent.json",
+            directory=self.temp_dir,
+            default=default,
+        )
         assert result == default
 
     def test_handling_invalid_json(self) -> None:
@@ -95,10 +114,17 @@ class TestDataHandler(unittest.TestCase):
             f.write("{invalid json")
 
         # Try to load the invalid file
-        result = data_handler.load(ComponentResult, self.test_filename, directory=self.temp_dir)
+        result = data_handler.load(
+            ComponentResult, self.test_filename, directory=self.temp_dir
+        )
         assert result is None
 
         # Try with a default value
         default = ComponentResult(success=False, message="Default")
-        result = data_handler.load(ComponentResult, self.test_filename, directory=self.temp_dir, default=default)
+        result = data_handler.load(
+            ComponentResult,
+            self.test_filename,
+            directory=self.temp_dir,
+            default=default,
+        )
         assert result == default

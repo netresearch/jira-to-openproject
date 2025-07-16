@@ -7,7 +7,7 @@
 # Details:
 1. Create a new executable script at scripts/run-taskmaster.sh with the following structure:
    • Shebang: #!/usr/bin/env bash
-   • Open and acquire an exclusive nonblocking lock on /tmp/taskmaster.lock: 
+   • Open and acquire an exclusive nonblocking lock on /tmp/taskmaster.lock:
      exec 200>/tmp/taskmaster.lock
      flock -n 200 || { echo "Another Taskmaster process is running." >&2; exit 1; }
    • (Optional) If the previous JSON state file (~/.taskmaster/state.json) exists, copy it to ~/.taskmaster/state.json.bak.timestamp for backup.

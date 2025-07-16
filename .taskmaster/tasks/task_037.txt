@@ -64,4 +64,3 @@ Test the 'status_types' component using: J2O_LOG_LEVEL=debug python src/main.py 
 ### Description: Verify the 'work_packages' migration component for correct client usage and rule adherence.
 ### Details:
 Test the 'work_packages' component using: J2O_LOG_LEVEL=debug python src/main.py migrate --force --no-backup --components work_packages. Review logs and code for YOLO/exception/rule compliance.
-

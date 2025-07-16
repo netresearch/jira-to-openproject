@@ -42,7 +42,9 @@ def run_quick_tests() -> int:
     print_info("Running unit tests only for rapid feedback...")
 
     cmd = [
-        "python", "-m", "pytest",
+        "python",
+        "-m",
+        "pytest",
         "tests/unit",
         "-x",  # Stop on first failure
         "--tb=short",  # Short traceback format
@@ -67,8 +69,11 @@ def run_smoke_tests() -> int:
     print_info("Running critical path tests...")
 
     cmd = [
-        "python", "-m", "pytest",
-        "-m", "unit and not slow",
+        "python",
+        "-m",
+        "pytest",
+        "-m",
+        "unit and not slow",
         "-x",
         "--tb=short",
         "-v",
@@ -95,7 +100,9 @@ def run_comprehensive_tests() -> int:
     os.makedirs("reports", exist_ok=True)
 
     cmd = [
-        "python", "-m", "pytest",
+        "python",
+        "-m",
+        "pytest",
         "--cov=src",
         "--cov-report=html:reports/coverage",
         "--cov-report=term",
@@ -146,7 +153,9 @@ def run_specific_module(module: str) -> int:
     print_info(f"Running tests in {test_path}")
 
     cmd = [
-        "python", "-m", "pytest",
+        "python",
+        "-m",
+        "pytest",
         test_path,
         "-v",
         "--tb=short",
@@ -161,7 +170,9 @@ def run_failed_tests() -> int:
     print_info("Running tests that failed in the last run...")
 
     cmd = [
-        "python", "-m", "pytest",
+        "python",
+        "-m",
+        "pytest",
         "--lf",  # Last failed
         "-v",
         "--tb=short",
@@ -177,13 +188,16 @@ def run_changed_tests() -> int:
 
     # Get changed files from git
     try:
-        changed_files = subprocess.check_output(
-            ["git", "diff", "--name-only", "HEAD~1"],
-            text=True
-        ).strip().split('\n')
+        changed_files = (
+            subprocess.check_output(["git", "diff", "--name-only", "HEAD~1"], text=True)
+            .strip()
+            .split("\n")
+        )
 
         # Filter for Python files in src/
-        src_files = [f for f in changed_files if f.startswith('src/') and f.endswith('.py')]
+        src_files = [
+            f for f in changed_files if f.startswith("src/") and f.endswith(".py")
+        ]
 
         if not src_files:
             print_info("No changed source files found")
@@ -195,8 +209,11 @@ def run_changed_tests() -> int:
         keywords = " or ".join([Path(f).stem for f in src_files])
 
         cmd = [
-            "python", "-m", "pytest",
-            "-k", keywords,
+            "python",
+            "-m",
+            "pytest",
+            "-k",
+            keywords,
             "-v",
             "--tb=short",
         ]
@@ -214,8 +231,11 @@ def run_performance_tests() -> int:
     print_info("Running slow and performance tests...")
 
     cmd = [
-        "python", "-m", "pytest",
-        "-m", "slow",
+        "python",
+        "-m",
+        "pytest",
+        "-m",
+        "slow",
         "-v",
         "--tb=short",
         "--durations=10",  # Show 10 slowest tests
@@ -262,7 +282,9 @@ def clean_test_artifacts() -> int:
     for artifact in artifacts:
         print_info(f"Cleaning {artifact}...")
         if artifact.startswith("."):
-            subprocess.call(["find", ".", "-name", artifact, "-exec", "rm", "-rf", "{}", "+"])
+            subprocess.call(
+                ["find", ".", "-name", artifact, "-exec", "rm", "-rf", "{}", "+"]
+            )
         else:
             subprocess.call(["find", ".", "-name", artifact, "-delete"])
 
@@ -295,19 +317,27 @@ Test Types:
   failed     - Re-run failed tests from last run
   changed    - Tests for git-changed files
   perf       - Performance and slow tests
-        """
+        """,
     )
 
     parser.add_argument(
         "command",
-        choices=["quick", "smoke", "full", "module", "failed", "changed", "perf", "setup", "clean"],
-        help="Test command to run"
+        choices=[
+            "quick",
+            "smoke",
+            "full",
+            "module",
+            "failed",
+            "changed",
+            "perf",
+            "setup",
+            "clean",
+        ],
+        help="Test command to run",
     )
 
     parser.add_argument(
-        "module",
-        nargs="?",
-        help="Module name (required for 'module' command)"
+        "module", nargs="?", help="Module name (required for 'module' command)"
     )
 
     args = parser.parse_args()

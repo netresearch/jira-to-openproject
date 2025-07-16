@@ -6,9 +6,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.migrations.base_migration import BaseMigration
+from src.models.component_results import ComponentResult
 from src.utils.change_detector import ChangeDetector
 from src.utils.state_manager import StateManager
-from src.models.component_results import ComponentResult
 
 
 class MockBaseMigration(BaseMigration):
@@ -18,7 +18,7 @@ class MockBaseMigration(BaseMigration):
         super().__init__(*args, **kwargs)
         self.test_entities = [
             {"id": "entity1", "name": "Test Entity 1"},
-            {"id": "entity2", "name": "Test Entity 2"}
+            {"id": "entity2", "name": "Test Entity 2"},
         ]
         self.run_called = False
 
@@ -34,7 +34,7 @@ class MockBaseMigration(BaseMigration):
             message="Test migration completed",
             success_count=2,
             failed_count=0,
-            total_count=2
+            total_count=2,
         )
 
 
@@ -60,6 +60,7 @@ class TestBaseMigrationStateIntegration:
     def teardown_method(self):
         """Clean up test fixtures."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_state_manager_dependency_injection(self):
@@ -68,7 +69,7 @@ class TestBaseMigrationStateIntegration:
             jira_client=self.jira_client,
             op_client=self.op_client,
             state_manager=self.state_manager,
-            change_detector=self.change_detector
+            change_detector=self.change_detector,
         )
 
         assert migration.state_manager is self.state_manager
@@ -83,14 +84,14 @@ class TestBaseMigrationStateIntegration:
             jira_client=self.jira_client,
             op_client=self.op_client,
             state_manager=self.state_manager,
-            change_detector=self.change_detector
+            change_detector=self.change_detector,
         )
 
         mapping_id = migration.register_entity_mapping(
             jira_entity_type="project",
             jira_entity_id="PROJ123",
             openproject_entity_type="project",
-            openproject_entity_id="456"
+            openproject_entity_id="456",
         )
 
         # Verify mapping was registered
@@ -108,23 +109,19 @@ class TestBaseMigrationStateIntegration:
             jira_client=self.jira_client,
             op_client=self.op_client,
             state_manager=self.state_manager,
-            change_detector=self.change_detector
+            change_detector=self.change_detector,
         )
 
         # Start migration record
         record_id = migration.start_migration_record(
-            entity_type="projects",
-            operation_type="migrate",
-            entity_count=5
+            entity_type="projects", operation_type="migrate", entity_count=5
         )
 
         assert isinstance(record_id, str)
 
         # Complete migration record
         migration.complete_migration_record(
-            record_id=record_id,
-            success_count=5,
-            error_count=0
+            record_id=record_id, success_count=5, error_count=0
         )
 
         # Verify record exists in state manager
@@ -139,21 +136,19 @@ class TestBaseMigrationStateIntegration:
             jira_client=self.jira_client,
             op_client=self.op_client,
             state_manager=self.state_manager,
-            change_detector=self.change_detector
+            change_detector=self.change_detector,
         )
 
         # Mock change detection to detect changes
-        with patch.object(migration, 'should_skip_migration') as mock_skip:
-            mock_skip.return_value = (False, {
-                "total_changes": 2,
-                "changes_by_type": {"new": 1, "modified": 1}
-            })
+        with patch.object(migration, "should_skip_migration") as mock_skip:
+            mock_skip.return_value = (
+                False,
+                {"total_changes": 2, "changes_by_type": {"new": 1, "modified": 1}},
+            )
 
             # Run migration with state management
             result = migration.run_with_state_management(
-                entity_type="test_entities",
-                operation_type="migrate",
-                entity_count=2
+                entity_type="test_entities", operation_type="migrate", entity_count=2
             )
 
             # Verify migration was executed
@@ -169,21 +164,16 @@ class TestBaseMigrationStateIntegration:
             jira_client=self.jira_client,
             op_client=self.op_client,
             state_manager=self.state_manager,
-            change_detector=self.change_detector
+            change_detector=self.change_detector,
         )
 
         # Mock change detection to detect no changes
-        with patch.object(migration, 'should_skip_migration') as mock_skip:
-            mock_skip.return_value = (True, {
-                "total_changes": 0,
-                "changes_by_type": {}
-            })
+        with patch.object(migration, "should_skip_migration") as mock_skip:
+            mock_skip.return_value = (True, {"total_changes": 0, "changes_by_type": {}})
 
             # Run migration with state management
             result = migration.run_with_state_management(
-                entity_type="test_entities",
-                operation_type="migrate",
-                entity_count=0
+                entity_type="test_entities", operation_type="migrate", entity_count=0
             )
 
             # Verify migration was NOT executed

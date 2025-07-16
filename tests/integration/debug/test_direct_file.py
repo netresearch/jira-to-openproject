@@ -38,7 +38,11 @@ def main() -> None:
         operation_timeout=30,
     )
 
-    docker_client = DockerClient(container_name=op_config.get("container"), ssh_client=ssh_client, command_timeout=30)
+    docker_client = DockerClient(
+        container_name=op_config.get("container"),
+        ssh_client=ssh_client,
+        command_timeout=30,
+    )
 
     rails_client = RailsConsoleClient(
         tmux_session_name=op_config.get("tmux_session_name", "rails_console"),

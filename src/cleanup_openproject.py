@@ -221,7 +221,9 @@ class OpenProjectCleaner:
                     elif entity_type == "it":
                         results["issue_types_deleted"] = self.cleanup_issue_types()
                     elif entity_type == "is":
-                        results["issue_statuses_deleted"] = self.cleanup_issue_statuses()
+                        results["issue_statuses_deleted"] = (
+                            self.cleanup_issue_statuses()
+                        )
                 except Exception as e:
                     logger.exception(
                         f"Error during cleanup of {entity_type}: {e!s}",
@@ -267,7 +269,9 @@ def main() -> None:
         description="Clean up OpenProject by removing specified entities. "
         "Defaults to all entities if none are specified.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Run in dry-run mode (no actual changes)")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Run in dry-run mode (no actual changes)"
+    )
 
     entity_choices = [
         "u",
@@ -335,7 +339,9 @@ def main() -> None:
         entities_to_delete = [e for e in normalized_entities if e]
 
     try:
-        cleaner = OpenProjectCleaner(entities_to_delete=entities_to_delete, dry_run=args.dry_run)
+        cleaner = OpenProjectCleaner(
+            entities_to_delete=entities_to_delete, dry_run=args.dry_run
+        )
         cleaner.run_cleanup()
 
         # Log summary (already done in run_cleanup, but keep a final message)

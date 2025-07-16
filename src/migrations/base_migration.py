@@ -1,15 +1,15 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from datetime import UTC, datetime
 
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 from src.utils.change_detector import ChangeDetector, ChangeReport
-from src.utils.state_manager import StateManager
 from src.utils.data_preservation_manager import DataPreservationManager
+from src.utils.state_manager import StateManager
 
 
 class ComponentInitializationError(Exception):
@@ -18,6 +18,7 @@ class ComponentInitializationError(Exception):
     This custom exception provides clear diagnostics when component
     initialization fails, following proper exception-based error handling.
     """
+
     pass
 
 
@@ -56,9 +57,11 @@ class BaseMigration:
         self.op_client = op_client or OpenProjectClient()
         self.change_detector = change_detector or ChangeDetector()
         self.state_manager = state_manager or StateManager()
-        self.data_preservation_manager = data_preservation_manager or DataPreservationManager(
-            jira_client=self.jira_client,
-            openproject_client=self.op_client
+        self.data_preservation_manager = (
+            data_preservation_manager
+            or DataPreservationManager(
+                jira_client=self.jira_client, openproject_client=self.op_client
+            )
         )
 
         self.data_dir: Path = config.get_path("data")
@@ -72,8 +75,12 @@ class BaseMigration:
             self.mappings = config.get_mappings()
         except config.MappingsInitializationError as e:
             # Only perform diagnostics if mappings initialization fails
-            self.logger.exception("Failed to initialize mappings in %s: %s", self.__class__.__name__, e)
-            raise ComponentInitializationError(f"Cannot initialize {self.__class__.__name__}: {e}") from e
+            self.logger.exception(
+                "Failed to initialize mappings in %s: %s", self.__class__.__name__, e
+            )
+            raise ComponentInitializationError(
+                f"Cannot initialize {self.__class__.__name__}: {e}"
+            ) from e
 
     def register_entity_mapping(
         self,
@@ -81,7 +88,7 @@ class BaseMigration:
         jira_entity_id: str,
         openproject_entity_type: str,
         openproject_entity_id: str,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Register a mapping between Jira and OpenProject entities.
 
@@ -102,13 +109,11 @@ class BaseMigration:
             openproject_entity_type=openproject_entity_type,
             openproject_entity_id=openproject_entity_id,
             migration_component=migration_component,
-            metadata=metadata
+            metadata=metadata,
         )
 
     def get_entity_mapping(
-        self,
-        jira_entity_type: str,
-        jira_entity_id: str
+        self, jira_entity_type: str, jira_entity_id: str
     ) -> dict[str, Any] | None:
         """Get entity mapping by Jira entity information.
 
@@ -126,7 +131,7 @@ class BaseMigration:
         entity_type: str,
         operation_type: str = "migrate",
         entity_count: int = 0,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Start a new migration record for tracking progress.
 
@@ -145,7 +150,7 @@ class BaseMigration:
             entity_type=entity_type,
             operation_type=operation_type,
             entity_count=entity_count,
-            metadata=metadata
+            metadata=metadata,
         )
 
     def complete_migration_record(
@@ -153,7 +158,7 @@ class BaseMigration:
         record_id: str,
         success_count: int,
         error_count: int = 0,
-        errors: list[str] | None = None
+        errors: list[str] | None = None,
     ) -> None:
         """Complete a migration record.
 
@@ -167,13 +172,11 @@ class BaseMigration:
             record_id=record_id,
             success_count=success_count,
             error_count=error_count,
-            errors=errors
+            errors=errors,
         )
 
     def create_state_snapshot(
-        self,
-        description: str,
-        metadata: dict[str, Any] | None = None
+        self, description: str, metadata: dict[str, Any] | None = None
     ) -> str:
         """Create a complete state snapshot for rollback purposes.
 
@@ -186,9 +189,7 @@ class BaseMigration:
         """
         migration_component = self.__class__.__name__
         return self.state_manager.create_state_snapshot(
-            description=description,
-            user=migration_component,
-            metadata=metadata
+            description=description, user=migration_component, metadata=metadata
         )
 
     def store_original_entity_state(
@@ -196,7 +197,7 @@ class BaseMigration:
         entity_id: str,
         entity_type: str,
         entity_data: dict[str, Any],
-        source: str = "migration"
+        source: str = "migration",
     ) -> None:
         """Store the original state of an entity for data preservation.
 
@@ -210,7 +211,7 @@ class BaseMigration:
             entity_id=entity_id,
             entity_type=entity_type,
             entity_data=entity_data,
-            source=source
+            source=source,
         )
 
     def detect_preservation_conflicts(
@@ -218,7 +219,7 @@ class BaseMigration:
         jira_changes: dict[str, Any],
         entity_id: str,
         entity_type: str,
-        current_openproject_data: dict[str, Any]
+        current_openproject_data: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Detect conflicts between Jira changes and OpenProject modifications.
 
@@ -235,14 +236,14 @@ class BaseMigration:
             jira_changes=jira_changes,
             entity_id=entity_id,
             entity_type=entity_type,
-            current_openproject_data=current_openproject_data
+            current_openproject_data=current_openproject_data,
         )
 
     def resolve_preservation_conflict(
         self,
         conflict: dict[str, Any],
         jira_data: dict[str, Any],
-        openproject_data: dict[str, Any]
+        openproject_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Resolve a conflict between Jira and OpenProject data.
 
@@ -255,16 +256,11 @@ class BaseMigration:
             Resolved entity data
         """
         return self.data_preservation_manager.resolve_conflict(
-            conflict=conflict,
-            jira_data=jira_data,
-            openproject_data=openproject_data
+            conflict=conflict, jira_data=jira_data, openproject_data=openproject_data
         )
 
     def create_entity_backup(
-        self,
-        entity_id: str,
-        entity_type: str,
-        entity_data: dict[str, Any]
+        self, entity_id: str, entity_type: str, entity_data: dict[str, Any]
     ) -> Path:
         """Create a backup of entity data before updating.
 
@@ -277,15 +273,11 @@ class BaseMigration:
             Path to the backup file
         """
         return self.data_preservation_manager.create_backup(
-            entity_id=entity_id,
-            entity_type=entity_type,
-            entity_data=entity_data
+            entity_id=entity_id, entity_type=entity_type, entity_data=entity_data
         )
 
     def analyze_preservation_status(
-        self,
-        jira_changes: dict[str, dict[str, Any]],
-        entity_type: str
+        self, jira_changes: dict[str, dict[str, Any]], entity_type: str
     ) -> dict[str, Any]:
         """Analyze potential conflicts for a set of entities.
 
@@ -297,11 +289,12 @@ class BaseMigration:
             Report of all conflicts detected
         """
         return self.data_preservation_manager.analyze_preservation_status(
-            jira_changes=jira_changes,
-            entity_type=entity_type
+            jira_changes=jira_changes, entity_type=entity_type
         )
 
-    def detect_changes(self, current_entities: list[dict[str, Any]], entity_type: str) -> ChangeReport:
+    def detect_changes(
+        self, current_entities: list[dict[str, Any]], entity_type: str
+    ) -> ChangeReport:
         """Detect changes in entities since the last migration run.
 
         Args:
@@ -328,9 +321,13 @@ class BaseMigration:
             Path to the created snapshot file
         """
         migration_component = self.__class__.__name__
-        return self.change_detector.create_snapshot(entities, entity_type, migration_component)
+        return self.change_detector.create_snapshot(
+            entities, entity_type, migration_component
+        )
 
-    def should_skip_migration(self, entity_type: str) -> tuple[bool, ChangeReport | None]:
+    def should_skip_migration(
+        self, entity_type: str
+    ) -> tuple[bool, ChangeReport | None]:
         """Check if migration should be skipped based on change detection.
 
         This method allows migration components to check if there are any changes
@@ -354,20 +351,26 @@ class BaseMigration:
             should_skip = change_report["total_changes"] == 0
 
             if should_skip:
-                self.logger.info("No changes detected for %s, skipping migration", entity_type)
+                self.logger.info(
+                    "No changes detected for %s, skipping migration", entity_type
+                )
             else:
                 self.logger.info(
                     "Detected %d changes for %s: %s",
                     change_report["total_changes"],
                     entity_type,
-                    change_report["changes_by_type"]
+                    change_report["changes_by_type"],
                 )
 
             return should_skip, change_report
 
         except Exception as e:
             # If change detection fails, proceed with migration to be safe
-            self.logger.warning("Change detection failed for %s: %s. Proceeding with migration.", entity_type, e)
+            self.logger.warning(
+                "Change detection failed for %s: %s. Proceeding with migration.",
+                entity_type,
+                e,
+            )
             return False, None
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
@@ -394,7 +397,7 @@ class BaseMigration:
         self,
         entity_type: str | None = None,
         operation_type: str = "migrate",
-        entity_count: int = 0
+        entity_count: int = 0,
     ) -> ComponentResult:
         """Run migration with complete state management and change detection.
 
@@ -417,7 +420,9 @@ class BaseMigration:
         """
         # If no entity type specified, run standard migration without change detection
         if not entity_type:
-            self.logger.debug("No entity type specified, running migration without change detection")
+            self.logger.debug(
+                "No entity type specified, running migration without change detection"
+            )
             return self.run()
 
         migration_record_id = None
@@ -431,10 +436,7 @@ class BaseMigration:
                 return ComponentResult(
                     success=True,
                     message=f"No changes detected for {entity_type}, migration skipped",
-                    details={
-                        "change_report": change_report,
-                        "migration_skipped": True
-                    },
+                    details={"change_report": change_report, "migration_skipped": True},
                     success_count=0,
                     failed_count=0,
                     total_count=0,
@@ -445,7 +447,7 @@ class BaseMigration:
                 entity_type=entity_type,
                 operation_type=operation_type,
                 entity_count=entity_count,
-                metadata={"change_report": change_report}
+                metadata={"change_report": change_report},
             )
 
             # Step 3: Run the actual migration
@@ -458,16 +460,22 @@ class BaseMigration:
                     record_id=migration_record_id,
                     success_count=result.success_count,
                     error_count=result.failed_count,
-                    errors=result.errors
+                    errors=result.errors,
                 )
 
                 # Create change detection snapshot
                 try:
                     current_entities = self._get_current_entities_for_type(entity_type)
                     snapshot_path = self.create_snapshot(current_entities, entity_type)
-                    self.logger.info("Created change detection snapshot for %s: %s", entity_type, snapshot_path)
+                    self.logger.info(
+                        "Created change detection snapshot for %s: %s",
+                        entity_type,
+                        snapshot_path,
+                    )
                 except Exception as e:
-                    self.logger.warning("Failed to create change detection snapshot: %s", e)
+                    self.logger.warning(
+                        "Failed to create change detection snapshot: %s", e
+                    )
 
                 # Create state snapshot for rollback
                 try:
@@ -477,8 +485,8 @@ class BaseMigration:
                             "entity_type": entity_type,
                             "operation_type": operation_type,
                             "success_count": result.success_count,
-                            "failed_count": result.failed_count
-                        }
+                            "failed_count": result.failed_count,
+                        },
                     )
                     self.logger.info("Created state snapshot: %s", snapshot_id)
                 except Exception as e:
@@ -493,12 +501,14 @@ class BaseMigration:
                 # Add state info to result details
                 if not result.details:
                     result.details = {}
-                result.details.update({
-                    "change_report": change_report,
-                    "migration_record_id": migration_record_id,
-                    "state_snapshot_id": snapshot_id,
-                    "state_management": True
-                })
+                result.details.update(
+                    {
+                        "change_report": change_report,
+                        "migration_record_id": migration_record_id,
+                        "state_snapshot_id": snapshot_id,
+                        "state_management": True,
+                    }
+                )
 
             else:
                 # Migration failed - complete record with error
@@ -506,7 +516,7 @@ class BaseMigration:
                     record_id=migration_record_id,
                     success_count=result.success_count,
                     error_count=result.failed_count,
-                    errors=result.errors
+                    errors=result.errors,
                 )
 
             return result
@@ -521,10 +531,13 @@ class BaseMigration:
                         record_id=migration_record_id,
                         success_count=0,
                         error_count=1,
-                        errors=[f"State management workflow error: {e}"]
+                        errors=[f"State management workflow error: {e}"],
                     )
                 except Exception as cleanup_error:
-                    self.logger.warning("Failed to complete migration record during error cleanup: %s", cleanup_error)
+                    self.logger.warning(
+                        "Failed to complete migration record during error cleanup: %s",
+                        cleanup_error,
+                    )
 
             # Fall back to standard migration if state management fails
             return self.run()
@@ -535,7 +548,7 @@ class BaseMigration:
         operation_type: str = "migrate",
         entity_count: int = 0,
         analyze_conflicts: bool = True,
-        create_backups: bool = True
+        create_backups: bool = True,
     ) -> ComponentResult:
         """Run migration with comprehensive data preservation, state management, and change detection.
 
@@ -563,7 +576,9 @@ class BaseMigration:
         """
         # If no entity type specified, run standard migration without advanced features
         if not entity_type:
-            self.logger.debug("No entity type specified, running migration without data preservation")
+            self.logger.debug(
+                "No entity type specified, running migration without data preservation"
+            )
             return self.run()
 
         migration_record_id = None
@@ -579,22 +594,26 @@ class BaseMigration:
 
                     # Convert entities to changes format for analysis
                     jira_changes = {
-                        str(entity.get('id', entity.get('key', i))): entity
+                        str(entity.get("id", entity.get("key", i))): entity
                         for i, entity in enumerate(current_entities)
                     }
 
-                    conflict_report = self.analyze_preservation_status(jira_changes, entity_type)
+                    conflict_report = self.analyze_preservation_status(
+                        jira_changes, entity_type
+                    )
 
                     if conflict_report["total_conflicts"] > 0:
                         self.logger.info(
                             "Detected %d conflicts for %s before migration: %s",
                             conflict_report["total_conflicts"],
                             entity_type,
-                            conflict_report["conflicts_by_resolution"]
+                            conflict_report["conflicts_by_resolution"],
                         )
 
                 except Exception as e:
-                    self.logger.warning("Failed to analyze conflicts before migration: %s", e)
+                    self.logger.warning(
+                        "Failed to analyze conflicts before migration: %s", e
+                    )
 
             # Step 2: Check for changes
             should_skip, change_report = self.should_skip_migration(entity_type)
@@ -607,7 +626,7 @@ class BaseMigration:
                         "change_report": change_report,
                         "conflict_report": conflict_report,
                         "migration_skipped": True,
-                        "data_preservation": True
+                        "data_preservation": True,
                     },
                     success_count=0,
                     failed_count=0,
@@ -623,8 +642,8 @@ class BaseMigration:
                     "change_report": change_report,
                     "conflict_report": conflict_report,
                     "data_preservation": True,
-                    "create_backups": create_backups
-                }
+                    "create_backups": create_backups,
+                },
             )
 
             # Step 4: Run the actual migration
@@ -637,23 +656,27 @@ class BaseMigration:
                     record_id=migration_record_id,
                     success_count=result.success_count,
                     error_count=result.failed_count,
-                    errors=result.errors
+                    errors=result.errors,
                 )
 
                 # Store original states for future preservation
                 try:
                     current_entities = self._get_current_entities_for_type(entity_type)
                     for entity in current_entities:
-                        entity_id = str(entity.get('id', entity.get('key', '')))
+                        entity_id = str(entity.get("id", entity.get("key", "")))
                         if entity_id:
                             self.data_preservation_manager.store_original_state(
                                 entity_id=entity_id,
                                 entity_type=entity_type,
                                 entity_data=entity,
-                                source="migration"
+                                source="migration",
                             )
 
-                    self.logger.info("Stored original states for %d %s entities", len(current_entities), entity_type)
+                    self.logger.info(
+                        "Stored original states for %d %s entities",
+                        len(current_entities),
+                        entity_type,
+                    )
                 except Exception as e:
                     self.logger.warning("Failed to store original states: %s", e)
 
@@ -661,9 +684,15 @@ class BaseMigration:
                 try:
                     current_entities = self._get_current_entities_for_type(entity_type)
                     snapshot_path = self.create_snapshot(current_entities, entity_type)
-                    self.logger.info("Created change detection snapshot for %s: %s", entity_type, snapshot_path)
+                    self.logger.info(
+                        "Created change detection snapshot for %s: %s",
+                        entity_type,
+                        snapshot_path,
+                    )
                 except Exception as e:
-                    self.logger.warning("Failed to create change detection snapshot: %s", e)
+                    self.logger.warning(
+                        "Failed to create change detection snapshot: %s", e
+                    )
 
                 # Create state snapshot for rollback
                 try:
@@ -678,8 +707,12 @@ class BaseMigration:
                             "success_count": result.success_count,
                             "failed_count": result.failed_count,
                             "data_preservation": True,
-                            "conflicts_detected": conflict_report["total_conflicts"] if conflict_report else 0
-                        }
+                            "conflicts_detected": (
+                                conflict_report["total_conflicts"]
+                                if conflict_report
+                                else 0
+                            ),
+                        },
                     )
                     self.logger.info("Created state snapshot: %s", snapshot_id)
                 except Exception as e:
@@ -694,14 +727,16 @@ class BaseMigration:
                 # Add comprehensive info to result details
                 if not result.details:
                     result.details = {}
-                result.details.update({
-                    "change_report": change_report,
-                    "conflict_report": conflict_report,
-                    "migration_record_id": migration_record_id,
-                    "state_snapshot_id": snapshot_id,
-                    "state_management": True,
-                    "data_preservation": True
-                })
+                result.details.update(
+                    {
+                        "change_report": change_report,
+                        "conflict_report": conflict_report,
+                        "migration_record_id": migration_record_id,
+                        "state_snapshot_id": snapshot_id,
+                        "state_management": True,
+                        "data_preservation": True,
+                    }
+                )
 
             else:
                 # Migration failed - complete record with error
@@ -709,7 +744,7 @@ class BaseMigration:
                     record_id=migration_record_id,
                     success_count=result.success_count,
                     error_count=result.failed_count,
-                    errors=result.errors
+                    errors=result.errors,
                 )
 
             return result
@@ -724,15 +759,20 @@ class BaseMigration:
                         record_id=migration_record_id,
                         success_count=0,
                         error_count=1,
-                        errors=[f"Data preservation workflow error: {e}"]
+                        errors=[f"Data preservation workflow error: {e}"],
                     )
                 except Exception as cleanup_error:
-                    self.logger.warning("Failed to complete migration record during error cleanup: %s", cleanup_error)
+                    self.logger.warning(
+                        "Failed to complete migration record during error cleanup: %s",
+                        cleanup_error,
+                    )
 
             # Fall back to standard migration if data preservation workflow fails
             return self.run()
 
-    def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:
+    def run_with_change_detection(
+        self, entity_type: str | None = None
+    ) -> ComponentResult:
         """Run migration with change detection support.
 
         This method wraps the standard run() method with change detection hooks:
@@ -748,7 +788,9 @@ class BaseMigration:
         """
         # If no entity type specified, run standard migration without change detection
         if not entity_type:
-            self.logger.debug("No entity type specified, running migration without change detection")
+            self.logger.debug(
+                "No entity type specified, running migration without change detection"
+            )
             return self.run()
 
         try:
@@ -773,7 +815,9 @@ class BaseMigration:
                 try:
                     current_entities = self._get_current_entities_for_type(entity_type)
                     snapshot_path = self.create_snapshot(current_entities, entity_type)
-                    self.logger.info("Created snapshot for %s: %s", entity_type, snapshot_path)
+                    self.logger.info(
+                        "Created snapshot for %s: %s", entity_type, snapshot_path
+                    )
 
                     # Add snapshot info to result details
                     if not result.details:
@@ -783,7 +827,9 @@ class BaseMigration:
 
                 except Exception as e:
                     # Don't fail the migration if snapshot creation fails
-                    self.logger.warning("Failed to create snapshot after successful migration: %s", e)
+                    self.logger.warning(
+                        "Failed to create snapshot after successful migration: %s", e
+                    )
 
             return result
 
@@ -796,7 +842,7 @@ class BaseMigration:
         self,
         entity_type: str | None = None,
         operation_type: str = "migrate",
-        entity_count: int = 0
+        entity_count: int = 0,
     ) -> ComponentResult:
         """Run migration with full idempotent capabilities (recommended method).
 
@@ -834,12 +880,12 @@ class BaseMigration:
                 # Fall back to basic state management if we can't detect
                 self.logger.warning(
                     "Could not auto-detect entity type for %s, using basic state management",
-                    self.__class__.__name__
+                    self.__class__.__name__,
                 )
                 return self.run_with_state_management(
                     entity_type=None,
                     operation_type=operation_type,
-                    entity_count=entity_count
+                    entity_count=entity_count,
                 )
 
         # Use the full data preservation workflow
@@ -848,14 +894,14 @@ class BaseMigration:
             operation_type=operation_type,
             entity_count=entity_count,
             analyze_conflicts=True,
-            create_backups=True
+            create_backups=True,
         )
 
     def run_selective_update(
         self,
         entity_type: str | None = None,
         dry_run: bool = False,
-        update_settings: dict[str, Any] | None = None
+        update_settings: dict[str, Any] | None = None,
     ) -> ComponentResult:
         """Run a selective update that only modifies changed entities.
 
@@ -879,7 +925,9 @@ class BaseMigration:
             from src.utils.selective_update_manager import SelectiveUpdateManager
 
             start_time = datetime.now(tz=UTC)
-            self.logger.info("Starting selective update for %s", self.__class__.__name__)
+            self.logger.info(
+                "Starting selective update for %s", self.__class__.__name__
+            )
 
             # Auto-detect entity type if not provided
             if not entity_type:
@@ -900,15 +948,15 @@ class BaseMigration:
                     data={
                         "entity_type": entity_type,
                         "changes_detected": False,
-                        "execution_time": 0
+                        "execution_time": 0,
                     },
-                    performance_metrics={}
+                    performance_metrics={},
                 )
 
             # Step 2: Get change report from ChangeDetector
             change_report = self.change_detector.detect_changes(
                 current_entities=self._get_current_entities_for_type(entity_type),
-                entity_type=entity_type
+                entity_type=entity_type,
             )
 
             if not change_report["changes"]:
@@ -918,16 +966,16 @@ class BaseMigration:
                     data={
                         "entity_type": entity_type,
                         "changes_detected": False,
-                        "change_report": change_report
+                        "change_report": change_report,
                     },
-                    performance_metrics={}
+                    performance_metrics={},
                 )
 
             # Step 3: Initialize SelectiveUpdateManager
             update_manager = SelectiveUpdateManager(
                 jira_client=self.jira_client,
                 op_client=self.op_client,
-                state_manager=self.state_manager
+                state_manager=self.state_manager,
             )
 
             # Step 4: Create update plan
@@ -935,7 +983,8 @@ class BaseMigration:
 
             self.logger.info(
                 "Created selective update plan with %d operations across %d entity types",
-                update_plan["total_operations"], len(update_plan["entity_types"])
+                update_plan["total_operations"],
+                len(update_plan["entity_types"]),
             )
 
             # Step 5: Execute update plan
@@ -961,7 +1010,7 @@ class BaseMigration:
                 "change_report": change_report,
                 "update_plan": update_plan,
                 "update_result": update_result,
-                "dry_run": dry_run
+                "dry_run": dry_run,
             }
 
             return ComponentResult(
@@ -969,7 +1018,7 @@ class BaseMigration:
                 message=message,
                 data=result_data,
                 performance_metrics=update_result.get("performance_metrics", {}),
-                errors=update_result.get("errors", [])
+                errors=update_result.get("errors", []),
             )
 
         except Exception as e:
@@ -1004,7 +1053,7 @@ class BaseMigration:
             self.logger.warning(
                 "Could not auto-detect entity type for %s. "
                 "Please specify entity_type parameter explicitly.",
-                self.__class__.__name__
+                self.__class__.__name__,
             )
             return None
 

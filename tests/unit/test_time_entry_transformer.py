@@ -101,7 +101,10 @@ class TestTimeEntryTransformer:
         assert "_embedded" in result
         assert result["_embedded"]["user"]["href"] == "/api/v3/users/123"
         assert result["_embedded"]["workPackage"]["href"] == "/api/v3/work_packages/789"
-        assert result["_embedded"]["activity"]["href"] == "/api/v3/time_entries/activities/1"
+        assert (
+            result["_embedded"]["activity"]["href"]
+            == "/api/v3/time_entries/activities/1"
+        )
 
         # Check metadata
         assert "_meta" in result
@@ -121,7 +124,11 @@ class TestTimeEntryTransformer:
                         "type": "paragraph",
                         "content": [
                             {"type": "text", "text": "Working on "},
-                            {"type": "text", "text": "authentication", "marks": [{"type": "strong"}]},
+                            {
+                                "type": "text",
+                                "text": "authentication",
+                                "marks": [{"type": "strong"}],
+                            },
                             {"type": "text", "text": " feature"},
                         ],
                     }
@@ -148,7 +155,10 @@ class TestTimeEntryTransformer:
         assert "_embedded" in result
         assert result["_embedded"]["user"]["href"] == "/api/v3/users/456"
         assert result["_embedded"]["workPackage"]["href"] == "/api/v3/work_packages/789"
-        assert result["_embedded"]["activity"]["href"] == "/api/v3/time_entries/activities/3"
+        assert (
+            result["_embedded"]["activity"]["href"]
+            == "/api/v3/time_entries/activities/3"
+        )
 
         # Check Tempo-specific metadata
         assert result["_meta"]["tempo_worklog_id"] == 67890
@@ -156,7 +166,9 @@ class TestTimeEntryTransformer:
         assert result["_meta"]["tempo_billable_hours"] == 1.0
         assert "tempo_attributes" in result["_meta"]
 
-    def test_transform_jira_work_log_unmapped_user(self, transformer, sample_jira_work_log):
+    def test_transform_jira_work_log_unmapped_user(
+        self, transformer, sample_jira_work_log
+    ):
         """Test Jira work log with unmapped user."""
         sample_jira_work_log["author"]["name"] = "unknown.user"
 
@@ -166,9 +178,13 @@ class TestTimeEntryTransformer:
         assert "user" not in result["_embedded"]
         assert result["_meta"]["jira_author"] == "unknown.user"
 
-    def test_transform_jira_work_log_unmapped_work_package(self, transformer, sample_jira_work_log):
+    def test_transform_jira_work_log_unmapped_work_package(
+        self, transformer, sample_jira_work_log
+    ):
         """Test Jira work log with unmapped work package."""
-        result = transformer.transform_jira_work_log(sample_jira_work_log, "UNKNOWN-999")
+        result = transformer.transform_jira_work_log(
+            sample_jira_work_log, "UNKNOWN-999"
+        )
 
         # Work package should not be in embedded resources
         assert "workPackage" not in result["_embedded"]
@@ -203,7 +219,9 @@ class TestTimeEntryTransformer:
     def test_parse_jira_date_formats(self, transformer):
         """Test parsing various Jira date formats."""
         # Standard format
-        assert transformer._parse_jira_date("2023-12-01T10:30:00.000+0000") == "2023-12-01"
+        assert (
+            transformer._parse_jira_date("2023-12-01T10:30:00.000+0000") == "2023-12-01"
+        )
 
         # Without timezone
         assert transformer._parse_jira_date("2023-12-01T10:30:00") == "2023-12-01"
@@ -237,7 +255,9 @@ class TestTimeEntryTransformer:
         assert transformer._detect_activity("Writing docs for the API") == 4
 
         # Test default fallback
-        assert transformer._detect_activity("Some random work") == 1  # default_activity_id
+        assert (
+            transformer._detect_activity("Some random work") == 1
+        )  # default_activity_id
 
     def test_detect_activity_from_tempo_attributes(self, transformer):
         """Test activity detection from Tempo work attributes."""
@@ -263,7 +283,11 @@ class TestTimeEntryTransformer:
                     "type": "paragraph",
                     "content": [
                         {"type": "text", "text": "Hello "},
-                        {"type": "text", "text": "world", "marks": [{"type": "strong"}]},
+                        {
+                            "type": "text",
+                            "text": "world",
+                            "marks": [{"type": "strong"}],
+                        },
                         {"type": "text", "text": "!"},
                     ],
                 }
@@ -390,7 +414,9 @@ class TestTimeEntryTransformer:
         assert transformer.default_activity_id is None
         assert "development" in transformer.default_activity_mappings
 
-    def test_work_log_without_issue_key_in_batch(self, transformer, sample_jira_work_log):
+    def test_work_log_without_issue_key_in_batch(
+        self, transformer, sample_jira_work_log
+    ):
         """Test batch processing skips work logs without issue key."""
         work_logs = [
             {**sample_jira_work_log},  # Missing issue_key

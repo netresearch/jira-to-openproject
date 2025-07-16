@@ -117,7 +117,9 @@ class OpenProjectClient:
         self.container_name = container_name or op_config.get("container")
         self.ssh_host = ssh_host or op_config.get("server")
         self.ssh_user = ssh_user or op_config.get("user")
-        self.tmux_session_name = tmux_session_name or op_config.get("tmux_session_name", "rails_console")
+        self.tmux_session_name = tmux_session_name or op_config.get(
+            "tmux_session_name", "rails_console"
+        )
         self.command_timeout = command_timeout
         self.retry_count = retry_count
         self.retry_delay = retry_delay
@@ -171,7 +173,11 @@ class OpenProjectClient:
             f"RailsConsoleClient with tmux session {self.tmux_session_name}",
         )
 
-        logger.success("OpenProjectClient initialized for host %s, container %s", self.ssh_host, self.container_name)
+        logger.success(
+            "OpenProjectClient initialized for host %s, container %s",
+            self.ssh_host,
+            self.container_name,
+        )
 
     def _create_script_file(self, script_content: str) -> Path:
         """Create a temporary file with the script content.
@@ -239,7 +245,9 @@ class OpenProjectClient:
 
             self.docker_client.transfer_file_to_container(abs_path, container_path)
 
-            logger.debug("Successfully transferred file to container at %s", container_path)
+            logger.debug(
+                "Successfully transferred file to container at %s", container_path
+            )
 
         except Exception as e:
             # Verify the local file exists and is readable only after failure
@@ -305,7 +313,9 @@ class OpenProjectClient:
         except (json.JSONDecodeError, TypeError):
             return {"result": result}
 
-    def transfer_file_to_container(self, local_path: Path, container_path: Path) -> None:
+    def transfer_file_to_container(
+        self, local_path: Path, container_path: Path
+    ) -> None:
         """Transfer a file from local to the OpenProject container.
 
         Args:
@@ -383,21 +393,56 @@ class OpenProjectClient:
         try:
             # For other queries, execute directly but be careful about automatic modifications
             # Only add .limit() for queries that are clearly meant to return collections
-            collection_indicators = ["all", "where", "offset", "order", "includes", "joins"]
-            single_record_indicators = ["find_by", "find(", "first", "last", "count", "sum", "exists?"]
+            collection_indicators = [
+                "all",
+                "where",
+                "offset",
+                "order",
+                "includes",
+                "joins",
+            ]
+            single_record_indicators = [
+                "find_by",
+                "find(",
+                "first",
+                "last",
+                "count",
+                "sum",
+                "exists?",
+            ]
 
             # Check if this is a single-record query that shouldn't have .limit() added
-            is_single_record = any(indicator in query.lower() for indicator in single_record_indicators)
-            is_collection = any(indicator in query.lower() for indicator in collection_indicators)
+            is_single_record = any(
+                indicator in query.lower() for indicator in single_record_indicators
+            )
+            is_collection = any(
+                indicator in query.lower() for indicator in collection_indicators
+            )
 
             # Check if query already produces an Array (like .map queries)
-            produces_array = any(indicator in query.lower() for indicator in [".map", ".collect", ".select", ".reject"])
+            produces_array = any(
+                indicator in query.lower()
+                for indicator in [".map", ".collect", ".select", ".reject"]
+            )
 
             # Check if this looks like a simple expression (math, simple method calls, etc.)
-            is_simple_expression = any(indicator in query for indicator in [
-                '+', '-', '*', '/', '%', '**',  # Math operators
-                'puts ', 'p ', 'pp ',  # Output methods
-            ]) or query.strip().replace(' ', '').isalnum()  # Simple alphanumeric
+            is_simple_expression = (
+                any(
+                    indicator in query
+                    for indicator in [
+                        "+",
+                        "-",
+                        "*",
+                        "/",
+                        "%",
+                        "**",  # Math operators
+                        "puts ",
+                        "p ",
+                        "pp ",  # Output methods
+                    ]
+                )
+                or query.strip().replace(" ", "").isalnum()
+            )  # Simple alphanumeric
 
             # Ensure the query produces JSON output
             if ".to_json" not in query and not query.strip().endswith(".to_json"):
@@ -428,7 +473,9 @@ class OpenProjectClient:
             logger.error(f"Error in execute_query_to_json_file: {e}")
             raise
 
-    def _execute_batched_query(self, model_name: str, timeout: int | None = None) -> list[dict[str, Any]]:
+    def _execute_batched_query(
+        self, model_name: str, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         """Execute a query in batches to avoid any truncation issues."""
         try:
             # First, try a simple non-batched approach for smaller datasets
@@ -441,7 +488,10 @@ class OpenProjectClient:
 
                 # If we get valid data and it's less than 50 items, we're done
                 if isinstance(simple_data, list) and len(simple_data) < 50:
-                    logger.debug("Retrieved %d total records using simple query", len(simple_data))
+                    logger.debug(
+                        "Retrieved %d total records using simple query",
+                        len(simple_data),
+                    )
                     return simple_data
                 if isinstance(simple_data, list) and len(simple_data) == 50:
                     # We might have more data, fall through to batched approach
@@ -455,13 +505,17 @@ class OpenProjectClient:
                 elif simple_data is not None:
                     logger.debug("Retrieved non-list data using simple query")
                     # For non-dict, non-list data, return empty list
-                    logger.warning("Unexpected data type from simple query: %s", type(simple_data))
+                    logger.warning(
+                        "Unexpected data type from simple query: %s", type(simple_data)
+                    )
                     return []
                 else:
                     return []
 
             except Exception as e:
-                logger.debug("Simple query failed, falling back to batched approach: %s", e)
+                logger.debug(
+                    "Simple query failed, falling back to batched approach: %s", e
+                )
 
             # Fall back to batched approach for larger datasets
             all_results = []
@@ -487,7 +541,9 @@ class OpenProjectClient:
                     self.rate_limiter.record_response(operation_time, 200)
 
                     # If we get no data or empty array, we're done
-                    if not batch_data or (isinstance(batch_data, list) and len(batch_data) == 0):
+                    if not batch_data or (
+                        isinstance(batch_data, list) and len(batch_data) == 0
+                    ):
                         break
 
                     # If we get a single item instead of array, wrap it
@@ -502,7 +558,10 @@ class OpenProjectClient:
                         if len(batch_data) < batch_size:
                             break
                     else:
-                        logger.warning("Unexpected data type from batch query: %s", type(batch_data))
+                        logger.warning(
+                            "Unexpected data type from batch query: %s",
+                            type(batch_data),
+                        )
                         break
 
                     offset += batch_size
@@ -518,7 +577,9 @@ class OpenProjectClient:
                     self.rate_limiter.record_response(operation_time, 500)
                     break
 
-            logger.debug("Retrieved %d total records using batched approach", len(all_results))
+            logger.debug(
+                "Retrieved %d total records using batched approach", len(all_results)
+            )
             return all_results
 
         except Exception as e:
@@ -555,7 +616,7 @@ class OpenProjectClient:
             clean_output = result_output.strip()
 
             # Split output into lines for processing
-            lines = clean_output.split('\n')
+            lines = clean_output.split("\n")
 
             # Look for TMUX command markers to extract content between them
             tmux_start_idx = -1
@@ -563,28 +624,43 @@ class OpenProjectClient:
 
             for i, line in enumerate(lines):
                 # Look for various start patterns
-                if ('TMUX_CMD_START' in line or
-                    line.strip().startswith('[{') or  # Start of JSON array
-                    (line.strip().startswith('[') and '"id":' in line)):  # JSON array with id field
+                if (
+                    "TMUX_CMD_START" in line
+                    or line.strip().startswith("[{")  # Start of JSON array
+                    or (line.strip().startswith("[") and '"id":' in line)
+                ):  # JSON array with id field
                     tmux_start_idx = i
-                    logger.debug("Found start marker at line %d: %s", i, repr(line[:100]))
+                    logger.debug(
+                        "Found start marker at line %d: %s", i, repr(line[:100])
+                    )
                     break
-                elif (line.strip().startswith('open-project(') and
-                      i < len(lines) - 1 and
-                      (lines[i+1].strip().startswith('[') or lines[i+1].strip().startswith('{"'))):
+                elif (
+                    line.strip().startswith("open-project(")
+                    and i < len(lines) - 1
+                    and (
+                        lines[i + 1].strip().startswith("[")
+                        or lines[i + 1].strip().startswith('{"')
+                    )
+                ):
                     # Rails prompt followed by JSON
                     tmux_start_idx = i
-                    logger.debug("Found Rails prompt + JSON start at line %d: %s", i, repr(line[:100]))
+                    logger.debug(
+                        "Found Rails prompt + JSON start at line %d: %s",
+                        i,
+                        repr(line[:100]),
+                    )
                     break
 
             # Look for end markers
             for i, line in enumerate(lines):
-                if 'TMUX_CMD_END' in line or line.strip().endswith('}]'):
+                if "TMUX_CMD_END" in line or line.strip().endswith("}]"):
                     tmux_end_idx = i
                     logger.debug("Found end marker at line %d: %s", i, repr(line[:100]))
                     break
 
-            logger.debug("TMUX marker indices: start=%d, end=%d", tmux_start_idx, tmux_end_idx)
+            logger.debug(
+                "TMUX marker indices: start=%d, end=%d", tmux_start_idx, tmux_end_idx
+            )
 
             # Extract between markers
             content_lines = []
@@ -606,33 +682,40 @@ class OpenProjectClient:
                 return None
 
             # Join all content lines to form complete JSON/output
-            clean_output = " ".join(line.strip() for line in content_lines if line.strip())
+            clean_output = " ".join(
+                line.strip() for line in content_lines if line.strip()
+            )
 
             # Log the cleaned output for debugging
             logger.debug("Clean output length: %d characters", len(clean_output))
             logger.debug("Clean output preview: %s", clean_output[:200])
 
             # Handle Rails console responses with => prefix first (before other parsing)
-            for line in clean_output.split('\n'):
+            for line in clean_output.split("\n"):
                 line = line.strip()
                 # Handle Rails console output patterns like "=> nil", "=> true", etc.
-                if line.startswith('=> '):
+                if line.startswith("=> "):
                     value_part = line[3:].strip()
-                    if value_part == 'nil':
+                    if value_part == "nil":
                         logger.debug("Found Rails console nil response")
                         return None
-                    elif value_part == 'true':
+                    elif value_part == "true":
                         logger.debug("Found Rails console true response")
                         return True
-                    elif value_part == 'false':
+                    elif value_part == "false":
                         logger.debug("Found Rails console false response")
                         return False
                     elif value_part.isdigit():
-                        logger.debug("Found Rails console integer response: %s", value_part)
+                        logger.debug(
+                            "Found Rails console integer response: %s", value_part
+                        )
                         return int(value_part)
-                    elif ((value_part.startswith('"') and value_part.endswith('"')) or
-                          (value_part.startswith("'") and value_part.endswith("'"))):
-                        logger.debug("Found Rails console string response: %s", value_part)
+                    elif (value_part.startswith('"') and value_part.endswith('"')) or (
+                        value_part.startswith("'") and value_part.endswith("'")
+                    ):
+                        logger.debug(
+                            "Found Rails console string response: %s", value_part
+                        )
                         return value_part[1:-1]  # Remove quotes
                     else:
                         logger.debug("Found Rails console response: %s", value_part)
@@ -644,17 +727,20 @@ class OpenProjectClient:
 
                 # For mixed console output, look for JSON patterns within the text
                 json_patterns = [
-                    r'\{[^{}]*\}',  # Simple objects like {"error":["..."]}
-                    r'\[[^\[\]]*\]',  # Simple arrays
+                    r"\{[^{}]*\}",  # Simple objects like {"error":["..."]}
+                    r"\[[^\[\]]*\]",  # Simple arrays
                 ]
 
                 for pattern in json_patterns:
                     import re
+
                     matches = re.findall(pattern, clean_output)
                     for match in matches:
                         try:
                             parsed = json.loads(match)
-                            logger.debug("Successfully parsed embedded JSON: %s", match[:100])
+                            logger.debug(
+                                "Successfully parsed embedded JSON: %s", match[:100]
+                            )
                             return parsed
                         except json.JSONDecodeError:
                             continue
@@ -670,16 +756,31 @@ class OpenProjectClient:
 
             # Look for JSON content in individual lines
             json_lines = []
-            for line in clean_output.split('\n'):
+            for line in clean_output.split("\n"):
                 line = line.strip()
                 # Skip Ruby script commands
-                if any(cmd in line for cmd in ["eval(<<", "SCRIPT_END", "puts(", "rescue =>", "begin", "end"]):
+                if any(
+                    cmd in line
+                    for cmd in [
+                        "eval(<<",
+                        "SCRIPT_END",
+                        "puts(",
+                        "rescue =>",
+                        "begin",
+                        "end",
+                    ]
+                ):
                     continue
 
                 # Look for lines that start with [ or { (JSON indicators)
                 if line.startswith("[") or line.startswith("{"):
                     json_lines.append(line)
-                elif json_lines and (line.endswith("]") or line.endswith("}") or "," in line or '"' in line):
+                elif json_lines and (
+                    line.endswith("]")
+                    or line.endswith("}")
+                    or "," in line
+                    or '"' in line
+                ):
                     # Continue collecting lines that seem to be part of JSON
                     json_lines.append(line)
 
@@ -693,39 +794,53 @@ class OpenProjectClient:
                     logger.debug("Failed to parse extracted JSON: %s", str(e))
 
             # Look for simple scalar values in individual lines
-            for line in clean_output.split('\n'):
+            for line in clean_output.split("\n"):
                 line = line.strip()
                 # Skip lines that look like commands or prompts
-                if (line.startswith('puts') or
-                    line.startswith('p ') or
-                    line.startswith('pp ') or
-                    '>' in line):
+                if (
+                    line.startswith("puts")
+                    or line.startswith("p ")
+                    or line.startswith("pp ")
+                    or ">" in line
+                ):
                     continue
 
                 # Extract value from Rails console format like "=> value"
-                if line.startswith('=> '):
+                if line.startswith("=> "):
                     value_part = line[3:].strip()
 
                     # Handle nil
-                    if value_part == 'nil':
+                    if value_part == "nil":
                         logger.debug("Found scalar nil value from Rails output")
                         return None
                     # Handle booleans
                     elif value_part in ["true", "false"]:
-                        logger.debug("Found scalar boolean value from Rails output: %s", value_part)
+                        logger.debug(
+                            "Found scalar boolean value from Rails output: %s",
+                            value_part,
+                        )
                         return value_part == "true"
                     # Handle numbers
                     elif value_part.isdigit():
-                        logger.debug("Found scalar integer value from Rails output: %s", value_part)
+                        logger.debug(
+                            "Found scalar integer value from Rails output: %s",
+                            value_part,
+                        )
                         return int(value_part)
                     # Handle quoted strings
-                    elif ((value_part.startswith('"') and value_part.endswith('"')) or
-                          (value_part.startswith("'") and value_part.endswith("'"))):
-                        logger.debug("Found scalar string value from Rails output: %s", value_part)
+                    elif (value_part.startswith('"') and value_part.endswith('"')) or (
+                        value_part.startswith("'") and value_part.endswith("'")
+                    ):
+                        logger.debug(
+                            "Found scalar string value from Rails output: %s",
+                            value_part,
+                        )
                         return value_part[1:-1]  # Remove quotes
                     # For other values, return as string
                     elif value_part:
-                        logger.debug("Found scalar value from Rails output: %s", value_part)
+                        logger.debug(
+                            "Found scalar value from Rails output: %s", value_part
+                        )
                         return value_part
 
                 # Check if this line is just a number (fallback)
@@ -741,8 +856,9 @@ class OpenProjectClient:
                     logger.debug("Found scalar nil value: %s", line)
                     return None
                 # Check if this line is a quoted string (fallback)
-                if ((line.startswith('"') and line.endswith('"')) or
-                        (line.startswith("'") and line.endswith("'"))):
+                if (line.startswith('"') and line.endswith('"')) or (
+                    line.startswith("'") and line.endswith("'")
+                ):
                     logger.debug("Found scalar string value: %s", line)
                     return line[1:-1]  # Remove quotes
 
@@ -756,8 +872,9 @@ class OpenProjectClient:
             if clean_output == "nil":
                 logger.debug("Found scalar nil value: %s", clean_output)
                 return None
-            if ((clean_output.startswith('"') and clean_output.endswith('"')) or
-                    (clean_output.startswith("'") and clean_output.endswith("'"))):
+            if (clean_output.startswith('"') and clean_output.endswith('"')) or (
+                clean_output.startswith("'") and clean_output.endswith("'")
+            ):
                 logger.debug("Found scalar string value: %s", clean_output)
                 return clean_output[1:-1]  # Remove quotes
 
@@ -766,7 +883,9 @@ class OpenProjectClient:
             logger.error("Full clean output: %s", clean_output[:500])
 
             # Raise an exception instead of returning unparsed strings to force proper error handling
-            raise JsonParseError(f"Failed to parse Rails console output: {clean_output[:100]}...")
+            raise JsonParseError(
+                f"Failed to parse Rails console output: {clean_output[:100]}..."
+            )
 
         except JsonParseError:
             # Re-raise JsonParseError
@@ -775,7 +894,9 @@ class OpenProjectClient:
             logger.error("Failed to process query result: %s", repr(e))
             logger.error("Raw output: %s", result_output[:200])
             # Raise an exception instead of returning None to ensure proper error handling
-            raise QueryExecutionError(f"Failed to parse Rails console output: {e}") from e
+            raise QueryExecutionError(
+                f"Failed to parse Rails console output: {e}"
+            ) from e
 
     def execute_json_query(self, query: str, timeout: int | None = None) -> Any:
         """Execute a Rails query and return parsed JSON result.
@@ -891,13 +1012,15 @@ class OpenProjectClient:
         # Convert Python boolean values to Ruby equivalents
         def format_value(v):
             if isinstance(v, bool):
-                return 'true' if v else 'false'
+                return "true" if v else "false"
             elif isinstance(v, str):
                 return f"'{v}'"
             else:
                 return str(v)
 
-        attributes_str = ', '.join([f"'{k}' => {format_value(v)}" for k, v in attributes.items()])
+        attributes_str = ", ".join(
+            [f"'{k}' => {format_value(v)}" for k, v in attributes.items()]
+        )
         command = f"record = {model}.new({{{attributes_str}}}); record.save ? record.as_json : {{'error' => record.errors.full_messages}}"
 
         try:
@@ -910,7 +1033,9 @@ class OpenProjectClient:
 
             # If result is None, empty, or not a dict, try the fallback method
             if result is None or not isinstance(result, dict):
-                logger.debug(f"First method returned invalid result ({type(result)}), trying fallback")
+                logger.debug(
+                    f"First method returned invalid result ({type(result)}), trying fallback"
+                )
 
                 # Fallback to simpler command with execute_json_query
                 simple_command = f"""
@@ -927,13 +1052,15 @@ class OpenProjectClient:
             if not isinstance(result, dict):
                 # If we still don't have a dict, but the command didn't raise an error,
                 # assume success and try to get the record by its attributes
-                logger.warning(f"Could not parse JSON response from {model} creation, but command executed. Attempting to find created record.")
+                logger.warning(
+                    f"Could not parse JSON response from {model} creation, but command executed. Attempting to find created record."
+                )
 
                 # Try to find the record we just created
                 try:
                     # Use a subset of attributes that are likely to be unique
                     search_attrs = {}
-                    for key in ['name', 'title', 'identifier', 'email']:
+                    for key in ["name", "title", "identifier", "email"]:
                         if key in attributes:
                             search_attrs[key] = attributes[key]
                             break
@@ -948,7 +1075,12 @@ class OpenProjectClient:
 
                 # If all else fails, create a minimal response
                 logger.warning(f"Creating minimal response for {model} creation")
-                return {"id": None, "created": True, "model": model, "attributes": attributes}
+                return {
+                    "id": None,
+                    "created": True,
+                    "model": model,
+                    "attributes": attributes,
+                }
 
             return result
 
@@ -959,7 +1091,9 @@ class OpenProjectClient:
             msg = f"Error creating {model}."
             raise QueryExecutionError(msg) from e
 
-    def update_record(self, model: str, id: int, attributes: dict[str, Any]) -> dict[str, Any]:
+    def update_record(
+        self, model: str, id: int, attributes: dict[str, Any]
+    ) -> dict[str, Any]:
         """Update a record with given attributes.
 
         Args:
@@ -1178,12 +1312,12 @@ class OpenProjectClient:
 
         try:
             # Use pure file-based approach - write to file and read directly from filesystem
-            file_path = '/tmp/users.json'
+            file_path = "/tmp/users.json"
 
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
             file_path_interpolated = f"'{file_path}'"
-            write_query = f"users = User.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(users)); puts \"Users data written to {file_path} (#{{users.count}} users)\"; nil"
+            write_query = f'users = User.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(users)); puts "Users data written to {file_path} (#{{users.count}} users)"; nil'
 
             # Execute the write command - fail immediately if Rails console fails
             self.rails_client.execute(write_query, suppress_output=True)
@@ -1193,26 +1327,48 @@ class OpenProjectClient:
             try:
                 # Use SSH to read the file from the Docker container
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
-                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                stdout, stderr, returncode = self.ssh_client.execute_command(
+                    ssh_command
+                )
 
                 if returncode != 0:
-                    logger.error("Failed to read file from container, stderr: %s", stderr)
-                    raise QueryExecutionError(f"SSH command failed with code {returncode}: {stderr}")
+                    logger.error(
+                        "Failed to read file from container, stderr: %s", stderr
+                    )
+                    raise QueryExecutionError(
+                        f"SSH command failed with code {returncode}: {stderr}"
+                    )
 
                 file_content = stdout.strip()
-                logger.debug("Successfully read users file from container, content length: %d", len(file_content))
+                logger.debug(
+                    "Successfully read users file from container, content length: %d",
+                    len(file_content),
+                )
 
                 # Parse the JSON content
                 json_data = json.loads(file_content)
-                logger.info("Successfully loaded %d users from container file", len(json_data) if isinstance(json_data, list) else 0)
+                logger.info(
+                    "Successfully loaded %d users from container file",
+                    len(json_data) if isinstance(json_data, list) else 0,
+                )
             except (json.JSONDecodeError, Exception) as e:
-                logger.error("Failed to read users from container file %s: %s", file_path, e)
-                raise QueryExecutionError(f"Failed to read users from container file: {e}")
+                logger.error(
+                    "Failed to read users from container file %s: %s", file_path, e
+                )
+                raise QueryExecutionError(
+                    f"Failed to read users from container file: {e}"
+                )
 
             # Validate that we got a list
             if not isinstance(json_data, list):
-                logger.error("Expected list of users, got %s: %s", type(json_data), str(json_data)[:200])
-                raise QueryExecutionError(f"Invalid users data format - expected list, got {type(json_data)}")
+                logger.error(
+                    "Expected list of users, got %s: %s",
+                    type(json_data),
+                    str(json_data)[:200],
+                )
+                raise QueryExecutionError(
+                    f"Invalid users data format - expected list, got {type(json_data)}"
+                )
 
             # Update cache
             self._users_cache = json_data or []
@@ -1245,7 +1401,10 @@ class OpenProjectClient:
         email_lower = email.lower()
 
         # Check cache first
-        if hasattr(self, "_users_by_email_cache") and email_lower in self._users_by_email_cache:
+        if (
+            hasattr(self, "_users_by_email_cache")
+            and email_lower in self._users_by_email_cache
+        ):
             return self._users_by_email_cache[email_lower]
 
         # Try to load all users to populate cache
@@ -1349,18 +1508,25 @@ class OpenProjectClient:
         cache_timeout = 300  # 5 minutes
 
         # Check cache first (unless force refresh)
-        if not force_refresh and self._custom_fields_cache and (current_time - self._custom_fields_cache_time) < cache_timeout:
-            logger.debug("Using cached custom fields (age: %.1fs)", current_time - self._custom_fields_cache_time)
+        if (
+            not force_refresh
+            and self._custom_fields_cache
+            and (current_time - self._custom_fields_cache_time) < cache_timeout
+        ):
+            logger.debug(
+                "Using cached custom fields (age: %.1fs)",
+                current_time - self._custom_fields_cache_time,
+            )
             return self._custom_fields_cache
 
         try:
             # Use pure file-based approach - write to file and read directly from filesystem
-            file_path = '/tmp/custom_fields.json'
+            file_path = "/tmp/custom_fields.json"
 
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
             file_path_interpolated = f"'{file_path}'"
-            write_query = f"custom_fields = CustomField.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(custom_fields)); puts \"Custom fields data written to {file_path} (#{{custom_fields.count}} fields)\"; nil"
+            write_query = f'custom_fields = CustomField.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(custom_fields)); puts "Custom fields data written to {file_path} (#{{custom_fields.count}} fields)"; nil'
 
             # Execute the write command - fail immediately if Rails console fails
             self.rails_client.execute(write_query, suppress_output=True)
@@ -1370,18 +1536,30 @@ class OpenProjectClient:
             try:
                 # Use SSH to read the file from the Docker container
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
-                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                stdout, stderr, returncode = self.ssh_client.execute_command(
+                    ssh_command
+                )
 
                 if returncode != 0:
-                    logger.error("Failed to read file from container, stderr: %s", stderr)
-                    raise QueryExecutionError(f"SSH command failed with code {returncode}: {stderr}")
+                    logger.error(
+                        "Failed to read file from container, stderr: %s", stderr
+                    )
+                    raise QueryExecutionError(
+                        f"SSH command failed with code {returncode}: {stderr}"
+                    )
 
                 file_content = stdout.strip()
-                logger.debug("Successfully read custom fields file from container, content length: %d", len(file_content))
+                logger.debug(
+                    "Successfully read custom fields file from container, content length: %d",
+                    len(file_content),
+                )
 
                 # Parse the JSON content
                 custom_fields = json.loads(file_content)
-                logger.info("Successfully loaded %d custom fields from container file", len(custom_fields) if isinstance(custom_fields, list) else 0)
+                logger.info(
+                    "Successfully loaded %d custom fields from container file",
+                    len(custom_fields) if isinstance(custom_fields, list) else 0,
+                )
 
                 # Update cache
                 self._custom_fields_cache = custom_fields or []
@@ -1391,7 +1569,9 @@ class OpenProjectClient:
 
             except (json.JSONDecodeError, Exception) as e:
                 logger.error("Failed to read custom fields from container file: %s", e)
-                raise QueryExecutionError(f"Failed to read/parse custom fields from file: {e}")
+                raise QueryExecutionError(
+                    f"Failed to read/parse custom fields from file: {e}"
+                )
 
         except Exception as e:
             msg = "Failed to get custom fields."
@@ -1441,12 +1621,12 @@ class OpenProjectClient:
         """
         try:
             # Use pure file-based approach - write to file and read directly from filesystem
-            file_path = '/tmp/projects.json'
+            file_path = "/tmp/projects.json"
 
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
             file_path_interpolated = f"'{file_path}'"
-            write_query = f"projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json; File.write({file_path_interpolated}, JSON.pretty_generate(projects)); puts \"Projects data written to {file_path} (#{{projects.count}} projects)\"; nil"
+            write_query = f'projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json; File.write({file_path_interpolated}, JSON.pretty_generate(projects)); puts "Projects data written to {file_path} (#{{projects.count}} projects)"; nil'
 
             # Execute the write command - fail immediately if Rails console fails
             self.rails_client.execute(write_query, suppress_output=True)
@@ -1456,26 +1636,48 @@ class OpenProjectClient:
             try:
                 # Use SSH to read the file from the Docker container
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
-                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                stdout, stderr, returncode = self.ssh_client.execute_command(
+                    ssh_command
+                )
 
                 if returncode != 0:
-                    logger.error("Failed to read file from container, stderr: %s", stderr)
-                    raise QueryExecutionError(f"SSH command failed with code {returncode}: {stderr}")
+                    logger.error(
+                        "Failed to read file from container, stderr: %s", stderr
+                    )
+                    raise QueryExecutionError(
+                        f"SSH command failed with code {returncode}: {stderr}"
+                    )
 
                 file_content = stdout.strip()
-                logger.debug("Successfully read projects file from container, content length: %d", len(file_content))
+                logger.debug(
+                    "Successfully read projects file from container, content length: %d",
+                    len(file_content),
+                )
 
                 # Parse the JSON content
                 result = json.loads(file_content)
-                logger.info("Successfully loaded %d projects from container file", len(result) if isinstance(result, list) else 0)
+                logger.info(
+                    "Successfully loaded %d projects from container file",
+                    len(result) if isinstance(result, list) else 0,
+                )
             except (json.JSONDecodeError, Exception) as e:
-                logger.error("Failed to read projects from container file %s: %s", file_path, e)
-                raise QueryExecutionError(f"Failed to read projects from container file: {e}")
+                logger.error(
+                    "Failed to read projects from container file %s: %s", file_path, e
+                )
+                raise QueryExecutionError(
+                    f"Failed to read projects from container file: {e}"
+                )
 
             # The execute_query_to_json_file method should return the parsed JSON
             if not isinstance(result, list):
-                logger.error("Expected list of projects, got %s: %s", type(result), str(result)[:200])
-                raise QueryExecutionError(f"Invalid projects data format - expected list, got {type(result)}")
+                logger.error(
+                    "Expected list of projects, got %s: %s",
+                    type(result),
+                    str(result)[:200],
+                )
+                raise QueryExecutionError(
+                    f"Invalid projects data format - expected list, got {type(result)}"
+                )
 
             # Validate and clean project data
             validated_projects = []
@@ -1486,17 +1688,25 @@ class OpenProjectClient:
                     validated_project = {
                         "id": project.get("id"),
                         "name": project.get("name", ""),
-                        "identifier": project.get("identifier", f"project-{project.get('id')}"),  # Generate if missing
+                        "identifier": project.get(
+                            "identifier", f"project-{project.get('id')}"
+                        ),  # Generate if missing
                         "description": project.get("description", ""),
                         "public": project.get("public", False),
-                        "status": project.get("status_code", 1),  # Use status_code from DB
+                        "status": project.get(
+                            "status_code", 1
+                        ),  # Use status_code from DB
                     }
                     validated_projects.append(validated_project)
                     logger.debug("Validated project: %s", validated_project)
                 else:
-                    logger.debug("Skipping invalid project data (missing ID): %s", project)
+                    logger.debug(
+                        "Skipping invalid project data (missing ID): %s", project
+                    )
 
-            logger.info("Retrieved %d projects using file-based method", len(validated_projects))
+            logger.info(
+                "Retrieved %d projects using file-based method", len(validated_projects)
+            )
             return validated_projects
 
         except Exception as e:

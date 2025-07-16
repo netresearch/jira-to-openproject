@@ -6,8 +6,8 @@ by looking for specific markers in the output.
 """
 
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
 def extract_json(input_file: Path, output_file: Path) -> bool:
@@ -74,7 +74,9 @@ def extract_json(input_file: Path, output_file: Path) -> bool:
             # Print a summary of the first few fields
             print("\nCustom Fields:")
             for field in data[:5]:  # Show first 5 fields
-                print(f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})")
+                print(
+                    f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
+                )
             if len(data) > 5:
                 print(f"... and {len(data) - 5} more fields")
 

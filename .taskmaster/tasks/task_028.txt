@@ -5,20 +5,20 @@
 # Priority: medium
 # Description: Modify the main README.md file to reflect the new client architecture by updating the architecture overview, diagram, and adding links to the client architecture documentation.
 # Details:
-1. Open the root-level README.md file.  
-2. Replace the existing architecture overview section with a concise description of the new client architecture, summarizing component responsibilities and data flows.  
-3. Update or replace the existing architecture diagram image:  
-   • Export the latest diagram (e.g., architecture-client.png) to the assets/images (or docs/images) directory.  
-   • Reference the updated image with correct relative path and include descriptive alt text.  
-4. Add a new subsection titled “Client Architecture Details” with a Markdown link to the Task 27 deliverable (e.g., docs/client-architecture.md).  
-5. Ensure all headings, code blocks, link styles, and list formatting adhere to the project’s Markdown style guide (line lengths, heading levels, bullet characters).  
-6. Validate that image paths, links, and section anchors function correctly on GitHub and in any local preview tooling.  
+1. Open the root-level README.md file.
+2. Replace the existing architecture overview section with a concise description of the new client architecture, summarizing component responsibilities and data flows.
+3. Update or replace the existing architecture diagram image:
+   • Export the latest diagram (e.g., architecture-client.png) to the assets/images (or docs/images) directory.
+   • Reference the updated image with correct relative path and include descriptive alt text.
+4. Add a new subsection titled “Client Architecture Details” with a Markdown link to the Task 27 deliverable (e.g., docs/client-architecture.md).
+5. Ensure all headings, code blocks, link styles, and list formatting adhere to the project’s Markdown style guide (line lengths, heading levels, bullet characters).
+6. Validate that image paths, links, and section anchors function correctly on GitHub and in any local preview tooling.
 7. Proofread for typos or inconsistent terminology, ensuring the documentation tone matches the existing style sheet.
 
 # Test Strategy:
-1. Render the updated README.md in a local Markdown viewer and on GitHub to confirm the new architecture section and diagram appear correctly.  
-2. Click the link to docs/client-architecture.md to verify it navigates to the correct documentation.  
-3. Run a Markdown linter (e.g., markdownlint) to ensure no style violations.  
-4. Perform a visual check of the architecture diagram: image loads, displays at proper resolution, alt text is present.  
-5. Conduct a peer review, asking at least one team member to review the changes for clarity, consistency, and adherence to style guidelines.  
+1. Render the updated README.md in a local Markdown viewer and on GitHub to confirm the new architecture section and diagram appear correctly.
+2. Click the link to docs/client-architecture.md to verify it navigates to the correct documentation.
+3. Run a Markdown linter (e.g., markdownlint) to ensure no style violations.
+4. Perform a visual check of the architecture diagram: image loads, displays at proper resolution, alt text is present.
+5. Conduct a peer review, asking at least one team member to review the changes for clarity, consistency, and adherence to style guidelines.
 6. Confirm no broken links or missing assets remain by checking CI logs or GitHub Actions documentation build step, if available.

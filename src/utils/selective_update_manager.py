@@ -9,24 +9,26 @@ dependencies during selective updates.
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, TypedDict
+from typing import Any, TypedDict
+from collections.abc import Callable
 
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.utils.change_detector import ChangeReport
-from src.utils.state_manager import StateManager
+from src.migrations.custom_field_migration import CustomFieldMigration
+from src.migrations.project_migration import ProjectMigration
 
 # Import migration classes for handler delegation
 from src.migrations.user_migration import UserMigration
-from src.migrations.project_migration import ProjectMigration
 from src.migrations.work_package_migration import WorkPackageMigration
-from src.migrations.custom_field_migration import CustomFieldMigration
+from src.utils.change_detector import ChangeReport
+from src.utils.state_manager import StateManager
 
 
 # Type definitions for selective updates
 class UpdateStrategy(TypedDict):
     """Represents an update strategy for an entity type."""
+
     entity_type: str
     create_handler: Callable[[dict[str, Any]], dict[str, Any]] | None
     update_handler: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None
@@ -38,6 +40,7 @@ class UpdateStrategy(TypedDict):
 
 class UpdateOperation(TypedDict):
     """Represents a single update operation to be performed."""
+
     operation_id: str
     entity_type: str
     change_type: str  # 'created', 'updated', 'deleted'
@@ -51,6 +54,7 @@ class UpdateOperation(TypedDict):
 
 class UpdatePlan(TypedDict):
     """Represents a complete update plan."""
+
     plan_id: str
     created_at: str
     entity_types: list[str]
@@ -63,6 +67,7 @@ class UpdatePlan(TypedDict):
 
 class UpdateResult(TypedDict):
     """Represents the result of executing an update plan."""
+
     plan_id: str
     started_at: str
     completed_at: str | None
@@ -92,7 +97,7 @@ class SelectiveUpdateManager:
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
         state_manager: StateManager | None = None,
-        update_dir: Path | None = None
+        update_dir: Path | None = None,
     ) -> None:
         """Initialize the selective update manager.
 
@@ -107,7 +112,9 @@ class SelectiveUpdateManager:
         self.op_client = op_client or OpenProjectClient()
         self.state_manager = state_manager or StateManager()
 
-        self.update_dir = update_dir or config.get_path("data").parent / "selective_updates"
+        self.update_dir = (
+            update_dir or config.get_path("data").parent / "selective_updates"
+        )
         self.update_dir.mkdir(parents=True, exist_ok=True)
 
         # Ensure update directory structure exists
@@ -119,20 +126,16 @@ class SelectiveUpdateManager:
         self._migration_instances = {}
         try:
             self._migration_instances["users"] = UserMigration(
-                jira_client=self.jira_client,
-                op_client=self.op_client
+                jira_client=self.jira_client, op_client=self.op_client
             )
             self._migration_instances["projects"] = ProjectMigration(
-                jira_client=self.jira_client,
-                op_client=self.op_client
+                jira_client=self.jira_client, op_client=self.op_client
             )
             self._migration_instances["issues"] = WorkPackageMigration(
-                jira_client=self.jira_client,
-                op_client=self.op_client
+                jira_client=self.jira_client, op_client=self.op_client
             )
             self._migration_instances["customfields"] = CustomFieldMigration(
-                jira_client=self.jira_client,
-                op_client=self.op_client
+                jira_client=self.jira_client, op_client=self.op_client
             )
         except Exception as e:
             self.logger.warning("Failed to initialize some migration instances: %s", e)
@@ -147,7 +150,7 @@ class SelectiveUpdateManager:
             "api_calls_made": 0,
             "entities_processed": 0,
             "cache_hits": 0,
-            "batch_operations": 0
+            "batch_operations": 0,
         }
 
     def _initialize_default_strategies(self) -> None:
@@ -160,7 +163,7 @@ class SelectiveUpdateManager:
             delete_handler=self._delete_user,
             depends_on=[],
             batch_size=50,
-            priority=9
+            priority=9,
         )
 
         # Projects strategy - high priority, depends on users
@@ -171,7 +174,7 @@ class SelectiveUpdateManager:
             delete_handler=self._delete_project,
             depends_on=["users"],
             batch_size=20,
-            priority=8
+            priority=8,
         )
 
         # Custom fields strategy - medium-high priority, no dependencies
@@ -182,7 +185,7 @@ class SelectiveUpdateManager:
             delete_handler=self._delete_custom_field,
             depends_on=[],
             batch_size=30,
-            priority=7
+            priority=7,
         )
 
         # Issue types strategy - medium priority, depends on custom fields
@@ -193,7 +196,7 @@ class SelectiveUpdateManager:
             delete_handler=self._delete_issue_type,
             depends_on=["customfields"],
             batch_size=25,
-            priority=6
+            priority=6,
         )
 
         # Statuses strategy - medium priority, no dependencies
@@ -204,7 +207,7 @@ class SelectiveUpdateManager:
             delete_handler=self._delete_status,
             depends_on=[],
             batch_size=40,
-            priority=6
+            priority=6,
         )
 
         # Issues/work packages strategy - lower priority, depends on everything
@@ -215,7 +218,7 @@ class SelectiveUpdateManager:
             delete_handler=self._delete_issue,
             depends_on=["users", "projects", "issuetypes", "statuses", "customfields"],
             batch_size=10,
-            priority=5
+            priority=5,
         )
 
     def register_update_strategy(self, strategy: UpdateStrategy) -> None:
@@ -229,9 +232,7 @@ class SelectiveUpdateManager:
         self.logger.debug("Registered update strategy for %s", entity_type)
 
     def analyze_changes(
-        self,
-        change_report: ChangeReport,
-        update_settings: dict[str, Any] | None = None
+        self, change_report: ChangeReport, update_settings: dict[str, Any] | None = None
     ) -> UpdatePlan:
         """Analyze a change report and create an update plan.
 
@@ -256,7 +257,9 @@ class SelectiveUpdateManager:
 
             # Check if we have a strategy for this entity type
             if entity_type not in self._update_strategies:
-                self.logger.warning("No update strategy for entity type: %s", entity_type)
+                self.logger.warning(
+                    "No update strategy for entity type: %s", entity_type
+                )
                 continue
 
             entity_types_involved.add(entity_type)
@@ -277,8 +280,8 @@ class SelectiveUpdateManager:
                 metadata={
                     "strategy": entity_type,
                     "batch_size": strategy["batch_size"],
-                    "original_change": change
-                }
+                    "original_change": change,
+                },
             )
 
             operations.append(operation)
@@ -295,20 +298,20 @@ class SelectiveUpdateManager:
             operations=operations,
             dependency_order=dependency_order,
             estimated_duration=self._estimate_plan_duration(operations),
-            update_settings=settings
+            update_settings=settings,
         )
 
         self.logger.info(
             "Created update plan %s with %d operations across %d entity types",
-            plan_id, len(operations), len(entity_types_involved)
+            plan_id,
+            len(operations),
+            len(entity_types_involved),
         )
 
         return update_plan
 
     def execute_update_plan(
-        self,
-        update_plan: UpdatePlan,
-        dry_run: bool = False
+        self, update_plan: UpdatePlan, dry_run: bool = False
     ) -> UpdateResult:
         """Execute an update plan.
 
@@ -334,7 +337,7 @@ class SelectiveUpdateManager:
             total_operations=len(update_plan["operations"]),
             errors=[],
             warnings=[],
-            performance_metrics={}
+            performance_metrics={},
         )
 
         try:
@@ -343,11 +346,13 @@ class SelectiveUpdateManager:
                 "api_calls_made": 0,
                 "entities_processed": 0,
                 "cache_hits": 0,
-                "batch_operations": 0
+                "batch_operations": 0,
             }
 
             # Group operations by dependency order
-            operations_by_type = self._group_operations_by_type(update_plan["operations"])
+            operations_by_type = self._group_operations_by_type(
+                update_plan["operations"]
+            )
 
             # Execute operations in dependency order
             for entity_type in update_plan["dependency_order"]:
@@ -355,7 +360,9 @@ class SelectiveUpdateManager:
                     continue
 
                 operations = operations_by_type[entity_type]
-                self.logger.info("Processing %d operations for %s", len(operations), entity_type)
+                self.logger.info(
+                    "Processing %d operations for %s", len(operations), entity_type
+                )
 
                 # Execute operations for this entity type
                 type_result = self._execute_operations_for_type(
@@ -380,8 +387,10 @@ class SelectiveUpdateManager:
 
             self.logger.info(
                 "Update plan %s completed: %d successful, %d failed, %d skipped",
-                plan_id, result["operations_completed"],
-                result["operations_failed"], result["operations_skipped"]
+                plan_id,
+                result["operations_completed"],
+                result["operations_failed"],
+                result["operations_skipped"],
             )
 
             return result
@@ -413,8 +422,7 @@ class SelectiveUpdateManager:
             if entity_type in self._update_strategies:
                 strategy = self._update_strategies[entity_type]
                 dependencies[entity_type] = [
-                    dep for dep in strategy["depends_on"]
-                    if dep in entity_types
+                    dep for dep in strategy["depends_on"] if dep in entity_types
                 ]
             else:
                 dependencies[entity_type] = []
@@ -447,11 +455,7 @@ class SelectiveUpdateManager:
             Estimated duration in seconds
         """
         # Base time estimates per operation type (seconds)
-        operation_times = {
-            "created": 2.0,
-            "updated": 1.5,
-            "deleted": 1.0
-        }
+        operation_times = {"created": 2.0, "updated": 1.5, "deleted": 1.0}
 
         total_time = 0.0
         for op in operations:
@@ -464,8 +468,7 @@ class SelectiveUpdateManager:
         return int(total_time + overhead)
 
     def _group_operations_by_type(
-        self,
-        operations: list[UpdateOperation]
+        self, operations: list[UpdateOperation]
     ) -> dict[str, list[UpdateOperation]]:
         """Group operations by entity type.
 
@@ -484,10 +487,7 @@ class SelectiveUpdateManager:
         return groups
 
     def _execute_operations_for_type(
-        self,
-        entity_type: str,
-        operations: list[UpdateOperation],
-        dry_run: bool
+        self, entity_type: str, operations: list[UpdateOperation], dry_run: bool
     ) -> dict[str, Any]:
         """Execute all operations for a specific entity type.
 
@@ -504,7 +504,7 @@ class SelectiveUpdateManager:
             "failed": 0,
             "skipped": 0,
             "errors": [],
-            "warnings": []
+            "warnings": [],
         }
 
         if entity_type not in self._update_strategies:
@@ -517,7 +517,7 @@ class SelectiveUpdateManager:
 
         # Process operations in batches
         for i in range(0, len(operations), batch_size):
-            batch = operations[i:i + batch_size]
+            batch = operations[i : i + batch_size]
             batch_result = self._execute_operation_batch(entity_type, batch, dry_run)
 
             result["completed"] += batch_result["completed"]
@@ -529,10 +529,7 @@ class SelectiveUpdateManager:
         return result
 
     def _execute_operation_batch(
-        self,
-        entity_type: str,
-        operations: list[UpdateOperation],
-        dry_run: bool
+        self, entity_type: str, operations: list[UpdateOperation], dry_run: bool
     ) -> dict[str, Any]:
         """Execute a batch of operations for an entity type.
 
@@ -549,7 +546,7 @@ class SelectiveUpdateManager:
             "failed": 0,
             "skipped": 0,
             "errors": [],
-            "warnings": []
+            "warnings": [],
         }
 
         strategy = self._update_strategies[entity_type]
@@ -561,7 +558,9 @@ class SelectiveUpdateManager:
                     # Simulate operation
                     self.logger.debug(
                         "[DRY RUN] Would %s %s %s",
-                        operation["change_type"], entity_type, operation["entity_id"]
+                        operation["change_type"],
+                        entity_type,
+                        operation["entity_id"],
                     )
                     result["completed"] += 1
                     continue
@@ -578,16 +577,16 @@ class SelectiveUpdateManager:
 
             except Exception as e:
                 result["failed"] += 1
-                error_msg = f"Error processing {entity_type} {operation['entity_id']}: {e}"
+                error_msg = (
+                    f"Error processing {entity_type} {operation['entity_id']}: {e}"
+                )
                 result["errors"].append(error_msg)
                 self.logger.exception(error_msg)
 
         return result
 
     def _execute_single_operation(
-        self,
-        operation: UpdateOperation,
-        strategy: UpdateStrategy
+        self, operation: UpdateOperation, strategy: UpdateStrategy
     ) -> bool:
         """Execute a single update operation.
 
@@ -624,21 +623,23 @@ class SelectiveUpdateManager:
             else:
                 self.logger.warning(
                     "No handler for %s operation on %s",
-                    change_type, operation["entity_type"]
+                    change_type,
+                    operation["entity_type"],
                 )
                 return False
 
         except Exception as e:
             self.logger.exception(
                 "Handler failed for %s %s %s: %s",
-                change_type, operation["entity_type"], operation["entity_id"], e
+                change_type,
+                operation["entity_type"],
+                operation["entity_id"],
+                e,
             )
             return False
 
     def _register_entity_mapping_from_operation(
-        self,
-        operation: UpdateOperation,
-        op_result: dict[str, Any]
+        self, operation: UpdateOperation, op_result: dict[str, Any]
     ) -> None:
         """Register entity mapping after successful creation.
 
@@ -660,8 +661,8 @@ class SelectiveUpdateManager:
                     migration_component="SelectiveUpdateManager",
                     metadata={
                         "created_via": "selective_update",
-                        "operation_id": operation["operation_id"]
-                    }
+                        "operation_id": operation["operation_id"],
+                    },
                 )
         except Exception as e:
             self.logger.warning("Failed to register entity mapping: %s", e)
@@ -674,7 +675,7 @@ class SelectiveUpdateManager:
         """
         try:
             plan_file = self.update_dir / "plans" / f"{plan['plan_id']}.json"
-            with plan_file.open('w') as f:
+            with plan_file.open("w") as f:
                 json.dump(plan, f, indent=2)
         except Exception as e:
             self.logger.warning("Failed to save update plan: %s", e)
@@ -687,7 +688,7 @@ class SelectiveUpdateManager:
         """
         try:
             result_file = self.update_dir / "results" / f"{result['plan_id']}.json"
-            with result_file.open('w') as f:
+            with result_file.open("w") as f:
                 json.dump(result, f, indent=2)
         except Exception as e:
             self.logger.warning("Failed to save update result: %s", e)
@@ -712,7 +713,9 @@ class SelectiveUpdateManager:
             self.logger.error("Failed to create user: %s", e)
             return None
 
-    def _update_user(self, new_data: dict[str, Any], old_data: dict[str, Any]) -> dict[str, Any] | None:
+    def _update_user(
+        self, new_data: dict[str, Any], old_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update a user in OpenProject."""
         self.logger.debug("Updating user: %s", new_data.get("displayName", "unknown"))
 
@@ -728,8 +731,12 @@ class SelectiveUpdateManager:
                 # Try to find mapping
                 jira_user_id = new_data.get("accountId") or new_data.get("key")
                 if jira_user_id:
-                    mapping = self.state_manager.get_entity_mapping("users", jira_user_id)
-                    op_user_id = mapping.get("openproject_entity_id") if mapping else None
+                    mapping = self.state_manager.get_entity_mapping(
+                        "users", jira_user_id
+                    )
+                    op_user_id = (
+                        mapping.get("openproject_entity_id") if mapping else None
+                    )
 
             if op_user_id:
                 # Update existing user
@@ -751,7 +758,9 @@ class SelectiveUpdateManager:
 
         # Note: User deletion in OpenProject might not be desired
         # as it could break references. Consider deactivation instead.
-        self.logger.warning("User deletion not implemented - users should be deactivated, not deleted")
+        self.logger.warning(
+            "User deletion not implemented - users should be deactivated, not deleted"
+        )
         return True
 
     def _create_project(self, project_data: dict[str, Any]) -> dict[str, Any] | None:
@@ -773,7 +782,9 @@ class SelectiveUpdateManager:
             self.logger.error("Failed to create project: %s", e)
             return None
 
-    def _update_project(self, new_data: dict[str, Any], old_data: dict[str, Any]) -> dict[str, Any] | None:
+    def _update_project(
+        self, new_data: dict[str, Any], old_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update a project in OpenProject."""
         self.logger.debug("Updating project: %s", new_data.get("name", "unknown"))
 
@@ -789,12 +800,18 @@ class SelectiveUpdateManager:
                 # Try to find mapping
                 jira_project_id = new_data.get("id") or new_data.get("key")
                 if jira_project_id:
-                    mapping = self.state_manager.get_entity_mapping("projects", jira_project_id)
-                    op_project_id = mapping.get("openproject_entity_id") if mapping else None
+                    mapping = self.state_manager.get_entity_mapping(
+                        "projects", jira_project_id
+                    )
+                    op_project_id = (
+                        mapping.get("openproject_entity_id") if mapping else None
+                    )
 
             if op_project_id:
                 # Update existing project
-                result = project_migration.update_project_in_openproject(new_data, op_project_id)
+                result = project_migration.update_project_in_openproject(
+                    new_data, op_project_id
+                )
                 if result:
                     return {"id": op_project_id, "updated": True}
             else:
@@ -812,22 +829,30 @@ class SelectiveUpdateManager:
 
         # Note: Project deletion is usually not desired as it removes all associated data
         # Consider archiving/deactivating instead
-        self.logger.warning("Project deletion not implemented - projects should be archived, not deleted")
+        self.logger.warning(
+            "Project deletion not implemented - projects should be archived, not deleted"
+        )
         return True
 
     def _create_custom_field(self, field_data: dict[str, Any]) -> dict[str, Any] | None:
         """Create a custom field in OpenProject."""
-        self.logger.debug("Creating custom field: %s", field_data.get("name", "unknown"))
+        self.logger.debug(
+            "Creating custom field: %s", field_data.get("name", "unknown")
+        )
         return {"id": "placeholder", "created": True}
 
-    def _update_custom_field(self, new_data: dict[str, Any], old_data: dict[str, Any]) -> dict[str, Any] | None:
+    def _update_custom_field(
+        self, new_data: dict[str, Any], old_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update a custom field in OpenProject."""
         self.logger.debug("Updating custom field: %s", new_data.get("name", "unknown"))
         return {"id": "placeholder", "updated": True}
 
     def _delete_custom_field(self, field_data: dict[str, Any]) -> bool:
         """Delete a custom field in OpenProject."""
-        self.logger.debug("Deleting custom field: %s", field_data.get("name", "unknown"))
+        self.logger.debug(
+            "Deleting custom field: %s", field_data.get("name", "unknown")
+        )
         return True
 
     def _create_issue_type(self, type_data: dict[str, Any]) -> dict[str, Any] | None:
@@ -835,7 +860,9 @@ class SelectiveUpdateManager:
         self.logger.debug("Creating issue type: %s", type_data.get("name", "unknown"))
         return {"id": "placeholder", "created": True}
 
-    def _update_issue_type(self, new_data: dict[str, Any], old_data: dict[str, Any]) -> dict[str, Any] | None:
+    def _update_issue_type(
+        self, new_data: dict[str, Any], old_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update an issue type in OpenProject."""
         self.logger.debug("Updating issue type: %s", new_data.get("name", "unknown"))
         return {"id": "placeholder", "updated": True}
@@ -850,7 +877,9 @@ class SelectiveUpdateManager:
         self.logger.debug("Creating status: %s", status_data.get("name", "unknown"))
         return {"id": "placeholder", "created": True}
 
-    def _update_status(self, new_data: dict[str, Any], old_data: dict[str, Any]) -> dict[str, Any] | None:
+    def _update_status(
+        self, new_data: dict[str, Any], old_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update a status in OpenProject."""
         self.logger.debug("Updating status: %s", new_data.get("name", "unknown"))
         return {"id": "placeholder", "updated": True}
@@ -865,7 +894,9 @@ class SelectiveUpdateManager:
         self.logger.debug("Creating issue: %s", issue_data.get("key", "unknown"))
         return {"id": "placeholder", "created": True}
 
-    def _update_issue(self, new_data: dict[str, Any], old_data: dict[str, Any]) -> dict[str, Any] | None:
+    def _update_issue(
+        self, new_data: dict[str, Any], old_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update an issue/work package in OpenProject."""
         self.logger.debug("Updating issue: %s", new_data.get("key", "unknown"))
         return {"id": "placeholder", "updated": True}
@@ -897,7 +928,7 @@ class SelectiveUpdateManager:
             if not plan_file.exists():
                 return None
 
-            with plan_file.open('r') as f:
+            with plan_file.open("r") as f:
                 return json.load(f)
         except Exception as e:
             self.logger.warning("Failed to load update plan %s: %s", plan_id, e)
@@ -917,7 +948,7 @@ class SelectiveUpdateManager:
             if not result_file.exists():
                 return None
 
-            with result_file.open('r') as f:
+            with result_file.open("r") as f:
                 return json.load(f)
         except Exception as e:
             self.logger.warning("Failed to load update result %s: %s", plan_id, e)
@@ -937,5 +968,5 @@ class SelectiveUpdateManager:
             "api_calls_made": 0,
             "entities_processed": 0,
             "cache_hits": 0,
-            "batch_operations": 0
+            "batch_operations": 0,
         }

@@ -48,5 +48,3 @@ Priority: High.
 ### Dependencies: None
 ### Description: Develop and execute tests to verify that custom fields are created correctly for unmapped link types
 ### Details:
-
-

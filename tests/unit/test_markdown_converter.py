@@ -143,10 +143,16 @@ Plain text content
         converter = MarkdownConverter()
 
         # URL only
-        assert converter.convert("[http://example.com]") == "[http://example.com](http://example.com)"
+        assert (
+            converter.convert("[http://example.com]")
+            == "[http://example.com](http://example.com)"
+        )
 
         # Title and URL
-        assert converter.convert("[Example Site|http://example.com]") == "[Example Site](http://example.com)"
+        assert (
+            converter.convert("[Example Site|http://example.com]")
+            == "[Example Site](http://example.com)"
+        )
 
         # Title only (internal link)
         assert converter.convert("[Internal Page]") == "[Internal Page](Internal Page)"
@@ -340,8 +346,8 @@ For questions, see #789 or contact @123."""
         converter = MarkdownConverter()
 
         context = {
-            'user_mapping': {'newuser': 999},
-            'work_package_mapping': {'NEW-123': 888}
+            "user_mapping": {"newuser": 999},
+            "work_package_mapping": {"NEW-123": 888},
         }
 
         text = "Contact [~newuser] about NEW-123"
@@ -530,19 +536,19 @@ Content for option B with _italic_ text.
     def test_convert_attachments(self):
         """Test attachment conversion from Jira to markdown format."""
         converter = MarkdownConverter()
-        
+
         # Test PDF attachment
         text = "Please review [Technical Spec|spec.pdf]"
         result = converter.convert(text)
         expected = "Please review [Technical Spec](spec.pdf)"
         assert result == expected
-        
+
         # Test various file types
         text = "Files: [Report|report.docx] and [Data|data.xlsx]"
         result = converter.convert(text)
         expected = "Files: [Report](report.docx) and [Data](data.xlsx)"
         assert result == expected
-        
+
         # Test zip file
         text = "Download [Source Code|source.zip]"
         result = converter.convert(text)

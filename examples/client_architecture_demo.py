@@ -50,19 +50,25 @@ def demo_each_client_independently() -> None:
     # 2. DockerClient (uses SSHClient)
     print("\n--- DockerClient Demo ---")
     # Create Docker client using the SSHClient we created above (dependency injection)
-    docker_client = DockerClient(container_name=container_name, ssh_client=ssh_client)  # Inject the SSHClient
+    docker_client = DockerClient(
+        container_name=container_name, ssh_client=ssh_client
+    )  # Inject the SSHClient
 
     # Execute a command in the container
     result = docker_client.execute_command("echo 'Hello from Docker Client'")
     print(f"Docker Command Result: {result.get('stdout', '')}")
 
     # Check if a file exists in the container
-    container_file_exists = docker_client.check_file_exists_in_container("/app/config/database.yml")
+    container_file_exists = docker_client.check_file_exists_in_container(
+        "/app/config/database.yml"
+    )
     print(f"Container file database.yml exists: {container_file_exists}")
 
     # 3. RailsConsoleClient (uses tmux)
     print("\n--- RailsConsoleClient Demo ---")
-    rails_client = RailsConsoleClient(tmux_session_name=tmux_session, command_timeout=30)
+    rails_client = RailsConsoleClient(
+        tmux_session_name=tmux_session, command_timeout=30
+    )
 
     # Execute a simple Ruby command
     result = rails_client.execute("puts 'Hello from Rails Console'; 'SUCCESS'")
@@ -136,12 +142,16 @@ def demo_file_transfer() -> None:
 
     # 3. Transfer to remote host via SSHClient
     print("Transferring file to remote host...")
-    result = ssh_client.copy_file_to_remote("/tmp/test_transfer.txt", "/tmp/test_transfer.txt")
+    result = ssh_client.copy_file_to_remote(
+        "/tmp/test_transfer.txt", "/tmp/test_transfer.txt"
+    )
     print(f"SSH transfer result: {result.get('status')}")
 
     # 4. Transfer from remote host to container via DockerClient
     print("Transferring file to container...")
-    result = docker_client.copy_file_to_container("/tmp/test_transfer.txt", "/tmp/test_transfer.txt")
+    result = docker_client.copy_file_to_container(
+        "/tmp/test_transfer.txt", "/tmp/test_transfer.txt"
+    )
     print(f"Docker transfer result: {result.get('status')}")
 
     # 5. Verify file in container

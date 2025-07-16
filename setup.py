@@ -2,6 +2,7 @@
 """Setup script for the Jira to OpenProject migration tool."""
 
 from pathlib import Path
+
 from setuptools import find_packages, setup
 
 # Read requirements from requirements.txt file

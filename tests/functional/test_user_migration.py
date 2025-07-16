@@ -221,8 +221,18 @@ class TestUserMigration(unittest.TestCase):
 
         # Configure jira_client to return test users
         jira_users = [
-            {"key": "test1", "name": "test_user1", "emailAddress": "test1@example.com", "displayName": "Test User 1"},
-            {"key": "test2", "name": "test_user2", "emailAddress": "test2@example.com", "displayName": "Test User 2"},
+            {
+                "key": "test1",
+                "name": "test_user1",
+                "emailAddress": "test1@example.com",
+                "displayName": "Test User 1",
+            },
+            {
+                "key": "test2",
+                "name": "test_user2",
+                "emailAddress": "test2@example.com",
+                "displayName": "Test User 2",
+            },
         ]
 
         # Mock the progress tracker context manager
@@ -267,7 +277,9 @@ class TestUserMigration(unittest.TestCase):
                     "matched_by": "none",
                 },
             }
-            with patch.object(migration, "create_user_mapping", return_value=user_mapping):
+            with patch.object(
+                migration, "create_user_mapping", return_value=user_mapping
+            ):
                 migration.user_mapping = user_mapping
 
                 # Configure op_client to succeed when creating users
@@ -276,8 +288,16 @@ class TestUserMigration(unittest.TestCase):
                         "created_count": 2,
                         "failed_count": 0,
                         "created_users": [
-                            {"id": 101, "login": "test_user1", "email": "test1@example.com"},
-                            {"id": 102, "login": "test_user2", "email": "test2@example.com"},
+                            {
+                                "id": 101,
+                                "login": "test_user1",
+                                "email": "test1@example.com",
+                            },
+                            {
+                                "id": 102,
+                                "login": "test_user2",
+                                "email": "test2@example.com",
+                            },
                         ],
                         "failed_users": [],
                     },

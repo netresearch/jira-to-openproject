@@ -114,8 +114,14 @@ class TestAccountMigration(unittest.TestCase):
         mock_exists.return_value = False  # Force new extraction
 
         # Mock _save_to_json to avoid actually writing to file
-        with patch("src.migrations.account_migration.BaseMigration._save_to_json") as mock_save, \
-             patch("src.migrations.account_migration.BaseMigration._load_from_json") as mock_load:
+        with (
+            patch(
+                "src.migrations.account_migration.BaseMigration._save_to_json"
+            ) as mock_save,
+            patch(
+                "src.migrations.account_migration.BaseMigration._load_from_json"
+            ) as mock_load,
+        ):
             # Return empty list for tempo_accounts.json, empty dict for others
             def load_side_effect(
                 filename: str | Path,
@@ -207,7 +213,9 @@ class TestAccountMigration(unittest.TestCase):
 
         # Mock the JSON file loading for jira_project_mapping
         project_mapping_mock = mock_open(
-            read_data=json.dumps({"PROJ1": {"openproject_id": "3"}, "PROJ2": {"openproject_id": None}}),
+            read_data=json.dumps(
+                {"PROJ1": {"openproject_id": "3"}, "PROJ2": {"openproject_id": None}}
+            ),
         )
         # This patch will be used when loading jira_project_mapping.json
         with patch("pathlib.Path.open", project_mapping_mock):
@@ -215,7 +223,7 @@ class TestAccountMigration(unittest.TestCase):
             migration = AccountMigration(mock_jira_instance, mock_op_instance)
 
             # Mock _load_from_json to return the project mapping
-            with patch.object(migration, '_load_from_json') as mock_load:
+            with patch.object(migration, "_load_from_json") as mock_load:
                 mock_load.return_value = {
                     "PROJ1": {"openproject_id": "3"},
                     "PROJ2": {"openproject_id": None},
@@ -256,7 +264,10 @@ class TestAccountMigration(unittest.TestCase):
         """Test that create_custom_field_via_rails prevents injection attacks."""
         # Test data with malicious account names that could cause injection
         malicious_accounts = [
-            {"id": "1", "name": "'; system('rm -rf /'); #"},  # Command injection attempt
+            {
+                "id": "1",
+                "name": "'; system('rm -rf /'); #",
+            },  # Command injection attempt
             {"id": "2", "name": "test\"; puts 'HACKED'; \""},  # Ruby code injection
             {"id": "3", "name": "Normal Account"},  # Normal account
             {"id": "4", "name": "Account with 'quotes'"},  # Single quotes
@@ -277,7 +288,7 @@ class TestAccountMigration(unittest.TestCase):
         migration.tempo_accounts = malicious_accounts
 
         # Mock the associate method to avoid additional complexity
-        with patch.object(migration, 'associate_field_with_work_package_types'):
+        with patch.object(migration, "associate_field_with_work_package_types"):
             # Call the method
             result = migration.create_custom_field_via_rails()
 
@@ -290,7 +301,7 @@ class TestAccountMigration(unittest.TestCase):
             # Verify malicious code is safely escaped within %q{} literals, not executed as raw Ruby
             # The patterns should appear within %q{} but not as executable Ruby code
             self.assertIn("%q{'; system('rm -rf /'); #}", executed_command)
-            self.assertIn('%q{test"; puts \'HACKED\'; "}', executed_command)
+            self.assertIn("%q{test\"; puts 'HACKED'; \"}", executed_command)
 
             # Verify that Ruby %q{} syntax is used for safe escaping
             self.assertIn("%q{", executed_command)
@@ -306,15 +317,15 @@ class TestAccountMigration(unittest.TestCase):
 
             # Verify dangerous patterns are not executed as raw Ruby code
             # They should only appear within safe %q{} string literals
-            lines = executed_command.split('\n')
+            lines = executed_command.split("\n")
             for line in lines:
                 # Skip the line that defines the array (contains safe %q{} literals)
-                if 'possible_values_array = [' in line:
+                if "possible_values_array = [" in line:
                     continue
                 # Other lines should not contain unescaped dangerous patterns
-                if 'system(' in line and '%q{' not in line:
+                if "system(" in line and "%q{" not in line:
                     self.fail(f"Found unescaped dangerous pattern in line: {line}")
-                if 'puts ' in line and 'HACKED' in line and '%q{' not in line:
+                if "puts " in line and "HACKED" in line and "%q{" not in line:
                     self.fail(f"Found unescaped dangerous pattern in line: {line}")
 
     def test_create_custom_field_via_rails_empty_accounts(self) -> None:
@@ -331,8 +342,10 @@ class TestAccountMigration(unittest.TestCase):
         migration.tempo_accounts = []  # Empty accounts list
 
         # Mock the associate method and _save_to_json to avoid JSON serialization issues
-        with patch.object(migration, 'associate_field_with_work_package_types'), \
-             patch.object(migration, '_save_to_json'):
+        with (
+            patch.object(migration, "associate_field_with_work_package_types"),
+            patch.object(migration, "_save_to_json"),
+        ):
             # Call the method
             result = migration.create_custom_field_via_rails()
 
@@ -376,7 +389,9 @@ class TestAccountMigration(unittest.TestCase):
 
         # Test with malicious string field_id
         with self.assertRaises(Exception) as context:
-            migration.associate_field_with_work_package_types("'; system('rm -rf /'); #")
+            migration.associate_field_with_work_package_types(
+                "'; system('rm -rf /'); #"
+            )
 
         self.assertIn("Invalid field_id provided", str(context.exception))
 
@@ -398,7 +413,9 @@ class TestAccountMigration(unittest.TestCase):
 
         self.assertIn("Invalid field_id provided", str(context.exception))
 
-    def test_associate_field_with_work_package_types_string_to_int_conversion(self) -> None:
+    def test_associate_field_with_work_package_types_string_to_int_conversion(
+        self,
+    ) -> None:
         """Test that associate_field_with_work_package_types properly converts string integers."""
         # Mock the clients
         mock_jira_client = MagicMock()
@@ -443,7 +460,7 @@ class TestAccountMigration(unittest.TestCase):
         migration.tempo_accounts = test_accounts
 
         # Mock the associate method
-        with patch.object(migration, 'associate_field_with_work_package_types'):
+        with patch.object(migration, "associate_field_with_work_package_types"):
             # Call the method
             result = migration.create_custom_field_via_rails()
 
@@ -468,9 +485,10 @@ class TestAccountMigration(unittest.TestCase):
                 if pattern in executed_command:
                     # If they appear, they should be within safe %q{} escaping
                     self.assertTrue(
-                        f"%q{{{pattern}}}" in executed_command or
-                        "%q{" in executed_command and "}" in executed_command,
-                        f"Dangerous pattern '{pattern}' not properly escaped"
+                        f"%q{{{pattern}}}" in executed_command
+                        or "%q{" in executed_command
+                        and "}" in executed_command,
+                        f"Dangerous pattern '{pattern}' not properly escaped",
                     )
 
 

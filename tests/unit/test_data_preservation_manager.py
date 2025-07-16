@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Unit tests for DataPreservationManager."""
 
-import json
 import hashlib
+import json
 from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
 
 from src.utils.data_preservation_manager import (
-    DataPreservationManager,
+    ConflictInfo,
     ConflictResolution,
-    MergeStrategy,
+    DataPreservationManager,
     EntityChangeType,
-    ConflictInfo
+    MergeStrategy,
 )
 
 
@@ -37,7 +37,7 @@ class TestDataPreservationManager:
         return DataPreservationManager(
             preservation_dir=temp_preservation_dir,
             jira_client=jira_client,
-            openproject_client=openproject_client
+            openproject_client=openproject_client,
         )
 
     def test_initialization(self, preservation_manager, temp_preservation_dir):
@@ -63,7 +63,7 @@ class TestDataPreservationManager:
             "name": "Test Entity",
             "description": "Test description",
             "self": "http://test.com/1",  # Volatile field
-            "lastViewed": "2023-01-01T00:00:00Z"  # Volatile field
+            "lastViewed": "2023-01-01T00:00:00Z",  # Volatile field
         }
 
         checksum = preservation_manager._calculate_entity_checksum(entity_data)
@@ -76,10 +76,12 @@ class TestDataPreservationManager:
         normalized_data = {
             "id": "1",
             "name": "Test Entity",
-            "description": "Test description"
+            "description": "Test description",
         }
-        expected_json = json.dumps(normalized_data, sort_keys=True, separators=(',', ':'))
-        expected_checksum = hashlib.sha256(expected_json.encode('utf-8')).hexdigest()
+        expected_json = json.dumps(
+            normalized_data, sort_keys=True, separators=(",", ":")
+        )
+        expected_checksum = hashlib.sha256(expected_json.encode("utf-8")).hexdigest()
         assert checksum == expected_checksum
 
     def test_store_original_state(self, preservation_manager):
@@ -87,13 +89,16 @@ class TestDataPreservationManager:
         entity_data = {"id": "1", "name": "Test", "description": "Test description"}
 
         preservation_manager.store_original_state(
-            entity_id="1",
-            entity_type="users",
-            entity_data=entity_data
+            entity_id="1", entity_type="users", entity_data=entity_data
         )
 
         # Check file was created
-        snapshot_file = preservation_manager.preservation_dir / "original_states" / "users" / "1.json"
+        snapshot_file = (
+            preservation_manager.preservation_dir
+            / "original_states"
+            / "users"
+            / "1.json"
+        )
         assert snapshot_file.exists()
 
         # Check content
@@ -115,7 +120,9 @@ class TestDataPreservationManager:
         preservation_manager.store_original_state("1", "users", entity_data)
 
         # Check unchanged data
-        change_type = preservation_manager.detect_openproject_changes("1", "users", entity_data)
+        change_type = preservation_manager.detect_openproject_changes(
+            "1", "users", entity_data
+        )
         assert change_type == EntityChangeType.UNCHANGED
 
     def test_detect_openproject_changes_modified(self, preservation_manager):
@@ -127,7 +134,9 @@ class TestDataPreservationManager:
         preservation_manager.store_original_state("1", "users", original_data)
 
         # Check modified data
-        change_type = preservation_manager.detect_openproject_changes("1", "users", modified_data)
+        change_type = preservation_manager.detect_openproject_changes(
+            "1", "users", modified_data
+        )
         assert change_type == EntityChangeType.MODIFIED
 
     def test_detect_openproject_changes_created(self, preservation_manager):
@@ -135,7 +144,9 @@ class TestDataPreservationManager:
         entity_data = {"id": "1", "name": "Test"}
 
         # No original state stored
-        change_type = preservation_manager.detect_openproject_changes("1", "users", entity_data)
+        change_type = preservation_manager.detect_openproject_changes(
+            "1", "users", entity_data
+        )
         assert change_type == EntityChangeType.CREATED
 
     def test_detect_conflicts_no_manual_changes(self, preservation_manager):
@@ -152,7 +163,9 @@ class TestDataPreservationManager:
         )
         assert conflict is None
 
-    def test_detect_conflicts_with_manual_changes_no_overlap(self, preservation_manager):
+    def test_detect_conflicts_with_manual_changes_no_overlap(
+        self, preservation_manager
+    ):
         """Test conflict detection with manual changes but no field overlap."""
         original_data = {"id": "1", "name": "Test"}
         current_data = {"id": "1", "name": "Modified Test"}  # Manual change
@@ -170,7 +183,11 @@ class TestDataPreservationManager:
     def test_detect_conflicts_with_field_conflicts(self, preservation_manager):
         """Test conflict detection with actual field conflicts."""
         original_data = {"id": "1", "name": "Test", "description": "Original"}
-        current_data = {"id": "1", "name": "Manual Change", "description": "Manual Description"}
+        current_data = {
+            "id": "1",
+            "name": "Manual Change",
+            "description": "Manual Description",
+        }
         jira_changes = {"name": "Jira Change", "email": "test@example.com"}
 
         # Store original state
@@ -197,13 +214,23 @@ class TestDataPreservationManager:
             openproject_changes={"name": "OP Name"},
             conflicted_fields=["name"],
             resolution_strategy=ConflictResolution.JIRA_WINS,
-            timestamp=datetime.now(tz=UTC).isoformat()
+            timestamp=datetime.now(tz=UTC).isoformat(),
         )
 
-        jira_data = {"name": "Jira Name", "description": "Jira Desc", "created_on": "2023-01-01"}
-        openproject_data = {"name": "OP Name", "status": "active", "created_on": "2023-01-02"}
+        jira_data = {
+            "name": "Jira Name",
+            "description": "Jira Desc",
+            "created_on": "2023-01-01",
+        }
+        openproject_data = {
+            "name": "OP Name",
+            "status": "active",
+            "created_on": "2023-01-02",
+        }
 
-        resolved = preservation_manager.resolve_conflict(conflict, jira_data, openproject_data)
+        resolved = preservation_manager.resolve_conflict(
+            conflict, jira_data, openproject_data
+        )
 
         # Jira wins for non-protected fields
         assert resolved["name"] == "Jira Name"
@@ -222,13 +249,15 @@ class TestDataPreservationManager:
             openproject_changes={"name": "OP Name"},
             conflicted_fields=["name"],
             resolution_strategy=ConflictResolution.OPENPROJECT_WINS,
-            timestamp=datetime.now(tz=UTC).isoformat()
+            timestamp=datetime.now(tz=UTC).isoformat(),
         )
 
         jira_data = {"name": "Jira Name", "email": "jira@test.com"}
         openproject_data = {"name": "OP Name", "status": "active"}
 
-        resolved = preservation_manager.resolve_conflict(conflict, jira_data, openproject_data)
+        resolved = preservation_manager.resolve_conflict(
+            conflict, jira_data, openproject_data
+        )
 
         # OpenProject wins for conflicted fields
         assert resolved["name"] == "OP Name"
@@ -246,13 +275,23 @@ class TestDataPreservationManager:
             openproject_changes={"description": "OP Desc", "homepage": "op.com"},
             conflicted_fields=["description", "homepage"],
             resolution_strategy=ConflictResolution.MERGE,
-            timestamp=datetime.now(tz=UTC).isoformat()
+            timestamp=datetime.now(tz=UTC).isoformat(),
         )
 
-        jira_data = {"description": "Jira Desc", "homepage": "jira.com", "category": "development"}
-        openproject_data = {"description": "OP Desc", "homepage": "op.com", "created_on": "2023-01-01"}
+        jira_data = {
+            "description": "Jira Desc",
+            "homepage": "jira.com",
+            "category": "development",
+        }
+        openproject_data = {
+            "description": "OP Desc",
+            "homepage": "op.com",
+            "created_on": "2023-01-01",
+        }
 
-        resolved = preservation_manager.resolve_conflict(conflict, jira_data, openproject_data)
+        resolved = preservation_manager.resolve_conflict(
+            conflict, jira_data, openproject_data
+        )
 
         # Merge fields should be merged
         assert "OP Desc" in resolved["description"]
@@ -267,10 +306,7 @@ class TestDataPreservationManager:
     def test_merge_field_values_concatenate(self, preservation_manager):
         """Test field value merging with concatenate strategy."""
         result = preservation_manager._merge_field_values(
-            "description",
-            "Jira value",
-            "OP value",
-            MergeStrategy.CONCATENATE
+            "description", "Jira value", "OP value", MergeStrategy.CONCATENATE
         )
 
         assert result == "OP value\n\n[Merged from Jira]: Jira value"
@@ -278,10 +314,7 @@ class TestDataPreservationManager:
     def test_merge_field_values_longest_value(self, preservation_manager):
         """Test field value merging with longest value strategy."""
         result = preservation_manager._merge_field_values(
-            "name",
-            "Short",
-            "Much longer value",
-            MergeStrategy.LONGEST_VALUE
+            "name", "Short", "Much longer value", MergeStrategy.LONGEST_VALUE
         )
 
         assert result == "Much longer value"
@@ -289,9 +322,7 @@ class TestDataPreservationManager:
     def test_custom_merge_logic(self, preservation_manager):
         """Test custom merge logic for specific fields."""
         result = preservation_manager._custom_merge_logic(
-            "description",
-            "Jira description",
-            "OP description"
+            "description", "Jira description", "OP description"
         )
 
         assert "OP description" in result
@@ -324,7 +355,7 @@ class TestDataPreservationManager:
 
         policy_updates = {
             "conflict_resolution": "jira_wins",
-            "protected_fields": ["id", "email"]
+            "protected_fields": ["id", "email"],
         }
 
         preservation_manager.update_preservation_policy("users", policy_updates)
@@ -342,7 +373,7 @@ class TestDataPreservationManager:
 
         jira_changes = {
             "1": {"name": "Changed Name"},
-            "2": {"description": "New Description"}
+            "2": {"description": "New Description"},
         }
 
         report = preservation_manager.analyze_preservation_status(jira_changes, "users")
@@ -351,7 +382,7 @@ class TestDataPreservationManager:
         assert report["conflicts"] == []
         assert "timestamp" in report
 
-    @patch('src.utils.data_preservation_manager.datetime')
+    @patch("src.utils.data_preservation_manager.datetime")
     def test_timestamps_use_utc(self, mock_datetime, preservation_manager):
         """Test that all timestamps use UTC."""
         mock_now = Mock()
@@ -367,7 +398,9 @@ class TestDataPreservationManager:
 
     def test_error_handling_invalid_entity_type(self, preservation_manager):
         """Test error handling for invalid entity types."""
-        preservation_manager.update_preservation_policy("invalid_type", {"conflict_resolution": "jira_wins"})
+        preservation_manager.update_preservation_policy(
+            "invalid_type", {"conflict_resolution": "jira_wins"}
+        )
 
         # Should not crash, just log warning
         assert "invalid_type" not in preservation_manager.preservation_policies
@@ -386,12 +419,12 @@ class TestDataPreservationManager:
                 "protected_fields": ["id"],
                 "merge_fields": ["description"],
                 "track_changes": True,
-                "backup_before_update": False
+                "backup_before_update": False,
             }
         }
 
         policies_file = policies_dir / "preservation_policies.json"
-        with policies_file.open('w') as f:
+        with policies_file.open("w") as f:
             json.dump(custom_policies, f)
 
         # Create manager - should load existing policies

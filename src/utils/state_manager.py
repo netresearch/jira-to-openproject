@@ -17,6 +17,7 @@ from src import config
 # Type definitions for state management
 class EntityMapping(TypedDict):
     """Represents a mapping between Jira and OpenProject entities."""
+
     mapping_id: str
     jira_entity_type: str
     jira_entity_id: str
@@ -30,6 +31,7 @@ class EntityMapping(TypedDict):
 
 class MigrationRecord(TypedDict):
     """Represents a single migration operation record."""
+
     record_id: str
     migration_component: str
     entity_type: str
@@ -48,6 +50,7 @@ class MigrationRecord(TypedDict):
 
 class StateSnapshot(TypedDict):
     """Represents a complete state snapshot for rollback purposes."""
+
     snapshot_id: str
     created_at: str
     created_by: str
@@ -95,7 +98,9 @@ class StateManager:
 
     def _generate_version(self) -> str:
         """Generate a unique version identifier."""
-        return f"v{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        return (
+            f"v{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        )
 
     def _generate_id(self) -> str:
         """Generate a unique identifier."""
@@ -108,7 +113,7 @@ class StateManager:
         openproject_entity_type: str,
         openproject_entity_id: str,
         migration_component: str,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Register a mapping between Jira and OpenProject entities.
 
@@ -134,24 +139,24 @@ class StateManager:
             mapped_at=datetime.now(tz=UTC).isoformat(),
             mapped_by=migration_component,
             mapping_version=self._current_version,
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
 
         self._current_mappings[mapping_id] = mapping
 
         self.logger.debug(
             "Registered entity mapping: %s:%s -> %s:%s (%s)",
-            jira_entity_type, jira_entity_id,
-            openproject_entity_type, openproject_entity_id,
-            mapping_id
+            jira_entity_type,
+            jira_entity_id,
+            openproject_entity_type,
+            openproject_entity_id,
+            mapping_id,
         )
 
         return mapping_id
 
     def get_entity_mapping(
-        self,
-        jira_entity_type: str,
-        jira_entity_id: str
+        self, jira_entity_type: str, jira_entity_id: str
     ) -> EntityMapping | None:
         """Get entity mapping by Jira entity information.
 
@@ -163,15 +168,14 @@ class StateManager:
             Entity mapping or None if not found
         """
         for mapping in self._current_mappings.values():
-            if (mapping["jira_entity_type"] == jira_entity_type and
-                mapping["jira_entity_id"] == str(jira_entity_id)):
+            if mapping["jira_entity_type"] == jira_entity_type and mapping[
+                "jira_entity_id"
+            ] == str(jira_entity_id):
                 return mapping
         return None
 
     def get_reverse_mapping(
-        self,
-        openproject_entity_type: str,
-        openproject_entity_id: str
+        self, openproject_entity_type: str, openproject_entity_id: str
     ) -> EntityMapping | None:
         """Get entity mapping by OpenProject entity information.
 
@@ -183,8 +187,11 @@ class StateManager:
             Entity mapping or None if not found
         """
         for mapping in self._current_mappings.values():
-            if (mapping["openproject_entity_type"] == openproject_entity_type and
-                mapping["openproject_entity_id"] == str(openproject_entity_id)):
+            if mapping[
+                "openproject_entity_type"
+            ] == openproject_entity_type and mapping["openproject_entity_id"] == str(
+                openproject_entity_id
+            ):
                 return mapping
         return None
 
@@ -195,7 +202,7 @@ class StateManager:
         operation_type: str,
         entity_count: int = 0,
         user: str | None = None,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Start a new migration record.
 
@@ -219,21 +226,23 @@ class StateManager:
             operation_type=operation_type,
             started_at=datetime.now(tz=UTC).isoformat(),
             completed_at=None,
-            status='started',
+            status="started",
             entity_count=entity_count,
             success_count=0,
             error_count=0,
             errors=[],
             version=self._current_version,
             user=user,
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
 
         self._current_records.append(record)
 
         self.logger.info(
             "Started migration record: %s for %s (%s entities)",
-            record_id, migration_component, entity_count
+            record_id,
+            migration_component,
+            entity_count,
         )
 
         return record_id
@@ -243,7 +252,7 @@ class StateManager:
         record_id: str,
         success_count: int,
         error_count: int = 0,
-        errors: list[str] | None = None
+        errors: list[str] | None = None,
     ) -> None:
         """Complete a migration record.
 
@@ -259,14 +268,16 @@ class StateManager:
             return
 
         record["completed_at"] = datetime.now(tz=UTC).isoformat()
-        record["status"] = 'completed' if error_count == 0 else 'failed'
+        record["status"] = "completed" if error_count == 0 else "failed"
         record["success_count"] = success_count
         record["error_count"] = error_count
         record["errors"] = errors or []
 
         self.logger.info(
             "Completed migration record: %s (%d success, %d errors)",
-            record_id, success_count, error_count
+            record_id,
+            success_count,
+            error_count,
         )
 
     def _find_record(self, record_id: str) -> MigrationRecord | None:
@@ -280,7 +291,7 @@ class StateManager:
         self,
         description: str,
         user: str | None = None,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Create a complete state snapshot for rollback purposes.
 
@@ -302,7 +313,7 @@ class StateManager:
             mapping_count=len(self._current_mappings),
             record_count=len(self._current_records),
             version=self._current_version,
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
 
         # Save snapshot to file
@@ -310,15 +321,17 @@ class StateManager:
         snapshot_data = {
             "snapshot": snapshot,
             "mappings": self._current_mappings,
-            "records": self._current_records
+            "records": self._current_records,
         }
 
-        with snapshot_path.open('w') as f:
+        with snapshot_path.open("w") as f:
             json.dump(snapshot_data, f, indent=2)
 
         self.logger.info(
             "Created state snapshot: %s (%d mappings, %d records)",
-            snapshot_id, len(self._current_mappings), len(self._current_records)
+            snapshot_id,
+            len(self._current_mappings),
+            len(self._current_records),
         )
 
         return snapshot_id
@@ -328,12 +341,12 @@ class StateManager:
         try:
             # Save current mappings
             mappings_path = self.state_dir / "current" / "mappings.json"
-            with mappings_path.open('w') as f:
+            with mappings_path.open("w") as f:
                 json.dump(self._current_mappings, f, indent=2)
 
             # Save current records
             records_path = self.state_dir / "current" / "records.json"
-            with records_path.open('w') as f:
+            with records_path.open("w") as f:
                 json.dump(self._current_records, f, indent=2)
 
             # Save version info
@@ -342,9 +355,9 @@ class StateManager:
                 "version": self._current_version,
                 "last_updated": datetime.now(tz=UTC).isoformat(),
                 "mapping_count": len(self._current_mappings),
-                "record_count": len(self._current_records)
+                "record_count": len(self._current_records),
             }
-            with version_path.open('w') as f:
+            with version_path.open("w") as f:
                 json.dump(version_info, f, indent=2)
 
             self.logger.debug("Saved current state to persistent storage")
@@ -358,25 +371,29 @@ class StateManager:
             # Load current mappings
             mappings_path = self.state_dir / "current" / "mappings.json"
             if mappings_path.exists():
-                with mappings_path.open('r') as f:
+                with mappings_path.open("r") as f:
                     self._current_mappings = json.load(f)
 
             # Load current records
             records_path = self.state_dir / "current" / "records.json"
             if records_path.exists():
-                with records_path.open('r') as f:
+                with records_path.open("r") as f:
                     self._current_records = json.load(f)
 
             # Load version info
             version_path = self.state_dir / "current" / "version.json"
             if version_path.exists():
-                with version_path.open('r') as f:
+                with version_path.open("r") as f:
                     version_info = json.load(f)
-                    self._current_version = version_info.get("version", self._current_version)
+                    self._current_version = version_info.get(
+                        "version", self._current_version
+                    )
 
             self.logger.debug(
                 "Loaded current state: %d mappings, %d records, version %s",
-                len(self._current_mappings), len(self._current_records), self._current_version
+                len(self._current_mappings),
+                len(self._current_records),
+                self._current_version,
             )
 
         except Exception as e:
@@ -393,21 +410,27 @@ class StateManager:
             "total_mappings": len(self._current_mappings),
             "mappings_by_jira_type": {},
             "mappings_by_openproject_type": {},
-            "mappings_by_component": {}
+            "mappings_by_component": {},
         }
 
         for mapping in self._current_mappings.values():
             # Count by Jira entity type
             jira_type = mapping["jira_entity_type"]
-            stats["mappings_by_jira_type"][jira_type] = stats["mappings_by_jira_type"].get(jira_type, 0) + 1
+            stats["mappings_by_jira_type"][jira_type] = (
+                stats["mappings_by_jira_type"].get(jira_type, 0) + 1
+            )
 
             # Count by OpenProject entity type
             op_type = mapping["openproject_entity_type"]
-            stats["mappings_by_openproject_type"][op_type] = stats["mappings_by_openproject_type"].get(op_type, 0) + 1
+            stats["mappings_by_openproject_type"][op_type] = (
+                stats["mappings_by_openproject_type"].get(op_type, 0) + 1
+            )
 
             # Count by migration component
             component = mapping["mapped_by"]
-            stats["mappings_by_component"][component] = stats["mappings_by_component"].get(component, 0) + 1
+            stats["mappings_by_component"][component] = (
+                stats["mappings_by_component"].get(component, 0) + 1
+            )
 
         return stats
 
@@ -422,9 +445,7 @@ class StateManager:
         """
         # Sort by started_at timestamp, most recent first
         sorted_records = sorted(
-            self._current_records,
-            key=lambda r: r["started_at"],
-            reverse=True
+            self._current_records, key=lambda r: r["started_at"], reverse=True
         )
         return sorted_records[:limit]
 
@@ -448,9 +469,13 @@ class StateManager:
                     try:
                         snapshot_file.unlink()
                         deleted_count += 1
-                        self.logger.debug("Deleted old snapshot: %s", snapshot_file.name)
+                        self.logger.debug(
+                            "Deleted old snapshot: %s", snapshot_file.name
+                        )
                     except OSError as e:
-                        self.logger.warning("Failed to delete snapshot %s: %s", snapshot_file.name, e)
+                        self.logger.warning(
+                            "Failed to delete snapshot %s: %s", snapshot_file.name, e
+                        )
 
         if deleted_count > 0:
             self.logger.info("Cleaned up %d old state files", deleted_count)

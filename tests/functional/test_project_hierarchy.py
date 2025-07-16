@@ -34,8 +34,12 @@ def analyze_project_hierarchy() -> dict[str, Any]:
     company_migration = CompanyMigration(jira_client, op_client)
 
     # Load existing mapping data
-    project_mapping = project_migration._load_from_json(Path("project_mapping.json")) or {}
-    company_mapping = company_migration._load_from_json(Path("company_mapping.json")) or {}
+    project_mapping = (
+        project_migration._load_from_json(Path("project_mapping.json")) or {}
+    )
+    company_mapping = (
+        company_migration._load_from_json(Path("company_mapping.json")) or {}
+    )
 
     # Get all OpenProject projects
     op_projects = op_client.get_projects()
@@ -61,8 +65,12 @@ def analyze_project_hierarchy() -> dict[str, Any]:
 
         if parent_link:
             parent_id = parent_link.split("/")[-1]
-            parent_project = next((p for p in op_projects if str(p.get("id")) == parent_id), None)
-            parent_name = parent_project.get("name", "Unknown") if parent_project else "Unknown"
+            parent_project = next(
+                (p for p in op_projects if str(p.get("id")) == parent_id), None
+            )
+            parent_name = (
+                parent_project.get("name", "Unknown") if parent_project else "Unknown"
+            )
 
             projects_with_parent.append(
                 {
@@ -77,7 +85,9 @@ def analyze_project_hierarchy() -> dict[str, Any]:
 
     # Calculate analysis metrics
     total_projects = len(projects_with_parent) + len(projects_without_parent)
-    hierarchy_percentage = (len(projects_with_parent) / total_projects * 100) if total_projects > 0 else 0
+    hierarchy_percentage = (
+        (len(projects_with_parent) / total_projects * 100) if total_projects > 0 else 0
+    )
 
     # Find projects that should have a parent but don't
     expected_parent_mapping = {}
@@ -114,7 +124,11 @@ def analyze_project_hierarchy() -> dict[str, Any]:
     # Log summary
     logger.info("Project hierarchy analysis:")
     logger.info("Total projects: %s", total_projects)
-    logger.info("Projects with parent: %s (%s%%)", len(projects_with_parent), hierarchy_percentage)
+    logger.info(
+        "Projects with parent: %s (%s%%)",
+        len(projects_with_parent),
+        hierarchy_percentage,
+    )
     logger.info("Projects without parent: %s", len(projects_without_parent))
     logger.info("Missing parent relations: %s", len(missing_parent_relations))
 
@@ -128,13 +142,17 @@ def run_hierarchy_test() -> Any:
 
     # Determine if test passed
     if analysis["missing_parent_relations"] == 0:
-        logger.success("✅ Project hierarchy test passed! All expected parent-child relationships are in place.")
+        logger.success(
+            "✅ Project hierarchy test passed! All expected parent-child relationships are in place."
+        )
     else:
         logger.error(
             "❌ Project hierarchy test failed! %s projects are missing their parent relationship.",
             analysis["missing_parent_relations"],
         )
-        logger.info("Review project_hierarchy_analysis.json for details on missing relationships.")
+        logger.info(
+            "Review project_hierarchy_analysis.json for details on missing relationships."
+        )
 
     return analysis
 

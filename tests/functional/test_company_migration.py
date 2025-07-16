@@ -38,7 +38,12 @@ class TestCompanyMigration(unittest.TestCase):
         # Sample API response from Tempo
         self.sample_tempo_companies_api = [
             {"id": "1", "key": "ACME", "name": "ACME Corporation", "status": "ACTIVE"},
-            {"id": "2", "key": "GLOBEX", "name": "Globex Corporation", "status": "ACTIVE"},
+            {
+                "id": "2",
+                "key": "GLOBEX",
+                "name": "Globex Corporation",
+                "status": "ACTIVE",
+            },
         ]
 
         # Create test data
@@ -107,7 +112,9 @@ class TestCompanyMigration(unittest.TestCase):
         ]
 
         # Set up the mock return values
-        self.jira_client.get_tempo_customers.return_value = self.sample_tempo_companies_api
+        self.jira_client.get_tempo_customers.return_value = (
+            self.sample_tempo_companies_api
+        )
         self.op_client.get_projects.return_value = self.sample_op_projects
 
     def tearDown(self) -> None:
@@ -117,7 +124,9 @@ class TestCompanyMigration(unittest.TestCase):
             filename.unlink()
 
         # Remove test data directory if empty
-        if Path(self.test_data_dir).exists() and not list(Path(self.test_data_dir).iterdir()):
+        if Path(self.test_data_dir).exists() and not list(
+            Path(self.test_data_dir).iterdir()
+        ):
             Path(self.test_data_dir).rmdir()
 
     @patch("src.clients.jira_client.JiraClient")
@@ -138,7 +147,9 @@ class TestCompanyMigration(unittest.TestCase):
         """Test the extract_tempo_companies method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
-        mock_jira_instance.get_tempo_customers.return_value = self.sample_tempo_companies_api
+        mock_jira_instance.get_tempo_customers.return_value = (
+            self.sample_tempo_companies_api
+        )
 
         mock_op_instance = mock_op_client.return_value
 
@@ -149,7 +160,9 @@ class TestCompanyMigration(unittest.TestCase):
         mock_load_dict.return_value = None  # No cached data
 
         # Mock _load_from_json to return None during initialization
-        with patch("src.migrations.company_migration.CompanyMigration._load_from_json") as mock_load:
+        with patch(
+            "src.migrations.company_migration.CompanyMigration._load_from_json"
+        ) as mock_load:
             mock_load.return_value = None
 
             # Initialize migration
@@ -212,7 +225,9 @@ class TestCompanyMigration(unittest.TestCase):
         assert "2" in companies
         assert companies["1"]["name"] == "ACME Corporation"
         assert companies["2"]["name"] == "Globex Corporation"
-        assert companies["2"]["id"] == "2"  # The ID should be added to the second company
+        assert (
+            companies["2"]["id"] == "2"
+        )  # The ID should be added to the second company
 
     def test_extract_openproject_projects(self) -> None:
         """Test extracting projects from OpenProject."""
@@ -248,12 +263,26 @@ class TestCompanyMigration(unittest.TestCase):
 
         # Mock the op_projects attribute and its access in the create_company_mapping method
         op_projects_data = [
-            {"id": 1, "name": "ACME Corporation", "identifier": "acme", "_links": {"parent": {"href": None}}},
-            {"id": 2, "name": "Some Other Project", "identifier": "other", "_links": {"parent": {"href": None}}},
+            {
+                "id": 1,
+                "name": "ACME Corporation",
+                "identifier": "acme",
+                "_links": {"parent": {"href": None}},
+            },
+            {
+                "id": 2,
+                "name": "Some Other Project",
+                "identifier": "other",
+                "_links": {"parent": {"href": None}},
+            },
         ]
 
         # Use the actual implementation - patch the method that uses op_projects
-        with patch.object(self.company_migration, "_extract_openproject_projects", return_value=op_projects_data):
+        with patch.object(
+            self.company_migration,
+            "_extract_openproject_projects",
+            return_value=op_projects_data,
+        ):
             # Set the property directly since we're mocking the extraction
             self.company_migration.op_projects = op_projects_data
 
@@ -322,29 +351,33 @@ class TestCompanyMigration(unittest.TestCase):
         mock_migration_config.get.return_value = False
 
         # Skip the data loading steps by mocking _extract methods
-        with patch.object(self.company_migration, "_extract_tempo_companies"), \
-             patch.object(self.company_migration, "_extract_openproject_projects"):
+        with (
+            patch.object(self.company_migration, "_extract_tempo_companies"),
+            patch.object(self.company_migration, "_extract_openproject_projects"),
+        ):
             # Create test data for documentation purposes but intentionally not used directly
             # because we're mocking the entire method
 
             # Mock the necessary file operations
-            with patch("builtins.open", unittest.mock.mock_open()), \
-                 patch("json.dump"), \
-                 patch("pathlib.Path.open"), \
-                 patch.object(self.company_migration, "_save_to_json"), \
-                 patch(
-                     "src.migrations.company_migration.CompanyMigration.migrate_companies_bulk",
-                     side_effect=lambda: {
-                         "2": {
-                             "tempo_id": "2",
-                             "tempo_name": "Globex Corporation",
-                             "openproject_id": 3,
-                             "openproject_identifier": "globex",
-                             "openproject_name": "Globex Corporation",
-                             "matched_by": "created",
-                         },
-                     },
-                 ):
+            with (
+                patch("builtins.open", unittest.mock.mock_open()),
+                patch("json.dump"),
+                patch("pathlib.Path.open"),
+                patch.object(self.company_migration, "_save_to_json"),
+                patch(
+                    "src.migrations.company_migration.CompanyMigration.migrate_companies_bulk",
+                    side_effect=lambda: {
+                        "2": {
+                            "tempo_id": "2",
+                            "tempo_name": "Globex Corporation",
+                            "openproject_id": 3,
+                            "openproject_identifier": "globex",
+                            "openproject_name": "Globex Corporation",
+                            "matched_by": "created",
+                        },
+                    },
+                ),
+            ):
                 # Call the method
                 result = self.company_migration.migrate_companies_bulk()
 

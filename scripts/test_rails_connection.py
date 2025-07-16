@@ -20,7 +20,9 @@ from src.clients.openproject_client import OpenProjectClient
 console = Console()
 
 
-def test_rails_connection(session_name: str = "rails_console", debug: bool = False) -> bool:
+def test_rails_connection(
+    session_name: str = "rails_console", debug: bool = False
+) -> bool:
     """Test connection to the Rails console.
 
     Args:
@@ -44,7 +46,9 @@ def test_rails_connection(session_name: str = "rails_console", debug: bool = Fal
         if result["status"] == "success":
             console.print(f"Rails version: {result['output']}")
         else:
-            console.print(f"Error executing command: {result.get('error', 'Unknown error')}")
+            console.print(
+                f"Error executing command: {result.get('error', 'Unknown error')}"
+            )
             return False
 
         # Run another command to test OpenProject environment
@@ -54,7 +58,9 @@ def test_rails_connection(session_name: str = "rails_console", debug: bool = Fal
         if result["status"] == "success":
             console.print(f"OpenProject user count: {result['output']}")
         else:
-            console.print(f"Error executing command: {result.get('error', 'Unknown error')}")
+            console.print(
+                f"Error executing command: {result.get('error', 'Unknown error')}"
+            )
             return False
 
         console.print("\nRails console connection test PASSED ✅")
@@ -70,7 +76,9 @@ def test_rails_connection(session_name: str = "rails_console", debug: bool = Fal
         return False
 
 
-def get_custom_fields(session_name: str = "rails_console", debug: bool = False) -> list[dict[str, Any]]:
+def get_custom_fields(
+    session_name: str = "rails_console", debug: bool = False
+) -> list[dict[str, Any]]:
     """Retrieve all custom fields from OpenProject via Rails console.
 
     Args:
@@ -81,7 +89,9 @@ def get_custom_fields(session_name: str = "rails_console", debug: bool = False) 
         List of custom fields with their attributes
 
     """
-    console.print(f"Retrieving custom fields from OpenProject via Rails console in tmux session: {session_name}")
+    console.print(
+        f"Retrieving custom fields from OpenProject via Rails console in tmux session: {session_name}"
+    )
 
     try:
         # Create an OpenProject client
@@ -103,7 +113,9 @@ def get_custom_fields(session_name: str = "rails_console", debug: bool = False) 
         result = client.execute_query(command)
 
         if result["status"] == "error":
-            console.print(f"Error retrieving custom fields: {result.get('error', 'Unknown error')}")
+            console.print(
+                f"Error retrieving custom fields: {result.get('error', 'Unknown error')}"
+            )
             return []
 
         # Extract and parse the custom fields from the output
@@ -174,8 +186,12 @@ Example:
         default="rails_console",
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    parser.add_argument("--get-fields", action="store_true", help="Retrieve and display custom fields")
-    parser.add_argument("--output", help="Output file for custom fields (JSON format)", default=None)
+    parser.add_argument(
+        "--get-fields", action="store_true", help="Retrieve and display custom fields"
+    )
+    parser.add_argument(
+        "--output", help="Output file for custom fields (JSON format)", default=None
+    )
 
     return parser.parse_args()
 
@@ -204,7 +220,9 @@ def main() -> None:
             # Print fields to console
             console.print("\nCustom Fields:")
             for field in fields:
-                console.print(f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})")
+                console.print(
+                    f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
+                )
 
             # Save to file if output path provided
             if args.output:

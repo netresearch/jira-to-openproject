@@ -68,10 +68,12 @@ class JiraClient:
 
         # ScriptRunner configuration
         self.scriptrunner_enabled = config.jira_config.get("scriptrunner", {}).get(
-            "enabled", False,
+            "enabled",
+            False,
         )
         self.scriptrunner_custom_field_options_endpoint = config.jira_config.get(
-            "scriptrunner", {},
+            "scriptrunner",
+            {},
         ).get(
             "custom_field_options_endpoint",
             "",
@@ -141,7 +143,8 @@ class JiraClient:
         # If all methods failed, raise exception with details
         error_details = "; ".join(connection_errors)
         logger.error(
-            "All authentication methods failed for Jira connection to %s", self.jira_url,
+            "All authentication methods failed for Jira connection to %s",
+            self.jira_url,
         )
         msg = f"Failed to authenticate with Jira: {error_details}"
         raise JiraAuthenticationError(msg) from None
@@ -211,7 +214,9 @@ class JiraClient:
             raise JiraApiError(error_msg) from e
 
     def get_all_issues_for_project(
-        self, project_key: str, expand_changelog: bool = True,
+        self,
+        project_key: str,
+        expand_changelog: bool = True,
     ) -> list[Issue]:
         """Gets all issues for a specific project, handling pagination.
 
@@ -399,7 +404,10 @@ class JiraClient:
         """
         try:
             users = self.jira.search_users(
-                user=".", includeInactive=True, startAt=0, maxResults=1000,
+                user=".",
+                includeInactive=True,
+                startAt=0,
+                maxResults=1000,
             )
 
             logger.info("Retrieved %s users from Jira API", len(users))
@@ -529,10 +537,14 @@ class JiraClient:
                         "description": getattr(status, "description", ""),
                         "statusCategory": {
                             "id": getattr(
-                                getattr(status, "statusCategory", None), "id", None,
+                                getattr(status, "statusCategory", None),
+                                "id",
+                                None,
                             ),
                             "key": getattr(
-                                getattr(status, "statusCategory", None), "key", None,
+                                getattr(status, "statusCategory", None),
+                                "key",
+                                None,
                             ),
                             "name": getattr(
                                 getattr(status, "statusCategory", None),
@@ -757,91 +769,43 @@ class JiraClient:
             raise JiraApiError(error_msg) from e
 
     def get_field_metadata(self, field_id: str) -> dict[str, Any]:
-        """Get metadata for a specific custom field, including allowed values.
-
-        Automatically uses ScriptRunner when available for better performance.
+        """Get field metadata for a specific custom field.
 
         Args:
-            field_id: ID of the custom field
+            field_id: The Jira custom field ID (e.g., 'customfield_10001')
 
         Returns:
-            Dictionary containing field metadata
+            Dict containing field metadata
 
         Raises:
-            JiraResourceNotFoundError: If the field is not found
-            JiraApiError: If the API request fails
+            JiraClientError: If the field cannot be retrieved
 
         """
-        # Check if we already have this field in cache
-        if field_id in self.field_options_cache:
-            logger.debug("Returning cached metadata for field %s", field_id)
-            return self.field_options_cache[field_id]
+        return self._get_field_metadata_via_createmeta(field_id)
 
-        # Try ScriptRunner first if enabled
-        if (
-            self.scriptrunner_enabled
-            and self.scriptrunner_custom_field_options_endpoint
-        ):
-            scriptrunner_cache_key = "_scriptrunner_all_fields"
+    def get_custom_fields(self) -> list[dict[str, Any]]:
+        """Get all custom fields from Jira.
 
-            # If we don't have the full ScriptRunner data cached yet, fetch it
-            if scriptrunner_cache_key not in self.field_options_cache:
-                logger.info("Fetching all custom field options via ScriptRunner...")
-                try:
-                    response = self._make_request(
-                        self.scriptrunner_custom_field_options_endpoint,
-                    )
-                    if response and response.status_code == 200:
-                        # Cache all fields data
-                        all_fields_data = response.json()
-                        self.field_options_cache[scriptrunner_cache_key] = (
-                            all_fields_data
-                        )
-                        logger.info(
-                            f"Successfully cached ScriptRunner data for {len(all_fields_data)} fields",
-                        )
-                    else:
-                        logger.warning(
-                            f"ScriptRunner request failed with status "
-                            f"{response.status_code if response else 'None'}",
-                        )
-                except Exception as e:
-                    logger.warning("Error fetching ScriptRunner data: %s", e)
-                    # Fall through to standard method - don't raise here
-
-            # Try to get the specific field from the cached ScriptRunner data
-            if scriptrunner_cache_key in self.field_options_cache:
-                all_fields_data = self.field_options_cache[scriptrunner_cache_key]
-                field_data = all_fields_data.get(field_id)
-
-                if field_data and field_data.get("options"):
-                    options = field_data.get("options", [])
-                    result = {"allowedValues": [{"value": value} for value in options]}
-
-                    # Cache the result
-                    self.field_options_cache[field_id] = result
-                    logger.debug(
-                        "Returning ScriptRunner data for field %s with %s options",
-                        field_id,
-                        len(options),
-                    )
-                    return result
-                logger.debug(
-                    "Field %s not found in ScriptRunner data or has no options",
-                    field_id,
-                )
-
-        # If ScriptRunner method didn't work, use the standard method
-        logger.debug("Falling back to standard method for field %s", field_id)
+        Returns:
+            List of custom field dictionaries
+        """
         try:
-            result = self._get_field_metadata_via_createmeta(field_id)
+            # Use the fields endpoint to get all fields, then filter for custom fields
+            response = self.jira.fields()
 
-            # Cache the result
-            self.field_options_cache[field_id] = result
-            return result
+            # Filter for custom fields (custom fields typically start with 'customfield_')
+            custom_fields = [
+                field for field in response
+                if field.get('id', '').startswith('customfield_')
+            ]
+
+            logger.debug("Retrieved %d custom fields from Jira", len(custom_fields))
+            return custom_fields
+
         except Exception as e:
-            msg = f"Failed to get field metadata for {field_id}: {e!s}"
-            raise JiraApiError(msg) from e
+            error_msg = f"Failed to retrieve custom fields: {e}"
+            logger.error(error_msg)
+            raise JiraClientError(error_msg) from e
 
     def _patch_jira_client(self) -> None:
         """Patch the JIRA client to catch CAPTCHA challenges.
@@ -1008,7 +972,8 @@ class JiraClient:
             raise JiraApiError(error_msg) from e
 
     def get_tempo_account_links_for_project(
-        self, project_id: int,
+        self,
+        project_id: int,
     ) -> list[dict[str, Any]]:
         """Retrieve Tempo account links for a specific Jira project.
 
@@ -1051,7 +1016,8 @@ class JiraClient:
         except JiraResourceNotFoundError:
             # Convert to empty list for this specific case since it's an expected condition
             logger.warning(
-                "Project %s not found or no account links exist.", project_id,
+                "Project %s not found or no account links exist.",
+                project_id,
             )
             return []
         except Exception as e:
@@ -1133,7 +1099,9 @@ class JiraClient:
                 if hasattr(work_log, "updateAuthor") and work_log.updateAuthor:
                     work_log_data["update_author"] = {
                         "name": getattr(work_log.updateAuthor, "name", None),
-                        "display_name": getattr(work_log.updateAuthor, "displayName", None),
+                        "display_name": getattr(
+                            work_log.updateAuthor, "displayName", None
+                        ),
                         "email": getattr(work_log.updateAuthor, "emailAddress", None),
                         "account_id": getattr(work_log.updateAuthor, "accountId", None),
                     }
@@ -1159,7 +1127,9 @@ class JiraClient:
             raise JiraApiError(error_msg) from e
 
     def get_all_work_logs_for_project(
-        self, project_key: str, include_empty: bool = False,
+        self,
+        project_key: str,
+        include_empty: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
         """Get all work logs for all issues in a project.
 
@@ -1182,7 +1152,9 @@ class JiraClient:
             )
 
             # Get all issues for the project with worklog field expanded
-            all_issues = self.get_all_issues_for_project(project_key, expand_changelog=False)
+            all_issues = self.get_all_issues_for_project(
+                project_key, expand_changelog=False
+            )
 
             work_logs_by_issue = {}
             issues_with_logs = 0
@@ -1223,7 +1195,9 @@ class JiraClient:
                             issue_key,
                         )
                         # Record 404 response
-                        self.rate_limiter.record_response(time.time() - request_start, 404)
+                        self.rate_limiter.record_response(
+                            time.time() - request_start, 404
+                        )
                         continue
                     except JiraApiError as e:
                         logger.warning(
@@ -1232,7 +1206,9 @@ class JiraClient:
                             e,
                         )
                         # Record error response (assuming 500 for API errors)
-                        self.rate_limiter.record_response(time.time() - request_start, 500)
+                        self.rate_limiter.record_response(
+                            time.time() - request_start, 500
+                        )
                         continue
 
             logger.info(
@@ -1311,7 +1287,9 @@ class JiraClient:
             return work_log_data
 
         except Exception as e:
-            error_msg = f"Failed to get work log {work_log_id} for issue {issue_key}: {e!s}"
+            error_msg = (
+                f"Failed to get work log {work_log_id} for issue {issue_key}: {e!s}"
+            )
             logger.exception(error_msg)
             if (
                 "issue does not exist" in str(e).lower()
@@ -1443,7 +1421,9 @@ class JiraClient:
                 raise JiraApiError(msg)
 
             attributes = response.json()
-            logger.info("Successfully retrieved %s Tempo work attributes", len(attributes))
+            logger.info(
+                "Successfully retrieved %s Tempo work attributes", len(attributes)
+            )
 
             return attributes
 
@@ -1453,7 +1433,10 @@ class JiraClient:
             raise JiraApiError(error_msg) from e
 
     def get_tempo_all_work_logs_for_project(
-        self, project_key: str, date_from: str | None = None, date_to: str | None = None,
+        self,
+        project_key: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get all Tempo work logs for a project with pagination handling.
 
@@ -1527,7 +1510,9 @@ class JiraClient:
                         "issue_id": work_log.get("issue", {}).get("id"),
                         "author": {
                             "username": work_log.get("author", {}).get("name"),
-                            "display_name": work_log.get("author", {}).get("displayName"),
+                            "display_name": work_log.get("author", {}).get(
+                                "displayName"
+                            ),
                             "account_id": work_log.get("author", {}).get("accountId"),
                         },
                         "time_spent_seconds": work_log.get("timeSpentSeconds"),

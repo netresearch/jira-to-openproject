@@ -70,7 +70,9 @@ def run_tests(
 
     # Handle coverage
     if coverage:
-        cmd.extend(["--cov=src", "--cov-report=term", "--cov-report=html:reports/coverage"])
+        cmd.extend(
+            ["--cov=src", "--cov-report=term", "--cov-report=html:reports/coverage"]
+        )
 
     # Handle JUnit report
     if junit_report:
@@ -121,27 +123,31 @@ def main() -> int:
 
     # Verbosity
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Show verbose output",
     )
 
     # Coverage
     parser.add_argument(
-        "--cov", "--coverage",
+        "--cov",
+        "--coverage",
         action="store_true",
         help="Generate coverage report",
     )
 
     # Markers
     parser.add_argument(
-        "-m", "--markers",
+        "-m",
+        "--markers",
         help="Pytest markers to include",
     )
 
     # Keyword expression
     parser.add_argument(
-        "-k", "--keyword",
+        "-k",
+        "--keyword",
         help="Keyword expression to filter tests",
     )
 

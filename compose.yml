@@ -48,7 +48,7 @@ services:
 
   # Redis for caching and task queues
   redis:
-    image: redis:7.4-alpine
+    image: redis:8.0-alpine
     # SECURITY: No port exposure needed - internal service only
     volumes:
       - redis_data:/data
@@ -57,7 +57,7 @@ services:
 
   # PostgreSQL for data storage
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     # SECURITY: No port exposure needed - internal service only
     environment:
       POSTGRES_DB: jira_migration

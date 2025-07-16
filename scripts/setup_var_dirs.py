@@ -42,7 +42,9 @@ def main() -> bool:
             if name != "root":
                 print(f"- {name}: {path}")
         print("\nYou may now update your code to use these new paths.")
-        print("After confirming everything works, you can clean up the old directories.")
+        print(
+            "After confirming everything works, you can clean up the old directories."
+        )
 
     except Exception as e:
         logger.exception(f"Error setting up var directories: {e!s}")

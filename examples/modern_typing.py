@@ -39,7 +39,9 @@ class DataProcessor:
         self.cache_dir = Path(cache_dir) if cache_dir else Path.home() / ".cache"
         self.handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
 
-    def register_handler(self, name: str, handler: Callable[[dict[str, Any]], Any]) -> None:
+    def register_handler(
+        self, name: str, handler: Callable[[dict[str, Any]], Any]
+    ) -> None:
         """Register a data handler function.
 
         Args:
@@ -72,7 +74,9 @@ class DataProcessor:
                 except Exception as e:
                     results.append({"error": str(e), "item": item})
             else:
-                results.append({"error": f"No handler for type {handler_name}", "item": item})
+                results.append(
+                    {"error": f"No handler for type {handler_name}", "item": item}
+                )
 
         return results
 
@@ -103,7 +107,9 @@ class DataProcessor:
                     with source_path.open() as f:
                         items = json.load(f)
                 except Exception as e:
-                    all_results[source_name] = [{"error": f"Failed to load {source}: {e}"}]
+                    all_results[source_name] = [
+                        {"error": f"Failed to load {source}: {e}"}
+                    ]
                     continue
             else:
                 source_name = source.get("name", "unnamed")
@@ -150,7 +156,11 @@ def main() -> None:
     # Register handler functions with modern type annotations
     processor.register_handler(
         "user",
-        lambda data: {"id": data.get("id"), "name": data.get("name"), "processed_at": datetime.now().isoformat()},
+        lambda data: {
+            "id": data.get("id"),
+            "name": data.get("name"),
+            "processed_at": datetime.now().isoformat(),
+        },
     )
 
     processor.register_handler(
@@ -166,11 +176,17 @@ def main() -> None:
     data_sources = [
         {
             "name": "users",
-            "items": [{"type": "user", "id": 1, "name": "Alice"}, {"type": "user", "id": 2, "name": "Bob"}],
+            "items": [
+                {"type": "user", "id": 1, "name": "Alice"},
+                {"type": "user", "id": 2, "name": "Bob"},
+            ],
         },
         {
             "name": "orders",
-            "items": [{"type": "order", "id": 101, "amount": 100}, {"type": "order", "id": 102, "amount": 200}],
+            "items": [
+                {"type": "order", "id": 101, "amount": 100},
+                {"type": "order", "id": 102, "amount": 200},
+            ],
         },
     ]
 

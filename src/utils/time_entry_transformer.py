@@ -1,9 +1,9 @@
 """Time entry transformation utilities for Jira to OpenProject migration."""
 
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-import re
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +13,10 @@ class TimeEntryTransformer:
 
     def __init__(
         self,
-        user_mapping: Optional[Dict[str, int]] = None,
-        work_package_mapping: Optional[Dict[str, int]] = None,
-        activity_mapping: Optional[Dict[str, int]] = None,
-        default_activity_id: Optional[int] = None,
+        user_mapping: dict[str, int] | None = None,
+        work_package_mapping: dict[str, int] | None = None,
+        activity_mapping: dict[str, int] | None = None,
+        default_activity_id: int | None = None,
     ):
         """Initialize the transformer with necessary mappings.
 
@@ -56,10 +56,10 @@ class TimeEntryTransformer:
 
     def transform_jira_work_log(
         self,
-        work_log: Dict[str, Any],
+        work_log: dict[str, Any],
         issue_key: str,
-        custom_field_mapping: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        custom_field_mapping: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Transform a single Jira work log to OpenProject time entry format.
 
         Args:
@@ -138,9 +138,9 @@ class TimeEntryTransformer:
 
     def transform_tempo_work_log(
         self,
-        tempo_log: Dict[str, Any],
-        custom_field_mapping: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        tempo_log: dict[str, Any],
+        custom_field_mapping: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Transform a Tempo work log to OpenProject time entry format.
 
         Args:
@@ -219,8 +219,8 @@ class TimeEntryTransformer:
             raise
 
     def batch_transform_work_logs(
-        self, work_logs: List[Dict[str, Any]], source_type: str = "jira"
-    ) -> List[Dict[str, Any]]:
+        self, work_logs: list[dict[str, Any]], source_type: str = "jira"
+    ) -> list[dict[str, Any]]:
         """Transform multiple work logs in batch.
 
         Args:
@@ -293,7 +293,7 @@ class TimeEntryTransformer:
             logger.warning("Failed to parse date '%s': %s", date_string, e)
             return datetime.now().strftime("%Y-%m-%d")
 
-    def _extract_text_from_jira_content(self, content: Dict[str, Any]) -> str:
+    def _extract_text_from_jira_content(self, content: dict[str, Any]) -> str:
         """Extract plain text from Jira rich text content.
 
         Args:
@@ -321,7 +321,7 @@ class TimeEntryTransformer:
             logger.warning("Failed to extract text from content: %s", e)
             return str(content)
 
-    def _extract_text_from_adf(self, doc: Dict[str, Any]) -> str:
+    def _extract_text_from_adf(self, doc: dict[str, Any]) -> str:
         """Extract text from Atlassian Document Format.
 
         Args:
@@ -344,7 +344,7 @@ class TimeEntryTransformer:
         # Join and clean up extra spaces
         return " ".join(text_parts).strip().replace("  ", " ")
 
-    def _map_user(self, username: str) -> Optional[int]:
+    def _map_user(self, username: str) -> int | None:
         """Map Jira username to OpenProject user ID.
 
         Args:
@@ -358,7 +358,7 @@ class TimeEntryTransformer:
             logger.warning("No user mapping found for username: %s", username)
         return user_id
 
-    def _map_work_package(self, issue_key: str) -> Optional[int]:
+    def _map_work_package(self, issue_key: str) -> int | None:
         """Map Jira issue key to OpenProject work package ID.
 
         Args:
@@ -372,7 +372,7 @@ class TimeEntryTransformer:
             logger.warning("No work package mapping found for issue: %s", issue_key)
         return work_package_id
 
-    def _detect_activity(self, comment: str) -> Optional[int]:
+    def _detect_activity(self, comment: str) -> int | None:
         """Detect activity type from work log comment.
 
         Args:
@@ -395,7 +395,7 @@ class TimeEntryTransformer:
 
         return self.default_activity_id
 
-    def _detect_activity_from_tempo(self, tempo_log: Dict[str, Any]) -> Optional[int]:
+    def _detect_activity_from_tempo(self, tempo_log: dict[str, Any]) -> int | None:
         """Detect activity from Tempo work log with enhanced metadata.
 
         Args:
@@ -421,7 +421,7 @@ class TimeEntryTransformer:
         return self._detect_activity(description)
 
     def _handle_tempo_specific_fields(
-        self, tempo_log: Dict[str, Any], time_entry: Dict[str, Any]
+        self, tempo_log: dict[str, Any], time_entry: dict[str, Any]
     ):
         """Handle Tempo-specific fields and attributes.
 
@@ -452,9 +452,9 @@ class TimeEntryTransformer:
 
     def _map_custom_fields(
         self,
-        source_log: Dict[str, Any],
-        time_entry: Dict[str, Any],
-        field_mapping: Dict[str, str],
+        source_log: dict[str, Any],
+        time_entry: dict[str, Any],
+        field_mapping: dict[str, str],
     ):
         """Map custom fields from source to OpenProject time entry.
 
@@ -476,8 +476,8 @@ class TimeEntryTransformer:
             time_entry["_meta"]["custom_fields"] = custom_fields
 
     def get_transformation_stats(
-        self, transformed_entries: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, transformed_entries: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """Get statistics about the transformation results.
 
         Args:

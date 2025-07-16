@@ -5,9 +5,9 @@ This script takes Ruby-formatted output and converts it to valid JSON.
 """
 
 import json
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 
 def convert_ruby_to_json(input_file: str, output_file: str) -> bool:

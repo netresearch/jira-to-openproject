@@ -21,12 +21,16 @@ def update_file(file_path: Path, dry_run: bool = False) -> bool:
         content = f.read()
 
     # Find the import statement
-    import_pattern = re.compile(r"from src\.clients\.openproject_rails_client import OpenProjectRailsClient")
+    import_pattern = re.compile(
+        r"from src\.clients\.openproject_rails_client import OpenProjectRailsClient"
+    )
     if not import_pattern.search(content):
         return False
 
     # Replace import statement
-    new_content = import_pattern.sub("from src.clients.openproject_client import OpenProjectClient", content)
+    new_content = import_pattern.sub(
+        "from src.clients.openproject_client import OpenProjectClient", content
+    )
 
     # Replace class references
     new_content = re.sub(r"OpenProjectRailsClient\(", "OpenProjectClient(", new_content)
@@ -53,8 +57,14 @@ def update_file(file_path: Path, dry_run: bool = False) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Update imports from OpenProjectRailsClient to OpenProjectClient")
-    parser.add_argument("--dry-run", action="store_true", help="Don't make changes, just print what would be changed")
+    parser = argparse.ArgumentParser(
+        description="Update imports from OpenProjectRailsClient to OpenProjectClient"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Don't make changes, just print what would be changed",
+    )
     args = parser.parse_args()
 
     root_dir = Path(__file__).parent.parent

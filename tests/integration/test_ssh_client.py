@@ -54,10 +54,14 @@ class TestSSHClient(unittest.TestCase):
         self.mock_path_class.return_value = self.mock_path_instance
 
         # Make Path constructor return the same mock for any arguments
-        self.mock_path_class.side_effect = lambda *args, **kwargs: self.mock_path_instance
+        self.mock_path_class.side_effect = (
+            lambda *args, **kwargs: self.mock_path_instance
+        )
 
         # Also patch src.clients.ssh_client.Path to return our mock
-        self.src_path_patcher = patch("src.clients.ssh_client.Path", self.mock_path_class)
+        self.src_path_patcher = patch(
+            "src.clients.ssh_client.Path", self.mock_path_class
+        )
         self.src_path_patcher.start()
 
         # File manager mock
@@ -113,13 +117,27 @@ class TestSSHClient(unittest.TestCase):
         # Test with key file
         self.ssh_client.key_file = "/path/to/key.pem"
         cmd = self.ssh_client.get_ssh_base_command()
-        expected_cmd = ["ssh", "-o", "ConnectTimeout=10", "-i", "/path/to/key.pem", "testuser@testhost"]
+        expected_cmd = [
+            "ssh",
+            "-o",
+            "ConnectTimeout=10",
+            "-i",
+            "/path/to/key.pem",
+            "testuser@testhost",
+        ]
         assert cmd == expected_cmd
 
         # Test without user
         self.ssh_client.user = None
         cmd = self.ssh_client.get_ssh_base_command()
-        expected_cmd = ["ssh", "-o", "ConnectTimeout=10", "-i", "/path/to/key.pem", "testhost"]
+        expected_cmd = [
+            "ssh",
+            "-o",
+            "ConnectTimeout=10",
+            "-i",
+            "/path/to/key.pem",
+            "testhost",
+        ]
         assert cmd == expected_cmd
 
     def test_test_connection_success(self) -> None:
@@ -172,7 +190,9 @@ class TestSSHClient(unittest.TestCase):
         self.mock_logger.exception.reset_mock()  # Using exception, not error
 
         # Configure mock to raise timeout
-        self.mock_subprocess.run.side_effect = subprocess.TimeoutExpired(cmd=["ssh"], timeout=10)
+        self.mock_subprocess.run.side_effect = subprocess.TimeoutExpired(
+            cmd=["ssh"], timeout=10
+        )
 
         # Call the method
         result = self.ssh_client.test_connection()
@@ -220,7 +240,9 @@ class TestSSHClient(unittest.TestCase):
         self.mock_subprocess.run.return_value = self.process_mock
 
         # Call the method with check=False to avoid exception
-        stdout, stderr, returncode = self.ssh_client.execute_command("invalid_command", check=False)
+        stdout, stderr, returncode = self.ssh_client.execute_command(
+            "invalid_command", check=False
+        )
 
         # Verify result
         assert stdout == ""
@@ -228,11 +250,19 @@ class TestSSHClient(unittest.TestCase):
         assert returncode == 1
 
         # But with check=True (default), it should raise SSHCommandError
-        with patch.object(
-            self.ssh_client,
-            "execute_command",
-            side_effect=SSHCommandError(command="invalid_command", returncode=1, stdout="", stderr="Command failed"),
-        ), pytest.raises(SSHCommandError):
+        with (
+            patch.object(
+                self.ssh_client,
+                "execute_command",
+                side_effect=SSHCommandError(
+                    command="invalid_command",
+                    returncode=1,
+                    stdout="",
+                    stderr="Command failed",
+                ),
+            ),
+            pytest.raises(SSHCommandError),
+        ):
             self.ssh_client.execute_command("invalid_command")
 
     def test_execute_command_timeout(self) -> None:
@@ -241,7 +271,9 @@ class TestSSHClient(unittest.TestCase):
         self.mock_subprocess.run.reset_mock()
 
         # Skip checking if the error is logged, just confirm the exception is raised
-        self.mock_subprocess.run.side_effect = subprocess.TimeoutExpired(cmd=["ssh"], timeout=60)
+        self.mock_subprocess.run.side_effect = subprocess.TimeoutExpired(
+            cmd=["ssh"], timeout=60
+        )
 
         # Simple test: Make sure TimeoutExpired is raised
         with pytest.raises(subprocess.TimeoutExpired):
@@ -282,7 +314,9 @@ class TestSSHClient(unittest.TestCase):
 
         # Configure subprocess.run to raise CalledProcessError as would happen with a missing file
         self.mock_subprocess.run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd=["scp"], stderr="No such file or directory",
+            returncode=1,
+            cmd=["scp"],
+            stderr="No such file or directory",
         )
 
         # Call the method - should raise FileNotFoundError
@@ -303,7 +337,9 @@ class TestSSHClient(unittest.TestCase):
 
         # Configure subprocess.run to raise exception
         self.mock_subprocess.run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd=["scp"], stderr="Permission denied",
+            returncode=1,
+            cmd=["scp"],
+            stderr="Permission denied",
         )
 
         # Call the method - should raise SSHFileTransferError
@@ -359,13 +395,16 @@ class TestSSHClient(unittest.TestCase):
 
         # Patch methods directly to simulate the FileNotFoundError
         # Call the method - should raise FileNotFoundError
-        with patch.object(
-            self.ssh_client,
-            "copy_file_from_remote",
-            side_effect=FileNotFoundError(
-                "File download succeeded but file not found",
+        with (
+            patch.object(
+                self.ssh_client,
+                "copy_file_from_remote",
+                side_effect=FileNotFoundError(
+                    "File download succeeded but file not found",
+                ),
             ),
-        ), pytest.raises(FileNotFoundError):
+            pytest.raises(FileNotFoundError),
+        ):
             self.ssh_client.copy_file_from_remote(
                 self.mock_path_instance,
                 self.mock_path_instance,
@@ -379,7 +418,9 @@ class TestSSHClient(unittest.TestCase):
 
         # Configure subprocess.run to raise exception
         self.mock_subprocess.run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd=["scp"], stderr="No such file or directory",
+            returncode=1,
+            cmd=["scp"],
+            stderr="No such file or directory",
         )
 
         # Call the method - should raise SSHFileTransferError

@@ -300,7 +300,9 @@ def save_to_path(
         return False
 
 
-def save_dict(data: dict[str, Any], filepath: Path, indent: int = 2, ensure_ascii: bool = False) -> bool:
+def save_dict(
+    data: dict[str, Any], filepath: Path, indent: int = 2, ensure_ascii: bool = False
+) -> bool:
     """Save dictionary data to a JSON file.
 
     This is a convenience wrapper around save_to_path for dictionaries.
@@ -318,7 +320,9 @@ def save_dict(data: dict[str, Any], filepath: Path, indent: int = 2, ensure_asci
     return save_to_path(data, filepath, indent, ensure_ascii)
 
 
-def load_model(model_class: type[T], filename: str | Path, directory: str | Path | None = None) -> T | None:
+def load_model(
+    model_class: type[T], filename: str | Path, directory: str | Path | None = None
+) -> T | None:
     """Load a Pydantic model from a JSON file.
 
     Args:

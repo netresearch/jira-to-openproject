@@ -47,7 +47,10 @@ class TestJiraClient(unittest.TestCase):
         self.mock_jira_class.return_value = self.mock_jira
 
         # Mock the server_info method
-        self.mock_jira.server_info.return_value = {"baseUrl": "https://jira.local", "version": "8.5.0"}
+        self.mock_jira.server_info.return_value = {
+            "baseUrl": "https://jira.local",
+            "version": "8.5.0",
+        }
 
         # Set up the session for request patching
         self.mock_jira._session = MagicMock()
@@ -74,7 +77,11 @@ class TestJiraClient(unittest.TestCase):
     def test_initialization_missing_url(self) -> None:
         """Test initialization with missing URL."""
         # Set up config with missing URL
-        self.mock_config.jira_config = {"url": "", "username": "test_user", "api_token": "test_token"}
+        self.mock_config.jira_config = {
+            "url": "",
+            "username": "test_user",
+            "api_token": "test_token",
+        }
 
         # Initialization should raise ValueError
         with pytest.raises(ValueError) as context:
@@ -144,7 +151,9 @@ class TestJiraClient(unittest.TestCase):
     def test_get_projects_failure(self) -> None:
         """Test failure in retrieving projects raises appropriate exception."""
         # Mock the projects method to raise an exception
-        self.mock_jira.projects.side_effect = Exception("API Error: Cannot get projects")
+        self.mock_jira.projects.side_effect = Exception(
+            "API Error: Cannot get projects"
+        )
 
         # Call should raise JiraApiError
         with pytest.raises(JiraApiError) as context:
@@ -254,7 +263,9 @@ class TestJiraClient(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.status_code = 400
         mock_response.reason = "Bad Request"
-        mock_response.json.return_value = {"errorMessages": ["Invalid input", "Field is required"]}
+        mock_response.json.return_value = {
+            "errorMessages": ["Invalid input", "Field is required"]
+        }
 
         # Test _handle_response method directly
         with pytest.raises(JiraApiError) as context:

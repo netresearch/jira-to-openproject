@@ -85,7 +85,9 @@ class TestIssueTypeMigration(unittest.TestCase):
             "10001": 2,  # Task
         }
 
-    def _mock_file_content(self, path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> MagicMock:
+    def _mock_file_content(
+        self, path: Path, mode: str = "r", *args: Any, **kwargs: Any
+    ) -> MagicMock:
         """Mock file content for different files based on path."""
         mock = mock_open()
 
@@ -102,10 +104,12 @@ class TestIssueTypeMigration(unittest.TestCase):
         elif "issue_type_id_mapping.json" in str(path):
             file_mock.read.return_value = json.dumps({"10000": 1, "10001": 2})
         elif "work_package_types_created.json" in str(path):
-            file_mock.read.return_value = json.dumps({
-                "created": [{"id": 3, "name": "Epic", "color": "#9B59B6"}],
-                "errors": [],
-            })
+            file_mock.read.return_value = json.dumps(
+                {
+                    "created": [{"id": 3, "name": "Epic", "color": "#9B59B6"}],
+                    "errors": [],
+                }
+            )
         else:
             file_mock.read.return_value = "{}"
 
@@ -133,7 +137,9 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_get_path.return_value = Path("/tmp/test_data")
 
         mock_op_instance = mock_op_client.return_value
-        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+        mock_migration_config.get.side_effect = lambda key, default=None: (
+            True if key == "force" else default
+        )
 
         # Create instance and call method
         migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
@@ -168,10 +174,14 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Configure the mocks
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
-        mock_op_instance.get_work_package_types.return_value = self.op_work_package_types
+        mock_op_instance.get_work_package_types.return_value = (
+            self.op_work_package_types
+        )
         mock_get_path.return_value = Path("/tmp/test_data")
 
-        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+        mock_migration_config.get.side_effect = lambda key, default=None: (
+            True if key == "force" else default
+        )
 
         # Create instance and call method
         migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
@@ -222,7 +232,10 @@ class TestIssueTypeMigration(unittest.TestCase):
 
         # Mock the openproject client execute_query (this is called by
         # check_existing_work_package_types and migrate_issue_types_via_rails)
-        mock_op_instance.execute_query.return_value = {"status": "success", "output": "===JSON_WRITE_SUCCESS==="}
+        mock_op_instance.execute_query.return_value = {
+            "status": "success",
+            "output": "===JSON_WRITE_SUCCESS===",
+        }
 
         # Mock the file transfer methods that are actually called
         mock_op_instance.transfer_file_to_container.return_value = True
@@ -230,17 +243,34 @@ class TestIssueTypeMigration(unittest.TestCase):
 
         # Mock subprocess run for any command execution
         mock_subprocess_run.return_value.returncode = 0
-        mock_subprocess_run.return_value.stdout = json.dumps([
-            {"id": 1, "name": "Bug", "color": "#FF0000"},
-            {"id": 2, "name": "Task", "color": "#00FF00"}
-        ])
+        mock_subprocess_run.return_value.stdout = json.dumps(
+            [
+                {"id": 1, "name": "Bug", "color": "#FF0000"},
+                {"id": 2, "name": "Task", "color": "#00FF00"},
+            ]
+        )
         mock_subprocess_run.return_value.stderr = ""
 
         # Create the migration instance with mocked components
-        with patch.object(Path, "open", mock_open(read_data=json.dumps({
-                "created": [{"id": 3, "name": "Epic", "color": "#9B59B6", "jira_type_name": "Epic"}],
-                "errors": [],
-            }))):
+        with patch.object(
+            Path,
+            "open",
+            mock_open(
+                read_data=json.dumps(
+                    {
+                        "created": [
+                            {
+                                "id": 3,
+                                "name": "Epic",
+                                "color": "#9B59B6",
+                                "jira_type_name": "Epic",
+                            }
+                        ],
+                        "errors": [],
+                    }
+                )
+            ),
+        ):
 
             migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
 
@@ -289,7 +319,9 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
-        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+        mock_migration_config.get.side_effect = lambda key, default=None: (
+            True if key == "force" else default
+        )
 
         # Configure the mock file to return test data
         mock_file.side_effect = self._mock_file_content
@@ -351,7 +383,9 @@ class TestIssueTypeMigration(unittest.TestCase):
             {"id": 2, "name": "Task"},
         ]
         mock_get_path.return_value = Path("/tmp/test_data")
-        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+        mock_migration_config.get.side_effect = lambda key, default=None: (
+            True if key == "force" else default
+        )
 
         # Configure exists and file mocks
         mock_exists.return_value = True
@@ -363,7 +397,11 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Pre-populate with test data
         migration.issue_type_mapping = {
             "Bug": {"jira_id": "1", "openproject_id": None, "openproject_name": "Bug"},
-            "Task": {"jira_id": "2", "openproject_id": None, "openproject_name": "Task"},
+            "Task": {
+                "jira_id": "2",
+                "openproject_id": None,
+                "openproject_name": "Task",
+            },
         }
 
         # Update mapping
@@ -393,7 +431,9 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Configure the mocks
         mock_jira_instance = mock_jira_client.return_value
         mock_get_path.return_value = Path("/tmp/test_data")
-        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
+        mock_migration_config.get.side_effect = lambda key, default=None: (
+            True if key == "force" else default
+        )
 
         # Create instance
         migration = IssueTypeMigration(mock_jira_instance, mock_op_client.return_value)

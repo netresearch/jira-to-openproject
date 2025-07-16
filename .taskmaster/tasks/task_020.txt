@@ -61,4 +61,3 @@ Develop transformation logic that:
 4. Maintains all temporal information (date, duration, timestamps)
 5. Preserves associations with work packages, users, and projects
 6. Transforms comments and descriptions with proper formatting
-

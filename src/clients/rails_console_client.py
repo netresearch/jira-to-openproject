@@ -179,7 +179,12 @@ class RailsConsoleClient:
             time.sleep(0.2)
 
             # Send Ctrl+C to abort any pending operation
-            subprocess.run(["tmux", "send-keys", "-t", target, "C-c"], capture_output=True, text=True, check=True)
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, "C-c"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
             time.sleep(0.2)
 
             logger.debug("Console state stabilized")
@@ -200,7 +205,9 @@ class RailsConsoleClient:
         """
         return command.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
 
-    def execute(self, command: str, timeout: int | None = None, suppress_output: bool = False) -> str:
+    def execute(
+        self, command: str, timeout: int | None = None, suppress_output: bool = False
+    ) -> str:
         """Execute a command in the Rails console and wait for completion.
 
         Args:
@@ -260,7 +267,14 @@ class RailsConsoleClient:
         end
         """
 
-        wrapped_command = template % (start_marker_cmd, command, result_print_line, end_marker_cmd, error_marker_cmd, end_marker_cmd)
+        wrapped_command = template % (
+            start_marker_cmd,
+            command,
+            result_print_line,
+            end_marker_cmd,
+            error_marker_cmd,
+            end_marker_cmd,
+        )
 
         command_path = self.file_manager.join(debug_session_dir, "ruby_command.rb")
         with command_path.open("w") as f:
@@ -283,11 +297,15 @@ class RailsConsoleClient:
             # we can try to parse what's available
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
-                logger.error("Console appears ready despite missing start marker - attempting to extract output")
+                logger.error(
+                    "Console appears ready despite missing start marker - attempting to extract output"
+                )
 
                 # Look for any output that resembles our command's expected output
                 if "load" in tmux_output:
-                    logger.info("Found load command execution in output, proceeding with extraction")
+                    logger.info(
+                        "Found load command execution in output, proceeding with extraction"
+                    )
 
                     # Try to find the result in the output directly
                     return tmux_output
@@ -306,7 +324,9 @@ class RailsConsoleClient:
             # Check if the console is in a ready state, which indicates the command may have completed
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
-                logger.error("Console appears ready despite missing end marker - attempting to extract output")
+                logger.error(
+                    "Console appears ready despite missing end marker - attempting to extract output"
+                )
 
                 # Try to find the result in the output - it usually appears between the start marker and the prompt
                 # Look for either a nil, a hash output like {:key=>value}, or other standard Ruby output formats
@@ -321,7 +341,10 @@ class RailsConsoleClient:
                     filtered_lines.append(line)
 
                 if filtered_lines:
-                    logger.info("Extracted %s lines of output despite missing end marker", len(filtered_lines))
+                    logger.info(
+                        "Extracted %s lines of output despite missing end marker",
+                        len(filtered_lines),
+                    )
                     return "\n".join(filtered_lines)
                 # If we can't extract useful output, we'll have to fail
                 msg = f"End marker '{end_marker_out}' not found in output and no clear output could be extracted"
@@ -390,7 +413,9 @@ class RailsConsoleClient:
         last_line = non_empty_lines[-1]
         logger.debug("Last line: '%s'", last_line)
 
-        if any(pattern in last_line for pattern in ready_patterns) or last_line.endswith(">"):
+        if any(
+            pattern in last_line for pattern in ready_patterns
+        ) or last_line.endswith(">"):
             result["prompt"] = last_line
             result["state"] = "ready"
             result["ready"] = True
@@ -408,7 +433,9 @@ class RailsConsoleClient:
 
         return result
 
-    def _wait_for_console_output(self, target: str, marker: str, timeout: int) -> tuple[bool, str]:
+    def _wait_for_console_output(
+        self, target: str, marker: str, timeout: int
+    ) -> tuple[bool, str]:
         """Wait for specific marker to appear in the console output.
 
         Args:
@@ -492,7 +519,10 @@ class RailsConsoleClient:
                     return True
 
                 if console_state["state"] in ["awaiting_input", "multiline_string"]:
-                    logger.debug("Console in %s state, sending Ctrl+C to reset", console_state["state"])
+                    logger.debug(
+                        "Console in %s state, sending Ctrl+C to reset",
+                        console_state["state"],
+                    )
                     subprocess.run(
                         ["tmux", "send-keys", "-t", target, "C-c"],
                         capture_output=True,
@@ -503,11 +533,17 @@ class RailsConsoleClient:
                     attempts += 1
 
                     if attempts >= 2:
-                        logger.debug("Multiple Ctrl+C attempts failed, trying full stabilization")
+                        logger.debug(
+                            "Multiple Ctrl+C attempts failed, trying full stabilization"
+                        )
                         self._stabilize_console()
                         attempts = 0
 
-                logger.debug("Waiting %ss for ready state, current: %s", poll_interval, console_state["state"])
+                logger.debug(
+                    "Waiting %ss for ready state, current: %s",
+                    poll_interval,
+                    console_state["state"],
+                )
                 time.sleep(poll_interval)
                 poll_interval *= 2
             except subprocess.SubprocessError as e:
@@ -580,7 +616,9 @@ class RailsConsoleClient:
                 check=True,
             )
 
-            found_end, last_output = self._wait_for_console_output(target, end_marker, timeout)
+            found_end, last_output = self._wait_for_console_output(
+                target, end_marker, timeout
+            )
 
             if not found_end:
                 msg = "End marker not found in tmux output"
@@ -588,11 +626,19 @@ class RailsConsoleClient:
 
             # drop all return lines from last_output
             last_output = "\n".join(
-                [line.strip() for line in last_output.split("\n") if not line.strip().startswith("=> ")],
+                [
+                    line.strip()
+                    for line in last_output.split("\n")
+                    if not line.strip().startswith("=> ")
+                ],
             )
             # drop all lines irb(main):30486>
             last_output = "\n".join(
-                [line.strip() for line in last_output.split("\n") if not line.strip().startswith("irb(main):")],
+                [
+                    line.strip()
+                    for line in last_output.split("\n")
+                    if not line.strip().startswith("irb(main):")
+                ],
             )
             # extract lines between markers
             start_idx = last_output.find(start_marker) + len(start_marker)

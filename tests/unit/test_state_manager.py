@@ -51,7 +51,7 @@ class TestStateManagerBasics:
             openproject_entity_type="project",
             openproject_entity_id="456",
             migration_component="ProjectMigration",
-            metadata={"test": "data"}
+            metadata={"test": "data"},
         )
 
         # Verify mapping ID is returned
@@ -78,7 +78,7 @@ class TestStateManagerBasics:
             jira_entity_id="ISSUE-123",
             openproject_entity_type="work_package",
             openproject_entity_id="789",
-            migration_component="WorkPackageMigration"
+            migration_component="WorkPackageMigration",
         )
 
         # Retrieve the mapping
@@ -100,7 +100,7 @@ class TestStateManagerBasics:
             entity_type="projects",
             operation_type="create",
             entity_count=10,
-            user="test_user"
+            user="test_user",
         )
 
         # Verify record ID is returned
@@ -122,14 +122,12 @@ class TestStateManagerBasics:
             migration_component="TestMigration",
             entity_type="projects",
             operation_type="create",
-            entity_count=10
+            entity_count=10,
         )
 
         # Complete the record
         state_manager.complete_migration_record(
-            record_id=record_id,
-            success_count=8,
-            error_count=2
+            record_id=record_id, success_count=8, error_count=2
         )
 
         # Verify record is updated
@@ -146,13 +144,12 @@ class TestStateManagerBasics:
             jira_entity_id="PROJ1",
             openproject_entity_type="project",
             openproject_entity_id="123",
-            migration_component="ProjectMigration"
+            migration_component="ProjectMigration",
         )
 
         # Create snapshot
         snapshot_id = state_manager.create_state_snapshot(
-            description="Test snapshot",
-            user="test_user"
+            description="Test snapshot", user="test_user"
         )
 
         # Verify snapshot ID is returned
@@ -173,7 +170,7 @@ class TestStateManagerBasics:
             jira_entity_id="PROJ1",
             openproject_entity_type="project",
             openproject_entity_id="123",
-            migration_component="ProjectMigration"
+            migration_component="ProjectMigration",
         )
 
         # Save current state
@@ -198,7 +195,7 @@ class TestStateManagerBasics:
             jira_entity_id="PROJ1",
             openproject_entity_type="project",
             openproject_entity_id="123",
-            migration_component="ProjectMigration"
+            migration_component="ProjectMigration",
         )
 
         state_manager.register_entity_mapping(
@@ -206,7 +203,7 @@ class TestStateManagerBasics:
             jira_entity_id="ISSUE-1",
             openproject_entity_type="work_package",
             openproject_entity_id="789",
-            migration_component="WorkPackageMigration"
+            migration_component="WorkPackageMigration",
         )
 
         # Get statistics
@@ -253,9 +250,7 @@ class TestStateManagerBasics:
         # Test completing non-existent migration record
         with patch.object(state_manager.logger, "warning") as mock_warning:
             state_manager.complete_migration_record(
-                record_id="nonexistent",
-                success_count=5,
-                error_count=0
+                record_id="nonexistent", success_count=5, error_count=0
             )
             mock_warning.assert_called_once()
 

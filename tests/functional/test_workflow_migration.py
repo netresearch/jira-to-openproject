@@ -143,7 +143,9 @@ class TestWorkflowMigration(unittest.TestCase):
         """Test the extract_jira_statuses method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
-        mock_jira_instance.jira._session.get.return_value.json.return_value = self.jira_statuses
+        mock_jira_instance.jira._session.get.return_value.json.return_value = (
+            self.jira_statuses
+        )
         mock_jira_instance.jira._session.get.return_value.raise_for_status = MagicMock()
         mock_jira_instance.base_url = "https://jira.local"
 
@@ -156,7 +158,9 @@ class TestWorkflowMigration(unittest.TestCase):
 
         # Assertions
         assert result == self.jira_statuses
-        mock_jira_instance.jira._session.get.assert_called_once_with("https://jira.local/rest/api/2/status")
+        mock_jira_instance.jira._session.get.assert_called_once_with(
+            "https://jira.local/rest/api/2/status"
+        )
         mock_file.assert_called()
         mock_file().write.assert_called()
 
@@ -280,7 +284,9 @@ class TestWorkflowMigration(unittest.TestCase):
         # Assertions
         assert result["id"] == 4
         assert result["name"] == "Custom Status"
-        mock_op_instance.create_status.assert_called_with(name="Custom Status", color="#6C8CD5", is_closed=False)
+        mock_op_instance.create_status.assert_called_with(
+            name="Custom Status", color="#6C8CD5", is_closed=False
+        )
 
     @patch("src.migrations.workflow_migration.JiraClient")
     @patch("src.migrations.workflow_migration.OpenProjectClient")

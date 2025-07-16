@@ -99,7 +99,8 @@ class LinkTypeMigration(BaseMigration):
             self.extract_jira_link_types()
             # Note: We no longer try to extract from OpenProject API since it's not supported
             self._save_to_json(
-                self.op_link_types, Path("openproject_relation_types.json"),
+                self.op_link_types,
+                Path("openproject_relation_types.json"),
             )
 
             # 2. Create mapping
@@ -244,7 +245,8 @@ class LinkTypeMigration(BaseMigration):
                 with filepath.open() as f:
                     self.jira_link_types = json.load(f)
                 self.logger.info(
-                    "Loaded %s Jira link types from cache", len(self.jira_link_types),
+                    "Loaded %s Jira link types from cache",
+                    len(self.jira_link_types),
                 )
                 return self.jira_link_types
             except Exception as e:
@@ -255,7 +257,8 @@ class LinkTypeMigration(BaseMigration):
             self.jira_link_types = self.jira_client.get_issue_link_types()
             if self.jira_link_types is not None:
                 self.logger.info(
-                    "Extracted %s link types from Jira", len(self.jira_link_types),
+                    "Extracted %s link types from Jira",
+                    len(self.jira_link_types),
                 )
                 self._save_to_json(self.jira_link_types, Path("jira_link_types.json"))
                 return self.jira_link_types
@@ -290,7 +293,8 @@ class LinkTypeMigration(BaseMigration):
                 with filepath.open() as f:
                     self.link_type_mapping = json.load(f)
                 self.logger.info(
-                    "Loaded %s link type mappings", len(self.link_type_mapping),
+                    "Loaded %s link type mappings",
+                    len(self.link_type_mapping),
                 )
                 # Optionally load and log analysis too
                 with analysis_filepath.open() as f:
@@ -315,7 +319,8 @@ class LinkTypeMigration(BaseMigration):
 
         # Create lookup dictionaries for OpenProject relation types
         op_types_by_name = {
-            (op_type.get("name") or "").lower(): op_type for op_type in self.op_link_types
+            (op_type.get("name") or "").lower(): op_type
+            for op_type in self.op_link_types
         }
         op_types_by_reverse_name = {
             op_type.get("reverseName", "").lower(): op_type
@@ -331,11 +336,13 @@ class LinkTypeMigration(BaseMigration):
                 with user_mapping_path.open() as f:
                     user_mappings = json.load(f)
                 self.logger.info(
-                    "Loaded %s user-defined link type mappings", len(user_mappings),
+                    "Loaded %s user-defined link type mappings",
+                    len(user_mappings),
                 )
             except Exception as e:
                 self.logger.warning(
-                    "Could not load user-defined link type mappings: %s", e,
+                    "Could not load user-defined link type mappings: %s",
+                    e,
                 )
 
         for jira_type in self.jira_link_types:
@@ -443,9 +450,7 @@ class LinkTypeMigration(BaseMigration):
             for op_type in self.op_link_types:
                 op_name = (op_type.get("name") or "").lower()
                 jira_outward_lower = (jira_outward or "").lower()
-                if (jira_outward_lower in op_name) or (
-                    op_name in jira_outward_lower
-                ):
+                if (jira_outward_lower in op_name) or (op_name in jira_outward_lower):
                     match_info.update(
                         {
                             "openproject_id": str(op_type["id"]),
@@ -548,7 +553,8 @@ class LinkTypeMigration(BaseMigration):
         unmapped_types = []
         for jira_id, type_data in self.link_type_mapping.items():
             if type_data.get("matched_by") == "none" or type_data.get(
-                "create_custom_field", False,
+                "create_custom_field",
+                False,
             ):
                 unmapped_types.append(
                     {
@@ -582,7 +588,10 @@ class LinkTypeMigration(BaseMigration):
         return analysis
 
     def _suggest_relation_types(
-        self, jira_name: str, jira_outward: str, jira_inward: str,
+        self,
+        jira_name: str,
+        jira_outward: str,
+        jira_inward: str,
     ) -> list[dict[str, Any]]:
         """Suggest appropriate OpenProject relation types for a given Jira link type.
 
@@ -599,7 +608,8 @@ class LinkTypeMigration(BaseMigration):
         return []
 
     def generate_user_mapping_template(
-        self, output_path: str | None = None,
+        self,
+        output_path: str | None = None,
     ) -> str:
         """Generate a template for user-defined mappings.
 
@@ -646,7 +656,8 @@ class LinkTypeMigration(BaseMigration):
 
         # Initialize a CustomFieldMigration instance
         custom_field_migration = CustomFieldMigration(
-            jira_client=self.jira_client, op_client=self.op_client,
+            jira_client=self.jira_client,
+            op_client=self.op_client,
         )
 
         if not unmapped_link_types:
@@ -684,7 +695,9 @@ class LinkTypeMigration(BaseMigration):
 
                 if field_success:
                     # Verify the field was actually created by refreshing and looking it up
-                    op_custom_fields = custom_field_migration.extract_openproject_custom_fields()
+                    op_custom_fields = (
+                        custom_field_migration.extract_openproject_custom_fields()
+                    )
                     field_name = f"Link: {mapping['jira_name']}".lower()
 
                     # Create a dictionary of OpenProject custom fields by name for easy lookup
@@ -701,7 +714,9 @@ class LinkTypeMigration(BaseMigration):
                             {
                                 "openproject_id": str(op_field.get("id")),
                                 "openproject_name": op_field.get("name"),
-                                "openproject_type": op_field.get("field_format", "text"),
+                                "openproject_type": op_field.get(
+                                    "field_format", "text"
+                                ),
                                 "matched_by": "custom_field",
                                 "status": "mapped",
                                 "custom_field_id": op_field.get("id"),
@@ -710,37 +725,44 @@ class LinkTypeMigration(BaseMigration):
                         success_count += 1
                         self.logger.debug(
                             "Successfully created custom field for link type '%s' (ID: %s)",
-                            mapping['jira_name'], jira_id
+                            mapping["jira_name"],
+                            jira_id,
                         )
                     else:
                         # Field creation reported success but field not found
                         error_msg = f"Custom field creation reported success but field not found: {field_name}"
-                        error_details.append({
-                            "jira_id": jira_id,
-                            "jira_name": mapping['jira_name'],
-                            "error": error_msg
-                        })
+                        error_details.append(
+                            {
+                                "jira_id": jira_id,
+                                "jira_name": mapping["jira_name"],
+                                "error": error_msg,
+                            }
+                        )
                         failure_count += 1
                         self.logger.warning(error_msg)
                 else:
                     # Field creation failed
                     error_msg = f"Failed to create custom field for link type: {mapping['jira_name']}"
-                    error_details.append({
-                        "jira_id": jira_id,
-                        "jira_name": mapping['jira_name'],
-                        "error": error_msg
-                    })
+                    error_details.append(
+                        {
+                            "jira_id": jira_id,
+                            "jira_name": mapping["jira_name"],
+                            "error": error_msg,
+                        }
+                    )
                     failure_count += 1
                     self.logger.warning(error_msg)
 
             except Exception as e:
                 # Catch any unexpected errors during field creation
                 error_msg = f"Exception while creating custom field for link type '{mapping['jira_name']}': {e}"
-                error_details.append({
-                    "jira_id": jira_id,
-                    "jira_name": mapping['jira_name'],
-                    "error": error_msg
-                })
+                error_details.append(
+                    {
+                        "jira_id": jira_id,
+                        "jira_name": mapping["jira_name"],
+                        "error": error_msg,
+                    }
+                )
                 failure_count += 1
                 self.logger.error(error_msg, exc_info=True)
 

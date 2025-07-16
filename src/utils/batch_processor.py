@@ -5,13 +5,14 @@ This module provides intelligent batch processing with adaptive sizing,
 parallel execution, memory monitoring, and performance optimization.
 """
 
-import time
 import logging
-from enum import Enum
-from typing import Any, List, Callable, Dict, Optional
-from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional
+from collections.abc import Callable
 
 try:
     import psutil
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 class BatchStrategy(Enum):
     """Batch processing strategies."""
+
     SEQUENTIAL = "sequential"
     PARALLEL = "parallel"
     MEMORY_AWARE = "memory_aware"
@@ -33,6 +35,7 @@ class BatchStrategy(Enum):
 @dataclass
 class BatchConfig:
     """Configuration for batch processing."""
+
     base_batch_size: int = 100
     max_batch_size: int = 1000
     min_batch_size: int = 10
@@ -49,6 +52,7 @@ class BatchConfig:
 @dataclass
 class BatchMetrics:
     """Metrics for batch processing."""
+
     total_items: int = 0
     processed_items: int = 0
     failed_items: int = 0
@@ -63,7 +67,7 @@ class BatchMetrics:
     memory_usage_mb: float = 0.0
     peak_memory_mb: float = 0.0
     batch_size_adjustments: int = 0
-    performance_history: List[Dict[str, float]] = field(default_factory=list)
+    performance_history: list[dict[str, float]] = field(default_factory=list)
 
     def update_performance(self, batch_time: float, batch_size: int):
         """Update performance metrics."""
@@ -72,7 +76,9 @@ class BatchMetrics:
 
         # Calculate average batch time
         if self.completed_batches > 0:
-            total_time = sum(p.get("time", 0) for p in self.performance_history) + batch_time
+            total_time = (
+                sum(p.get("time", 0) for p in self.performance_history) + batch_time
+            )
             self.average_batch_time = total_time / self.completed_batches
 
         # Calculate items per second
@@ -87,11 +93,13 @@ class BatchMetrics:
             self.peak_memory_mb = max(self.peak_memory_mb, memory_mb)
 
         # Add to performance history
-        self.performance_history.append({
-            "time": batch_time,
-            "size": batch_size,
-            "throughput": batch_size / batch_time if batch_time > 0 else 0
-        })
+        self.performance_history.append(
+            {
+                "time": batch_time,
+                "size": batch_size,
+                "throughput": batch_size / batch_time if batch_time > 0 else 0,
+            }
+        )
 
         # Limit history size
         if len(self.performance_history) > 100:
@@ -101,11 +109,12 @@ class BatchMetrics:
 @dataclass
 class BatchOperation:
     """Represents a batch operation."""
+
     operation_id: str
-    items: List[Any]
-    processor_func: Callable[[List[Any]], List[Any]]
+    items: list[Any]
+    processor_func: Callable[[list[Any]], list[Any]]
     strategy: BatchStrategy
-    batch_size: Optional[int] = None
+    batch_size: int | None = None
 
 
 class BatchProcessor:
@@ -114,13 +123,15 @@ class BatchProcessor:
     def __init__(self, config: BatchConfig):
         self.config = config
         self.metrics = BatchMetrics()
-        self._executor: Optional[ThreadPoolExecutor] = None
-        self._performance_history: List[tuple] = []
+        self._executor: ThreadPoolExecutor | None = None
+        self._performance_history: list[tuple] = []
         self._lock = threading.Lock()
 
     def __enter__(self):
         """Enter context manager."""
-        self._executor = ThreadPoolExecutor(max_workers=self.config.max_parallel_workers)
+        self._executor = ThreadPoolExecutor(
+            max_workers=self.config.max_parallel_workers
+        )
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -131,12 +142,12 @@ class BatchProcessor:
 
     def process_items(
         self,
-        items: List[Any],
-        processor_func: Callable[[List[Any]], List[Any]],
+        items: list[Any],
+        processor_func: Callable[[list[Any]], list[Any]],
         strategy: BatchStrategy = BatchStrategy.SEQUENTIAL,
-        batch_size: Optional[int] = None,
-        operation_id: Optional[str] = None
-    ) -> List[Any]:
+        batch_size: int | None = None,
+        operation_id: str | None = None,
+    ) -> list[Any]:
         """
         Process items using the specified batch strategy.
 
@@ -162,7 +173,9 @@ class BatchProcessor:
 
         logger.info(
             "Starting batch processing: %d items, strategy=%s, operation_id=%s",
-            len(items), strategy.value, operation_id
+            len(items),
+            strategy.value,
+            operation_id,
         )
 
         try:
@@ -177,13 +190,19 @@ class BatchProcessor:
 
             # Process based on strategy
             if strategy == BatchStrategy.SEQUENTIAL:
-                results = self._process_sequential(batches, processor_func, operation_id)
+                results = self._process_sequential(
+                    batches, processor_func, operation_id
+                )
             elif strategy == BatchStrategy.PARALLEL:
                 results = self._process_parallel(batches, processor_func, operation_id)
             elif strategy == BatchStrategy.MEMORY_AWARE:
-                results = self._process_memory_aware(batches, processor_func, operation_id)
+                results = self._process_memory_aware(
+                    batches, processor_func, operation_id
+                )
             elif strategy == BatchStrategy.PERFORMANCE_ADAPTIVE:
-                results = self._process_performance_adaptive(batches, processor_func, operation_id)
+                results = self._process_performance_adaptive(
+                    batches, processor_func, operation_id
+                )
             elif strategy == BatchStrategy.HYBRID:
                 results = self._process_hybrid(batches, processor_func, operation_id)
             else:
@@ -191,15 +210,21 @@ class BatchProcessor:
 
             # Finalize metrics
             self.metrics.end_time = time.time()
-            self.metrics.total_duration = self.metrics.end_time - self.metrics.start_time
+            self.metrics.total_duration = (
+                self.metrics.end_time - self.metrics.start_time
+            )
 
             if self.metrics.total_duration > 0:
-                self.metrics.items_per_second = self.metrics.processed_items / self.metrics.total_duration
+                self.metrics.items_per_second = (
+                    self.metrics.processed_items / self.metrics.total_duration
+                )
 
             logger.info(
                 "Completed batch processing: %d/%d items processed, %d batches, %.2fs",
-                self.metrics.processed_items, self.metrics.total_items,
-                self.metrics.completed_batches, self.metrics.total_duration
+                self.metrics.processed_items,
+                self.metrics.total_items,
+                self.metrics.completed_batches,
+                self.metrics.total_duration,
             )
 
             return results
@@ -208,13 +233,18 @@ class BatchProcessor:
             logger.error("Batch processing failed: %s", e)
             raise
 
-    def _calculate_optimal_batch_size(self, item_count: int, strategy: BatchStrategy) -> int:
+    def _calculate_optimal_batch_size(
+        self, item_count: int, strategy: BatchStrategy
+    ) -> int:
         """Calculate optimal batch size based on item count and strategy."""
         if strategy == BatchStrategy.PARALLEL:
             # For parallel processing, balance between workers
             return min(
-                max(item_count // self.config.max_parallel_workers, self.config.min_batch_size),
-                self.config.max_batch_size
+                max(
+                    item_count // self.config.max_parallel_workers,
+                    self.config.min_batch_size,
+                ),
+                self.config.max_batch_size,
             )
         elif strategy == BatchStrategy.MEMORY_AWARE:
             # For memory-aware processing, start conservative
@@ -226,20 +256,20 @@ class BatchProcessor:
             # Default to base batch size
             return min(self.config.base_batch_size, item_count)
 
-    def _create_batches(self, items: List[Any], batch_size: int) -> List[List[Any]]:
+    def _create_batches(self, items: list[Any], batch_size: int) -> list[list[Any]]:
         """Create batches from items."""
         batches = []
         for i in range(0, len(items), batch_size):
-            batch = items[i:i + batch_size]
+            batch = items[i : i + batch_size]
             batches.append(batch)
         return batches
 
     def _process_sequential(
         self,
-        batches: List[List[Any]],
-        processor_func: Callable[[List[Any]], List[Any]],
-        operation_id: str
-    ) -> List[Any]:
+        batches: list[list[Any]],
+        processor_func: Callable[[list[Any]], list[Any]],
+        operation_id: str,
+    ) -> list[Any]:
         """Process batches sequentially."""
         results = []
 
@@ -247,13 +277,17 @@ class BatchProcessor:
             batch_start = time.time()
 
             try:
-                batch_result = self._process_single_batch(batch, processor_func, f"{operation_id}_batch_{i}")
+                batch_result = self._process_single_batch(
+                    batch, processor_func, f"{operation_id}_batch_{i}"
+                )
                 results.extend(batch_result)
 
                 batch_time = time.time() - batch_start
                 self.metrics.update_performance(batch_time, len(batch))
 
-                logger.debug("Completed batch %d/%d (size: %d)", i + 1, len(batches), len(batch))
+                logger.debug(
+                    "Completed batch %d/%d (size: %d)", i + 1, len(batches), len(batch)
+                )
 
             except Exception as e:
                 logger.error("Batch %d failed: %s", i + 1, e)
@@ -265,10 +299,10 @@ class BatchProcessor:
 
     def _process_parallel(
         self,
-        batches: List[List[Any]],
-        processor_func: Callable[[List[Any]], List[Any]],
-        operation_id: str
-    ) -> List[Any]:
+        batches: list[list[Any]],
+        processor_func: Callable[[list[Any]], list[Any]],
+        operation_id: str,
+    ) -> list[Any]:
         """Process batches in parallel."""
         if not self._executor:
             raise RuntimeError("Executor not initialized. Use context manager.")
@@ -278,20 +312,25 @@ class BatchProcessor:
 
         # Submit all batches
         for i, batch in enumerate(batches):
-            future = self._executor.submit(
-                processor_func,
-                batch
-            )
+            future = self._executor.submit(processor_func, batch)
             future_to_batch[future] = (i, batch)
 
         # Collect results
         try:
-            for future in as_completed(future_to_batch, timeout=self.config.timeout_seconds):
+            for future in as_completed(
+                future_to_batch, timeout=self.config.timeout_seconds
+            ):
                 batch_index, batch = future_to_batch[future]
 
                 try:
-                    logger.debug("Waiting for batch %d with timeout %d seconds", batch_index + 1, self.config.timeout_seconds)
-                    batch_result = future.result()  # No timeout here since as_completed handles it
+                    logger.debug(
+                        "Waiting for batch %d with timeout %d seconds",
+                        batch_index + 1,
+                        self.config.timeout_seconds,
+                    )
+                    batch_result = (
+                        future.result()
+                    )  # No timeout here since as_completed handles it
 
                     # Ensure result is a list
                     if batch_result is None:
@@ -305,7 +344,9 @@ class BatchProcessor:
                     self.metrics.completed_batches += 1
                     self.metrics.processed_items += len(batch)
 
-                    logger.debug("Completed batch %d (size: %d)", batch_index + 1, len(batch))
+                    logger.debug(
+                        "Completed batch %d (size: %d)", batch_index + 1, len(batch)
+                    )
 
                 except Exception as e:
                     logger.error("Batch %d failed: %s", batch_index + 1, e)
@@ -320,16 +361,18 @@ class BatchProcessor:
                 if not future.done():
                     self.metrics.failed_batches += 1
                     self.metrics.failed_items += len(batch)
-            raise RuntimeError(f"Batch processing timed out after {self.config.timeout_seconds} seconds") from e
+            raise RuntimeError(
+                f"Batch processing timed out after {self.config.timeout_seconds} seconds"
+            ) from e
 
         return results
 
     def _process_memory_aware(
         self,
-        batches: List[List[Any]],
-        processor_func: Callable[[List[Any]], List[Any]],
-        operation_id: str
-    ) -> List[Any]:
+        batches: list[list[Any]],
+        processor_func: Callable[[list[Any]], list[Any]],
+        operation_id: str,
+    ) -> list[Any]:
         """Process batches with memory awareness."""
         results = []
         current_batch_size = len(batches[0]) if batches else self.config.base_batch_size
@@ -346,24 +389,28 @@ class BatchProcessor:
                 if memory_percent > self.config.memory_threshold_percent:
                     logger.warning(
                         "Memory usage high: %.1f%% (%.1f MB), reducing batch size",
-                        memory_percent, memory_mb
+                        memory_percent,
+                        memory_mb,
                     )
                     # Reduce batch size for memory pressure
                     if current_batch_size > self.config.min_batch_size:
                         current_batch_size = max(
-                            self.config.min_batch_size,
-                            int(current_batch_size * 0.8)
+                            self.config.min_batch_size, int(current_batch_size * 0.8)
                         )
                         self.metrics.batch_size_adjustments += 1
 
             try:
-                batch_result = self._process_single_batch(batch, processor_func, f"{operation_id}_batch_{i}")
+                batch_result = self._process_single_batch(
+                    batch, processor_func, f"{operation_id}_batch_{i}"
+                )
                 results.extend(batch_result)
 
                 batch_time = time.time() - batch_start
                 self.metrics.update_performance(batch_time, len(batch))
 
-                logger.debug("Completed batch %d/%d (size: %d)", i + 1, len(batches), len(batch))
+                logger.debug(
+                    "Completed batch %d/%d (size: %d)", i + 1, len(batches), len(batch)
+                )
 
             except Exception as e:
                 logger.error("Batch %d failed: %s", i + 1, e)
@@ -375,10 +422,10 @@ class BatchProcessor:
 
     def _process_performance_adaptive(
         self,
-        batches: List[List[Any]],
-        processor_func: Callable[[List[Any]], List[Any]],
-        operation_id: str
-    ) -> List[Any]:
+        batches: list[list[Any]],
+        processor_func: Callable[[list[Any]], list[Any]],
+        operation_id: str,
+    ) -> list[Any]:
         """Process batches with performance-based adaptive sizing."""
         results = []
         current_batch_size = len(batches[0]) if batches else self.config.base_batch_size
@@ -387,7 +434,9 @@ class BatchProcessor:
             batch_start = time.time()
 
             try:
-                batch_result = self._process_single_batch(batch, processor_func, f"{operation_id}_batch_{i}")
+                batch_result = self._process_single_batch(
+                    batch, processor_func, f"{operation_id}_batch_{i}"
+                )
                 results.extend(batch_result)
 
                 batch_time = time.time() - batch_start
@@ -400,23 +449,28 @@ class BatchProcessor:
 
                 # Adjust batch size based on performance
                 if i < len(batches) - 1 and len(self._performance_history) >= 3:
-                    new_batch_size = self._calculate_adaptive_batch_size(current_batch_size, batch_time)
+                    new_batch_size = self._calculate_adaptive_batch_size(
+                        current_batch_size, batch_time
+                    )
 
                     if new_batch_size != current_batch_size:
                         logger.debug(
                             "Adapting batch size from %d to %d based on performance",
-                            current_batch_size, new_batch_size
+                            current_batch_size,
+                            new_batch_size,
                         )
                         current_batch_size = new_batch_size
                         self.metrics.batch_size_adjustments += 1
 
                         # Recreate remaining batches with new size
                         remaining_items = []
-                        for remaining_batch in batches[i + 1:]:
+                        for remaining_batch in batches[i + 1 :]:
                             remaining_items.extend(remaining_batch)
 
-                        new_batches = self._create_batches(remaining_items, new_batch_size)
-                        batches = batches[:i + 1] + new_batches
+                        new_batches = self._create_batches(
+                            remaining_items, new_batch_size
+                        )
+                        batches = batches[: i + 1] + new_batches
 
             except Exception as e:
                 logger.error("Batch %d failed: %s", i + 1, e)
@@ -426,7 +480,9 @@ class BatchProcessor:
 
         return results
 
-    def _calculate_adaptive_batch_size(self, current_size: int, last_batch_time: float) -> int:
+    def _calculate_adaptive_batch_size(
+        self, current_size: int, last_batch_time: float
+    ) -> int:
         """Calculate new batch size based on recent performance."""
         if not self._performance_history:
             return current_size
@@ -441,7 +497,9 @@ class BatchProcessor:
             return current_size
 
         avg_throughput = sum(recent_throughput) / len(recent_throughput)
-        current_throughput = current_size / last_batch_time if last_batch_time > 0 else 0
+        current_throughput = (
+            current_size / last_batch_time if last_batch_time > 0 else 0
+        )
 
         # Adjust based on throughput comparison
         if current_throughput > avg_throughput * 1.1:
@@ -455,14 +513,16 @@ class BatchProcessor:
             new_size = current_size
 
         # Ensure within bounds
-        return max(self.config.min_batch_size, min(new_size, self.config.max_batch_size))
+        return max(
+            self.config.min_batch_size, min(new_size, self.config.max_batch_size)
+        )
 
     def _process_hybrid(
         self,
-        batches: List[List[Any]],
-        processor_func: Callable[[List[Any]], List[Any]],
-        operation_id: str
-    ) -> List[Any]:
+        batches: list[list[Any]],
+        processor_func: Callable[[list[Any]], list[Any]],
+        operation_id: str,
+    ) -> list[Any]:
         """Process batches using hybrid approach (parallel + memory-aware + adaptive)."""
         # Use parallel processing for smaller datasets if executor is available
         if self._executor and len(batches) <= self.config.max_parallel_workers:
@@ -473,16 +533,21 @@ class BatchProcessor:
 
     def _process_single_batch(
         self,
-        batch: List[Any],
-        processor_func: Callable[[List[Any]], List[Any]],
-        batch_id: str
-    ) -> List[Any]:
+        batch: list[Any],
+        processor_func: Callable[[list[Any]], list[Any]],
+        batch_id: str,
+    ) -> list[Any]:
         """Process a single batch with retry logic."""
         last_error = None
 
         for attempt in range(self.config.retry_attempts):
             try:
-                logger.debug("Processing batch %s (attempt %d/%d)", batch_id, attempt + 1, self.config.retry_attempts)
+                logger.debug(
+                    "Processing batch %s (attempt %d/%d)",
+                    batch_id,
+                    attempt + 1,
+                    self.config.retry_attempts,
+                )
 
                 result = processor_func(batch)
 
@@ -497,19 +562,30 @@ class BatchProcessor:
                 last_error = e
 
                 if attempt < self.config.retry_attempts - 1:
-                    backoff_time = self.config.backoff_factor ** attempt
+                    backoff_time = self.config.backoff_factor**attempt
                     logger.warning(
                         "Batch %s failed (attempt %d/%d), retrying in %.1fs: %s",
-                        batch_id, attempt + 1, self.config.retry_attempts, backoff_time, e
+                        batch_id,
+                        attempt + 1,
+                        self.config.retry_attempts,
+                        backoff_time,
+                        e,
                     )
                     time.sleep(backoff_time)
                 else:
-                    logger.error("Batch %s failed after %d attempts: %s", batch_id, self.config.retry_attempts, e)
+                    logger.error(
+                        "Batch %s failed after %d attempts: %s",
+                        batch_id,
+                        self.config.retry_attempts,
+                        e,
+                    )
 
         # All attempts failed
-        raise RuntimeError(f"Batch {batch_id} failed after {self.config.retry_attempts} attempts") from last_error
+        raise RuntimeError(
+            f"Batch {batch_id} failed after {self.config.retry_attempts} attempts"
+        ) from last_error
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """Get current processing metrics."""
         return {
             "total_items": self.metrics.total_items,
@@ -524,7 +600,7 @@ class BatchProcessor:
             "memory_usage_mb": self.metrics.memory_usage_mb,
             "peak_memory_mb": self.metrics.peak_memory_mb,
             "batch_size_adjustments": self.metrics.batch_size_adjustments,
-            "performance_history": self.metrics.performance_history.copy()
+            "performance_history": self.metrics.performance_history.copy(),
         }
 
     def reset_metrics(self):
@@ -532,17 +608,21 @@ class BatchProcessor:
         self.metrics = BatchMetrics()
         self._performance_history = []
 
-    def get_performance_summary(self) -> Dict[str, Any]:
+    def get_performance_summary(self) -> dict[str, Any]:
         """Get performance summary."""
         return {
             "total_items": self.metrics.total_items,
             "processed_items": self.metrics.processed_items,
-            "success_rate": (self.metrics.processed_items / self.metrics.total_items * 100) if self.metrics.total_items > 0 else 0,
+            "success_rate": (
+                (self.metrics.processed_items / self.metrics.total_items * 100)
+                if self.metrics.total_items > 0
+                else 0
+            ),
             "total_duration": self.metrics.total_duration,
             "items_per_second": self.metrics.items_per_second,
             "average_batch_time": self.metrics.average_batch_time,
             "batch_size_adjustments": self.metrics.batch_size_adjustments,
-            "peak_memory_mb": self.metrics.peak_memory_mb
+            "peak_memory_mb": self.metrics.peak_memory_mb,
         }
 
 
@@ -556,7 +636,7 @@ def create_api_batch_processor() -> BatchProcessor:
         max_parallel_workers=4,
         timeout_seconds=30,
         retry_attempts=3,
-        backoff_factor=1.5
+        backoff_factor=1.5,
     )
     return BatchProcessor(config)
 
@@ -570,7 +650,7 @@ def create_database_batch_processor() -> BatchProcessor:
         max_parallel_workers=2,
         timeout_seconds=60,
         retry_attempts=2,
-        backoff_factor=2.0
+        backoff_factor=2.0,
     )
     return BatchProcessor(config)
 
@@ -585,6 +665,6 @@ def create_memory_intensive_batch_processor() -> BatchProcessor:
         memory_limit_mb=4096,
         memory_threshold_percent=75.0,
         timeout_seconds=300,
-        retry_attempts=2
+        retry_attempts=2,
     )
     return BatchProcessor(config)

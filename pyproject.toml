@@ -13,10 +13,21 @@ requires-python = ">=3.9"
 readme = "README.md"
 license = {text = "MIT"}
 dependencies = [
-    "requests>=2.32.4",
-    "paramiko>=3.0.0",
-    "colorlog>=6.7.0",
-    "docker>=6.1.2",
+    # Core HTTP library for API calls
+    "requests==2.32.4",
+
+    # Jira API
+    "jira==3.8.0",
+
+    # Data validation
+    "pydantic==2.11.7",
+
+    # Configuration and environment
+    "python-dotenv==1.1.1",
+    "pyyaml==6.0.2",
+
+    # Console display and progress
+    "rich==14.0.0",
 ]
 
 [project.optional-dependencies]

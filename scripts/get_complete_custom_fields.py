@@ -7,10 +7,10 @@ information about custom fields and saves it to a JSON file.
 
 import contextlib
 import json
-from pathlib import Path
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 
@@ -224,7 +224,9 @@ def get_complete_custom_fields(
     # Print a summary
     print("\nCustom Fields:")
     for field in custom_fields[:5]:  # Show first 5 fields
-        print(f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})")
+        print(
+            f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
+        )
     if len(custom_fields) > 5:
         print(f"... and {len(custom_fields) - 5} more fields")
 
@@ -235,10 +237,16 @@ def main() -> int:
     """Main entry point."""
     # Parse command line arguments
     output_file: str | None = None
-    output_file = sys.argv[1] if len(sys.argv) > 1 else "var/data/openproject_custom_fields_complete.json"
+    output_file = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else "var/data/openproject_custom_fields_complete.json"
+    )
 
     # Get the custom fields
-    fields: list[dict[str, Any]] = get_complete_custom_fields(session_name="rails_console", output_file=output_file)
+    fields: list[dict[str, Any]] = get_complete_custom_fields(
+        session_name="rails_console", output_file=output_file
+    )
 
     return 0 if fields else 1
 

@@ -23,7 +23,8 @@ class MigrationResult(BaseModel):
         self.overall.setdefault("status", "success")
         self.overall.setdefault("start_time", datetime.now(tz=UTC).isoformat())
         self.overall.setdefault(
-            "timestamp", datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S"),
+            "timestamp",
+            datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S"),
         )
 
     def __setitem__(self, key: str, value: Any) -> None:

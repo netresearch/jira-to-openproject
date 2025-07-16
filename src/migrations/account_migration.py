@@ -174,7 +174,8 @@ class AccountMigration(BaseMigration):
         self._save_to_json(self.op_projects, "openproject_projects.json")
 
         self.logger.info(
-            "Extracted %d projects from OpenProject", len(self.op_projects),
+            "Extracted %d projects from OpenProject",
+            len(self.op_projects),
         )
         return self.op_projects
 
@@ -371,7 +372,9 @@ class AccountMigration(BaseMigration):
 
         # Create the field
         result = self.op_client.create_record("CustomField", field_options)
-        self.logger.debug(f"Result from create_record: type={type(result)}, value={result}")
+        self.logger.debug(
+            f"Result from create_record: type={type(result)}, value={result}"
+        )
 
         # Check if field was created successfully or already exists
         if isinstance(result, dict) and "id" in result:
@@ -393,21 +396,28 @@ class AccountMigration(BaseMigration):
         elif isinstance(result, dict) and "error" in result:
             error_messages = result.get("error", [])
             if any("already been taken" in str(msg) for msg in error_messages):
-                self.logger.info("Tempo Account custom field already exists, attempting to find existing field...")
+                self.logger.info(
+                    "Tempo Account custom field already exists, attempting to find existing field..."
+                )
                 # Try to get the existing field ID
                 try:
                     field_id = self.get_account_custom_field_id()
                     if field_id:
                         self.account_custom_field_id = field_id
-                        self.logger.info("Found existing Tempo Account custom field with ID %d", field_id)
+                        self.logger.info(
+                            "Found existing Tempo Account custom field with ID %d",
+                            field_id,
+                        )
                     else:
-                        self.logger.warning("Custom field already exists but couldn't retrieve its ID")
+                        self.logger.warning(
+                            "Custom field already exists but couldn't retrieve its ID"
+                        )
                 except Exception as e:
-                    self.logger.warning("Failed to retrieve existing custom field ID: %s", e)
+                    self.logger.warning(
+                        "Failed to retrieve existing custom field ID: %s", e
+                    )
             else:
-                msg = (
-                    f"Failed to create custom field: OpenProject error: {error_messages}"
-                )
+                msg = f"Failed to create custom field: OpenProject error: {error_messages}"
                 raise MigrationError(msg)
         else:
             msg = (
@@ -641,9 +651,9 @@ class AccountMigration(BaseMigration):
 
         # Add custom field ID to all accounts in the mapping
         for account_id in self.account_mapping:
-            self.account_mapping[account_id]["custom_field_id"] = (
-                self.account_custom_field_id
-            )
+            self.account_mapping[account_id][
+                "custom_field_id"
+            ] = self.account_custom_field_id
 
         # Save the updated mapping
         self._save_to_json(self.account_mapping, ACCOUNT_MAPPING_FILE)
@@ -807,13 +817,18 @@ class AccountMigration(BaseMigration):
                 if "SUCCESS" in result or "=> nil" in result:
                     success = True
                 # If there's no error indication, assume success
-                elif not any(error_word in result.lower() for error_word in ["error", "exception", "failed"]):
+                elif not any(
+                    error_word in result.lower()
+                    for error_word in ["error", "exception", "failed"]
+                ):
                     success = True
 
             if success:
                 self.logger.info("Custom field activated for all work package types")
             else:
-                error_msg = f"Failed to activate custom field for all types. Result: {result}"
+                error_msg = (
+                    f"Failed to activate custom field for all types. Result: {result}"
+                )
                 self.logger.warning(error_msg)
                 raise MigrationError(error_msg)
 

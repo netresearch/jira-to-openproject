@@ -13,9 +13,11 @@ from typing import Any, TypedDict
 
 from src import config
 
+
 # Type definitions for change detection
 class EntitySnapshot(TypedDict):
     """Represents a snapshot of an entity at a specific point in time."""
+
     entity_id: str
     entity_type: str
     last_modified: str | None
@@ -26,6 +28,7 @@ class EntitySnapshot(TypedDict):
 
 class EntityChange(TypedDict):
     """Represents a detected change in an entity."""
+
     entity_id: str
     entity_type: str
     change_type: str  # 'created', 'updated', 'deleted'
@@ -36,6 +39,7 @@ class EntityChange(TypedDict):
 
 class ChangeReport(TypedDict):
     """Complete change detection report."""
+
     detection_timestamp: str
     baseline_snapshot_timestamp: str | None
     total_changes: int
@@ -84,16 +88,23 @@ class ChangeDetector:
 
         # Remove timestamp fields that change on every API call
         fields_to_ignore = [
-            'self', 'lastViewed', 'expand', 'renderedFields',
-            'transitions', 'operations', 'editmeta'
+            "self",
+            "lastViewed",
+            "expand",
+            "renderedFields",
+            "transitions",
+            "operations",
+            "editmeta",
         ]
 
         for field in fields_to_ignore:
             normalized_data.pop(field, None)
 
         # Sort the dictionary to ensure consistent ordering
-        normalized_json = json.dumps(normalized_data, sort_keys=True, separators=(',', ':'))
-        return hashlib.sha256(normalized_json.encode('utf-8')).hexdigest()
+        normalized_json = json.dumps(
+            normalized_data, sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(normalized_json.encode("utf-8")).hexdigest()
 
     def _get_entity_last_modified(self, entity_data: dict[str, Any]) -> str | None:
         """Extract last modified timestamp from entity data.
@@ -105,7 +116,7 @@ class ChangeDetector:
             Last modified timestamp or None if not available
         """
         # Common timestamp fields in Jira entities
-        timestamp_fields = ['updated', 'lastModified', 'created']
+        timestamp_fields = ["updated", "lastModified", "created"]
 
         for field in timestamp_fields:
             if field in entity_data:
@@ -117,7 +128,7 @@ class ChangeDetector:
         self,
         entities: list[dict[str, Any]],
         entity_type: str,
-        migration_component: str | None = None
+        migration_component: str | None = None,
     ) -> Path:
         """Create a snapshot of entities after a successful migration.
 
@@ -145,7 +156,7 @@ class ChangeDetector:
                 last_modified=self._get_entity_last_modified(entity),
                 checksum=self._calculate_entity_checksum(entity),
                 data=entity,
-                snapshot_timestamp=timestamp
+                snapshot_timestamp=timestamp,
             )
             snapshots.append(snapshot)
 
@@ -158,24 +169,30 @@ class ChangeDetector:
             "entity_type": entity_type,
             "migration_component": migration_component,
             "entity_count": len(snapshots),
-            "snapshots": snapshots
+            "snapshots": snapshots,
         }
 
-        with snapshot_path.open('w') as f:
+        with snapshot_path.open("w") as f:
             json.dump(snapshot_data, f, indent=2)
 
         # Update current snapshot pointer
         current_snapshot_path = self.snapshot_dir / "current" / f"{entity_type}.json"
-        with current_snapshot_path.open('w') as f:
-            json.dump({
-                "latest_snapshot": snapshot_filename,
-                "timestamp": timestamp,
-                "entity_count": len(snapshots)
-            }, f, indent=2)
+        with current_snapshot_path.open("w") as f:
+            json.dump(
+                {
+                    "latest_snapshot": snapshot_filename,
+                    "timestamp": timestamp,
+                    "entity_count": len(snapshots),
+                },
+                f,
+                indent=2,
+            )
 
         self.logger.info(
             "Created snapshot for %d %s entities: %s",
-            len(snapshots), entity_type, snapshot_path
+            len(snapshots),
+            entity_type,
+            snapshot_path,
         )
 
         return snapshot_path
@@ -192,35 +209,33 @@ class ChangeDetector:
         """
         # Common ID fields for different entity types
         id_field_mapping = {
-            'users': 'accountId',
-            'projects': 'key',
-            'issues': 'key',
-            'worklogs': 'id',
-            'comments': 'id',
-            'attachments': 'id',
-            'statuses': 'id',
-            'issuetypes': 'id',
-            'priorities': 'id',
-            'resolutions': 'id',
-            'customfields': 'id'
+            "users": "accountId",
+            "projects": "key",
+            "issues": "key",
+            "worklogs": "id",
+            "comments": "id",
+            "attachments": "id",
+            "statuses": "id",
+            "issuetypes": "id",
+            "priorities": "id",
+            "resolutions": "id",
+            "customfields": "id",
         }
 
         # Try specific field for entity type
-        id_field = id_field_mapping.get(entity_type, 'id')
+        id_field = id_field_mapping.get(entity_type, "id")
         if id_field in entity:
             return str(entity[id_field])
 
         # Fallback to common ID fields
-        for field in ['id', 'key', 'accountId', 'name']:
+        for field in ["id", "key", "accountId", "name"]:
             if field in entity:
                 return str(entity[field])
 
         return None
 
     def detect_changes(
-        self,
-        current_entities: list[dict[str, Any]],
-        entity_type: str
+        self, current_entities: list[dict[str, Any]], entity_type: str
     ) -> ChangeReport:
         """Detect changes between current entities and stored snapshot.
 
@@ -259,10 +274,12 @@ class ChangeDetector:
                 change = EntityChange(
                     entity_id=entity_id,
                     entity_type=entity_type,
-                    change_type='created',
+                    change_type="created",
                     old_data=None,
                     new_data=current_entity,
-                    priority=self._calculate_change_priority(entity_type, 'created', current_entity)
+                    priority=self._calculate_change_priority(
+                        entity_type, "created", current_entity
+                    ),
                 )
                 changes.append(change)
             else:
@@ -274,10 +291,15 @@ class ChangeDetector:
                     change = EntityChange(
                         entity_id=entity_id,
                         entity_type=entity_type,
-                        change_type='updated',
+                        change_type="updated",
                         old_data=baseline_entity["data"],
                         new_data=current_entity,
-                        priority=self._calculate_change_priority(entity_type, 'updated', current_entity, baseline_entity["data"])
+                        priority=self._calculate_change_priority(
+                            entity_type,
+                            "updated",
+                            current_entity,
+                            baseline_entity["data"],
+                        ),
                     )
                     changes.append(change)
 
@@ -287,10 +309,12 @@ class ChangeDetector:
                 change = EntityChange(
                     entity_id=entity_id,
                     entity_type=entity_type,
-                    change_type='deleted',
+                    change_type="deleted",
                     old_data=baseline_entity["data"],
                     new_data=None,
-                    priority=self._calculate_change_priority(entity_type, 'deleted', None, baseline_entity["data"])
+                    priority=self._calculate_change_priority(
+                        entity_type, "deleted", None, baseline_entity["data"]
+                    ),
                 )
                 changes.append(change)
 
@@ -312,10 +336,10 @@ class ChangeDetector:
             summary={
                 "baseline_entity_count": len(baseline_entities),
                 "current_entity_count": len(current_entities_lookup),
-                "entities_created": changes_by_type.get('created', 0),
-                "entities_updated": changes_by_type.get('updated', 0),
-                "entities_deleted": changes_by_type.get('deleted', 0),
-            }
+                "entities_created": changes_by_type.get("created", 0),
+                "entities_updated": changes_by_type.get("updated", 0),
+                "entities_deleted": changes_by_type.get("deleted", 0),
+            },
         )
 
     def _load_baseline_snapshot(self, entity_type: str) -> dict[str, Any] | None:
@@ -334,7 +358,7 @@ class ChangeDetector:
             return None
 
         try:
-            with current_snapshot_path.open('r') as f:
+            with current_snapshot_path.open("r") as f:
                 current_info = json.load(f)
 
             snapshot_filename = current_info.get("latest_snapshot")
@@ -346,11 +370,13 @@ class ChangeDetector:
                 self.logger.warning("Snapshot file not found: %s", snapshot_path)
                 return None
 
-            with snapshot_path.open('r') as f:
+            with snapshot_path.open("r") as f:
                 return json.load(f)
 
         except (json.JSONDecodeError, KeyError) as e:
-            self.logger.warning("Error loading baseline snapshot for %s: %s", entity_type, e)
+            self.logger.warning(
+                "Error loading baseline snapshot for %s: %s", entity_type, e
+            )
             return None
 
     def _calculate_change_priority(
@@ -358,7 +384,7 @@ class ChangeDetector:
         entity_type: str,
         change_type: str,
         new_data: dict[str, Any] | None,
-        old_data: dict[str, Any] | None = None
+        old_data: dict[str, Any] | None = None,
     ) -> int:
         """Calculate priority for a detected change.
 
@@ -372,37 +398,41 @@ class ChangeDetector:
             Priority score (1-10, higher is more important)
         """
         base_priority = {
-            'projects': 9,      # High priority - affects everything else
-            'users': 8,         # High priority - affects assignments
-            'customfields': 7,  # Medium-high priority - affects data structure
-            'issuetypes': 6,    # Medium priority - affects work packages
-            'statuses': 6,      # Medium priority - affects workflows
-            'issues': 5,        # Medium priority - core content
-            'worklogs': 4,      # Medium-low priority - time tracking
-            'comments': 3,      # Lower priority - additional content
-            'attachments': 3,   # Lower priority - files
+            "projects": 9,  # High priority - affects everything else
+            "users": 8,  # High priority - affects assignments
+            "customfields": 7,  # Medium-high priority - affects data structure
+            "issuetypes": 6,  # Medium priority - affects work packages
+            "statuses": 6,  # Medium priority - affects workflows
+            "issues": 5,  # Medium priority - core content
+            "worklogs": 4,  # Medium-low priority - time tracking
+            "comments": 3,  # Lower priority - additional content
+            "attachments": 3,  # Lower priority - files
         }.get(entity_type, 5)
 
         # Adjust priority based on change type
         change_type_modifier = {
-            'deleted': 2,   # Deletions are high priority
-            'created': 1,   # Creations are medium priority
-            'updated': 0,   # Updates are base priority
+            "deleted": 2,  # Deletions are high priority
+            "created": 1,  # Creations are medium priority
+            "updated": 0,  # Updates are base priority
         }.get(change_type, 0)
 
         # Additional priority adjustments based on entity content
         content_modifier = 0
         if new_data:
             # Check for critical fields that indicate important changes
-            if entity_type == 'projects' and new_data.get('archived', False):
+            if entity_type == "projects" and new_data.get("archived", False):
                 content_modifier += 2  # Project archival is important
-            elif entity_type == 'users' and not new_data.get('active', True):
+            elif entity_type == "users" and not new_data.get("active", True):
                 content_modifier += 1  # User deactivation is notable
 
-        final_priority = min(10, max(1, base_priority + change_type_modifier + content_modifier))
+        final_priority = min(
+            10, max(1, base_priority + change_type_modifier + content_modifier)
+        )
         return final_priority
 
-    def get_changes_since_timestamp(self, entity_type: str, since_timestamp: str) -> ChangeReport | None:
+    def get_changes_since_timestamp(
+        self, entity_type: str, since_timestamp: str
+    ) -> ChangeReport | None:
         """Get changes for an entity type since a specific timestamp.
 
         Args:
@@ -440,7 +470,9 @@ class ChangeDetector:
                     deleted_count += 1
                     self.logger.debug("Deleted old snapshot: %s", snapshot_file.name)
                 except OSError as e:
-                    self.logger.warning("Failed to delete snapshot %s: %s", snapshot_file.name, e)
+                    self.logger.warning(
+                        "Failed to delete snapshot %s: %s", snapshot_file.name, e
+                    )
 
         if deleted_count > 0:
             self.logger.info("Cleaned up %d old snapshot files", deleted_count)

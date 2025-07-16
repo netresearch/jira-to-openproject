@@ -16,7 +16,7 @@
 
 # Test Strategy:
 1. Unit Tests: Mock SSHClient and DockerClient to verify that file transfer methods invoke the correct client methods with expected parameters and handle errors properly.
-2. Integration Tests: 
+2. Integration Tests:
    a. Set up a test SSH server and Docker container; attempt to transfer a sample file via OpenProjectClient and verify file presence and integrity on both host and container.
    b. Test failure scenarios (e.g., non-existent file, permission denied) and confirm proper error propagation and retry behavior.
 3. Logging Verification: Capture and assert log entries for each transfer step, ensuring messages include file details and statuses.
