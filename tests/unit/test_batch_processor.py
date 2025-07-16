@@ -247,7 +247,7 @@ class TestBatchProcessor:
                 assert False, "Should have timed out"
             except concurrent.futures.TimeoutError:
                 pass  # Expected
-            except Exception as e:
+            except Exception:
                 raise
 
     def test_batch_processor_timeout(self):

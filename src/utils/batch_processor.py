@@ -10,7 +10,7 @@ import logging
 from enum import Enum
 from typing import Any, List, Callable, Dict, Optional
 from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 try:

@@ -19,11 +19,8 @@ services:
       # This migration tool uses SSH-based remote Docker client - no local Docker daemon access needed
       # See src/clients/docker_client.py for SSH-based Docker operations
     environment:
-      - DOCKER_HOST=ssh://user@remote-host
-      # Use SSH_AUTH_SOCK for key-based authentication
-      - SSH_AUTH_SOCK=/run/ssh-agent
-    ports:
-      - "8000:8000"
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/jira_migration
     depends_on:
       - redis
       - postgres
@@ -32,45 +29,43 @@ services:
   # Mock Jira API server
   mock-jira:
     image: stoplight/prism:5.14.2
-    command: mock -h 0.0.0.0 --cors /tmp/jira-api.yaml
-    volumes:
-      - ./tests/fixtures/jira-api.yaml:/tmp/jira-api.yaml
     ports:
       - "4010:4010"
+    command: mock -h 0.0.0.0 -p 4010 /app/api-specs/jira-api.yaml
+    volumes:
+      - ./api-specs:/app/api-specs
     restart: unless-stopped
 
   # Mock OpenProject API server
   mock-openproject:
     image: stoplight/prism:5.14.2
-    command: mock -h 0.0.0.0 --cors /tmp/openproject-api.yaml
-    volumes:
-      - ./tests/fixtures/openproject-api.yaml:/tmp/openproject-api.yaml
     ports:
-      - "4011:4010"
+      - "4011:4011"
+    command: mock -h 0.0.0.0 -p 4011 /app/api-specs/openproject-api.yaml
+    volumes:
+      - ./api-specs:/app/api-specs
     restart: unless-stopped
 
   # Redis for caching and task queues
   redis:
     image: redis:7.4-alpine
-    ports:
-      - "6379:6379"
+    # SECURITY: No port exposure needed - internal service only
     volumes:
       - redis_data:/data
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-defaultpassword}
+    command: redis-server --appendonly yes
 
   # PostgreSQL for data storage
   postgres:
     image: postgres:16-alpine
+    # SECURITY: No port exposure needed - internal service only
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-jira_migration}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-defaultpassword}
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: jira_migration
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
 
 volumes:
   redis_data:

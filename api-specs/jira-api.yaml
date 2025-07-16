@@ -1,0 +1,94 @@
+openapi: 3.0.0
+info:
+  title: Jira API Mock
+  description: Mock Jira API for testing migration tool
+  version: 1.0.0
+servers:
+  - url: http://localhost:4010
+    description: Mock Jira server
+paths:
+  /rest/api/2/project:
+    get:
+      summary: Get all projects
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    key:
+                      type: string
+                    name:
+                      type: string
+              examples:
+                example1:
+                  value:
+                    - id: "10000"
+                      key: "TEST"
+                      name: "Test Project"
+  /rest/api/2/project/{projectId}/issues:
+    get:
+      summary: Get issues for project
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of issues
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  issues:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        key:
+                          type: string
+                        summary:
+                          type: string
+              examples:
+                example1:
+                  value:
+                    issues:
+                      - id: "10001"
+                        key: "TEST-1"
+                        summary: "Sample issue"
+  /rest/api/2/user:
+    get:
+      summary: Get users
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    accountId:
+                      type: string
+                    displayName:
+                      type: string
+                    emailAddress:
+                      type: string
+              examples:
+                example1:
+                  value:
+                    - accountId: "user1"
+                      displayName: "John Doe"
+                      emailAddress: "john@example.com"

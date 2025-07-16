@@ -6,12 +6,10 @@ including all components and realistic data scenarios.
 
 import json
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.migration import run_migration, create_backup, restore_backup

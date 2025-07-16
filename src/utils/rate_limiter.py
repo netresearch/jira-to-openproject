@@ -7,7 +7,7 @@ and implements exponential backoff for different types of errors.
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict
 from threading import Lock
 import logging
 

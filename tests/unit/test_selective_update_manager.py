@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for SelectiveUpdateManager."""
 
-import json
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -15,7 +14,6 @@ from src.utils.change_detector import ChangeReport
 from src.utils.selective_update_manager import (
     SelectiveUpdateManager,
     UpdateOperation,
-    UpdatePlan,
     UpdateResult,
     UpdateStrategy,
 )

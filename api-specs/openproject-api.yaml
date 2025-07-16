@@ -1,0 +1,160 @@
+openapi: 3.0.0
+info:
+  title: OpenProject API Mock
+  description: Mock OpenProject API for testing migration tool
+  version: 1.0.0
+servers:
+  - url: http://localhost:4011
+    description: Mock OpenProject server
+paths:
+  /api/v3/projects:
+    get:
+      summary: Get all projects
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  _embedded:
+                    type: object
+                    properties:
+                      elements:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: integer
+                            name:
+                              type: string
+                            identifier:
+                              type: string
+              examples:
+                example1:
+                  value:
+                    _embedded:
+                      elements:
+                        - id: 1
+                          name: "Test Project"
+                          identifier: "test-project"
+    post:
+      summary: Create new project
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                identifier:
+                  type: string
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  name:
+                    type: string
+                  identifier:
+                    type: string
+  /api/v3/work_packages:
+    get:
+      summary: Get work packages
+      responses:
+        '200':
+          description: List of work packages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  _embedded:
+                    type: object
+                    properties:
+                      elements:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: integer
+                            subject:
+                              type: string
+                            description:
+                              type: string
+              examples:
+                example1:
+                  value:
+                    _embedded:
+                      elements:
+                        - id: 1
+                          subject: "Sample work package"
+                          description: "Sample description"
+    post:
+      summary: Create work package
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subject:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Work package created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  subject:
+                    type: string
+                  description:
+                    type: string
+  /api/v3/users:
+    get:
+      summary: Get users
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  _embedded:
+                    type: object
+                    properties:
+                      elements:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: integer
+                            login:
+                              type: string
+                            email:
+                              type: string
+              examples:
+                example1:
+                  value:
+                    _embedded:
+                      elements:
+                        - id: 1
+                          login: "admin"
+                          email: "admin@example.com"

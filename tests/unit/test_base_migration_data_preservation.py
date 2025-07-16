@@ -1,7 +1,7 @@
 """Tests for BaseMigration data preservation workflow functionality."""
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch, call
+from unittest.mock import Mock
 from pathlib import Path
 
 from src.migrations.base_migration import BaseMigration
