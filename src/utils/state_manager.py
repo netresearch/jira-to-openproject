@@ -5,7 +5,10 @@ This module provides functionality to track entity mappings between Jira and
 OpenProject, maintain migration history, and enable rollback capabilities.
 """
 
+import fcntl
 import json
+import os
+import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -337,33 +340,98 @@ class StateManager:
         return snapshot_id
 
     def save_current_state(self) -> None:
-        """Save current state to persistent storage."""
+        """Save current state to persistent storage atomically.
+        
+        Uses file locking and atomic writes to prevent state corruption
+        during concurrent operations.
+        """
         try:
-            # Save current mappings
-            mappings_path = self.state_dir / "current" / "mappings.json"
-            with mappings_path.open("w") as f:
-                json.dump(self._current_mappings, f, indent=2)
-
-            # Save current records
-            records_path = self.state_dir / "current" / "records.json"
-            with records_path.open("w") as f:
-                json.dump(self._current_records, f, indent=2)
-
-            # Save version info
-            version_path = self.state_dir / "current" / "version.json"
-            version_info = {
-                "version": self._current_version,
-                "last_updated": datetime.now(tz=UTC).isoformat(),
-                "mapping_count": len(self._current_mappings),
-                "record_count": len(self._current_records),
-            }
-            with version_path.open("w") as f:
-                json.dump(version_info, f, indent=2)
-
-            self.logger.debug("Saved current state to persistent storage")
+            # Create lock file to prevent concurrent writes
+            lock_file = self.state_dir / "state.lock"
+            
+            with lock_file.open("w") as lock_fd:
+                # Acquire exclusive lock
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+                
+                try:
+                    # Perform atomic saves for all state files
+                    self._atomic_save_mappings()
+                    self._atomic_save_records()
+                    self._atomic_save_version()
+                    
+                    self.logger.debug("Atomically saved current state to persistent storage")
+                    
+                finally:
+                    # Lock is automatically released when file is closed
+                    pass
 
         except Exception as e:
             self.logger.exception("Failed to save current state: %s", e)
+            raise
+
+    def _atomic_save_mappings(self) -> None:
+        """Atomically save current mappings to avoid partial writes."""
+        mappings_path = self.state_dir / "current" / "mappings.json"
+        
+        # Write to temporary file first
+        with tempfile.NamedTemporaryFile(
+            mode='w', 
+            dir=mappings_path.parent, 
+            delete=False,
+            suffix='.tmp'
+        ) as temp_file:
+            json.dump(self._current_mappings, temp_file, indent=2)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())  # Force write to disk
+            temp_path = temp_file.name
+        
+        # Atomic move (rename) to final location
+        os.replace(temp_path, mappings_path)
+
+    def _atomic_save_records(self) -> None:
+        """Atomically save current records to avoid partial writes."""
+        records_path = self.state_dir / "current" / "records.json"
+        
+        # Write to temporary file first
+        with tempfile.NamedTemporaryFile(
+            mode='w', 
+            dir=records_path.parent, 
+            delete=False,
+            suffix='.tmp'
+        ) as temp_file:
+            json.dump(self._current_records, temp_file, indent=2)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())  # Force write to disk
+            temp_path = temp_file.name
+        
+        # Atomic move (rename) to final location
+        os.replace(temp_path, records_path)
+
+    def _atomic_save_version(self) -> None:
+        """Atomically save version info to avoid partial writes."""
+        version_path = self.state_dir / "current" / "version.json"
+        
+        version_info = {
+            "version": self._current_version,
+            "last_updated": datetime.now(tz=UTC).isoformat(),
+            "mapping_count": len(self._current_mappings),
+            "record_count": len(self._current_records),
+        }
+        
+        # Write to temporary file first
+        with tempfile.NamedTemporaryFile(
+            mode='w', 
+            dir=version_path.parent, 
+            delete=False,
+            suffix='.tmp'
+        ) as temp_file:
+            json.dump(version_info, temp_file, indent=2)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())  # Force write to disk
+            temp_path = temp_file.name
+        
+        # Atomic move (rename) to final location
+        os.replace(temp_path, version_path)
 
     def _load_current_state(self) -> None:
         """Load current state from persistent storage."""
@@ -399,6 +467,185 @@ class StateManager:
         except Exception as e:
             self.logger.warning("Failed to load current state: %s", e)
             # Continue with empty state if loading fails
+
+    def validate_state_consistency(self) -> dict[str, Any]:
+        """Validate consistency between migration records and state snapshots.
+        
+        Returns:
+            Dictionary with validation results and any inconsistencies found
+        """
+        validation_result = {
+            "is_consistent": True,
+            "issues": [],
+            "statistics": {
+                "total_mappings": len(self._current_mappings),
+                "total_records": len(self._current_records),
+                "completed_records": 0,
+                "failed_records": 0,
+            }
+        }
+        
+        try:
+            # Check for orphaned migration records
+            completed_records = 0
+            failed_records = 0
+            
+            for record in self._current_records:
+                if record["status"] == "completed":
+                    completed_records += 1
+                elif record["status"] == "failed":
+                    failed_records += 1
+                elif record["status"] == "started":
+                    # Check for stuck migration records (started but never completed)
+                    started_time = datetime.fromisoformat(record["started_at"].replace('Z', '+00:00'))
+                    current_time = datetime.now(tz=UTC)
+                    time_diff = current_time - started_time
+                    
+                    if time_diff.total_seconds() > 3600:  # 1 hour threshold
+                        validation_result["is_consistent"] = False
+                        validation_result["issues"].append({
+                            "type": "stuck_migration_record",
+                            "record_id": record["record_id"],
+                            "component": record["migration_component"],
+                            "started_at": record["started_at"],
+                            "age_hours": time_diff.total_seconds() / 3600
+                        })
+            
+            validation_result["statistics"]["completed_records"] = completed_records
+            validation_result["statistics"]["failed_records"] = failed_records
+            
+            # Check for mapping consistency
+            mapping_versions = set()
+            for mapping in self._current_mappings.values():
+                mapping_versions.add(mapping["mapping_version"])
+            
+            if len(mapping_versions) > 3:  # Too many different versions
+                validation_result["is_consistent"] = False
+                validation_result["issues"].append({
+                    "type": "mapping_version_drift",
+                    "versions_count": len(mapping_versions),
+                    "versions": list(mapping_versions)
+                })
+            
+            # Check file system consistency
+            current_dir = self.state_dir / "current"
+            required_files = ["mappings.json", "records.json", "version.json"]
+            
+            for required_file in required_files:
+                file_path = current_dir / required_file
+                if not file_path.exists():
+                    validation_result["is_consistent"] = False
+                    validation_result["issues"].append({
+                        "type": "missing_state_file",
+                        "file": required_file,
+                        "path": str(file_path)
+                    })
+            
+            self.logger.debug("State consistency validation completed: %s", 
+                            "CONSISTENT" if validation_result["is_consistent"] else "ISSUES FOUND")
+            
+            return validation_result
+            
+        except Exception as e:
+            self.logger.exception("Error during state consistency validation: %s", e)
+            validation_result["is_consistent"] = False
+            validation_result["issues"].append({
+                "type": "validation_error",
+                "error": str(e)
+            })
+            return validation_result
+
+    def recover_from_corruption(self, backup_snapshots: int = 5) -> bool:
+        """Attempt to recover from state corruption using snapshots.
+        
+        Args:
+            backup_snapshots: Number of recent snapshots to try for recovery
+            
+        Returns:
+            True if recovery was successful, False otherwise
+        """
+        self.logger.warning("Attempting to recover from state corruption...")
+        
+        try:
+            # Get available snapshots sorted by creation time (newest first)
+            snapshots_dir = self.state_dir / "snapshots"
+            if not snapshots_dir.exists():
+                self.logger.error("No snapshots directory found for recovery")
+                return False
+            
+            snapshot_files = []
+            for snapshot_file in snapshots_dir.glob("*.json"):
+                try:
+                    stat = snapshot_file.stat()
+                    snapshot_files.append((snapshot_file, stat.st_mtime))
+                except Exception:
+                    continue
+            
+            # Sort by modification time (newest first)
+            snapshot_files.sort(key=lambda x: x[1], reverse=True)
+            
+            if not snapshot_files:
+                self.logger.error("No valid snapshots found for recovery")
+                return False
+            
+            # Try to recover from recent snapshots
+            for snapshot_file, _ in snapshot_files[:backup_snapshots]:
+                try:
+                    self.logger.info("Attempting recovery from snapshot: %s", snapshot_file.name)
+                    
+                    # Load and validate snapshot
+                    with snapshot_file.open("r") as f:
+                        snapshot_data = json.load(f)
+                    
+                    # Validate snapshot structure
+                    required_keys = ["snapshot_id", "created_at", "state"]
+                    if not all(key in snapshot_data for key in required_keys):
+                        self.logger.warning("Invalid snapshot structure: %s", snapshot_file.name)
+                        continue
+                    
+                    state_data = snapshot_data["state"]
+                    if not all(key in state_data for key in ["mappings", "records"]):
+                        self.logger.warning("Incomplete state data in snapshot: %s", snapshot_file.name)
+                        continue
+                    
+                    # Create backup of current corrupted state
+                    corrupted_backup_dir = self.state_dir / "corrupted_backups"
+                    corrupted_backup_dir.mkdir(exist_ok=True)
+                    
+                    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+                    backup_suffix = f"corrupted_{timestamp}"
+                    
+                    # Backup current state files if they exist
+                    current_dir = self.state_dir / "current"
+                    for state_file in ["mappings.json", "records.json", "version.json"]:
+                        source_path = current_dir / state_file
+                        if source_path.exists():
+                            backup_path = corrupted_backup_dir / f"{state_file}.{backup_suffix}"
+                            source_path.rename(backup_path)
+                    
+                    # Restore from snapshot
+                    self._current_mappings = state_data["mappings"]
+                    self._current_records = state_data["records"]
+                    
+                    # Update version to indicate recovery
+                    self._current_version = f"recovered_{timestamp}_{snapshot_data['snapshot_id'][:8]}"
+                    
+                    # Save restored state atomically
+                    self.save_current_state()
+                    
+                    self.logger.success("Successfully recovered state from snapshot: %s", snapshot_file.name)
+                    return True
+                    
+                except Exception as e:
+                    self.logger.warning("Failed to recover from snapshot %s: %s", snapshot_file.name, e)
+                    continue
+            
+            self.logger.error("Failed to recover from any available snapshots")
+            return False
+            
+        except Exception as e:
+            self.logger.exception("Error during state recovery: %s", e)
+            return False
 
     def get_mapping_statistics(self) -> dict[str, Any]:
         """Get statistics about current entity mappings.

@@ -179,6 +179,23 @@ class OpenProjectClient:
             self.container_name,
         )
 
+    def _generate_unique_temp_filename(self, base_name: str) -> str:
+        """Generate a unique temporary filename to prevent race conditions.
+        
+        Combines timestamp, process ID, and random component to ensure uniqueness
+        across concurrent migration processes.
+        
+        Args:
+            base_name: Base name for the file (e.g., 'users', 'projects')
+            
+        Returns:
+            Unique temporary file path (e.g., '/tmp/users_1703123456_12345_abc123.json')
+        """
+        timestamp = int(time.time())
+        pid = os.getpid()
+        random_suffix = format(random.randint(0, 0xffffff), '06x')
+        return f"/tmp/{base_name}_{timestamp}_{pid}_{random_suffix}.json"
+
     def _create_script_file(self, script_content: str) -> Path:
         """Create a temporary file with the script content.
 
@@ -393,6 +410,10 @@ class OpenProjectClient:
 
         """
         try:
+            # Get the configured batch size from migration config
+            # This respects user configuration instead of hardcoded limits
+            default_batch_size = config.migration_config.get("batch_size", 100)
+            
             # For other queries, execute directly but be careful about automatic modifications
             # Only add .limit() for queries that are clearly meant to return collections
             collection_indicators = [
@@ -421,22 +442,37 @@ class OpenProjectClient:
                 indicator in query.lower() for indicator in collection_indicators
             )
 
-            # Check if query already produces an Array (like .map queries)
+            # Check if query already produces arrays (e.g., .map, .pluck results)
             produces_array = any(
-                indicator in query.lower()
-                for indicator in [".map", ".collect", ".select", ".reject"]
+                method in query.lower()
+                for method in [".map", ".pluck", ".collect", ".select {"]
             )
 
-            # Check if this looks like a simple expression (math, simple method calls, etc.)
+            # Check for simple expressions that shouldn't have limits
             is_simple_expression = (
                 any(
-                    indicator in query
-                    for indicator in [
+                    operator in query
+                    for operator in [
                         "+",
                         "-",
                         "*",
                         "/",
-                        "%",
+                        "%",  # Arithmetic operators
+                        "==",
+                        "!=",
+                        "<",
+                        ">",
+                        "<=",
+                        ">=",  # Comparison operators
+                        "&&",
+                        "||",
+                        "!",  # Logical operators
+                        "&",
+                        "|",
+                        "^",
+                        "~",
+                        "<<",
+                        ">>",  # Bitwise operators
                         "**",  # Math operators
                         "puts ",
                         "p ",
@@ -454,13 +490,14 @@ class OpenProjectClient:
                 elif is_collection and not produces_array:
                     # Only add .limit() for explicit collection queries that don't already produce arrays
                     if ".limit(" not in query:
-                        # Apply limit before any JSON conversion
+                        # Apply configurable limit before any JSON conversion
+                        # Use the configured batch size instead of hardcoded value
                         if ".as_json" in query:
                             # If query already has .as_json, we need to restructure it
                             base_query = query.replace(".as_json", "")
-                            query = f"({base_query}).limit(5).to_json"
+                            query = f"({base_query}).limit({default_batch_size}).to_json"
                         else:
-                            query = f"({query}).limit(5).to_json"
+                            query = f"({query}).limit({default_batch_size}).to_json"
                     else:
                         query = f"({query}).to_json"
                 else:
@@ -1314,7 +1351,7 @@ class OpenProjectClient:
 
         try:
             # Use pure file-based approach - write to file and read directly from filesystem
-            file_path = "/tmp/users.json"
+            file_path = self._generate_unique_temp_filename("users")
 
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
@@ -1523,7 +1560,7 @@ class OpenProjectClient:
 
         try:
             # Use pure file-based approach - write to file and read directly from filesystem
-            file_path = "/tmp/custom_fields.json"
+            file_path = self._generate_unique_temp_filename("custom_fields")
 
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
@@ -1623,7 +1660,7 @@ class OpenProjectClient:
         """
         try:
             # Use pure file-based approach - write to file and read directly from filesystem
-            file_path = "/tmp/projects.json"
+            file_path = self._generate_unique_temp_filename("projects")
 
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
