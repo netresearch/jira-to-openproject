@@ -16,13 +16,14 @@ from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker
-from src.migrations.base_migration import BaseMigration
+from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
 # Get logger from config
 logger = config.logger
 
 
+@register_entity_types("users", "user_accounts")
 class UserMigration(BaseMigration):
     """Handles the migration of users from Jira to OpenProject.
 

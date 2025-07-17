@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Issue type migration module for Jira to OpenProject migration.
-Handles the migration of issue types from Jira to OpenProject work package types.
+Handles mapping and creation of issue types from Jira to work package types in OpenProject.
 """
 
 import json
@@ -12,15 +12,17 @@ from typing import Any
 
 from src import config
 from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
 from src.display import console
-from src.migrations.base_migration import BaseMigration
+from src.mappings.mappings import Mappings
+from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
 # Get logger from config
 logger = config.logger
 
 
+@register_entity_types("issue_types", "work_package_types")
 class IssueTypeMigration(BaseMigration):
     """Handles the migration of issue types from Jira to work package types in OpenProject.
 

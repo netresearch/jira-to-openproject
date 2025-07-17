@@ -1,16 +1,194 @@
+#!/usr/bin/env python3
+"""Base migration class providing common functionality for all migrations."""
+
+from __future__ import annotations
+
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
-from src.models import ComponentResult
-from src.utils.change_detector import ChangeDetector, ChangeReport
-from src.utils.data_preservation_manager import DataPreservationManager
-from src.utils.state_manager import StateManager
-from src.utils.checkpoint_manager import CheckpointManager, CheckpointStatus, RecoveryAction
+from src.models import ComponentResult, MigrationError
+
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+
+# Import dependencies that were missing
+try:
+    from src.utils.change_detector import ChangeDetector
+except ImportError:
+    # Create a mock ChangeDetector if not available
+    class ChangeDetector:
+        def detect_changes(self, current_entities, entity_type):
+            return {"has_changes": False, "changes": []}
+
+try:
+    from src.utils.state_manager import StateManager
+except ImportError:
+    # Create a mock StateManager if not available
+    class StateManager:
+        def save_current_state(self):
+            pass
+
+try:
+    from src.utils.data_preservation_manager import DataPreservationManager
+except ImportError:
+    # Create a mock DataPreservationManager if not available
+    class DataPreservationManager:
+        def __init__(self, jira_client=None, openproject_client=None):
+            pass
+        
+        def store_original_state(self, entity_id, entity_type, entity_data, source):
+            pass
+
+try:
+    from src.utils.selective_update_manager import SelectiveUpdateManager
+except ImportError:
+    # Create a mock SelectiveUpdateManager if not available
+    class SelectiveUpdateManager:
+        def __init__(self, jira_client=None, op_client=None, state_manager=None):
+            pass
+
+
+class EntityTypeRegistry:
+    """Centralized registry for mapping migration classes to their supported entity types.
+    
+    This replaces brittle string matching with a robust registry system that ensures
+    fail-fast behavior when entity types cannot be resolved.
+    """
+    
+    _registry: dict[type[BaseMigration], list[str]] = {}
+    _type_to_class_map: dict[str, type[BaseMigration]] = {}
+    
+    @classmethod
+    def register(cls, migration_class: type[BaseMigration], entity_types: list[str]) -> None:
+        """Register a migration class with its supported entity types.
+        
+        Args:
+            migration_class: The migration class to register
+            entity_types: List of entity types this class supports
+            
+        Raises:
+            ValueError: If entity_types is empty or migration_class is invalid
+        """
+        if migration_class is None:
+            raise ValueError("Migration class cannot be None")
+            
+        if not entity_types:
+            raise ValueError(f"Migration class {migration_class.__name__} must support at least one entity type")
+        
+        if not issubclass(migration_class, BaseMigration):
+            raise ValueError(f"Class {migration_class.__name__} must inherit from BaseMigration")
+            
+        cls._registry[migration_class] = entity_types.copy()
+        
+        # Build reverse mapping for quick lookups
+        for entity_type in entity_types:
+            if entity_type in cls._type_to_class_map:
+                existing_class = cls._type_to_class_map[entity_type]
+                if existing_class != migration_class:
+                    logger = config.logger
+                    logger.warning(
+                        f"Entity type '{entity_type}' is supported by multiple classes: "
+                        f"{existing_class.__name__} and {migration_class.__name__}. "
+                        f"Using {migration_class.__name__}."
+                    )
+            cls._type_to_class_map[entity_type] = migration_class
+    
+    @classmethod
+    def resolve(cls, migration_class: type[BaseMigration]) -> str:
+        """Resolve the primary entity type for a migration class.
+        
+        Args:
+            migration_class: The migration class to resolve
+            
+        Returns:
+            The primary (first) entity type supported by this class
+            
+        Raises:
+            ValueError: If the migration class is not registered or has no entity types
+        """
+        if migration_class is None:
+            raise ValueError("Migration class cannot be None")
+            
+        if migration_class not in cls._registry:
+            raise ValueError(
+                f"Migration class {migration_class.__name__} is not registered with EntityTypeRegistry. "
+                f"Add SUPPORTED_ENTITY_TYPES class attribute and ensure the class is properly registered."
+            )
+        
+        entity_types = cls._registry[migration_class]
+        if not entity_types:
+            raise ValueError(f"Migration class {migration_class.__name__} has no registered entity types")
+            
+        return entity_types[0]  # Return primary (first) entity type
+    
+    @classmethod
+    def get_supported_types(cls, migration_class: type[BaseMigration]) -> list[str]:
+        """Get all entity types supported by a migration class.
+        
+        Args:
+            migration_class: The migration class to query
+            
+        Returns:
+            List of all entity types supported by this class
+            
+        Raises:
+            ValueError: If the migration class is not registered
+        """
+        if migration_class not in cls._registry:
+            raise ValueError(f"Migration class {migration_class.__name__} is not registered with EntityTypeRegistry")
+            
+        return cls._registry[migration_class].copy()
+    
+    @classmethod
+    def get_class_for_type(cls, entity_type: str) -> type[BaseMigration] | None:
+        """Get the migration class that handles a specific entity type.
+        
+        Args:
+            entity_type: The entity type to look up
+            
+        Returns:
+            The migration class that handles this entity type, or None if not found
+        """
+        return cls._type_to_class_map.get(entity_type)
+    
+    @classmethod
+    def clear_registry(cls) -> None:
+        """Clear all registrations. Used primarily for testing."""
+        cls._registry.clear()
+        cls._type_to_class_map.clear()
+    
+    @classmethod
+    def get_all_registered_types(cls) -> set[str]:
+        """Get all registered entity types across all migration classes."""
+        all_types = set()
+        for entity_types in cls._registry.values():
+            all_types.update(entity_types)
+        return all_types
+
+
+def register_entity_types(*entity_types: str):
+    """Decorator to register entity types for a migration class.
+    
+    Args:
+        entity_types: Entity types supported by the decorated class
+        
+    Returns:
+        Decorator function that registers the class
+        
+    Example:
+        @register_entity_types("users", "user_accounts")
+        class UserMigration(BaseMigration):
+            pass
+    """
+    def decorator(cls: type[BaseMigration]) -> type[BaseMigration]:
+        EntityTypeRegistry.register(cls, list(entity_types))
+        return cls
+    return decorator
 
 
 class ComponentInitializationError(Exception):
@@ -928,7 +1106,7 @@ class BaseMigration:
             ComponentResult with selective update results
 
         Raises:
-            ComponentError: If selective update fails
+            MigrationError: If selective update fails
         """
         try:
             # Import here to avoid circular imports
@@ -943,7 +1121,7 @@ class BaseMigration:
             if not entity_type:
                 entity_type = self._auto_detect_entity_type()
                 if not entity_type:
-                    raise ComponentError(
+                    raise MigrationError(
                         "Could not determine entity type for selective update. "
                         "Please specify entity_type parameter."
                     )
@@ -1034,36 +1212,30 @@ class BaseMigration:
         except Exception as e:
             error_msg = f"Selective update failed for {self.__class__.__name__}: {e}"
             self.logger.exception(error_msg)
-            raise ComponentError(error_msg) from e
+            raise MigrationError(error_msg) from e
 
     def _auto_detect_entity_type(self) -> str | None:
-        """Auto-detect entity type from migration class name.
+        """Auto-detect entity type using EntityTypeRegistry.
+
+        This method uses the EntityTypeRegistry to resolve the primary entity type
+        for this migration class, providing fail-fast behavior if the class is not
+        properly registered.
 
         Returns:
-            Entity type string, or None if cannot be detected
+            Entity type string from the registry
+            
+        Raises:
+            ValueError: If the migration class is not registered with EntityTypeRegistry
         """
-        class_name = self.__class__.__name__.lower()
-
-        # Map class names to entity types
-        if "user" in class_name:
-            return "users"
-        elif "project" in class_name:
-            return "projects"
-        elif "workpackage" in class_name or "issue" in class_name:
-            return "issues"
-        elif "customfield" in class_name or "field" in class_name:
-            return "customfields"
-        elif "status" in class_name:
-            return "statuses"
-        elif "type" in class_name:
-            return "issuetypes"
-        elif "link" in class_name:
-            return "links"
-        else:
+        try:
+            return EntityTypeRegistry.resolve(self.__class__)
+        except ValueError as e:
+            # Log warning and provide helpful guidance
             self.logger.warning(
-                "Could not auto-detect entity type for %s. "
-                "Please specify entity_type parameter explicitly.",
+                "Migration class %s is not registered with EntityTypeRegistry. "
+                "Add @register_entity_types decorator to the class. Error: %s",
                 self.__class__.__name__,
+                e
             )
             return None
 

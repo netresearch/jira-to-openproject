@@ -1,6 +1,5 @@
 """Company migration module for Jira to OpenProject migration.
-
-Handles the migration of Tempo timesheet companies from Jira to OpenProject as top-level projects.
+Handles the migration of Tempo companies to OpenProject projects.
 """
 
 import json
@@ -12,11 +11,15 @@ from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
-from src.migrations.base_migration import BaseMigration
+from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 from src.utils import data_handler
 
+# Get logger from config
+logger = config.logger
 
+
+@register_entity_types("companies", "tempo_companies")
 class CompanyMigration(BaseMigration):
     """Handles the migration of companies from Tempo timesheet to OpenProject.
 

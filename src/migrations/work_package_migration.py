@@ -15,7 +15,7 @@ from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
 from src.display import ProgressTracker
-from src.migrations.base_migration import BaseMigration
+from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 from src.utils import data_handler
 from src.utils.markdown_converter import MarkdownConverter
@@ -28,6 +28,7 @@ from src.utils.time_entry_migrator import TimeEntryMigrator
 logger = config.logger
 
 
+@register_entity_types("work_packages", "issues")
 class WorkPackageMigration(BaseMigration):
     """Handles the migration of issues from Jira to work packages in OpenProject.
 

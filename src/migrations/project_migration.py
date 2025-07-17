@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from src import config
 from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
 from src.mappings.mappings import Mappings
-from src.migrations.base_migration import BaseMigration
+from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ PROJECT_ACCOUNT_MAPPING_FILE = "project_account_mapping.json"
 TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
 
 
+@register_entity_types("projects")
 class ProjectMigration(BaseMigration):
     """Handles the migration of projects from Jira to OpenProject.
 

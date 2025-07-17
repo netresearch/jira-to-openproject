@@ -1,5 +1,5 @@
 """Link type migration module for Jira to OpenProject migration.
-Handles the migration of issue link types from Jira to OpenProject.
+Handles the migration of link types from Jira to OpenProject relation types.
 """
 
 import json
@@ -11,7 +11,7 @@ from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import console
-from src.migrations.base_migration import BaseMigration
+from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.migrations.custom_field_migration import CustomFieldMigration
 from src.models import ComponentResult, MigrationError
 
@@ -54,6 +54,7 @@ DEFAULT_RELATION_TYPES = [
 ]
 
 
+@register_entity_types("link_types", "relation_types")
 class LinkTypeMigration(BaseMigration):
     """Handles the migration of issue link types from Jira to OpenProject.
 
