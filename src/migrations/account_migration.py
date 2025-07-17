@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from src import config
 from src.mappings.mappings import Mappings
-from src.migrations.base_migration import BaseMigration
+from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
 if TYPE_CHECKING:
@@ -23,6 +23,7 @@ ACCOUNT_MAPPING_FILE = "account_mapping.json"
 TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
 
 
+@register_entity_types("accounts", "tempo_accounts")
 class AccountMigration(BaseMigration):
     """Handles the migration of accounts from Tempo timesheet to OpenProject.
 

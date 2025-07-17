@@ -52,6 +52,14 @@ except ImportError:
         def __init__(self, jira_client=None, op_client=None, state_manager=None):
             pass
 
+try:
+    from src.utils.checkpoint_manager import CheckpointManager
+except ImportError:
+    # Create a mock CheckpointManager if not available
+    class CheckpointManager:
+        def __init__(self, checkpoint_dir=None):
+            pass
+
 
 class EntityTypeRegistry:
     """Centralized registry for mapping migration classes to their supported entity types.

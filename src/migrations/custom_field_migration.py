@@ -16,13 +16,14 @@ from src.clients.openproject_client import OpenProjectClient
 # Import RailsConsolePexpect to handle direct Rails console execution
 from src.clients.rails_console_client import RailsConsoleClient
 from src.display import ProgressTracker, console
-from src.migrations.base_migration import BaseMigration
+from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
 # Create rich console instance
 console = console
 
 
+@register_entity_types("custom_fields")
 class CustomFieldMigration(BaseMigration):
     """Handles the migration of custom fields from Jira to OpenProject.
 

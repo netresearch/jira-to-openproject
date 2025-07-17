@@ -18,7 +18,7 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker
 from src.mappings.mappings import Mappings
-from src.migrations.base_migration import BaseMigration
+from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 from src.models.migration_error import MigrationError
 
@@ -29,6 +29,7 @@ logger = config.logger
 T = TypeVar("T")
 
 
+@register_entity_types("statuses", "status_types")
 class StatusMigration(BaseMigration):
     """Handles the migration of statuses from Jira to OpenProject.
 
