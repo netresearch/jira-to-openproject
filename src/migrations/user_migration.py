@@ -5,6 +5,7 @@ Handles the migration of users and their accounts from Jira to OpenProject.
 """
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -302,12 +303,19 @@ class UserMigration(BaseMigration):
                     first_name = names[0] if len(names) > 0 else "User"
                     last_name = names[1] if len(names) > 1 else user["jira_name"]
 
+                    # Handle missing or empty email addresses with fallback
+                    email = user["jira_email"]
+                    if not email or email.strip() == "":
+                        # Generate fallback email using login name and a noreply domain
+                        email = f"{user['jira_name']}@noreply.migration.local"
+                        self.logger.info(f"Using fallback email for user {user['jira_name']}: {email}")
+
                     users_to_create.append(
                         {
                             "login": user["jira_name"],
                             "firstname": first_name,
                             "lastname": last_name,
-                            "mail": user["jira_email"],
+                            "mail": email,
                             "admin": False,
                             "status": "active",
                         },
@@ -317,56 +325,131 @@ class UserMigration(BaseMigration):
                 tracker.update_description(f"Creating users: {', '.join(batch_users)}")
 
                 try:
-                    # Create users in bulk and process the response
-                    result_str = self.op_client.create_users_in_bulk(users_to_create)
+                    # Use file-based transfer approach (like other migrations)
+                    self.logger.info(f"Creating {len(users_to_create)} users via file transfer")
+                    
+                    # Create temporary file for user data
+                    batch_num = tracker.processed_count // batch_size
+                    temp_file_path = Path(self.data_dir) / f"users_batch_{batch_num}.json"
+                    
+                    # Write users data to JSON file
+                    with temp_file_path.open("w", encoding='utf-8') as f:
+                        json.dump(users_to_create, f, ensure_ascii=False, indent=2)
 
-                    # Process result with optimistic execution
-                    try:
-                        # First try standard JSON parsing
-                        result = json.loads(result_str[0])
-                    except json.JSONDecodeError:
-                        # If standard parsing fails, attempt to extract a JSON-like structure
-                        result_str_safe = (
-                            str(result_str)
-                            if not isinstance(result_str, str)
-                            else result_str
+                    # Transfer file to container
+                    container_temp_path = f'/tmp/users_batch_{batch_num}.json'
+                    self.op_client.transfer_file_to_container(
+                        temp_file_path, Path(container_temp_path)
+                    )
+
+                    # Header: f-string interpolation for file paths and variables
+                    result_file_path = f'/tmp/users_result_{batch_num}.json'
+                    script_header = f"""
+                    require 'json'
+                    
+                    # File paths
+                    input_file = '{container_temp_path}'
+                    output_file = '{result_file_path}'
+                    
+                    # Load the data from the JSON file
+                    users_data = JSON.parse(File.read(input_file))
+                    puts "Loaded " + users_data.length.to_s + " users from JSON file"
+                    """
+                    
+                    # Body: pure Ruby code without Python interpolation
+                    script_body = """
+                    created_users = []
+                    errors = []
+                    
+                    users_data.each do |user_data|
+                      begin
+                        # Create user with the provided data
+                        user = User.new(
+                          login: user_data['login'],
+                          firstname: user_data['firstname'],
+                          lastname: user_data['lastname'],
+                          mail: user_data['mail'],
+                          admin: user_data['admin'] || false,
+                          status: User.statuses.key(user_data['status']) || User.statuses['active']
                         )
+                        
+                        if user.save
+                          created_users << {
+                            status: 'success',
+                            login: user.login,
+                            mail: user.mail,
+                            id: user.id
+                          }
+                        else
+                          errors << {
+                            status: 'error',
+                            login: user_data['login'],
+                            mail: user_data['mail'],
+                            errors: user.errors.full_messages
+                          }
+                        end
+                      rescue => e
+                        errors << {
+                          status: 'error',
+                          login: user_data['login'],
+                          mail: user_data['mail'],
+                          errors: [e.message]
+                        }
+                      end
+                    end
+                    
+                    # Write results to file
+                    result = {
+                      created: created_users.length,
+                      failed: errors.length,
+                      total: users_data.length,
+                      created_users: created_users,
+                      errors: errors
+                    }
+                    
+                    puts "User creation completed: " + created_users.length.to_s + " created, " + errors.length.to_s + " failed"
+                    File.write(output_file, result.to_json)
+                    puts "Results written to " + output_file
+                    """
+                    
+                    script = script_header + script_body
 
-                        match = re.search(r"\{.*\}", result_str_safe, re.DOTALL)
-                        if match:
-                            # Convert Ruby hash string to JSON format
-                            json_str = match.group(0)
-                            json_str = re.sub(r":(\w+)\s*=>", r'"\1":', json_str)
-                            json_str = json_str.replace("=>", ":")
-                            result = json.loads(json_str)
-                        else:
-                            # Fall back to basic success count logic
-                            success_count_1 = 0
-                            success_count_2 = 0
-                            if isinstance(result_str, str):
-                                success_count_1 = result_str.count(
-                                    '"status": "success"',
-                                )
-                                success_count_2 = result_str.count(
-                                    '"status" => "success"',
-                                )
-                            success_count = success_count_1 + success_count_2
-                            result = {
-                                "created_count": success_count,
-                                "created_users": [],
-                                "failed_users": [],
-                            }
+                    # Debug: Log the script being executed
+                    self.logger.debug(f"Executing Ruby script:\n{script}")
+                    
+                    # Execute the Ruby script with extended timeout for user creation
+                    script_result = self.op_client.execute_query(script, timeout=60)
+                    self.logger.debug(f"Ruby script output: {script_result}")
 
+                    # Transfer result file back and read it
+                    result_local_path = Path(self.data_dir) / f'users_result_{batch_num}.json'
+                    container_result_path = f'/tmp/users_result_{batch_num}.json'
+                    
+                    result_path = self.op_client.transfer_file_from_container(
+                        Path(container_result_path), result_local_path
+                    )
+                    
+                    # Read the result
+                    with result_path.open('r', encoding='utf-8') as f:
+                        result = json.load(f)
+                    
+                    # Clean up files
+                    temp_file_path.unlink(missing_ok=True)
+                    result_local_path.unlink(missing_ok=True)
+                    
                     # Extract result stats
-                    batch_created = result.get("created_count", 0)
-                    if isinstance(batch_created, str) and batch_created.isdigit():
-                        batch_created = int(batch_created)
-                    batch_failed = len(batch) - batch_created
+                    batch_created = result.get("created", 0)
+                    batch_failed = result.get("failed", 0)
                     batch_created_users = result.get("created_users", [])
+                    batch_errors = result.get("errors", [])
 
                     created += batch_created
                     failed += batch_failed
                     created_users.extend(batch_created_users)
+
+                    if batch_errors and self.logger.isEnabledFor(logging.DEBUG):
+                        for error in batch_errors[:3]:  # Show first 3 errors
+                            self.logger.debug(f"User creation error: {error}")
 
                     tracker.add_log_item(
                         f"Created {batch_created}/{len(batch)} users in batch",
