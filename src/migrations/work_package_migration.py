@@ -22,6 +22,7 @@ from src.utils.markdown_converter import MarkdownConverter
 from src.utils.enhanced_user_association_migrator import EnhancedUserAssociationMigrator
 from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
 from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
+from src.utils.time_entry_migrator import TimeEntryMigrator
 
 # Get logger from config
 logger = config.logger
@@ -89,6 +90,13 @@ class WorkPackageMigration(BaseMigration):
         self.enhanced_audit_trail_migrator = EnhancedAuditTrailMigrator(
             jira_client=jira_client,
             op_client=op_client
+        )
+        
+        # Initialize time entry migrator
+        self.time_entry_migrator = TimeEntryMigrator(
+            jira_client=jira_client,
+            op_client=op_client,
+            data_dir=self.data_dir
         )
 
         # Load existing mappings
@@ -309,9 +317,9 @@ class WorkPackageMigration(BaseMigration):
                     self.logger.info(
                         f"Saved backup of issues to {backup_path}",
                     )
-                except Exception as backup_error:
-                    self.logger.critical(
-                        f"Also failed to save backup: {backup_error}",
+                except Exception as backup_err:
+                    self.logger.warning(
+                        f"Failed to create backup of state file: {backup_err}",
                     )
 
             return all_issues
@@ -2583,6 +2591,63 @@ class WorkPackageMigration(BaseMigration):
                 "status": "failed"
             }
 
+    def _execute_time_entry_migration(self) -> dict[str, Any]:
+        """Execute time entry migration for all migrated work packages.
+        
+        Returns:
+            Dictionary with time entry migration results
+        """
+        try:
+            self.logger.info("Executing time entry migration...")
+            
+            # Get list of migrated issues for time entry extraction
+            migrated_issues = []
+            for jira_key, wp_data in self.issue_mapping.items():
+                if wp_data.get("migrated", False):
+                    migrated_issues.append({
+                        "jira_key": jira_key,
+                        "work_package_id": wp_data["work_package_id"],
+                        "project_id": wp_data.get("project_id")
+                    })
+            
+            if not migrated_issues:
+                self.logger.warning("No migrated work packages found for time entry migration")
+                return {
+                    "status": "skipped",
+                    "reason": "No migrated work packages found",
+                    "jira_work_logs": {"extracted": 0, "migrated": 0, "errors": []},
+                    "tempo_time_entries": {"extracted": 0, "migrated": 0, "errors": []},
+                    "total_time_entries": {"migrated": 0, "failed": 0}
+                }
+            
+            self.logger.info("Found %d migrated work packages for time entry migration", len(migrated_issues))
+            
+            # Execute time entry migration
+            migration_result = self.time_entry_migrator.migrate_time_entries_for_issues(migrated_issues)
+            
+            # Save migration results
+            time_entry_report_path = self.data_dir / "reports" / "time_entry_migration_report.json"
+            time_entry_report_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(time_entry_report_path, "w", encoding="utf-8") as f:
+                json.dump(migration_result, f, indent=2, default=str)
+            
+            self.logger.info("Time entry migration completed successfully")
+            return {
+                **migration_result,
+                "status": "success"
+            }
+            
+        except Exception as e:
+            self.logger.error("Failed to execute time entry migration: %s", e)
+            return {
+                "status": "failed",
+                "error": str(e),
+                "jira_work_logs": {"extracted": 0, "migrated": 0, "errors": [str(e)]},
+                "tempo_time_entries": {"extracted": 0, "migrated": 0, "errors": [str(e)]},
+                "total_time_entries": {"migrated": 0, "failed": 0}
+            }
+
     def migrate_work_packages(self) -> dict[str, Any]:
         """Migrate work packages from Jira to OpenProject.
 
@@ -2598,5 +2663,10 @@ class WorkPackageMigration(BaseMigration):
         if result.get("status") == "success":
             enhanced_user_result = self._execute_enhanced_user_operations()
             result["enhanced_user_associations"] = enhanced_user_result
+            
+            # Execute time entry migration after work packages and enhanced operations
+            self.logger.info("Starting time entry migration...")
+            time_entry_result = self._execute_time_entry_migration()
+            result["time_entry_migration"] = time_entry_result
         
         return result

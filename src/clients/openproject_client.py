@@ -1882,3 +1882,323 @@ class OpenProjectClient:
         except Exception as e:
             msg = "Failed to delete non-default issue statuses."
             raise QueryExecutionError(msg) from e
+
+    def get_time_entry_activities(self) -> list[dict[str, Any]]:
+        """Get all available time entry activities from OpenProject.
+        
+        Returns:
+            List of time entry activity dictionaries with id, name, and other properties
+            
+        Raises:
+            QueryExecutionError: If the query fails
+        """
+        script = """
+        activities = TimeEntryActivity.active.map do |activity|
+          {
+            id: activity.id,
+            name: activity.name,
+            position: activity.position,
+            is_default: activity.is_default,
+            active: activity.active
+          }
+        end
+        activities
+        """
+        
+        try:
+            result = self.execute_json_query(script)
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            msg = "Failed to retrieve time entry activities."
+            raise QueryExecutionError(msg) from e
+
+    def create_time_entry(self, time_entry_data: dict[str, Any]) -> dict[str, Any] | None:
+        """Create a time entry in OpenProject.
+        
+        Args:
+            time_entry_data: Time entry data in OpenProject API format
+            
+        Returns:
+            Created time entry data with ID, or None if creation failed
+            
+        Raises:
+            QueryExecutionError: If the creation fails
+        """
+        # Extract embedded references and convert to IDs
+        embedded = time_entry_data.get("_embedded", {})
+        
+        # Get work package ID from href
+        work_package_href = embedded.get("workPackage", {}).get("href", "")
+        work_package_id = None
+        if work_package_href:
+            # Extract ID from href like "/api/v3/work_packages/123"
+            import re
+            match = re.search(r'/work_packages/(\d+)', work_package_href)
+            if match:
+                work_package_id = int(match.group(1))
+        
+        # Get user ID from href
+        user_href = embedded.get("user", {}).get("href", "")
+        user_id = None
+        if user_href:
+            # Extract ID from href like "/api/v3/users/456"
+            match = re.search(r'/users/(\d+)', user_href)
+            if match:
+                user_id = int(match.group(1))
+        
+        # Get activity ID from href
+        activity_href = embedded.get("activity", {}).get("href", "")
+        activity_id = None
+        if activity_href:
+            # Extract ID from href like "/api/v3/time_entries/activities/789"
+            match = re.search(r'/activities/(\d+)', activity_href)
+            if match:
+                activity_id = int(match.group(1))
+        
+        if not all([work_package_id, user_id, activity_id]):
+            raise ValueError(
+                f"Missing required IDs: work_package_id={work_package_id}, "
+                f"user_id={user_id}, activity_id={activity_id}"
+            )
+        
+        # Prepare the script with proper Ruby syntax
+        script = f"""
+        begin
+          time_entry = TimeEntry.new(
+            work_package_id: {work_package_id},
+            user_id: {user_id},
+            activity_id: {activity_id},
+            hours: {time_entry_data.get('hours', 0)},
+            spent_on: Date.parse('{time_entry_data.get('spentOn', '')}'),
+            comments: {repr(time_entry_data.get('comment', {}).get('raw', ''))}
+          )
+          
+          if time_entry.save
+            {{
+              id: time_entry.id,
+              work_package_id: time_entry.work_package_id,
+              user_id: time_entry.user_id,
+              activity_id: time_entry.activity_id,
+              hours: time_entry.hours.to_f,
+              spent_on: time_entry.spent_on.to_s,
+              comments: time_entry.comments,
+              created_at: time_entry.created_at.to_s,
+              updated_at: time_entry.updated_at.to_s
+            }}
+          else
+            {{
+              error: "Validation failed",
+              errors: time_entry.errors.full_messages
+            }}
+          end
+        rescue => e
+          {{
+            error: "Creation failed",
+            message: e.message,
+            backtrace: e.backtrace.first(3)
+          }}
+        end
+        """
+        
+        try:
+            result = self.execute_json_query(script)
+            
+            if isinstance(result, dict):
+                if result.get("error"):
+                    logger.warning(f"Time entry creation failed: {result}")
+                    return None
+                return result
+            
+            logger.warning(f"Unexpected time entry creation result: {result}")
+            return None
+            
+        except Exception as e:
+            msg = f"Failed to create time entry: {e}"
+            raise QueryExecutionError(msg) from e
+
+    def get_time_entries(
+        self, 
+        work_package_id: int | None = None,
+        user_id: int | None = None,
+        limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Get time entries from OpenProject with optional filtering.
+        
+        Args:
+            work_package_id: Filter by work package ID
+            user_id: Filter by user ID  
+            limit: Maximum number of entries to return
+            
+        Returns:
+            List of time entry dictionaries
+            
+        Raises:
+            QueryExecutionError: If the query fails
+        """
+        conditions = []
+        if work_package_id:
+            conditions.append(f"work_package_id: {work_package_id}")
+        if user_id:
+            conditions.append(f"user_id: {user_id}")
+        
+        where_clause = f".where({', '.join(conditions)})" if conditions else ""
+        
+        script = f"""
+        time_entries = TimeEntry{where_clause}.limit({limit}).includes(:work_package, :user, :activity)
+        
+        time_entries.map do |entry|
+          {{
+            id: entry.id,
+            work_package_id: entry.work_package_id,
+            work_package_subject: entry.work_package&.subject,
+            user_id: entry.user_id,
+            user_name: entry.user&.name,
+            activity_id: entry.activity_id,
+            activity_name: entry.activity&.name,
+            hours: entry.hours.to_f,
+            spent_on: entry.spent_on.to_s,
+            comments: entry.comments,
+            created_at: entry.created_at.to_s,
+            updated_at: entry.updated_at.to_s
+          }}
+        end
+        """
+        
+        try:
+            result = self.execute_json_query(script)
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            msg = "Failed to retrieve time entries."
+            raise QueryExecutionError(msg) from e
+
+    def batch_create_time_entries(self, time_entries: list[dict[str, Any]]) -> dict[str, Any]:
+        """Create multiple time entries in a single operation.
+        
+        Args:
+            time_entries: List of time entry data dictionaries
+            
+        Returns:
+            Dictionary with creation results and statistics
+            
+        Raises:
+            QueryExecutionError: If the batch operation fails
+        """
+        if not time_entries:
+            return {"created": 0, "failed": 0, "results": []}
+        
+        # Build the batch creation script
+        entries_data = []
+        for i, entry_data in enumerate(time_entries):
+            # Extract required data similar to create_time_entry
+            embedded = entry_data.get("_embedded", {})
+            
+            # Get work package ID
+            work_package_href = embedded.get("workPackage", {}).get("href", "")
+            work_package_id = None
+            if work_package_href:
+                import re
+                match = re.search(r'/work_packages/(\d+)', work_package_href)
+                if match:
+                    work_package_id = int(match.group(1))
+            
+            # Get user ID
+            user_href = embedded.get("user", {}).get("href", "")
+            user_id = None
+            if user_href:
+                match = re.search(r'/users/(\d+)', user_href)
+                if match:
+                    user_id = int(match.group(1))
+            
+            # Get activity ID
+            activity_href = embedded.get("activity", {}).get("href", "")
+            activity_id = None
+            if activity_href:
+                match = re.search(r'/activities/(\d+)', activity_href)
+                if match:
+                    activity_id = int(match.group(1))
+            
+            if all([work_package_id, user_id, activity_id]):
+                entries_data.append({
+                    "index": i,
+                    "work_package_id": work_package_id,
+                    "user_id": user_id,
+                    "activity_id": activity_id,
+                    "hours": entry_data.get('hours', 0),
+                    "spent_on": entry_data.get('spentOn', ''),
+                    "comments": entry_data.get('comment', {}).get('raw', '')
+                })
+        
+        if not entries_data:
+            return {"created": 0, "failed": len(time_entries), "results": []}
+        
+        # Generate Ruby script for batch creation
+        entries_ruby = []
+        for entry in entries_data:
+            entries_ruby.append(f"""
+            {{
+              index: {entry['index']},
+              work_package_id: {entry['work_package_id']},
+              user_id: {entry['user_id']},
+              activity_id: {entry['activity_id']},
+              hours: {entry['hours']},
+              spent_on: '{entry['spent_on']}',
+              comments: {repr(entry['comments'])}
+            }}""")
+        
+        script = f"""
+        entries_data = [{', '.join(entries_ruby)}]
+        results = []
+        created_count = 0
+        failed_count = 0
+        
+        entries_data.each do |entry_data|
+          begin
+            time_entry = TimeEntry.new(
+              work_package_id: entry_data[:work_package_id],
+              user_id: entry_data[:user_id],
+              activity_id: entry_data[:activity_id],
+              hours: entry_data[:hours],
+              spent_on: Date.parse(entry_data[:spent_on]),
+              comments: entry_data[:comments]
+            )
+            
+            if time_entry.save
+              created_count += 1
+              results << {{
+                index: entry_data[:index],
+                success: true,
+                id: time_entry.id,
+                work_package_id: time_entry.work_package_id,
+                hours: time_entry.hours.to_f
+              }}
+            else
+              failed_count += 1
+              results << {{
+                index: entry_data[:index],
+                success: false,
+                errors: time_entry.errors.full_messages
+              }}
+            end
+          rescue => e
+            failed_count += 1
+            results << {{
+              index: entry_data[:index],
+              success: false,
+              error: e.message
+            }}
+          end
+        end
+        
+        {{
+          created: created_count,
+          failed: failed_count,
+          results: results
+        }}
+        """
+        
+        try:
+            result = self.execute_json_query(script)
+            return result if isinstance(result, dict) else {"created": 0, "failed": len(time_entries), "results": []}
+        except Exception as e:
+            msg = f"Failed to batch create time entries: {e}"
+            raise QueryExecutionError(msg) from e

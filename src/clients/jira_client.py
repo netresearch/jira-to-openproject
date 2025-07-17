@@ -5,6 +5,7 @@ Provides a clean, exception-based interface for Jira resource access.
 
 import time
 from typing import Any
+from datetime import datetime
 
 from jira import JIRA, Issue
 from requests import Response
@@ -1646,5 +1647,108 @@ class JiraClient:
 
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo work logs for user {user_key}: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    def get_tempo_time_entries(
+        self,
+        project_keys: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        user_key: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Get Tempo time entries with enhanced metadata for migration.
+        
+        This method provides a migration-friendly interface to Tempo work logs,
+        combining work logs from multiple projects if specified.
+        
+        Args:
+            project_keys: List of project keys to extract entries for (None for all)
+            date_from: Start date for extraction (YYYY-MM-DD format)
+            date_to: End date for extraction (YYYY-MM-DD format)
+            user_key: Specific user key to filter by
+            
+        Returns:
+            List of Tempo time entry dictionaries with migration metadata
+            
+        Raises:
+            JiraApiError: If the API request fails
+        """
+        try:
+            logger.info(
+                f"Fetching Tempo time entries for projects: {project_keys}, "
+                f"date range: {date_from} to {date_to}, user: {user_key}"
+            )
+            
+            all_time_entries = []
+            
+            if project_keys:
+                # Get work logs for specific projects
+                for project_key in project_keys:
+                    try:
+                        project_work_logs = self.get_tempo_all_work_logs_for_project(
+                            project_key=project_key,
+                            date_from=date_from,
+                            date_to=date_to
+                        )
+                        
+                        # Filter by user if specified
+                        if user_key:
+                            project_work_logs = [
+                                log for log in project_work_logs
+                                if log.get("author", {}).get("key") == user_key
+                            ]
+                        
+                        all_time_entries.extend(project_work_logs)
+                        logger.debug(f"Retrieved {len(project_work_logs)} entries for project {project_key}")
+                        
+                    except Exception as e:
+                        logger.warning(f"Failed to get Tempo entries for project {project_key}: {e}")
+                        continue
+            else:
+                # Get work logs using general method (may be limited by Tempo API)
+                if user_key:
+                    all_time_entries = self.get_tempo_user_work_logs(
+                        user_key=user_key,
+                        date_from=date_from,
+                        date_to=date_to
+                    )
+                else:
+                    all_time_entries = self.get_tempo_work_logs(
+                        date_from=date_from,
+                        date_to=date_to
+                    )
+            
+            # Enhance entries with migration metadata
+            enhanced_entries = []
+            for entry in all_time_entries:
+                enhanced_entry = entry.copy()
+                
+                # Add migration-specific metadata
+                enhanced_entry["_migration_metadata"] = {
+                    "source_type": "tempo",
+                    "extraction_timestamp": datetime.now().isoformat(),
+                    "tempo_worklog_id": entry.get("tempo_worklog_id"),
+                    "jira_worklog_id": entry.get("worklogId"),
+                    "issue_key": entry.get("issue", {}).get("key"),
+                    "project_key": entry.get("issue", {}).get("projectKey")
+                }
+                
+                # Ensure consistent field naming for migration
+                if "timeSpentSeconds" in entry:
+                    enhanced_entry["timeSpent"] = entry["timeSpentSeconds"]
+                
+                if "dateStarted" in entry:
+                    enhanced_entry["started"] = entry["dateStarted"]
+                elif "started" not in entry and "created" in entry:
+                    enhanced_entry["started"] = entry["created"]
+                
+                enhanced_entries.append(enhanced_entry)
+            
+            logger.success(f"Retrieved {len(enhanced_entries)} Tempo time entries total")
+            return enhanced_entries
+            
+        except Exception as e:
+            error_msg = f"Failed to retrieve Tempo time entries: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
