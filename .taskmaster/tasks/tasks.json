@@ -154,18 +154,18 @@
       {
         "id": 16,
         "title": "Implement Idempotent Operation",
-        "description": "Develop idempotent operation capability that allows running the migration tool multiple times to synchronize changes from Jira to OpenProject over time. Data preservation safeguards (subtask 4) are now fully implemented and validated, enabling conflict detection and resolution based on configurable policies. Next up: build out recovery and resilience features and finalize conflict‐resolution workflows.",
-        "status": "in-progress",
+        "description": "All idempotent operation capabilities are now implemented and validated, providing robust, repeatable migration runs from Jira to OpenProject. The system supports change detection, state preservation, selective updates, data preservation safeguards with conflict‐resolution policies, and comprehensive recovery and resilience features.",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
-        "details": "Implement the following features:\n1. Change detection and tracking to identify modifications in Jira since last run\n2. State preservation of previous migration runs\n3. Selective update of only changed entities\n4. Safeguards to preserve manually imported or modified data in OpenProject (complete – see subtask 4)\n5. Resumable operations in case of interruptions\n6. Conflict resolution mechanisms when data has been modified in both systems",
-        "testStrategy": "Overall idempotency tests:\n1. Run the migration tool repeatedly against the same Jira dataset with controlled modifications and verify:\n   • Only changed items are updated\n   • Manually modified data in OpenProject is preserved (data preservation tests: 30+ unit tests, 4 integration tests all passing)\n   • No duplicate entities are created\n   • Proper handling of deleted items in Jira\n   • Performance remains consistent across multiple executions\n2. Upcoming recovery tests (for subtask 5 & conflict resolution):\n   • Simulate interruptions and verify checkpointing allows resume without data loss\n   • Force failures and verify rollback to last good state\n   • Validate clear error reporting and remediation guidance",
+        "details": "Implemented idempotent migration features:\n1. Change detection and tracking to identify Jira modifications since last run\n2. State preservation of previous migration runs with versioned storage and rollback capability\n3. Selective updates of only changed entities, minimizing API calls and preserving manual edits\n4. Data preservation safeguards with conflict detection, merge capabilities, and configurable precedence rules\n5. Recovery and resilience features including granular checkpoint management, resume capabilities, intelligent error classification, automated recovery plans, and rollback support\n\nAll features are integrated in BaseMigration through methods: run_idempotent(), run_with_state_management(), run_with_data_preservation(), run_selective_update(), and run_with_recovery().",
+        "testStrategy": "1. Idempotency tests:\n   • Repeated runs against the same Jira dataset verify only changed items are updated, no duplicates occur, deleted items are handled correctly, and manually modified data in OpenProject is preserved.  \n   • Performance consistency across multiple executions.  \n2. Recovery & resilience tests:\n   • 15+ unit tests for CheckpointManager covering checkpoint lifecycle, persistence, progress tracking, and thread safety.  \n   • 12+ integration tests demonstrating end-to-end recovery workflows: simulated interruptions, resume from checkpoints, rollback to last good state, automated recovery plan execution, and user confirmation flows.  \n   • End-to-end validation from failure through successful recovery with real migration operations.  \n3. Conflict resolution tests:\n   • 30+ unit and 4 integration tests validating conflict detection, merge operations, and policy-driven precedence rules across all entity types.  \n   • Clear error reporting and remediation guidance verified.",
         "subtasks": [
           {
             "id": 5,
             "title": "Recovery and Resilience Features",
             "description": "Implement recovery mechanisms for handling interruptions and failures during migration",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Create resilience features that:\n1. Track migration progress at a granular level\n2. Implement checkpointing during long-running operations\n3. Provide the ability to resume interrupted migrations\n4. Create rollback capabilities for failed migrations\n5. Implement robust error handling with clear remediation steps",
             "testStrategy": "TBD - same as parent task"
@@ -1277,11 +1277,51 @@
         ],
         "priority": "medium",
         "subtasks": []
+      },
+      {
+        "id": 67,
+        "title": "Implement Batch API Processing in DataPreservationManager",
+        "description": "Replace the per‐entity OpenProject API calls in DataPreservationManager.analyze_preservation_status() with a batched fetch to improve performance for bulk operations.",
+        "details": "1. Locate the loop in data_preservation_manager.py (lines 806–850) where individual calls to OpenProjectClient.find_record or equivalent are made for each entity.\n2. Introduce a batching helper that uses client.batch_find_records(entity_type, ids_list) or a similar multi‐record endpoint.  \n   a. Collect entity identifiers in chunks sized by a configurable batch_size (default 100).  \n   b. For each chunk, call batch_find_records and accumulate results.  \n3. Map batched responses back to the original entity order or lookup key. Maintain identical behavior for missing or errored entities.  \n4. Implement robust error handling:  \n   • Retry transient HTTP errors per batch with exponential backoff.  \n   • Log and continue on non‐recoverable errors for individual IDs, collecting failures for post‐run review.  \n5. Ensure backward compatibility: preserve all side‐effects, status flags, and data transforms currently applied after each single‐record fetch.  \n6. Make batch_size configurable via existing config system (see Task 2).  \n7. Add clear in‐run logging/progress indicators for batch execution phases.",
+        "testStrategy": "1. Unit tests:  \n   • Mock client.batch_find_records() to verify that:  \n     – analyze_preservation_status() issues only O(n/batch_size) API calls.  \n     – All IDs are requested and results correctly mapped, including simulated missing records.  \n   • Simulate transient and fatal API errors to verify retry/backoff logic and error aggregation.  \n2. Integration/performance tests:  \n   • Create a test suite with >500 dummy OpenProject entities in a staging environment.  \n   • Measure and compare total API calls and elapsed time before and after batching; expect O(batch_count) calls and ≥5× speedup.  \n3. Regression tests: run existing data preservation scenarios to confirm no functional regressions (all previous unit/integration tests still pass).",
+        "status": "pending",
+        "dependencies": [
+          13,
+          16
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 68,
+        "title": "Refactor DataPreservationManager for Better Architecture",
+        "description": "Improve the architecture and readability of DataPreservationManager by decomposing large methods, simplifying exception handling, and introducing a configurable entity registry.",
+        "details": "1. Extract nested exception handling blocks in lines 870–950 into independent, well-named methods (e.g., _handle_user_entity, _handle_project_entity) to eliminate three-level nested try/except structures and improve readability.\n2. Implement a pluggable EntityRegistry: define a registry class that maps entity types to handler classes or functions, replacing hardcoded if/elif mappings in lines 875–945. Allow new entity handlers to register themselves via decorator or config file without modifying core code.\n3. Decompose the ~130-line _get_openproject_entity_data() method (lines 870–990) into smaller single-responsibility methods (e.g., _fetch_entities, _transform_entity_data, _apply_preservation_rules). Each method should have clear inputs/outputs and be covered by unit tests.\n4. Ensure all existing functionality and error handling behavior remain unchanged by preserving exception semantics and return values. Update docstrings and add type annotations for method signatures.\n5. Add logging hooks in each new method to trace the entity processing flow and exception occurrences.\n\nExample snippet for registry registration:\n\n```python\n@EntityRegistry.register('user')\ndef handle_user_entity(data: dict) -> EntityModel:\n    # transform and return model\n```\n",
+        "testStrategy": "1. Unit tests for each extracted handler method: verify correct transformation, exception propagation, and log messages using pytest and caplog.\n2. Registry tests: simulate registration of a fake entity type, confirm it’s discoverable and invoked by the main dispatcher.\n3. End-to-end integration tests: run DataPreservationManager against a recorded OpenProject dataset and compare output to prior golden fixtures to ensure no behavior regressions.\n4. Mutation testing or complexity metrics: verify that cyclomatic complexity of _get_openproject_entity_data is reduced below a defined threshold and no functionality is lost.\n5. Error path tests: inject failures in each handler (e.g., malformed data, API errors) and assert that exceptions bubble up correctly and are logged with contextual information.",
+        "status": "pending",
+        "dependencies": [
+          16
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": 69,
+        "title": "DataPreservationManager Quality Improvements",
+        "description": "Implement several low-priority enhancements to DataPreservationManager for improved robustness, maintainability, and performance.",
+        "details": "1. Input Validation: At line 878+, validate the format of entity_id (e.g., using regex or str.isdigit()) before converting to int. Raise a custom ValidationError with clear messaging on failure.  \n2. Resource Management: In backup creation logic (lines 775–800), replace manual open/close calls with `with` context managers for reading/writing files. Ensure temporary files and streams are always closed even on exceptions.  \n3. Configuration-Driven Entity Mapping: Extract hardcoded entity type mappings into an external YAML or JSON config file. Update the EntityRegistry (from Task 68) initializer to load mapping entries at startup. Provide schema validation for the config and fallback to defaults if entries are missing.  \n4. Performance Optimizations: Implement an in-memory LRU cache for successful timestamp parsing patterns to skip re-testing formats on each call. Refactor bulk backup file operations to use buffered writes and parallel file checks (e.g., via thread pool) where safe.",
+        "testStrategy": "• Input Validation Tests: supply valid and invalid entity_id strings and assert that valid IDs parse correctly and invalid IDs raise ValidationError with the expected message.  \n• Resource Management Tests: simulate file I/O errors using fixtures or mocks and verify that no file handles remain open; use `psutil` or similar to check handle counts.  \n• Config-Driven Mapping Tests: provide a custom mapping file with a new entity type, reload the registry, and assert the new type is recognized and correctly routed; test missing/ malformed config yields default behavior.  \n• Performance Tests: run timestamp parsing over a large sample with repeated formats and assert that the underlying `strptime` call count is reduced via the cache; measure backup creation on a directory of many small files and verify buffered operations complete within expected time threshold.",
+        "status": "pending",
+        "dependencies": [
+          68
+        ],
+        "priority": "low",
+        "subtasks": []
       }
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-17T10:19:42.696Z",
+      "updated": "2025-07-17T10:37:07.189Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
