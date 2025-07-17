@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from src import config
 from src.models import ComponentResult, MigrationError
+from src.clients.jira_client import JiraClient
+from src.clients.openproject_client import OpenProjectClient
 
 if TYPE_CHECKING:
-    from src.clients.jira_client import JiraClient
-    from src.clients.openproject_client import OpenProjectClient
+    pass
 
 # Import dependencies that were missing
 try:
@@ -522,7 +523,7 @@ class BaseMigration:
         )
 
     def should_skip_migration(
-        self, entity_type: str
+        self, entity_type: str, cache_func=None
     ) -> tuple[bool, ChangeReport | None]:
         """Check if migration should be skipped based on change detection.
 
@@ -531,6 +532,7 @@ class BaseMigration:
 
         Args:
             entity_type: Type of entities to check for changes
+            cache_func: Optional function to use for cached entity retrieval
 
         Returns:
             Tuple of (should_skip, change_report). should_skip is True if no changes
@@ -538,7 +540,10 @@ class BaseMigration:
         """
         try:
             # Get current entities from Jira for the specific entity type
-            current_entities = self._get_current_entities_for_type(entity_type)
+            if cache_func:
+                current_entities = cache_func(entity_type)
+            else:
+                current_entities = self._get_current_entities_for_type(entity_type)
 
             # Detect changes
             change_report = self.detect_changes(current_entities, entity_type)
@@ -780,13 +785,50 @@ class BaseMigration:
         migration_record_id = None
         snapshot_id = None
         conflict_report = None
+        
+        # Initialize entity cache for this migration run to eliminate redundant API calls
+        entity_cache: dict[str, list[dict[str, Any]]] = {}
+        cache_invalidated: set[str] = set()
+        total_cache_invalidations = 0
+        
+        def get_cached_entities(type_name: str) -> list[dict[str, Any]]:
+            """Get entities with caching to reduce redundant API calls.
+            
+            Args:
+                type_name: Type of entities to retrieve
+                
+            Returns:
+                List of entities from cache or fresh API call
+            """
+            if type_name not in entity_cache or type_name in cache_invalidated:
+                self.logger.debug(
+                    "Fetching entities for type %s %s", 
+                    type_name,
+                    "(cache invalidated)" if type_name in cache_invalidated else "(not cached)"
+                )
+                entity_cache[type_name] = self._get_current_entities_for_type(type_name)
+                cache_invalidated.discard(type_name)
+            else:
+                self.logger.debug("Using cached entities for type %s", type_name)
+            return entity_cache[type_name]
+        
+        def invalidate_cache(type_name: str) -> None:
+            """Invalidate cache for a specific entity type.
+            
+            Args:
+                type_name: Type of entities to invalidate from cache
+            """
+            nonlocal total_cache_invalidations
+            cache_invalidated.add(type_name)
+            total_cache_invalidations += 1
+            self.logger.debug("Invalidated cache for entity type %s", type_name)
 
         try:
             # Step 1: Analyze conflicts if requested
             if analyze_conflicts:
                 try:
-                    # Get current Jira changes for conflict analysis
-                    current_entities = self._get_current_entities_for_type(entity_type)
+                    # Get current Jira changes for conflict analysis (using cache)
+                    current_entities = get_cached_entities(entity_type)
 
                     # Convert entities to changes format for analysis
                     jira_changes = {
@@ -811,8 +853,8 @@ class BaseMigration:
                         "Failed to analyze conflicts before migration: %s", e
                     )
 
-            # Step 2: Check for changes
-            should_skip, change_report = self.should_skip_migration(entity_type)
+            # Step 2: Check for changes (using cache)
+            should_skip, change_report = self.should_skip_migration(entity_type, get_cached_entities)
 
             if should_skip:
                 return ComponentResult(
@@ -843,7 +885,10 @@ class BaseMigration:
             )
 
             # Step 4: Run the actual migration
+            # Invalidate cache after migration since entities may have been modified
             result = self.run()
+            if result.success and entity_type:
+                invalidate_cache(entity_type)
 
             # Step 5: Process results and update state
             if result.success:
@@ -855,9 +900,9 @@ class BaseMigration:
                     errors=result.errors,
                 )
 
-                # Store original states for future preservation
+                # Store original states for future preservation (using cache)
                 try:
-                    current_entities = self._get_current_entities_for_type(entity_type)
+                    current_entities = get_cached_entities(entity_type)
                     for entity in current_entities:
                         entity_id = str(entity.get("id", entity.get("key", "")))
                         if entity_id:
@@ -876,9 +921,9 @@ class BaseMigration:
                 except Exception as e:
                     self.logger.warning("Failed to store original states: %s", e)
 
-                # Create change detection snapshot
+                # Create change detection snapshot (using cache)
                 try:
-                    current_entities = self._get_current_entities_for_type(entity_type)
+                    current_entities = get_cached_entities(entity_type)
                     snapshot_path = self.create_snapshot(current_entities, entity_type)
                     self.logger.info(
                         "Created change detection snapshot for %s: %s",
@@ -931,6 +976,10 @@ class BaseMigration:
                         "state_snapshot_id": snapshot_id,
                         "state_management": True,
                         "data_preservation": True,
+                        "cache_stats": {
+                            "types_cached": len(entity_cache),
+                            "cache_invalidations": total_cache_invalidations,
+                        }
                     }
                 )
 
@@ -942,29 +991,40 @@ class BaseMigration:
                     error_count=result.failed_count,
                     errors=result.errors,
                 )
+                
+                # Add cache stats to failed result details
+                if not result.details:
+                    result.details = {}
+                result.details.update(
+                    {
+                        "change_report": change_report,
+                        "conflict_report": conflict_report,
+                        "migration_record_id": migration_record_id,
+                        "data_preservation": True,
+                        "cache_stats": {
+                            "types_cached": len(entity_cache),
+                            "cache_invalidations": total_cache_invalidations,
+                        }
+                    }
+                )
 
             return result
 
         except Exception as e:
             self.logger.exception("Error in data preservation workflow: %s", e)
-
-            # Complete migration record with error if it was started
+            # If we have a migration record, mark it as failed
             if migration_record_id:
                 try:
                     self.complete_migration_record(
                         record_id=migration_record_id,
                         success_count=0,
                         error_count=1,
-                        errors=[f"Data preservation workflow error: {e}"],
+                        errors=[str(e)],
                     )
-                except Exception as cleanup_error:
-                    self.logger.warning(
-                        "Failed to complete migration record during error cleanup: %s",
-                        cleanup_error,
-                    )
+                except Exception:
+                    pass  # Avoid masking the original exception
 
-            # Fall back to standard migration if data preservation workflow fails
-            return self.run()
+            raise
 
     def run_with_change_detection(
         self, entity_type: str | None = None
