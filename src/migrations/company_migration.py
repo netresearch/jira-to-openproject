@@ -633,9 +633,8 @@ class CompanyMigration(BaseMigration):
                 )
 
                 # Prepare smaller Ruby script for this batch
-                batch_result = self._create_companies_batch(batch_container_path, i)
-
-                if batch_result:
+                try:
+                    batch_result = self._create_companies_batch(batch_container_path, i)
                     batch_companies = batch_result.get("created", [])
                     created_companies.extend(batch_companies)
                     errors.extend(batch_result.get("errors", []))
@@ -657,6 +656,14 @@ class CompanyMigration(BaseMigration):
                                     "status", "created"
                                 ),  # "existing" or "created"
                             }
+                except MigrationError as e:
+                    self.logger.error("Batch %d failed: %s", i, e)
+                    # Continue with next batch on error
+                    errors.append({
+                        "batch_index": i,
+                        "error": str(e),
+                        "type": "batch_processing_error"
+                    })
 
                 # Clean up batch file
                 try:
@@ -695,7 +702,7 @@ class CompanyMigration(BaseMigration):
 
     def _create_companies_batch(
         self, batch_file_path: Path, batch_index: int
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         """Create a batch of companies using a smaller Ruby script to avoid console crashes.
 
         Args:
@@ -703,7 +710,10 @@ class CompanyMigration(BaseMigration):
             batch_index: Index of this batch for logging
 
         Returns:
-            Dictionary with created companies and errors, or None if execution failed
+            Dictionary with created companies and errors
+
+        Raises:
+            MigrationError: If batch processing fails
         """
         try:
             # Create a compact Ruby script for this batch
@@ -839,11 +849,9 @@ class CompanyMigration(BaseMigration):
                 )
 
         except (ValueError, Exception) as e:
-            self.logger.error("Failed to create companies batch %d: %s", batch_index, e)
-            # For batch processing, we want to stop on error to avoid data corruption
-            if self.config.migration_config.get("stop_on_error", False):
-                raise
-            return None
+            error_msg = f"Failed to create companies batch {batch_index}: {e}"
+            self.logger.error(error_msg)
+            raise MigrationError(error_msg) from e
 
     def migrate_customer_metadata(self) -> ComponentResult:
         """Migrate customer metadata (address, contact info, etc.) to OpenProject projects.

@@ -11,6 +11,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel
 
 from src import config
+from src.models.migration_error import MigrationError
 
 T = TypeVar("T")
 
@@ -94,18 +95,20 @@ def load(
     model_class: type[T],
     filename: str | Path,
     directory: str | Path | None = None,
-    default: Any | None = None,
-) -> T | None:
+) -> T:
     """Load data from a JSON file and convert to specified model type.
 
     Args:
         model_class: Pydantic model class to load into
         filename: File to load from
         directory: Directory to load from (default: config.get_path("data"))
-        default: Default value if file doesn't exist or load fails
 
     Returns:
-        Instance of model_class or default value if loading fails
+        Instance of model_class
+
+    Raises:
+        FileNotFoundError: If the file doesn't exist
+        MigrationError: If data loading or parsing fails
 
     """
     if directory is None:
@@ -122,8 +125,7 @@ def load(
     filepath = directory / filename
 
     if not filepath.exists():
-        config.logger.info("File not found: %s, returning default", filepath)
-        return default
+        raise FileNotFoundError(f"File not found: {filepath}")
 
     try:
         with filepath.open("r", encoding="utf-8") as f:
@@ -141,9 +143,8 @@ def load(
 
         config.logger.info("Loaded data from %s", filepath)
         return result
-    except Exception:
-        config.logger.exception("Failed to load data from %s", filepath)
-        return default
+    except Exception as e:
+        raise MigrationError(f"Failed to load data from {filepath}: {e}") from e
 
 
 def load_dict(

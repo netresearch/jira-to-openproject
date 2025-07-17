@@ -13,7 +13,7 @@ from jira import Issue
 
 from src import config
 from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
 from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult, MigrationError
@@ -1469,24 +1469,8 @@ class WorkPackageMigration(BaseMigration):
                    File.write(result_file_path, result.to_json)
                    puts "Results written to #{result_file_path}"
 
-                   # Also return the result for direct capture
+                   # Return the result for direct capture
                    result
-                 rescue => e
-                   error_result = {
-                     'status' => 'error',
-                     'message' => e.message,
-                     'backtrace' => e.backtrace[0..5]
-                   }
-
-                   # Try to save error to file
-                   begin
-                     File.write(result_file_path, error_result.to_json)
-                   rescue => write_error
-                     puts "Failed to write error to file: #{write_error.message}"
-                   end
-
-                   # Return error result
-                   error_result
                  end
                  """
 
@@ -1498,14 +1482,31 @@ class WorkPackageMigration(BaseMigration):
                 )
 
                 # Execute the Ruby script
-                result = self.op_client.execute_query(
-                    header_script + main_script,
-                    timeout=90
-                )
+                try:
+                    result = self.op_client.execute_query(
+                        header_script + main_script,
+                        timeout=90
+                    )
 
-                if result.get("status") != "success":
+                    # Validate that we got a proper result
+                    if not isinstance(result, dict) or result.get("status") != "success":
+                        error_msg = f"Invalid result format or unsuccessful execution: {result}"
+                        self.logger.error(
+                            f"Rails error during work package creation: {error_msg}",
+                        )
+                        project_tracker.add_log_item(
+                            f"Error: {project_key} (Invalid result format)"
+                        )
+                        project_tracker.increment()
+                        processed_projects.add(project_key)
+                        failed_projects.append(
+                            {"project_key": project_key, "reason": "invalid_result_format"}
+                        )
+                        continue
+
+                except QueryExecutionError as e:
                     self.logger.error(
-                        f"Rails error during work package creation: {result.get('error', 'Unknown error')}",
+                        f"Rails execution error during work package creation: {e}",
                     )
                     project_tracker.add_log_item(
                         f"Error: {project_key} (Rails execution failed)"
@@ -1513,7 +1514,21 @@ class WorkPackageMigration(BaseMigration):
                     project_tracker.increment()
                     processed_projects.add(project_key)
                     failed_projects.append(
-                        {"project_key": project_key, "reason": "rails_execution_failed"}
+                        {"project_key": project_key, "reason": "rails_execution_failed", "error": str(e)}
+                    )
+                    continue
+
+                except Exception as e:
+                    self.logger.exception(
+                        f"Unexpected error during work package creation for {project_key}: {e}",
+                    )
+                    project_tracker.add_log_item(
+                        f"Error: {project_key} (Unexpected error)"
+                    )
+                    project_tracker.increment()
+                    processed_projects.add(project_key)
+                    failed_projects.append(
+                        {"project_key": project_key, "reason": "unexpected_error", "error": str(e)}
                     )
                     continue
 
@@ -2639,14 +2654,9 @@ class WorkPackageMigration(BaseMigration):
             }
             
         except Exception as e:
-            self.logger.error("Failed to execute time entry migration: %s", e)
-            return {
-                "status": "failed",
-                "error": str(e),
-                "jira_work_logs": {"extracted": 0, "migrated": 0, "errors": [str(e)]},
-                "tempo_time_entries": {"extracted": 0, "migrated": 0, "errors": [str(e)]},
-                "total_time_entries": {"migrated": 0, "failed": 0}
-            }
+            error_msg = f"Failed to execute time entry migration: {e}"
+            self.logger.error(error_msg)
+            raise MigrationError(error_msg) from e
 
     def migrate_work_packages(self) -> dict[str, Any]:
         """Migrate work packages from Jira to OpenProject.
@@ -2666,7 +2676,17 @@ class WorkPackageMigration(BaseMigration):
             
             # Execute time entry migration after work packages and enhanced operations
             self.logger.info("Starting time entry migration...")
-            time_entry_result = self._execute_time_entry_migration()
-            result["time_entry_migration"] = time_entry_result
+            try:
+                time_entry_result = self._execute_time_entry_migration()
+                result["time_entry_migration"] = time_entry_result
+            except MigrationError as e:
+                self.logger.error("Time entry migration failed: %s", e)
+                result["time_entry_migration"] = {
+                    "status": "failed",
+                    "error": str(e),
+                    "jira_work_logs": {"extracted": 0, "migrated": 0, "errors": [str(e)]},
+                    "tempo_time_entries": {"extracted": 0, "migrated": 0, "errors": [str(e)]},
+                    "total_time_entries": {"migrated": 0, "failed": 0}
+                }
         
         return result

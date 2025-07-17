@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src import config
-from src.clients.openproject_client import OpenProjectClient
+from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult
@@ -684,45 +684,35 @@ class ProjectMigration(BaseMigration):
                 # Use a Rails command with proper exception handling that returns JSON in all cases
                 # SECURITY: All dynamic fields are now properly escaped to prevent command injection
                 create_script = (
-                    f"begin; "
                     f"p = Project.create!(name: '{name_escaped}', "
                     f"identifier: '{identifier_escaped}', "
                     f"description: '{desc_escaped}', public: false); "
                     f"p.enabled_module_names = ['work_package_tracking', 'wiki']; "
                     f"p.save!; "
-                    f"p.as_json; "
-                    f"rescue => e; "
-                    f"{{error: e.message, success: false}}.to_json; "
-                    f"end"
+                    f"p.as_json"
                 )
 
-                result = self.op_client.execute_query_to_json_file(create_script)
+                try:
+                    result = self.op_client.execute_query_to_json_file(create_script)
 
-                # Check if the result contains an error (from our exception handling)
-                if isinstance(result, dict) and result.get("error"):
-                    error_msg = result.get("error", "Unknown error")
-                    logger.error(
-                        "Rails validation error creating project '%s': %s",
-                        project_data["name"],
-                        error_msg,
-                    )
-                    errors.append(
-                        {
-                            "jira_key": project_data["jira_key"],
-                            "name": project_data["name"],
-                            "errors": [error_msg],
-                            "error_type": "validation_error",
-                        }
-                    )
-
-                    # Check if we should stop on error
-                    if config.migration_config.get("stop_on_error", False):
+                    # Validate that we got a proper project result
+                    if not isinstance(result, dict) or not result.get("id"):
+                        error_msg = f"Unexpected result format: {result}"
                         logger.error(
-                            "Stopping migration due to validation error and --stop-on-error flag is set"
+                            "Error creating project '%s': %s",
+                            project_data["name"],
+                            error_msg,
                         )
-                        raise Exception(f"Project validation failed: {error_msg}")
+                        errors.append(
+                            {
+                                "jira_key": project_data["jira_key"],
+                                "name": project_data["name"],
+                                "errors": [error_msg],
+                                "error_type": "invalid_result",
+                            }
+                        )
+                        continue
 
-                elif isinstance(result, dict) and result.get("id"):
                     logger.info(
                         "Successfully created project '%s' with ID %s",
                         project_data["name"],
@@ -737,8 +727,32 @@ class ProjectMigration(BaseMigration):
                             "created_new": True,
                         }
                     )
-                else:
-                    error_msg = f"Unexpected result format: {result}"
+
+                except QueryExecutionError as e:
+                    error_msg = f"Rails validation error: {e}"
+                    logger.error(
+                        "Rails validation error creating project '%s': %s",
+                        project_data["name"],
+                        error_msg,
+                    )
+                    errors.append(
+                        {
+                            "jira_key": project_data["jira_key"],
+                            "name": project_data["name"],
+                            "errors": [str(e)],
+                            "error_type": "validation_error",
+                        }
+                    )
+
+                    # Check if we should stop on error
+                    if config.migration_config.get("stop_on_error", False):
+                        logger.error(
+                            "Stopping migration due to validation error and --stop-on-error flag is set"
+                        )
+                        raise QueryExecutionError(f"Project validation failed: {e}") from e
+
+                except Exception as e:
+                    error_msg = f"Unexpected error: {e}"
                     logger.error(
                         "Error creating project '%s': %s",
                         project_data["name"],
@@ -758,7 +772,7 @@ class ProjectMigration(BaseMigration):
                         logger.error(
                             "Stopping migration due to format error and --stop-on-error flag is set"
                         )
-                        raise Exception(f"Project creation failed: {error_msg}")
+                        raise QueryExecutionError(f"Project creation failed: {error_msg}") from e
 
             except Exception as e:
                 logger.exception(

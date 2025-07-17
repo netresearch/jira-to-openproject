@@ -4,7 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 from src.models import ComponentResult
+from src.models.migration_error import MigrationError
 from src.utils import data_handler
 
 
@@ -91,21 +94,11 @@ class TestDataHandler(unittest.TestCase):
 
     def test_load_nonexistent_file(self) -> None:
         """Test loading a file that doesn't exist."""
-        # Try to load a nonexistent file
-        result = data_handler.load(
-            ComponentResult, "nonexistent.json", directory=self.temp_dir
-        )
-        assert result is None
-
-        # Try with a default value
-        default = ComponentResult(success=False, message="Default")
-        result = data_handler.load(
-            ComponentResult,
-            "nonexistent.json",
-            directory=self.temp_dir,
-            default=default,
-        )
-        assert result == default
+        # Try to load a nonexistent file - should raise FileNotFoundError
+        with pytest.raises(FileNotFoundError, match="File not found"):
+            data_handler.load(
+                ComponentResult, "nonexistent.json", directory=self.temp_dir
+            )
 
     def test_handling_invalid_json(self) -> None:
         """Test handling invalid JSON data."""
@@ -113,18 +106,8 @@ class TestDataHandler(unittest.TestCase):
         with self.test_filepath.open("w") as f:
             f.write("{invalid json")
 
-        # Try to load the invalid file
-        result = data_handler.load(
-            ComponentResult, self.test_filename, directory=self.temp_dir
-        )
-        assert result is None
-
-        # Try with a default value
-        default = ComponentResult(success=False, message="Default")
-        result = data_handler.load(
-            ComponentResult,
-            self.test_filename,
-            directory=self.temp_dir,
-            default=default,
-        )
-        assert result == default
+        # Try to load the invalid file - should raise MigrationError
+        with pytest.raises(MigrationError, match="Failed to load data"):
+            data_handler.load(
+                ComponentResult, self.test_filename, directory=self.temp_dir
+            )

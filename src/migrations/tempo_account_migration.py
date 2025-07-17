@@ -11,7 +11,7 @@ import requests
 
 from src import config
 from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.clients.openproject_client import OpenProjectClient, OpenProjectError
 from src.display import ProgressTracker
 
 # Get logger from config
@@ -203,14 +203,17 @@ class TempoAccountMigration:
 
     def create_company_in_openproject(
         self, tempo_account: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         """Create a company in OpenProject based on a Tempo account.
 
         Args:
             tempo_account: The Tempo account data
 
         Returns:
-            The created OpenProject company or None if creation failed
+            The created OpenProject company
+
+        Raises:
+            OpenProjectError: If company creation fails
 
         """
         name = tempo_account.get("name")
@@ -247,28 +250,24 @@ class TempoAccountMigration:
             }
 
         # Create the company in OpenProject
-        try:
-            company, was_created = self.op_client.create_company(
-                name=name,
-                identifier=identifier,
-                description=description,
-            )
+        company, was_created = self.op_client.create_company(
+            name=name,
+            identifier=identifier,
+            description=description,
+        )
 
-            if company:
-                if was_created:
-                    logger.info("Successfully created company: %s", name)
-                else:
-                    logger.info(
-                        "Found existing company with identifier '%s' for: %s",
-                        identifier,
-                        name,
-                    )
-                return company
-            logger.error("Failed to create company: %s", name)
-            return None
-        except Exception as e:
-            logger.exception("Error creating company %s: %s", name, e)
-            return None
+        if not company:
+            raise OpenProjectError(f"Failed to create company: {name}")
+
+        if was_created:
+            logger.info("Successfully created company: %s", name)
+        else:
+            logger.info(
+                "Found existing company with identifier '%s' for: %s",
+                identifier,
+                name,
+            )
+        return company
 
     def migrate_accounts(self) -> dict[str, Any]:
         """Migrate Tempo accounts to OpenProject projects.
@@ -322,9 +321,8 @@ class TempoAccountMigration:
                 tracker.update_description(f"Creating account: {account_name}")
 
                 # Create the company in OpenProject
-                op_company = self.create_company_in_openproject(tempo_account)
-
-                if op_company:
+                try:
+                    op_company = self.create_company_in_openproject(tempo_account)
                     # Update the mapping
                     mapping["openproject_id"] = op_company.get("id")
                     mapping["openproject_name"] = op_company.get("name")
@@ -332,8 +330,9 @@ class TempoAccountMigration:
                     tracker.add_log_item(
                         f"Created: {account_name} (ID: {op_company.get('id')})"
                     )
-                else:
-                    tracker.add_log_item(f"Failed: {account_name}")
+                except OpenProjectError as e:
+                    tracker.add_log_item(f"Failed: {account_name} - {e}")
+                    logger.error("Failed to create company for account %s: %s", account_name, e)
 
                 tracker.increment()
 
