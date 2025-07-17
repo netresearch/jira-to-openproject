@@ -16,9 +16,15 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration
-from src.models import ComponentResult
+from src.models import ComponentResult, MigrationError
 from src.utils import data_handler
 from src.utils.markdown_converter import MarkdownConverter
+from src.utils.enhanced_user_association_migrator import EnhancedUserAssociationMigrator
+from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
+from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
+
+# Get logger from config
+logger = config.logger
 
 
 class WorkPackageMigration(BaseMigration):
@@ -66,6 +72,24 @@ class WorkPackageMigration(BaseMigration):
 
         # Initialize markdown converter (will be updated with mappings when available)
         self.markdown_converter = MarkdownConverter()
+
+        # Initialize enhanced user association migrator
+        self.enhanced_user_migrator = EnhancedUserAssociationMigrator(
+            jira_client=jira_client,
+            op_client=op_client
+        )
+        
+        # Initialize enhanced timestamp migrator
+        self.enhanced_timestamp_migrator = EnhancedTimestampMigrator(
+            jira_client=jira_client,
+            op_client=op_client
+        )
+        
+        # Initialize enhanced audit trail migrator
+        self.enhanced_audit_trail_migrator = EnhancedAuditTrailMigrator(
+            jira_client=jira_client,
+            op_client=op_client
+        )
 
         # Load existing mappings
         self._load_mappings()
@@ -335,14 +359,7 @@ class WorkPackageMigration(BaseMigration):
         if hasattr(jira_issue.fields, "reporter") and jira_issue.fields.reporter:
             reporter_name = getattr(jira_issue.fields.reporter, "name", None)
 
-        # Extract dates
-        created_at = None
-        if hasattr(jira_issue.fields, "created"):
-            created_at = jira_issue.fields.created
-
-        updated_at = None
-        if hasattr(jira_issue.fields, "updated"):
-            updated_at = jira_issue.fields.updated
+        # Enhanced timestamp migration will be handled after user associations
 
         # Extract watchers
         watchers = []
@@ -411,29 +428,48 @@ class WorkPackageMigration(BaseMigration):
         if status_id:
             status_op_id = self.status_mapping.get(status_id)
 
-        # Map the assignee
-        assigned_to_id = None
-        if assignee_name and assignee_name in self.user_mapping:
-            assigned_to_id = self.user_mapping[assignee_name]
-
-        # Map creator and reporter (author) users
-        author_id = None
-        if reporter_name and reporter_name in self.user_mapping:
-            author_id = self.user_mapping[reporter_name]
-
-        # If reporter is not available, fall back to creator
-        if not author_id and creator_name and creator_name in self.user_mapping:
-            author_id = self.user_mapping[creator_name]
-
-        # Handle watchers
-        watcher_ids = []
-        for watcher_name in watchers:
-            if watcher_name in self.user_mapping:
-                watcher_id = self.user_mapping[watcher_name]
-                if watcher_id:
-                    watcher_ids.append(watcher_id)
-            else:
-                self.logger.debug("Watcher %s not found in user mapping", watcher_name)
+        # Enhanced user association migration with comprehensive edge case handling
+        work_package_data = {
+            "project_id": project_id,
+            "type_id": type_id,
+            "subject": subject,
+            "jira_id": jira_id,
+            "jira_key": jira_key,
+        }
+        
+        # Use enhanced user association migrator for robust user mapping
+        association_result = self.enhanced_user_migrator.migrate_user_associations(
+            jira_issue=jira_issue,
+            work_package_data=work_package_data,
+            preserve_creator_via_rails=True
+        )
+        
+        # Log any warnings from user association migration
+        if association_result["warnings"]:
+            for warning in association_result["warnings"]:
+                self.logger.warning("User association: %s", warning)
+        
+        # Extract user association results
+        assigned_to_id = work_package_data.get("assigned_to_id")
+        author_id = work_package_data.get("author_id")
+        watcher_ids = work_package_data.get("watcher_ids", [])
+        
+        # Enhanced timestamp migration with comprehensive datetime preservation
+        timestamp_result = self.enhanced_timestamp_migrator.migrate_timestamps(
+            jira_issue=jira_issue,
+            work_package_data=work_package_data,
+            use_rails_for_immutable=True
+        )
+        
+        # Log any warnings from timestamp migration
+        if timestamp_result["warnings"]:
+            for warning in timestamp_result["warnings"]:
+                self.logger.warning("Timestamp migration: %s", warning)
+        
+        # Log any errors from timestamp migration
+        if timestamp_result["errors"]:
+            for error in timestamp_result["errors"]:
+                self.logger.error("Timestamp migration error: %s", error)
 
         # Add Jira issue key to description for reference
         jira_reference = f"\n\n*Imported from Jira issue: {jira_key}*"
@@ -442,15 +478,9 @@ class WorkPackageMigration(BaseMigration):
         else:
             description = jira_reference
 
-        # Prepare work package data
-        work_package = {
-            "project_id": project_id,
-            "type_id": type_id,
-            "subject": subject,
-            "description": description,
-            "jira_id": jira_id,
-            "jira_key": jira_key,
-        }
+        # Update work package data with description (work_package_data was created earlier)
+        work_package = work_package_data
+        work_package["description"] = description
 
         # Add optional fields if available
         if status_op_id:
@@ -462,11 +492,7 @@ class WorkPackageMigration(BaseMigration):
         if watcher_ids:
             work_package["watcher_ids"] = watcher_ids
 
-        # Handle dates
-        if created_at:
-            work_package["created_at"] = created_at
-        if updated_at:
-            work_package["updated_at"] = updated_at
+        # Timestamps are now handled by enhanced timestamp migrator
 
         # Process custom fields
         if custom_fields:
@@ -964,11 +990,27 @@ class WorkPackageMigration(BaseMigration):
                             }
                             continue
 
-                        # Prepare work package data
+                                                # Prepare work package data
                         try:
                             wp_data = self._prepare_work_package(issue, op_project_id)
                             if wp_data:
                                 work_packages_data.append(wp_data)
+                                
+                                # Extract audit trail data while we have access to the full Jira issue
+                                # Store it for later processing after work packages are created
+                                if hasattr(issue, 'changelog') and issue.changelog:
+                                    try:
+                                        changelog_entries = self.enhanced_audit_trail_migrator.extract_changelog_from_issue(issue)
+                                        if changelog_entries:
+                                            # Store the changelog data with the Jira issue key for later processing
+                                            jira_id = issue.id if hasattr(issue, 'id') else issue.get('id')
+                                            self.enhanced_audit_trail_migrator.changelog_data[jira_id] = {
+                                                'jira_issue_key': issue_key,
+                                                'changelog_entries': changelog_entries
+                                            }
+                                    except Exception as audit_error:
+                                        self.logger.warning(f"Failed to extract audit trail for {issue_key}: {audit_error}")
+                                        
                         except Exception as e:
                             # Log the error with details about the issue
                             self.logger.exception(
@@ -2430,6 +2472,117 @@ class WorkPackageMigration(BaseMigration):
             return formatted[:57] + "..."
         return formatted
 
+    def _execute_enhanced_user_operations(self) -> dict[str, Any]:
+        """Execute queued Rails operations for enhanced user association and timestamp preservation.
+        
+        Returns:
+            Dictionary with execution results
+        """
+        try:
+            # Execute Rails operations for user association preservation
+            user_rails_result = self.enhanced_user_migrator.execute_rails_author_operations(
+                self.work_package_mapping
+            )
+            
+            if user_rails_result["processed"] > 0:
+                self.logger.success(
+                    "Successfully executed %d Rails operations for user association preservation",
+                    user_rails_result["processed"]
+                )
+            
+            if user_rails_result["errors"]:
+                for error in user_rails_result["errors"]:
+                    self.logger.error("User Rails operation error: %s", error)
+            
+            # Execute Rails operations for timestamp preservation
+            timestamp_rails_result = self.enhanced_timestamp_migrator.execute_rails_timestamp_operations(
+                self.work_package_mapping
+            )
+            
+            if timestamp_rails_result["processed"] > 0:
+                self.logger.success(
+                    "Successfully executed %d Rails operations for timestamp preservation",
+                    timestamp_rails_result["processed"]
+                )
+            
+            if timestamp_rails_result["errors"]:
+                for error in timestamp_rails_result["errors"]:
+                    self.logger.error("Timestamp Rails operation error: %s", error)
+            
+            # Execute Rails operations for audit trail preservation
+            audit_rails_result = self.enhanced_audit_trail_migrator.execute_rails_audit_operations(
+                self.work_package_mapping
+            )
+            
+            if audit_rails_result["processed"] > 0:
+                self.logger.success(
+                    "Successfully executed %d Rails operations for audit trail preservation",
+                    audit_rails_result["processed"]
+                )
+            
+            if audit_rails_result["errors"]:
+                for error in audit_rails_result["errors"]:
+                    self.logger.error("Audit trail Rails operation error: %s", error)
+            
+            # Save enhanced mappings and results for future reference
+            self.enhanced_user_migrator.save_enhanced_mappings()
+            self.enhanced_timestamp_migrator.save_migration_results()
+            self.enhanced_audit_trail_migrator.save_migration_results()
+            
+            # Generate reports
+            association_report = self.enhanced_user_migrator.generate_association_report()
+            timestamp_report = self.enhanced_timestamp_migrator.generate_timestamp_report()
+            audit_trail_report = self.enhanced_audit_trail_migrator.generate_audit_trail_report()
+            
+            self.logger.info(
+                "User association migration summary: %d total users, %d mapped (%.1f%%), %d unmapped, %d deleted",
+                association_report["summary"]["total_users"],
+                association_report["summary"]["mapped_users"],
+                association_report["summary"]["mapping_percentage"],
+                association_report["summary"]["unmapped_users"],
+                association_report["summary"]["deleted_users"]
+            )
+            
+            self.logger.info(
+                "Timestamp migration summary: %d total issues, %d successful (%.1f%%), %d partial, %d failed",
+                timestamp_report["summary"]["total_issues"],
+                timestamp_report["summary"]["successful_migrations"],
+                timestamp_report["summary"]["success_percentage"],
+                timestamp_report["summary"]["partial_migrations"],
+                timestamp_report["summary"]["failed_migrations"]
+            )
+            
+            self.logger.info(
+                "Audit trail migration summary: %d total entries, %d successful (%.1f%%), %d failed, %d skipped",
+                audit_trail_report["summary"]["total_changelog_entries"],
+                audit_trail_report["summary"]["successful_migrations"],
+                audit_trail_report["summary"]["success_rate"],
+                audit_trail_report["summary"]["failed_migrations"],
+                audit_trail_report["summary"]["skipped_entries"]
+            )
+            
+            return {
+                "user_rails_operations": user_rails_result,
+                "timestamp_rails_operations": timestamp_rails_result,
+                "audit_trail_operations": audit_rails_result,
+                "association_report": association_report,
+                "timestamp_report": timestamp_report,
+                "audit_trail_report": audit_trail_report,
+                "status": "success"
+            }
+            
+        except Exception as e:
+            self.logger.error("Failed to execute enhanced metadata operations: %s", e)
+            return {
+                "user_rails_operations": {"processed": 0, "errors": [str(e)]},
+                "timestamp_rails_operations": {"processed": 0, "errors": [str(e)]},
+                "audit_trail_operations": {"processed": 0, "errors": [str(e)]},
+                "association_report": {},
+                "timestamp_report": {},
+                "audit_trail_report": {},
+                "status": "failed"
+            }
+
     def migrate_work_packages(self) -> dict[str, Any]:
         """Migrate work packages from Jira to OpenProject.
 
@@ -2439,4 +2592,11 @@ class WorkPackageMigration(BaseMigration):
             Dictionary with migration results
 
         """
-        return self._migrate_work_packages()
+        result = self._migrate_work_packages()
+        
+        # Execute enhanced user association operations after work package creation
+        if result.get("status") == "success":
+            enhanced_user_result = self._execute_enhanced_user_operations()
+            result["enhanced_user_associations"] = enhanced_user_result
+        
+        return result
