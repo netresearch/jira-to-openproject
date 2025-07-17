@@ -53,6 +53,7 @@ class TestEnhancedAuditTrailMigrator:
         """Create sample Jira changelog data."""
         return [
             {
+                "id": "12345",
                 "created": "2023-01-15T10:30:00.000+0000",
                 "author": {
                     "name": "john.doe",
@@ -75,6 +76,7 @@ class TestEnhancedAuditTrailMigrator:
                 ]
             },
             {
+                "id": "12346",
                 "created": "2023-01-16T14:45:30.000+0000",
                 "author": {
                     "name": "jane.smith",
@@ -303,10 +305,10 @@ class TestEnhancedAuditTrailMigrator:
         """Test generating audit comment with None values."""
         migrator = migrator_with_mocks
         
-        change_item = {"field": "assignee", "old_value": None, "new_value": "john.doe"}
+        change_item = {"field": "assignee", "fromString": None, "toString": "john.doe"}
         comment = migrator._generate_audit_comment(change_item)
         
-        assert "Changed assignee from '' to 'john.doe'" in comment
+        assert comment == "Changed assignee from 'empty' to 'john.doe'"
 
     def test_transform_changelog_to_audit_events(self, migrator_with_mocks, sample_changelog_data, sample_user_mapping):
         """Test transforming changelog to audit events."""
@@ -314,23 +316,30 @@ class TestEnhancedAuditTrailMigrator:
         migrator.user_mapping = sample_user_mapping
         
         work_package_id = 1001
-        events = migrator.transform_changelog_to_audit_events(sample_changelog_data, work_package_id)
+        jira_issue_key = "TEST-123"
+        events = migrator.transform_changelog_to_audit_events(sample_changelog_data, jira_issue_key, work_package_id)
         
-        assert len(events) == 2
+        assert len(events) == 3
         
-        # First event
+        # First event (summary change)
         event1 = events[0]
-        assert event1["work_package_id"] == work_package_id
+        assert event1["openproject_work_package_id"] == work_package_id
         assert event1["user_id"] == 123  # john.doe mapped to 123
         assert event1["created_at"] == "2023-01-15T10:30:00.000+0000"
-        assert len(event1["changes"]) == 2
-        assert "Changed subject from 'Old Title' to 'New Title'" in event1["notes"]
+        assert event1["changes"] == {"subject": ["Old Title", "New Title"]}
+        assert event1["comment"] == "Changed summary from 'Old Title' to 'New Title'"
         
-        # Second event
+        # Second event (status change)
         event2 = events[1]
-        assert event2["user_id"] == 456  # jane.smith mapped to 456
-        assert event2["created_at"] == "2023-01-16T14:45:30.000+0000"
-        assert len(event2["changes"]) == 1
+        assert event2["user_id"] == 123  # john.doe mapped to 123
+        assert event2["created_at"] == "2023-01-15T10:30:00.000+0000"
+        assert event2["changes"] == {"status_id": ["1", "3"]}
+        
+        # Third event (assignee change)
+        event3 = events[2]
+        assert event3["user_id"] == 456  # jane.smith mapped to 456
+        assert event3["created_at"] == "2023-01-16T14:45:30.000+0000"
+        assert event3["changes"] == {"assigned_to_id": [123, 456]}
 
     def test_transform_changelog_unmapped_user(self, migrator_with_mocks, sample_changelog_data):
         """Test transforming changelog with unmapped user."""
@@ -338,14 +347,14 @@ class TestEnhancedAuditTrailMigrator:
         migrator.user_mapping = {"john.doe": 123}  # Missing jane.smith
         
         work_package_id = 1001
-        events = migrator.transform_changelog_to_audit_events(sample_changelog_data, work_package_id)
+        jira_issue_key = "TEST-123"
+        events = migrator.transform_changelog_to_audit_events(sample_changelog_data, jira_issue_key, work_package_id)
         
-        assert len(events) == 2
+        assert len(events) == 3
         
-        # Second event should use admin fallback
-        event2 = events[1]
-        assert event2["user_id"] == 1  # Admin fallback
-        assert "jane.smith" in event2["notes"]  # Original user mentioned in notes
+        # Third event should use admin fallback since jane.smith is unmapped
+        event3 = events[2]
+        assert event3["user_id"] == 1  # Admin fallback
 
     def test_migrate_audit_trail_for_issue(self, migrator_with_mocks, sample_jira_issue, sample_user_mapping):
         """Test migrating audit trail for a single issue."""
