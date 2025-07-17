@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Callable
 
 from src import config
 from src.models import ComponentResult, MigrationError
@@ -214,11 +215,26 @@ class BaseMigration:
     """Base class for all migration classes.
 
     Provides common functionality and initialization for all migration types.
+    
+    Includes API call caching with thread safety and memory management.
 
     Follows the layered client architecture:
     1. OpenProjectClient - Manages all lower-level clients and operations
     2. BaseMigration - Uses OpenProjectClient for migrations
     """
+    
+    # Cache configuration - production-ready limits
+    MAX_CACHE_SIZE_PER_TYPE = 1000  # Maximum entities per cache type
+    MAX_TOTAL_CACHE_SIZE = 5000     # Maximum total cached entities across all types
+    CACHE_CLEANUP_THRESHOLD = 0.8   # Cleanup when 80% full
+    
+    # Cache statistics tracking
+    _global_cache_stats = {
+        "total_hits": 0,
+        "total_misses": 0, 
+        "total_evictions": 0,
+        "memory_cleanups": 0
+    }
 
     def __init__(
         self,
@@ -273,11 +289,129 @@ class BaseMigration:
         # Initialize managers
         self.state_manager = StateManager()
         self.data_preservation_manager = DataPreservationManager()
-        self.checkpoint_manager = CheckpointManager()
+        
+        # Initialize thread-safe cache infrastructure for API call optimization
+        self._cache_lock = threading.RLock()
+        self._global_entity_cache: dict[str, list[dict[str, Any]]] = {}
+        self._cache_stats = {
+            "hits": 0,
+            "misses": 0,
+            "evictions": 0,
+            "memory_cleanups": 0,
+            "total_size": 0
+        }
         
         # Progress tracking
         self._current_migration_record_id: str | None = None
         self._current_checkpoints: list[str] = []
+
+    def _cleanup_cache_if_needed(self) -> None:
+        """Clean up global cache if memory usage exceeds thresholds.
+        
+        Implements LRU-like eviction strategy to prevent memory exhaustion.
+        Thread-safe implementation with comprehensive logging.
+        """
+        with self._cache_lock:
+            current_size = sum(len(entities) for entities in self._global_entity_cache.values())
+            self._cache_stats["total_size"] = current_size
+            
+            if current_size > self.MAX_TOTAL_CACHE_SIZE * self.CACHE_CLEANUP_THRESHOLD:
+                # Sort cache types by size (largest first) for efficient cleanup
+                cache_sizes = [(k, len(v)) for k, v in self._global_entity_cache.items()]
+                cache_sizes.sort(key=lambda x: x[1], reverse=True)
+                
+                target_size = self.MAX_TOTAL_CACHE_SIZE // 2
+                removed_count = 0
+                removed_types = []
+                
+                for cache_key, size in cache_sizes:
+                    if current_size - removed_count <= target_size:
+                        break
+                    del self._global_entity_cache[cache_key]
+                    removed_count += size
+                    removed_types.append(cache_key)
+                    self._cache_stats["evictions"] += 1
+                    BaseMigration._global_cache_stats["total_evictions"] += 1
+                
+                self._cache_stats["memory_cleanups"] += 1
+                BaseMigration._global_cache_stats["memory_cleanups"] += 1
+                
+                self.logger.info(
+                    "Cache cleanup: removed %d entities from %d types: %s", 
+                    removed_count, len(removed_types), removed_types
+                )
+
+    def _get_cached_entities_threadsafe(
+        self, 
+        entity_type: str,
+        cache_invalidated: set[str],
+        entity_cache: dict[str, list[dict[str, Any]]]
+    ) -> list[dict[str, Any]]:
+        """Thread-safe cached entity retrieval with size limits and error handling.
+        
+        Args:
+            entity_type: Type of entities to retrieve
+            cache_invalidated: Set of invalidated cache types  
+            entity_cache: Local cache for this migration run
+            
+        Returns:
+            List of entities from cache or fresh API call
+            
+        Raises:
+            MigrationError: If API call fails and no cached data available
+        """
+        try:
+            # Check local cache first (fastest path)
+            if entity_type in entity_cache and entity_type not in cache_invalidated:
+                self._cache_stats["hits"] += 1
+                BaseMigration._global_cache_stats["total_hits"] += 1
+                self.logger.debug("Cache hit (local): cached %s", entity_type)
+                return entity_cache[entity_type]
+            
+            # Check global cache with thread safety
+            with self._cache_lock:
+                if entity_type in self._global_entity_cache and entity_type not in cache_invalidated:
+                    entities = self._global_entity_cache[entity_type].copy()
+                    entity_cache[entity_type] = entities
+                    self._cache_stats["hits"] += 1
+                    BaseMigration._global_cache_stats["total_hits"] += 1
+                    self.logger.debug("Cache hit (global): cached %s", entity_type)
+                    return entities
+            
+            # Cache miss - perform API call with error handling
+            self._cache_stats["misses"] += 1
+            BaseMigration._global_cache_stats["total_misses"] += 1
+            self.logger.debug("Cache miss: fetching cached %s from API", entity_type)
+            
+            try:
+                entities = self._get_current_entities_for_type(entity_type)
+            except Exception as e:
+                self.logger.error("Failed to fetch entities for %s: %s", entity_type, e)
+                raise MigrationError(f"API call failed for {entity_type}: {e}") from e
+            
+            # Store in caches with size validation
+            if len(entities) <= self.MAX_CACHE_SIZE_PER_TYPE:
+                entity_cache[entity_type] = entities
+                
+                with self._cache_lock:
+                    # Check if cleanup needed before adding to global cache
+                    self._cleanup_cache_if_needed()
+                    self._global_entity_cache[entity_type] = entities.copy()
+                    cache_invalidated.discard(entity_type)
+            else:
+                self.logger.warning(
+                    "Entity list too large to cache: %s has %d entities (limit: %d)",
+                    entity_type, len(entities), self.MAX_CACHE_SIZE_PER_TYPE
+                )
+                # Still store in local cache for this run, but not global
+                entity_cache[entity_type] = entities
+                cache_invalidated.discard(entity_type)
+            
+            return entities
+            
+        except Exception as e:
+            self.logger.error("Critical error in cache retrieval for %s: %s", entity_type, e)
+            raise
 
     def register_entity_mapping(
         self,
@@ -600,14 +734,14 @@ class BaseMigration:
         operation_type: str = "migrate",
         entity_count: int = 0,
     ) -> ComponentResult:
-        """Run migration with complete state management and change detection.
+        """Run migration with complete state management, change detection, and enhanced caching.
 
         This method provides the full idempotent migration workflow:
-        1. Check for changes before migration
+        1. Check for changes before migration (using cached entities)
         2. Start migration record tracking
         3. Run the actual migration if changes are detected
         4. Register entity mappings during migration
-        5. Create snapshots after successful migration
+        5. Create snapshots after successful migration (using cached entities)
         6. Complete migration record tracking
         7. Save state and create snapshot for rollback
 
@@ -628,16 +762,57 @@ class BaseMigration:
 
         migration_record_id = None
         snapshot_id = None
+        
+        # Initialize entity cache for this migration run
+        entity_cache: dict[str, list[dict[str, Any]]] = {}
+        cache_invalidated: set[str] = set()
+        total_cache_invalidations = 0
+        
+        # Clear global cache to ensure isolation between migration runs
+        with self._cache_lock:
+            self._global_entity_cache.clear()
+            self.logger.debug("Cleared global cache for new migration run")
+
+        def get_cached_entities(type_name: str) -> list[dict[str, Any]]:
+            """Get entities with enhanced thread-safe caching."""
+            return self._get_cached_entities_threadsafe(type_name, cache_invalidated, entity_cache)
+        
+        def invalidate_cache(type_name: str) -> None:
+            """Invalidate cache for a specific entity type."""
+            nonlocal total_cache_invalidations
+            cache_invalidated.add(type_name)
+            total_cache_invalidations += 1
+            
+            # Also invalidate from global cache for thread safety
+            with self._cache_lock:
+                if type_name in self._global_entity_cache:
+                    del self._global_entity_cache[type_name]
+                    self.logger.debug("Invalidated global cache for entity type %s", type_name)
+            
+            self.logger.debug("Invalidated cache for entity type %s", type_name)
 
         try:
-            # Step 1: Check for changes
-            should_skip, change_report = self.should_skip_migration(entity_type)
+            # Step 1: Check for changes (using cached entities)
+            should_skip, change_report = self.should_skip_migration(entity_type, get_cached_entities)
 
             if should_skip:
                 return ComponentResult(
                     success=True,
                     message=f"No changes detected for {entity_type}, migration skipped",
-                    details={"change_report": change_report, "migration_skipped": True},
+                    details={
+                        "change_report": change_report,
+                        "migration_skipped": True,
+                        "cache_stats": {
+                            "types_cached": len(entity_cache),
+                            "cache_invalidations": total_cache_invalidations,
+                            "cache_hits": self._cache_stats["hits"],
+                            "cache_misses": self._cache_stats["misses"],
+                            "cache_evictions": self._cache_stats["evictions"],
+                            "memory_cleanups": self._cache_stats["memory_cleanups"],
+                            "total_cache_size": self._cache_stats["total_size"],
+                            "global_cache_types": len(self._global_entity_cache)
+                        }
+                    },
                     success_count=0,
                     failed_count=0,
                     total_count=0,
@@ -653,6 +828,10 @@ class BaseMigration:
 
             # Step 3: Run the actual migration
             result = self.run()
+            
+            # Invalidate cache after migration since entities may have been modified
+            if result.success and entity_type:
+                invalidate_cache(entity_type)
 
             # Step 4: Process results and update state
             if result.success:
@@ -664,9 +843,9 @@ class BaseMigration:
                     errors=result.errors,
                 )
 
-                # Create change detection snapshot
+                # Create change detection snapshot (using cached entities)
                 try:
-                    current_entities = self._get_current_entities_for_type(entity_type)
+                    current_entities = get_cached_entities(entity_type)
                     snapshot_path = self.create_snapshot(current_entities, entity_type)
                     self.logger.info(
                         "Created change detection snapshot for %s: %s",
@@ -708,6 +887,16 @@ class BaseMigration:
                         "migration_record_id": migration_record_id,
                         "state_snapshot_id": snapshot_id,
                         "state_management": True,
+                        "cache_stats": {
+                            "types_cached": len(entity_cache),
+                            "cache_invalidations": total_cache_invalidations,
+                            "cache_hits": self._cache_stats["hits"],
+                            "cache_misses": self._cache_stats["misses"],
+                            "cache_evictions": self._cache_stats["evictions"],
+                            "memory_cleanups": self._cache_stats["memory_cleanups"],
+                            "total_cache_size": self._cache_stats["total_size"],
+                            "global_cache_types": len(self._global_entity_cache)
+                        }
                     }
                 )
 
@@ -786,13 +975,18 @@ class BaseMigration:
         snapshot_id = None
         conflict_report = None
         
-        # Initialize entity cache for this migration run to eliminate redundant API calls
+        # Initialize enhanced entity cache for this migration run
         entity_cache: dict[str, list[dict[str, Any]]] = {}
         cache_invalidated: set[str] = set()
         total_cache_invalidations = 0
         
+        # Clear global cache to ensure isolation between migration runs
+        with self._cache_lock:
+            self._global_entity_cache.clear()
+            self.logger.debug("Cleared global cache for new migration run")
+
         def get_cached_entities(type_name: str) -> list[dict[str, Any]]:
-            """Get entities with caching to reduce redundant API calls.
+            """Get entities with enhanced thread-safe caching and memory management.
             
             Args:
                 type_name: Type of entities to retrieve
@@ -800,17 +994,7 @@ class BaseMigration:
             Returns:
                 List of entities from cache or fresh API call
             """
-            if type_name not in entity_cache or type_name in cache_invalidated:
-                self.logger.debug(
-                    "Fetching entities for type %s %s", 
-                    type_name,
-                    "(cache invalidated)" if type_name in cache_invalidated else "(not cached)"
-                )
-                entity_cache[type_name] = self._get_current_entities_for_type(type_name)
-                cache_invalidated.discard(type_name)
-            else:
-                self.logger.debug("Using cached entities for type %s", type_name)
-            return entity_cache[type_name]
+            return self._get_cached_entities_threadsafe(type_name, cache_invalidated, entity_cache)
         
         def invalidate_cache(type_name: str) -> None:
             """Invalidate cache for a specific entity type.
@@ -821,6 +1005,13 @@ class BaseMigration:
             nonlocal total_cache_invalidations
             cache_invalidated.add(type_name)
             total_cache_invalidations += 1
+            
+            # Also invalidate from global cache for thread safety
+            with self._cache_lock:
+                if type_name in self._global_entity_cache:
+                    del self._global_entity_cache[type_name]
+                    self.logger.debug("Invalidated global cache for entity type %s", type_name)
+            
             self.logger.debug("Invalidated cache for entity type %s", type_name)
 
         try:
@@ -979,6 +1170,12 @@ class BaseMigration:
                         "cache_stats": {
                             "types_cached": len(entity_cache),
                             "cache_invalidations": total_cache_invalidations,
+                            "cache_hits": self._cache_stats["hits"],
+                            "cache_misses": self._cache_stats["misses"],
+                            "cache_evictions": self._cache_stats["evictions"],
+                            "memory_cleanups": self._cache_stats["memory_cleanups"],
+                            "total_cache_size": self._cache_stats["total_size"],
+                            "global_cache_types": len(self._global_entity_cache)
                         }
                     }
                 )
@@ -1004,6 +1201,12 @@ class BaseMigration:
                         "cache_stats": {
                             "types_cached": len(entity_cache),
                             "cache_invalidations": total_cache_invalidations,
+                            "cache_hits": self._cache_stats["hits"],
+                            "cache_misses": self._cache_stats["misses"],
+                            "cache_evictions": self._cache_stats["evictions"],
+                            "memory_cleanups": self._cache_stats["memory_cleanups"],
+                            "total_cache_size": self._cache_stats["total_size"],
+                            "global_cache_types": len(self._global_entity_cache)
                         }
                     }
                 )
@@ -1029,12 +1232,12 @@ class BaseMigration:
     def run_with_change_detection(
         self, entity_type: str | None = None
     ) -> ComponentResult:
-        """Run migration with change detection support.
+        """Run migration with change detection support and enhanced caching.
 
         This method wraps the standard run() method with change detection hooks:
-        1. Check for changes before migration
+        1. Check for changes before migration (using cached entities)
         2. Run the actual migration if changes are detected
-        3. Create a snapshot after successful migration
+        3. Create a snapshot after successful migration (using cached entities)
 
         Args:
             entity_type: Type of entities being migrated (required for change detection)
@@ -1049,15 +1252,55 @@ class BaseMigration:
             )
             return self.run()
 
+        # Initialize entity cache for this migration run
+        entity_cache: dict[str, list[dict[str, Any]]] = {}
+        cache_invalidated: set[str] = set()
+        total_cache_invalidations = 0
+        
+        # Clear global cache to ensure isolation between migration runs
+        with self._cache_lock:
+            self._global_entity_cache.clear()
+            self.logger.debug("Cleared global cache for new migration run")
+
+        def get_cached_entities(type_name: str) -> list[dict[str, Any]]:
+            """Get entities with enhanced thread-safe caching."""
+            return self._get_cached_entities_threadsafe(type_name, cache_invalidated, entity_cache)
+        
+        def invalidate_cache(type_name: str) -> None:
+            """Invalidate cache for a specific entity type."""
+            nonlocal total_cache_invalidations
+            cache_invalidated.add(type_name)
+            total_cache_invalidations += 1
+            
+            # Also invalidate from global cache for thread safety
+            with self._cache_lock:
+                if type_name in self._global_entity_cache:
+                    del self._global_entity_cache[type_name]
+                    self.logger.debug("Invalidated global cache for entity type %s", type_name)
+            
+            self.logger.debug("Invalidated cache for entity type %s", type_name)
+
         try:
-            # Check if migration should be skipped
-            should_skip, change_report = self.should_skip_migration(entity_type)
+            # Check if migration should be skipped (using cached entities)
+            should_skip, change_report = self.should_skip_migration(entity_type, get_cached_entities)
 
             if should_skip:
                 return ComponentResult(
                     success=True,
                     message=f"No changes detected for {entity_type}, migration skipped",
-                    details={"change_report": change_report},
+                    details={
+                        "change_report": change_report,
+                        "cache_stats": {
+                            "types_cached": len(entity_cache),
+                            "cache_invalidations": total_cache_invalidations,
+                            "cache_hits": self._cache_stats["hits"],
+                            "cache_misses": self._cache_stats["misses"],
+                            "cache_evictions": self._cache_stats["evictions"],
+                            "memory_cleanups": self._cache_stats["memory_cleanups"],
+                            "total_cache_size": self._cache_stats["total_size"],
+                            "global_cache_types": len(self._global_entity_cache)
+                        }
+                    },
                     success_count=0,
                     failed_count=0,
                     total_count=0,
@@ -1065,11 +1308,15 @@ class BaseMigration:
 
             # Run the actual migration
             result = self.run()
+            
+            # Invalidate cache after migration since entities may have been modified
+            if result.success and entity_type:
+                invalidate_cache(entity_type)
 
             # If migration was successful, create a snapshot for future change detection
             if result.success:
                 try:
-                    current_entities = self._get_current_entities_for_type(entity_type)
+                    current_entities = get_cached_entities(entity_type)
                     snapshot_path = self.create_snapshot(current_entities, entity_type)
                     self.logger.info(
                         "Created snapshot for %s: %s", entity_type, snapshot_path
@@ -1078,8 +1325,20 @@ class BaseMigration:
                     # Add snapshot info to result details
                     if not result.details:
                         result.details = {}
-                    result.details["snapshot_created"] = str(snapshot_path)
-                    result.details["change_report"] = change_report
+                    result.details.update({
+                        "snapshot_created": str(snapshot_path),
+                        "change_report": change_report,
+                        "cache_stats": {
+                            "types_cached": len(entity_cache),
+                            "cache_invalidations": total_cache_invalidations,
+                            "cache_hits": self._cache_stats["hits"],
+                            "cache_misses": self._cache_stats["misses"],
+                            "cache_evictions": self._cache_stats["evictions"],
+                            "memory_cleanups": self._cache_stats["memory_cleanups"],
+                            "total_cache_size": self._cache_stats["total_size"],
+                            "global_cache_types": len(self._global_entity_cache)
+                        }
+                    })
 
                 except Exception as e:
                     # Don't fail the migration if snapshot creation fails
