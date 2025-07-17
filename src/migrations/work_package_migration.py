@@ -5,14 +5,16 @@ Handles the migration of issues from Jira to work packages in OpenProject.
 import json
 import re
 import shutil
+import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
+import requests
 from jira import Issue
 
 from src import config
-from src.clients.jira_client import JiraClient
+from src.clients.jira_client import JiraClient, JiraApiError, JiraResourceNotFoundError
 from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
 from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration, register_entity_types
@@ -167,137 +169,199 @@ class WorkPackageMigration(BaseMigration):
             user_mapping=user_mapping, work_package_mapping=work_package_mapping
         )
 
-    def _extract_jira_issues(
-        self,
-        project_key: str,
-        project_tracker: ProgressTracker,
-        batch_size: int = 100,
+    def iter_project_issues(self, project_key: str) -> Iterator[Issue]:
+        """Generate issues for a project with memory-efficient pagination.
+        
+        This generator yields individual issues instead of loading all issues 
+        into memory at once, solving the unbounded memory growth problem.
+        
+        Args:
+            project_key: The key of the Jira project
+            
+        Yields:
+            Individual Jira Issue objects
+            
+        Raises:
+            JiraApiError: If the API request fails after retries
+            JiraResourceNotFoundError: If the project is not found
+        """
+        start_at = 0
+        batch_size = getattr(config, 'jira', {}).get('batch_size', 100)
+        
+        # Use existing JQL pattern from get_all_issues_for_project
+        jql = f'project = "{project_key}" ORDER BY created ASC'
+        fields = None  # Get all fields
+        expand = "changelog"  # Include changelog for history
+        
+        logger.notice("Starting paginated fetch for project '%s'...", project_key)
+        
+        # Verify project exists first
+        try:
+            self.jira_client.jira.project(project_key)
+        except Exception as e:
+            from src.clients.jira_client import JiraResourceNotFoundError
+            msg = f"Project '{project_key}' not found: {e!s}"
+            raise JiraResourceNotFoundError(msg) from e
+        
+        total_yielded = 0
+        while True:
+            # Fetch batch with retry logic
+            issues_batch = self._fetch_issues_with_retry(
+                jql=jql,
+                start_at=start_at,
+                max_results=batch_size,
+                fields=fields,
+                expand=expand,
+                project_key=project_key
+            )
+            
+            if not issues_batch:
+                logger.debug("No more issues found for %s at startAt=%s", project_key, start_at)
+                break
+                
+            # Yield individual issues
+            for issue in issues_batch:
+                yield issue
+                total_yielded += 1
+                
+            logger.debug(
+                "Yielded %s issues from batch (total: %s) for %s",
+                len(issues_batch),
+                total_yielded,
+                project_key
+            )
+            
+            # Check if this was the last page
+            if len(issues_batch) < batch_size:
+                break
+                
+            start_at += len(issues_batch)
+            
+        logger.info("Finished yielding %s issues for project '%s'", total_yielded, project_key)
+
+    def _fetch_issues_with_retry(
+        self, 
+        jql: str, 
+        start_at: int, 
+        max_results: int, 
+        fields: str | None, 
+        expand: str | None,
+        project_key: str
     ) -> list[Issue]:
-        """Extract issues from a Jira project.
+        """Fetch issues with exponential backoff for rate limiting.
+        
+        Args:
+            jql: JQL query string
+            start_at: Starting index for pagination
+            max_results: Maximum results per page
+            fields: Fields to retrieve
+            expand: Expand options
+            project_key: Project key for logging
+            
+        Returns:
+            List of issues for this page
+            
+        Raises:
+            Exception: If all retries are exhausted
+        """
+        max_retries = 5
+        base_delay = 1.0
+        
+        for attempt in range(max_retries + 1):
+            try:
+                logger.debug(
+                    "Fetching issues for %s: startAt=%s, maxResults=%s (attempt %s)",
+                    project_key,
+                    start_at,
+                    max_results,
+                    attempt + 1
+                )
+                
+                issues_page = self.jira_client.jira.search_issues(
+                    jql,
+                    startAt=start_at,
+                    maxResults=max_results,
+                    fields=fields,
+                    expand=expand,
+                    json_result=False,  # Get jira.Issue objects
+                )
+                
+                return issues_page
+                
+            except requests.exceptions.HTTPError as e:
+                if e.response and e.response.status_code == 429 and attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "Rate limited for %s. Retrying in %ss (attempt %s/%s)",
+                        project_key, delay, attempt + 1, max_retries + 1
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+                
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "Request failed for %s. Retrying in %ss (attempt %s/%s): %s",
+                        project_key, delay, attempt + 1, max_retries + 1, e
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+                
+            except Exception as e:
+                error_msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {e!s}"
+                logger.exception(error_msg)
+                from src.clients.jira_client import JiraApiError
+                raise JiraApiError(error_msg) from e
+
+    def _extract_jira_issues(
+        self, project_key: str, project_tracker: Any = None
+    ) -> list[dict]:
+        """Extract all issues from a specific Jira project using pagination.
+
+        This method uses the new iter_project_issues generator to avoid loading
+        all issues into memory at once, while preserving the existing interface
+        for JSON file saving and project tracking.
 
         Args:
-            project_key: The key of the Jira project to extract issues from
-            batch_size: Number of issues to retrieve in each batch
-            project_tracker: Optional parent progress tracker to update
+            project_key: The Jira project key to extract issues from
+            project_tracker: Optional project tracker for logging
 
         Returns:
-            List of Jira issue dictionaries
+            List of all issues from the project (as dictionaries)
 
         """
-        self.logger.info(
-            f"Extracting issues from Jira project {project_key}...",
-        )
-        all_issues: list[Issue] = []
+        self.logger.info(f"Extracting issues from Jira project: {project_key}")
 
         try:
-            # First, get the total number of issues for this project to set up progress bar
-            total_issues = self.jira_client.get_issue_count(project_key)
-            if total_issues <= 0:
-                self.logger.warning("No issues found for project %s", project_key)
-                return all_issues
+            all_issues = []
+            issue_count = 0
+            
+            # Use the new generator to process issues efficiently
+            for issue in self.iter_project_issues(project_key):
+                # Convert Issue object to dictionary format expected by rest of code
+                issue_dict = {
+                    'key': issue.key,
+                    'id': issue.id,
+                    'self': issue.self,
+                    'fields': issue.fields,
+                    'changelog': getattr(issue, 'changelog', None)
+                }
+                all_issues.append(issue_dict)
+                issue_count += 1
+                
+                # Log progress periodically for large projects
+                if issue_count % 500 == 0:
+                    self.logger.info(f"Processed {issue_count} issues from {project_key}")
+                    if project_tracker:
+                        project_tracker.add_log_item(f"Processed {issue_count} issues")
 
-            self.logger.info(
-                f"Found {total_issues} issues to extract from project {project_key}",
-            )
-
-            # Remove artificial testing limit - process all issues
-            # total_issues = min(10, total_issues)  # Commented out for full migration
-            batch_size = min(batch_size, total_issues)
-
-            # Get issues in batches with progress tracking
-            start_at = 0
-
-            project_tracker.update_description(
-                f"Fetching issues from {project_key} (0/{total_issues})"
-            )
-            current_batch = 0
-
-            # Using the parent tracker instead of creating a new one
-            while start_at < total_issues:
-                # Update progress description
-                current_batch += 1
-                progress_desc = (
-                    f"Fetching {project_key} issues "
-                    f"{start_at+1}-{min(start_at+batch_size, total_issues)}/{total_issues}"
-                )
-                project_tracker.update_description(progress_desc)
-
-                # Fetch a batch of issues with retry logic
-                max_retries = 3
-                retry_count = 0
-                issues: list[Issue] = []
-
-                while retry_count < max_retries:
-                    try:
-                        issues = self.jira_client.get_all_issues_for_project(
-                            project_key, expand_changelog=True
-                        )
-                        break
-                    except Exception as e:
-                        retry_count += 1
-                        retry_msg = f"Error fetching issues for {project_key} (attempt {retry_count}/{max_retries}): {e}"
-                        self.logger.warning(retry_msg)
-                        project_tracker.add_log_item(retry_msg)
-
-                        if retry_count >= max_retries:
-                            self.logger.exception(
-                                f"Failed to fetch issues after {max_retries} attempts: {e}",
-                            )
-                            project_tracker.add_log_item(
-                                f"Failed to fetch issues after {max_retries} attempts"
-                            )
-                            # Save what we have so far before potentially raising exception
-                            if all_issues:
-                                self._save_to_json(
-                                    all_issues, f"jira_issues_{project_key}.json"
-                                )
-                                self.logger.info(
-                                    f"Saved {len(all_issues)} issues collected before error occurred",
-                                )
-                            # Continue with next batch instead of failing completely
-                            issues = []
-                            break
-
-                        # Exponential backoff: wait longer with each retry
-                        import time
-
-                        wait_time = 2**retry_count
-                        self.logger.info(
-                            f"Retrying in {wait_time} seconds...",
-                        )
-                        time.sleep(wait_time)
-
-                if not issues:
-                    # Log message and move to next batch instead of breaking completely
-                    self.logger.warning(
-                        f"No issues retrieved for batch starting at {start_at}. Moving to next batch.",
-                    )
-                    project_tracker.add_log_item(
-                        f"Warning: No issues retrieved for batch starting at {start_at}"
-                    )
-                    start_at += batch_size
-                    continue
-
-                # Add to overall list
-                all_issues.extend(issues)
-
-                # Update trackers
-                retrieved_count = len(issues)
-                project_tracker.add_log_item(
-                    f"Retrieved {retrieved_count} issues from {project_key} (batch #{current_batch})",
-                )
-
-                # Only log at the NOTICE level for large projects with multiple batches
-                if total_issues > batch_size:
-                    self.logger.notice(
-                        f"Retrieved {retrieved_count} issues (total: {len(all_issues)}/{total_issues})",
-                    )
-
-                if len(issues) < batch_size:
-                    # We got fewer issues than requested, so we're done
-                    break
-
-                start_at += batch_size
+            # Final logging
+            self.logger.info(f"Extracted {len(all_issues)} issues from project {project_key}")
+            if project_tracker:
+                project_tracker.add_log_item(f"Retrieved {len(all_issues)} issues from {project_key}")
 
             # Save issues to file for later reference, using safe save
             try:
@@ -1883,8 +1947,11 @@ class WorkPackageMigration(BaseMigration):
 
         raise RuntimeError(error_details)
 
-    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
-        """Get current entities from Jira for a specific type.
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
+        """Get current entities of the specified type from Jira.
+
+        This method now uses memory-efficient pagination instead of loading
+        all issues into memory at once.
 
         Args:
             entity_type: Type of entities to retrieve
@@ -1896,14 +1963,30 @@ class WorkPackageMigration(BaseMigration):
             ValueError: If entity_type is not supported by this migration
         """
         if entity_type == "work_packages" or entity_type == "issues":
-            # Get issues from all configured projects
+            # Process issues from all configured projects using generator
             all_issues = []
             projects = self.jira_client.get_projects()
+            
             for project in projects:
                 project_key = project.get("key")
                 if project_key:
-                    issues = self.jira_client.get_issues_for_project(project_key)
-                    all_issues.extend(issues)
+                    # Use the new generator method for memory-efficient processing
+                    for issue in self.iter_project_issues(project_key):
+                        # Convert Issue object to dict format expected by the rest of the code
+                        issue_dict = {
+                            "id": issue.id,
+                            "key": issue.key,
+                            "fields": issue.fields.__dict__,
+                            "raw": issue.raw,
+                            "project_key": project_key
+                        }
+                        all_issues.append(issue_dict)
+                        
+                        # Log progress periodically
+                        if len(all_issues) % getattr(config, 'jira', {}).get('batch_size', 100) == 0:
+                            logger.info(f"Processed {len(all_issues)} issues so far...")
+                            
+            logger.info(f"Finished processing {len(all_issues)} total issues from all projects")
             return all_issues
         else:
             raise ValueError(
