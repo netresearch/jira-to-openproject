@@ -657,20 +657,90 @@ class DataPreservationManager:
             return jira_value
 
         if merge_strategy == MergeStrategy.LATEST_TIMESTAMP:
-            # For now, default to OpenProject value (would need timestamp comparison)
-            return openproject_value
+            # Try to determine which value is more recent
+            try:
+                # Look for timestamp fields in the data
+                jira_timestamp = self._extract_timestamp_from_value(jira_value, field_name)
+                op_timestamp = self._extract_timestamp_from_value(openproject_value, field_name)
+                
+                if jira_timestamp and op_timestamp:
+                    # Compare timestamps - keep the latest
+                    if jira_timestamp > op_timestamp:
+                        return jira_value
+                    else:
+                        return openproject_value
+                        
+                # If we can't extract timestamps, default to OpenProject value
+                # (preserving manual changes)
+                return openproject_value
+                
+            except Exception as e:
+                self.logger.debug(
+                    "Failed to compare timestamps for field %s: %s", field_name, e
+                )
+                # Fallback to OpenProject value if timestamp comparison fails
+                return openproject_value
+                
         elif merge_strategy == MergeStrategy.LONGEST_VALUE:
             jira_len = len(str(jira_value))
             op_len = len(str(openproject_value))
             return jira_value if jira_len > op_len else openproject_value
+            
         elif merge_strategy == MergeStrategy.CONCATENATE:
             if isinstance(jira_value, str) and isinstance(openproject_value, str):
+                # Create a merged string with clear attribution
                 return f"{openproject_value}\n\n[Merged from Jira]: {jira_value}"
             else:
+                # For non-string values, preserve OpenProject value
                 return openproject_value
+                
         else:  # CUSTOM
             # Implement custom merge logic per field type
             return self._custom_merge_logic(field_name, jira_value, openproject_value)
+
+    def _extract_timestamp_from_value(self, value: Any, field_name: str) -> datetime | None:
+        """Extract timestamp from a field value for comparison.
+
+        Args:
+            value: Field value that might contain timestamp information
+            field_name: Name of the field (used for context)
+
+        Returns:
+            datetime object if timestamp found, None otherwise
+        """
+        try:
+            # If the value itself is a timestamp string
+            if isinstance(value, str):
+                # Try common timestamp formats
+                timestamp_formats = [
+                    "%Y-%m-%dT%H:%M:%S.%fZ",  # ISO with microseconds
+                    "%Y-%m-%dT%H:%M:%SZ",     # ISO without microseconds
+                    "%Y-%m-%dT%H:%M:%S%z",    # ISO with timezone
+                    "%Y-%m-%d %H:%M:%S",      # Standard datetime
+                    "%Y-%m-%d",               # Date only
+                ]
+                
+                for fmt in timestamp_formats:
+                    try:
+                        return datetime.strptime(value, fmt)
+                    except ValueError:
+                        continue
+                        
+            # If the value is a dict, look for timestamp fields
+            elif isinstance(value, dict):
+                timestamp_fields = [
+                    "updated_at", "updated_on", "modified", "changed",
+                    "created_at", "created_on", "timestamp", "last_modified"
+                ]
+                
+                for ts_field in timestamp_fields:
+                    if ts_field in value:
+                        return self._extract_timestamp_from_value(value[ts_field], ts_field)
+                        
+            return None
+            
+        except Exception:
+            return None
 
     def _custom_merge_logic(
         self, field_name: str, jira_value: Any, openproject_value: Any
@@ -800,17 +870,91 @@ class DataPreservationManager:
         Returns:
             Entity data or None if not found
         """
-        # This would need actual OpenProject client implementation
-        # For now, return None to indicate we can't fetch data
         if not self.openproject_client:
             return None
 
-        # Placeholder for actual implementation
         try:
-            # This would call the appropriate OpenProject client method
-            # return self.openproject_client.get_entity(entity_id, entity_type)
-            return None
-        except Exception:
+            # Map entity types to appropriate OpenProject client methods
+            if entity_type == "users":
+                # For users, we can try to find by ID first, then fallback to email if that fails
+                try:
+                    return self.openproject_client.find_record("User", int(entity_id))
+                except (ValueError, Exception):
+                    # If ID is not numeric or record not found, try treating it as email
+                    try:
+                        return self.openproject_client.get_user_by_email(entity_id)
+                    except Exception:
+                        return None
+
+            elif entity_type == "projects":
+                # For projects, try ID first, then identifier
+                try:
+                    return self.openproject_client.find_record("Project", int(entity_id))
+                except (ValueError, Exception):
+                    # If ID is not numeric or record not found, try as identifier
+                    try:
+                        return self.openproject_client.get_project_by_identifier(entity_id)
+                    except Exception:
+                        return None
+
+            elif entity_type == "work_packages":
+                # For work packages, use ID-based lookup
+                try:
+                    return self.openproject_client.find_record("WorkPackage", int(entity_id))
+                except (ValueError, Exception):
+                    return None
+
+            elif entity_type == "custom_fields":
+                # For custom fields, try ID first, then name
+                try:
+                    return self.openproject_client.find_record("CustomField", int(entity_id))
+                except (ValueError, Exception):
+                    # If ID is not numeric or record not found, try as name
+                    try:
+                        return self.openproject_client.get_custom_field_by_name(entity_id)
+                    except Exception:
+                        return None
+
+            elif entity_type in ["statuses", "status_types"]:
+                # For statuses, use ID-based lookup
+                try:
+                    return self.openproject_client.find_record("Status", int(entity_id))
+                except (ValueError, Exception):
+                    return None
+
+            elif entity_type in ["issue_types", "work_package_types"]:
+                # For work package types, use ID-based lookup
+                try:
+                    return self.openproject_client.find_record("Type", int(entity_id))
+                except (ValueError, Exception):
+                    return None
+
+            elif entity_type in ["link_types", "relation_types"]:
+                # For relation types, use ID-based lookup
+                try:
+                    return self.openproject_client.find_record("Relation", int(entity_id))
+                except (ValueError, Exception):
+                    return None
+
+            else:
+                # For unknown entity types, try generic lookup
+                self.logger.warning(
+                    "Unknown entity type '%s', attempting generic lookup", entity_type
+                )
+                try:
+                    # Try to capitalize entity type and remove trailing 's' for model name
+                    model_name = entity_type.rstrip('s').capitalize()
+                    return self.openproject_client.find_record(model_name, int(entity_id))
+                except (ValueError, Exception):
+                    return None
+
+        except Exception as e:
+            self.logger.warning(
+                "Failed to get OpenProject entity data for %s %s: %s",
+                entity_type,
+                entity_id,
+                e
+            )
             return None
 
     def update_preservation_policy(

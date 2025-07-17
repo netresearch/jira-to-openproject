@@ -437,3 +437,195 @@ class TestDataPreservationManager:
         custom_policy = manager.preservation_policies["custom_entity"]
         assert custom_policy["conflict_resolution"] == ConflictResolution.MERGE
         assert custom_policy["merge_strategy"] == MergeStrategy.CONCATENATE
+
+    def test_get_openproject_entity_data_users(self, preservation_manager):
+        """Test fetching user data from OpenProject."""
+        # Mock OpenProject client methods
+        mock_client = preservation_manager.openproject_client
+        mock_client.find_record.return_value = {"id": 1, "email": "test@example.com"}
+        mock_client.get_user_by_email.return_value = {"id": 1, "email": "test@example.com"}
+
+        # Test ID-based lookup
+        result = preservation_manager._get_openproject_entity_data("1", "users")
+        assert result == {"id": 1, "email": "test@example.com"}
+        mock_client.find_record.assert_called_with("User", 1)
+
+        # Test email-based lookup (when ID fails)
+        mock_client.find_record.side_effect = ValueError("Not an integer")
+        result = preservation_manager._get_openproject_entity_data("test@example.com", "users")
+        assert result == {"id": 1, "email": "test@example.com"}
+        mock_client.get_user_by_email.assert_called_with("test@example.com")
+
+    def test_get_openproject_entity_data_projects(self, preservation_manager):
+        """Test fetching project data from OpenProject."""
+        # Mock OpenProject client methods
+        mock_client = preservation_manager.openproject_client
+        mock_client.find_record.return_value = {"id": 1, "identifier": "test-project"}
+        mock_client.get_project_by_identifier.return_value = {"id": 1, "identifier": "test-project"}
+
+        # Test ID-based lookup
+        result = preservation_manager._get_openproject_entity_data("1", "projects")
+        assert result == {"id": 1, "identifier": "test-project"}
+        mock_client.find_record.assert_called_with("Project", 1)
+
+        # Test identifier-based lookup (when ID fails)
+        mock_client.find_record.side_effect = ValueError("Not an integer")
+        result = preservation_manager._get_openproject_entity_data("test-project", "projects")
+        assert result == {"id": 1, "identifier": "test-project"}
+        mock_client.get_project_by_identifier.assert_called_with("test-project")
+
+    def test_get_openproject_entity_data_work_packages(self, preservation_manager):
+        """Test fetching work package data from OpenProject."""
+        # Mock OpenProject client methods
+        mock_client = preservation_manager.openproject_client
+        mock_client.find_record.return_value = {"id": 1, "subject": "Test Work Package"}
+
+        # Test ID-based lookup
+        result = preservation_manager._get_openproject_entity_data("1", "work_packages")
+        assert result == {"id": 1, "subject": "Test Work Package"}
+        mock_client.find_record.assert_called_with("WorkPackage", 1)
+
+    def test_get_openproject_entity_data_custom_fields(self, preservation_manager):
+        """Test fetching custom field data from OpenProject."""
+        # Mock OpenProject client methods
+        mock_client = preservation_manager.openproject_client
+        mock_client.find_record.return_value = {"id": 1, "name": "Test Field"}
+        mock_client.get_custom_field_by_name.return_value = {"id": 1, "name": "Test Field"}
+
+        # Test ID-based lookup
+        result = preservation_manager._get_openproject_entity_data("1", "custom_fields")
+        assert result == {"id": 1, "name": "Test Field"}
+        mock_client.find_record.assert_called_with("CustomField", 1)
+
+        # Test name-based lookup (when ID fails)
+        mock_client.find_record.side_effect = ValueError("Not an integer")
+        result = preservation_manager._get_openproject_entity_data("Test Field", "custom_fields")
+        assert result == {"id": 1, "name": "Test Field"}
+        mock_client.get_custom_field_by_name.assert_called_with("Test Field")
+
+    def test_get_openproject_entity_data_unknown_type(self, preservation_manager):
+        """Test fetching data for unknown entity type."""
+        # Mock OpenProject client methods
+        mock_client = preservation_manager.openproject_client
+        mock_client.find_record.return_value = {"id": 1, "name": "Test Entity"}
+
+        # Test generic lookup for unknown type
+        result = preservation_manager._get_openproject_entity_data("1", "unknown_types")
+        assert result == {"id": 1, "name": "Test Entity"}
+        mock_client.find_record.assert_called_with("Unknown_type", 1)
+
+    def test_extract_timestamp_from_string_value(self, preservation_manager):
+        """Test timestamp extraction from string values."""
+        # Test ISO format with microseconds
+        timestamp_str = "2023-12-01T10:30:45.123456Z"
+        result = preservation_manager._extract_timestamp_from_value(timestamp_str, "updated")
+        assert result is not None
+        assert result.year == 2023
+        assert result.month == 12
+        assert result.day == 1
+
+        # Test ISO format without microseconds
+        timestamp_str = "2023-12-01T10:30:45Z"
+        result = preservation_manager._extract_timestamp_from_value(timestamp_str, "updated")
+        assert result is not None
+        assert result.year == 2023
+
+        # Test date only
+        timestamp_str = "2023-12-01"
+        result = preservation_manager._extract_timestamp_from_value(timestamp_str, "created")
+        assert result is not None
+        assert result.year == 2023
+
+        # Test invalid timestamp
+        result = preservation_manager._extract_timestamp_from_value("invalid", "field")
+        assert result is None
+
+    def test_extract_timestamp_from_dict_value(self, preservation_manager):
+        """Test timestamp extraction from dictionary values."""
+        # Test dict with timestamp field
+        value = {
+            "id": 1,
+            "name": "Test",
+            "updated_at": "2023-12-01T10:30:45Z"
+        }
+        result = preservation_manager._extract_timestamp_from_value(value, "entity")
+        assert result is not None
+        assert result.year == 2023
+
+        # Test dict without timestamp field
+        value = {"id": 1, "name": "Test"}
+        result = preservation_manager._extract_timestamp_from_value(value, "entity")
+        assert result is None
+
+    def test_merge_field_values_latest_timestamp(self, preservation_manager):
+        """Test merging field values using latest timestamp strategy."""
+        # Test with timestamp values
+        jira_value = "2023-12-01T10:30:45Z"
+        op_value = "2023-12-01T09:00:00Z"
+        
+        result = preservation_manager._merge_field_values(
+            "updated", jira_value, op_value, MergeStrategy.LATEST_TIMESTAMP
+        )
+        assert result == jira_value  # Jira value is more recent
+
+        # Test with reversed timestamps
+        jira_value = "2023-12-01T09:00:00Z"
+        op_value = "2023-12-01T10:30:45Z"
+        
+        result = preservation_manager._merge_field_values(
+            "updated", jira_value, op_value, MergeStrategy.LATEST_TIMESTAMP
+        )
+        assert result == op_value  # OpenProject value is more recent
+
+    def test_merge_field_values_concatenate(self, preservation_manager):
+        """Test merging field values using concatenate strategy."""
+        jira_value = "Description from Jira"
+        op_value = "Description from OpenProject"
+        
+        result = preservation_manager._merge_field_values(
+            "description", jira_value, op_value, MergeStrategy.CONCATENATE
+        )
+        
+        expected = f"{op_value}\n\n[Merged from Jira]: {jira_value}"
+        assert result == expected
+
+    def test_merge_field_values_longest_value(self, preservation_manager):
+        """Test merging field values using longest value strategy."""
+        jira_value = "Short"
+        op_value = "Much longer description from OpenProject"
+        
+        result = preservation_manager._merge_field_values(
+            "description", jira_value, op_value, MergeStrategy.LONGEST_VALUE
+        )
+        assert result == op_value  # OpenProject value is longer
+
+    def test_analyze_preservation_status_with_real_data(self, preservation_manager):
+        """Test analyzing preservation status with real conflict data."""
+        # Mock OpenProject client to return current data
+        preservation_manager.openproject_client.find_record.return_value = {
+            "id": 1,
+            "name": "Modified User",
+            "email": "modified@example.com"
+        }
+        
+        # Store original state to create a baseline
+        original_data = {"id": 1, "name": "Original User", "email": "original@example.com"}
+        preservation_manager.store_original_state("1", "users", original_data)
+        
+        # Jira changes that conflict with manual changes
+        jira_changes = {
+            "1": {"name": "Jira User", "description": "New description"}
+        }
+        
+        # Analyze conflicts
+        report = preservation_manager.analyze_preservation_status(jira_changes, "users")
+        
+        assert report["total_conflicts"] == 1
+        assert "users" in report["conflicts_by_type"]
+        assert report["conflicts_by_type"]["users"] == 1
+        assert len(report["conflicts"]) == 1
+        
+        conflict = report["conflicts"][0]
+        assert conflict["entity_id"] == "1"
+        assert conflict["entity_type"] == "users"
+        assert "name" in conflict["conflicted_fields"]

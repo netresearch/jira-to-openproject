@@ -154,13 +154,22 @@
       {
         "id": 16,
         "title": "Implement Idempotent Operation",
-        "description": "Develop idempotent operation capability that allows running the migration tool multiple times to synchronize changes from Jira to OpenProject over time.",
-        "details": "Implement the following features:\n1. Change detection and tracking to identify modifications in Jira since last run\n2. State preservation of previous migration runs\n3. Selective update of only changed entities\n4. Safeguards to preserve manually imported or modified data in OpenProject\n5. Resumable operations in case of interruptions\n6. Conflict resolution mechanisms when data has been modified in both systems",
-        "testStrategy": "Test with repeated migrations of the same data with controlled changes to verify:\n1. Only changed items are updated\n2. Manually modified data in OpenProject is preserved\n3. No duplicate entities are created\n4. Proper handling of deleted items in Jira\n5. Performance remains consistent across multiple executions",
+        "description": "Develop idempotent operation capability that allows running the migration tool multiple times to synchronize changes from Jira to OpenProject over time. Data preservation safeguards (subtask 4) are now fully implemented and validated, enabling conflict detection and resolution based on configurable policies. Next up: build out recovery and resilience features and finalize conflict‐resolution workflows.",
         "status": "in-progress",
         "dependencies": [],
         "priority": "high",
+        "details": "Implement the following features:\n1. Change detection and tracking to identify modifications in Jira since last run\n2. State preservation of previous migration runs\n3. Selective update of only changed entities\n4. Safeguards to preserve manually imported or modified data in OpenProject (complete – see subtask 4)\n5. Resumable operations in case of interruptions\n6. Conflict resolution mechanisms when data has been modified in both systems",
+        "testStrategy": "Overall idempotency tests:\n1. Run the migration tool repeatedly against the same Jira dataset with controlled modifications and verify:\n   • Only changed items are updated\n   • Manually modified data in OpenProject is preserved (data preservation tests: 30+ unit tests, 4 integration tests all passing)\n   • No duplicate entities are created\n   • Proper handling of deleted items in Jira\n   • Performance remains consistent across multiple executions\n2. Upcoming recovery tests (for subtask 5 & conflict resolution):\n   • Simulate interruptions and verify checkpointing allows resume without data loss\n   • Force failures and verify rollback to last good state\n   • Validate clear error reporting and remediation guidance",
         "subtasks": [
+          {
+            "id": 5,
+            "title": "Recovery and Resilience Features",
+            "description": "Implement recovery mechanisms for handling interruptions and failures during migration",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Create resilience features that:\n1. Track migration progress at a granular level\n2. Implement checkpointing during long-running operations\n3. Provide the ability to resume interrupted migrations\n4. Create rollback capabilities for failed migrations\n5. Implement robust error handling with clear remediation steps",
+            "testStrategy": "TBD - same as parent task"
+          },
           {
             "id": 1,
             "title": "Change Detection System",
@@ -199,18 +208,7 @@
             "title": "Data Preservation Safeguards",
             "description": "Implement safeguards to preserve manually imported or modified data in OpenProject",
             "details": "Develop protection mechanisms that:\n1. Detect manually added or modified data in OpenProject\n2. Implement conflict detection between Jira changes and OpenProject changes\n3. Create rules to determine precedence in conflict situations\n4. Provide merge capabilities for conflicting changes\n5. Allow configuration of preservation policies per entity type",
-            "status": "pending",
-            "dependencies": [],
-            "testStrategy": "TBD - same as parent task",
-            "priority": "high",
-            "parentTaskId": 16
-          },
-          {
-            "id": 5,
-            "title": "Recovery and Resilience Features",
-            "description": "Implement recovery mechanisms for handling interruptions and failures during migration",
-            "details": "Create resilience features that:\n1. Track migration progress at a granular level\n2. Implement checkpointing during long-running operations\n3. Provide the ability to resume interrupted migrations\n4. Create rollback capabilities for failed migrations\n5. Implement robust error handling with clear remediation steps",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "testStrategy": "TBD - same as parent task",
             "priority": "high",
@@ -1283,7 +1281,7 @@
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-16T08:56:46.453Z",
+      "updated": "2025-07-17T10:19:42.696Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
