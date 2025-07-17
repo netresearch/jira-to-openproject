@@ -261,3 +261,9 @@ def update_from_cli_args(args: Any) -> None:
         logger.debug("Setting no_confirm=True from CLI arguments")
 
     # Add any other CLI arguments that should affect configuration here
+
+
+# User Migration Configuration Constants
+FALLBACK_MAIL_DOMAIN = "noreply.migration.local"
+USER_CREATION_TIMEOUT = 60  # seconds
+USER_CREATION_BATCH_SIZE = 10

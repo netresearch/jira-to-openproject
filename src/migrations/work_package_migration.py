@@ -1090,8 +1090,9 @@ class WorkPackageMigration(BaseMigration):
 
                     while retry_count < max_retries:
                         try:
-                            types_result = self.op_client.rails_client.execute_query(
+                            types_result = self.op_client.execute_query(
                                 enable_types_header + enable_types_script,
+                                timeout=45
                             )
                             break
                         except Exception as e:
@@ -1447,8 +1448,9 @@ class WorkPackageMigration(BaseMigration):
                 )
 
                 # Execute the Ruby script
-                result = self.op_client.rails_client.execute_query(
-                    header_script + main_script
+                result = self.op_client.execute_query(
+                    header_script + main_script,
+                    timeout=90
                 )
 
                 if result.get("status") != "success":
@@ -2374,8 +2376,9 @@ class WorkPackageMigration(BaseMigration):
             """
 
             # Execute the script
-            result = self.op_client.rails_client.execute_query(
-                ruby_header + ruby_script
+            result = self.op_client.execute_query(
+                ruby_header + ruby_script,
+                timeout=45
             )
 
             if result.get("status") != "success":

@@ -742,7 +742,7 @@ class AccountMigration(BaseMigration):
             cf.id
             """
 
-            result = self.op_client.execute_query(create_command)
+            result = self.op_client.execute_query(create_command, timeout=45)
 
             if result and "output" in result and result["output"] is not None:
                 new_id = int(result["output"])
@@ -805,7 +805,7 @@ class AccountMigration(BaseMigration):
             puts %q{{SUCCESS}}
             """
 
-            result = self.op_client.execute_query(activate_command)
+            result = self.op_client.execute_query(activate_command, timeout=45)
 
             # Handle both string and dict results
             success = False

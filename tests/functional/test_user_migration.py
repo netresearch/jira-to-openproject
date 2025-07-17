@@ -315,6 +315,75 @@ class TestUserMigration(unittest.TestCase):
         # Clean up
         shutil.rmtree(data_dir)
 
+    def test_build_fallback_email_basic(self) -> None:
+        """Test basic fallback email generation."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            
+            # Create migration instance
+            migration = UserMigration()
+            migration.data_dir = data_dir
+            
+            # Test basic email generation
+            email = migration._build_fallback_email("testuser")
+            self.assertEqual(email, "testuser@noreply.migration.local")
+    
+    def test_build_fallback_email_sanitization(self) -> None:
+        """Test email sanitization for invalid characters."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            
+            # Create migration instance
+            migration = UserMigration()
+            migration.data_dir = data_dir
+            
+            # Test with invalid characters
+            email = migration._build_fallback_email("test@user#$%")
+            self.assertEqual(email, "testuser@noreply.migration.local")
+            
+            # Test with spaces and special chars
+            email = migration._build_fallback_email("test user!@#")
+            self.assertEqual(email, "testuser@noreply.migration.local")
+    
+    def test_build_fallback_email_collision_handling(self) -> None:
+        """Test email collision handling."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            
+            # Create migration instance
+            migration = UserMigration()
+            migration.data_dir = data_dir
+            
+            existing_emails = {"testuser@noreply.migration.local"}
+            
+            # Should generate alternative email
+            email = migration._build_fallback_email("testuser", existing_emails)
+            self.assertEqual(email, "testuser.1@noreply.migration.local")
+            
+            # Test multiple collisions
+            existing_emails.add("testuser.1@noreply.migration.local")
+            email = migration._build_fallback_email("testuser", existing_emails)
+            self.assertEqual(email, "testuser.2@noreply.migration.local")
+    
+    def test_build_fallback_email_empty_login(self) -> None:
+        """Test fallback email generation for empty login."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            
+            # Create migration instance
+            migration = UserMigration()
+            migration.data_dir = data_dir
+            
+            # Test with empty string (should use UUID)
+            email = migration._build_fallback_email("")
+            self.assertTrue(email.endswith("@noreply.migration.local"))
+            self.assertTrue(len(email.split("@")[0]) == 8)  # UUID should be 8 chars
+            
+            # Test with only invalid characters
+            email = migration._build_fallback_email("!@#$%")
+            self.assertTrue(email.endswith("@noreply.migration.local"))
+            self.assertTrue(len(email.split("@")[0]) == 8)  # UUID should be 8 chars
+
 
 if __name__ == "__main__":
     unittest.main()

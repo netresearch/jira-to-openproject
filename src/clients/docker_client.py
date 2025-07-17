@@ -246,7 +246,7 @@ class DockerClient:
 
         Args:
             container_path: Path in container
-            local_path: Path to save file locally on the remote server
+            local_path: Path to save file locally
 
         Returns:
             Path to the file on success
@@ -264,40 +264,49 @@ class DockerClient:
         local_path = Path(local_path) if isinstance(local_path, str) else local_path
 
         try:
-            # Ensure local directory exists
-            local_dir = local_path.parent
-            mkdir_cmd = f"mkdir -p {quote(str(local_dir))}"
-            self.ssh_client.execute_command(mkdir_cmd, check=True)
+            # Use a temporary file on the remote server for intermediate storage
+            import uuid
+            temp_filename = f"docker_transfer_{uuid.uuid4().hex}.tmp"
+            remote_temp_path = f"/tmp/{temp_filename}"
 
-            # Build docker cp command
-            cmd = f"docker cp {self.container_name}:{quote(str(container_path))} {quote(str(local_path))}"
+            # Step 1: Copy from container to temporary location on remote server
+            cmd = f"docker cp {self.container_name}:{quote(str(container_path))} {quote(remote_temp_path)}"
 
-            # Execute the command
             stdout, stderr, returncode = self.ssh_client.execute_command(
                 cmd,
                 check=True,
                 timeout=self.command_timeout,
             )
 
-            # Verify that the file was copied successfully
-            if returncode == 0:
-                # Check if local file exists
-                if not self.ssh_client.check_remote_file_exists(local_path):
-                    logger.error("File not found locally after copy: %s", local_path)
-                    msg = f"File not found locally after copy: {local_path}"
-                    raise ValueError(msg)
+            if returncode != 0:
+                logger.error("Failed to copy file from container: %s", stderr)
+                msg = f"Failed to copy file from container: {stderr}"
+                raise ValueError(msg)
 
-                # Get file size
-                size = self.ssh_client.get_remote_file_size(local_path)
+            # Step 2: Copy from remote server to actual local path
+            try:
+                # Ensure local directory exists
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Copy from remote to local
+                result_path = self.ssh_client.copy_file_from_remote(
+                    remote_temp_path, local_path
+                )
+                
                 logger.debug(
                     f"Successfully copied file from container: "
-                    f"{container_path} -> {local_path} (size: {size} bytes)",
+                    f"{container_path} -> {local_path}",
                 )
-
-                return local_path
-            logger.error("Failed to copy file from container: %s", stderr)
-            msg = f"Failed to copy file from container: {stderr}"
-            raise ValueError(msg)
+                
+                return result_path
+                
+            finally:
+                # Step 3: Clean up temporary file on remote server
+                try:
+                    cleanup_cmd = f"rm -f {quote(remote_temp_path)}"
+                    self.ssh_client.execute_command(cleanup_cmd, check=False)
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up temporary file {remote_temp_path}: {cleanup_error}")
 
         except FileNotFoundError:
             # Re-raise file not found errors

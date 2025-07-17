@@ -373,7 +373,9 @@ class OpenProjectClient:
         """
         self._last_query = query
 
-        return self.rails_client._send_command_to_tmux(f"puts ({query})", 5)
+        # Use provided timeout or default to 30 seconds for complex operations
+        effective_timeout = timeout if timeout is not None else 30
+        return self.rails_client._send_command_to_tmux(f"puts ({query})", effective_timeout)
 
     def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> Any:
         """Execute a Rails query and return parsed JSON result.
@@ -1319,8 +1321,8 @@ class OpenProjectClient:
             file_path_interpolated = f"'{file_path}'"
             write_query = f'users = User.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(users)); puts "Users data written to {file_path} (#{{users.count}} users)"; nil'
 
-            # Execute the write command - fail immediately if Rails console fails
-            self.rails_client.execute(write_query, suppress_output=True)
+            # Execute the write command with extended timeout for large user sets
+            self.rails_client.execute(write_query, timeout=60, suppress_output=True)
             logger.debug("Successfully executed users write command")
 
             # Read the JSON directly from the Docker container file system via SSH
@@ -1842,79 +1844,4 @@ class OpenProjectClient:
             return count if isinstance(count, int) else 0
         except Exception as e:
             msg = "Failed to delete non-default issue statuses."
-            raise QueryExecutionError(msg) from e
-
-    def create_users_in_bulk(
-        self,
-        users_data: list[dict[str, Any]],
-    ) -> str:
-        """Create multiple users in OpenProject with a single API call.
-
-        Args:
-            users_data: List of user data dictionaries
-
-        Returns:
-            List of created user objects
-
-        Raises:
-            QueryExecutionError: If bulk user creation fails
-
-        """
-        if not users_data:
-            return ""
-
-        # Format the user data for Ruby
-        ruby_user_data = json.dumps(users_data)
-
-        # Create a Ruby script to create the users in bulk
-        script = f"""
-        users_data = {ruby_user_data}
-        results = []
-
-        users_data.each do |user_data|
-          begin
-            user = User.new
-            user.login = user_data['login']
-            user.firstname = user_data['firstname']
-            user.lastname = user_data['lastname']
-            user.mail = user_data['mail']
-            user.admin = user_data['admin'] || false
-            user.status = user_data['status'] || :active
-            user.password = user_data['password'] || SecureRandom.hex(8)
-
-            if user.save
-              results << {{
-                'status' => 'success',
-                'id' => user.id,
-                'login' => user.login,
-                'mail' => user.mail
-              }}
-            else
-              results << {{
-                'status' => 'error',
-                'login' => user.login,
-                'mail' => user.mail,
-                'errors' => user.errors.full_messages
-              }}
-            end
-          rescue => e
-            results << {{
-              'status' => 'error',
-              'login' => user_data['login'],
-              'mail' => user_data['mail'],
-              'errors' => [e.message]
-            }}
-          end
-        end
-
-        results.as_json
-        """
-
-        try:
-            # Execute the script
-            return self.execute_query(script)
-
-            # Return the results
-        except Exception as e:
-            msg = "Failed to create users in bulk."
             raise QueryExecutionError(msg) from e

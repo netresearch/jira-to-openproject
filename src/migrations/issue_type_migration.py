@@ -1078,7 +1078,7 @@ class IssueTypeMigration(BaseMigration):
         self.logger.info(
             "Executing bulk creation of work package types via Rails console..."
         )
-        result = self.op_client.execute_query(bulk_create_script)
+        result = self.op_client.execute_query(bulk_create_script, timeout=60)
         self.logger.debug(
             f"bulk_create_script result type: {type(result)}, value: {result}"
         )
