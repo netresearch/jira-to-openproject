@@ -1654,7 +1654,7 @@
             "description": "Add new configuration options and extend the mapping cache data structure in EnhancedUserAssociationMigrator.",
             "dependencies": [],
             "details": "1. In the application config schema under `migration.mapping`, add `refresh_interval` (duration string) and `fallback_strategy` (enum: skip, assign_admin, create_placeholder) with validation rules and defaults. 2. In EnhancedUserAssociationMigrator, update the in-memory cache to store entries as `{ mappedUser: User, lastRefreshed: Date }` keyed by user identifier. 3. Initialize the cache on migrator startup.\n<info added on 2025-07-18T18:33:38.040Z>\n4. Extended UserAssociationMapping TypedDict with optional `lastRefreshed` field (ISO string)  \n5. Introduced `_parse_duration()` and `_validate_fallback_strategy()` utilities to parse duration formats (1s, 30m, 2h, 7d) and enforce `fallback_strategy` enum (skip, assign_admin, create_placeholder) with defaults  \n6. Updated `_load_enhanced_mappings()` to handle legacy cache entries missing `lastRefreshed` for backward compatibility  \n7. Added `_load_staleness_config()` to load `refresh_interval` and `fallback_strategy` from config with validation and defaults  \n8. Implemented `is_mapping_stale()` to parse `lastRefreshed`, compute age against `refresh_interval` using timezone-aware comparison, and determine staleness with robust error handling\n</info added on 2025-07-18T18:33:38.040Z>",
-            "status": "in-progress",
+            "status": "done",
             "testStrategy": "Unit test loading of new config options, default values, and verify that cache entries can store and retrieve both `mappedUser` and `lastRefreshed` fields."
           },
           {
@@ -1665,7 +1665,7 @@
               1
             ],
             "details": "1. Before any mapping lookup or write, compute `age = now() - entry.lastRefreshed`. 2. Compare `age` to `config.migration.mapping.refresh_interval` or check if `mappedUser` is missing. 3. Mark entry as stale if `age` exceeds TTL or `mappedUser` is undefined. 4. Return a flag or throw a specific `StaleMappingError` to trigger refresh.",
-            "status": "pending",
+            "status": "in-progress",
             "testStrategy": "Unit tests seeding cache entries with timestamps older and newer than the TTL and asserting that stale flags/triggers occur only for expired entries."
           },
           {
@@ -1759,7 +1759,7 @@
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-18T17:19:48.409Z",
+      "updated": "2025-07-18T20:15:19.154Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
