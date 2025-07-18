@@ -10,9 +10,10 @@ This module provides advanced user association migration capabilities that:
 """
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from src import config
 from src.clients.jira_client import JiraClient
@@ -20,8 +21,12 @@ from src.clients.openproject_client import OpenProjectClient
 from src.utils.validators import validate_jira_key
 
 
+# Enum types for validation
+FallbackStrategy = Literal["skip", "assign_admin", "create_placeholder"]
+
+
 class UserAssociationMapping(TypedDict):
-    """Represents a mapping between Jira and OpenProject user associations."""
+    """Represents a mapping between Jira and OpenProject user associations with staleness tracking."""
     
     jira_username: str
     jira_user_id: str | None
@@ -33,6 +38,7 @@ class UserAssociationMapping(TypedDict):
     mapping_status: str  # 'mapped', 'deleted', 'unmapped', 'fallback'
     fallback_user_id: int | None
     metadata: dict[str, Any]
+    lastRefreshed: str | None  # ISO datetime string for staleness detection
 
 
 class AssociationResult(TypedDict):
@@ -55,6 +61,7 @@ class EnhancedUserAssociationMigrator:
     - Creator information preservation via Rails console
     - Watcher relationships with metadata
     - Assignee relationships with proper fallbacks
+    - Staleness detection and automatic refresh
     """
 
     def __init__(
@@ -86,6 +93,9 @@ class EnhancedUserAssociationMigrator:
         
         # Cache for Rails console operations
         self._rails_operations_cache: list[dict[str, Any]] = []
+        
+        # Load and validate staleness configuration
+        self._load_staleness_config()
 
     def _load_user_mapping(self) -> dict[str, Any]:
         """Load user mapping from file or config."""
@@ -117,9 +127,23 @@ class EnhancedUserAssociationMigrator:
             if enhanced_mapping_file.exists():
                 with enhanced_mapping_file.open() as f:
                     data = json.load(f)
-                    self.enhanced_user_mappings = {
-                        k: UserAssociationMapping(**v) for k, v in data.items()
-                    }
+                    self.enhanced_user_mappings = {}
+                    current_time = datetime.now(tz=UTC).isoformat()
+                    
+                    for k, v in data.items():
+                        # Handle backwards compatibility for existing cache files
+                        if "lastRefreshed" not in v:
+                            v["lastRefreshed"] = current_time
+                            self.logger.debug(
+                                "Added lastRefreshed timestamp to existing cache entry for %s", k
+                            )
+                        
+                        self.enhanced_user_mappings[k] = UserAssociationMapping(**v)
+                        
+                    self.logger.info(
+                        "Loaded %d enhanced user mappings with staleness tracking",
+                        len(self.enhanced_user_mappings)
+                    )
             else:
                 # Create enhanced mappings from basic user mapping
                 self._create_enhanced_mappings()
@@ -150,7 +174,8 @@ class EnhancedUserAssociationMigrator:
                     "created_at": datetime.now(tz=UTC).isoformat(),
                     "jira_active": jira_user_info.get("active", True) if jira_user_info else None,
                     "openproject_active": op_user_info.get("status") == 1 if op_user_info else None,
-                }
+                },
+                lastRefreshed=datetime.now(tz=UTC).isoformat()
             )
             
             self.enhanced_user_mappings[jira_username] = mapping
@@ -436,6 +461,116 @@ class EnhancedUserAssociationMigrator:
         
         return None
 
+    def is_mapping_stale(self, username: str) -> bool:
+        """Check if a user mapping is stale and needs refresh.
+        
+        Args:
+            username: Jira username to check
+            
+        Returns:
+            True if mapping is stale or missing, False otherwise
+        """
+        mapping = self.enhanced_user_mappings.get(username)
+        
+        if not mapping:
+            # Missing mapping is considered stale
+            return True
+        
+        last_refreshed = mapping.get("lastRefreshed")
+        if not last_refreshed:
+            # No refresh timestamp is considered stale
+            return True
+        
+        try:
+            # Parse the ISO datetime string
+            last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
+            current_time = datetime.now(tz=UTC)
+            
+            # Calculate age in seconds
+            age_seconds = (current_time - last_refresh_time).total_seconds()
+            
+            # Check if age exceeds configured refresh interval
+            is_stale = age_seconds > self.refresh_interval_seconds
+            
+            if is_stale:
+                self.logger.debug(
+                    "Mapping for %s is stale (age: %ds, limit: %ds)",
+                    username, int(age_seconds), self.refresh_interval_seconds
+                )
+            
+            return is_stale
+            
+        except (ValueError, TypeError) as e:
+            self.logger.warning(
+                "Failed to parse lastRefreshed timestamp for %s: %s. Treating as stale.",
+                username, e
+            )
+            return True
+
+    def refresh_user_mapping(self, username: str) -> bool:
+        """Refresh a stale user mapping by re-fetching from Jira.
+        
+        Args:
+            username: Jira username to refresh
+            
+        Returns:
+            True if refresh succeeded, False otherwise
+        """
+        try:
+            self.logger.debug("Refreshing user mapping for %s", username)
+            
+            # Get fresh user info from Jira
+            jira_user_info = self._get_jira_user_info(username)
+            
+            if not jira_user_info:
+                self.logger.warning("Could not fetch fresh user info for %s", username)
+                return False
+            
+            # Get existing mapping or create new one
+            existing_mapping = self.enhanced_user_mappings.get(username)
+            current_time = datetime.now(tz=UTC).isoformat()
+            
+            if existing_mapping:
+                # Update existing mapping with fresh data
+                existing_mapping["jira_user_id"] = jira_user_info.get("accountId")
+                existing_mapping["jira_display_name"] = jira_user_info.get("displayName")
+                existing_mapping["jira_email"] = jira_user_info.get("emailAddress")
+                existing_mapping["lastRefreshed"] = current_time
+                existing_mapping["metadata"]["jira_active"] = jira_user_info.get("active", True)
+                existing_mapping["metadata"]["refreshed_at"] = current_time
+            else:
+                # Create new mapping
+                op_user_id = self.user_mapping.get(username)
+                op_user_info = self._get_openproject_user_info(op_user_id) if op_user_id else None
+                
+                mapping = UserAssociationMapping(
+                    jira_username=username,
+                    jira_user_id=jira_user_info.get("accountId"),
+                    jira_display_name=jira_user_info.get("displayName"),
+                    jira_email=jira_user_info.get("emailAddress"),
+                    openproject_user_id=op_user_id,
+                    openproject_username=op_user_info.get("login") if op_user_info else None,
+                    openproject_email=op_user_info.get("mail") if op_user_info else None,
+                    mapping_status="mapped" if op_user_id else "unmapped",
+                    fallback_user_id=None,
+                    metadata={
+                        "created_at": current_time,
+                        "jira_active": jira_user_info.get("active", True),
+                        "openproject_active": op_user_info.get("status") == 1 if op_user_info else None,
+                        "refreshed_at": current_time,
+                    },
+                    lastRefreshed=current_time
+                )
+                
+                self.enhanced_user_mappings[username] = mapping
+            
+            self.logger.debug("Successfully refreshed user mapping for %s", username)
+            return True
+            
+        except Exception as e:
+            self.logger.error("Failed to refresh user mapping for %s: %s", username, e)
+            return False
+
     def _queue_rails_author_operation(
         self, jira_key: str, author_id: int, author_data: dict[str, Any]
     ) -> None:
@@ -608,3 +743,96 @@ class EnhancedUserAssociationMigrator:
         }
 
         return report 
+
+    def _load_staleness_config(self) -> None:
+        """Load and validate staleness detection configuration."""
+        try:
+            mapping_config = config.migration_config.get("mapping", {})
+            
+            # Validate refresh_interval
+            self.refresh_interval_seconds = self._parse_duration(
+                mapping_config.get("refresh_interval", "24h")
+            )
+            
+            # Validate fallback_strategy
+            self.fallback_strategy = self._validate_fallback_strategy(
+                mapping_config.get("fallback_strategy", "skip")
+            )
+            
+            # Get admin user ID for assign_admin strategy
+            self.admin_user_id = mapping_config.get("fallback_admin_user_id")
+            if self.fallback_strategy == "assign_admin" and not self.admin_user_id:
+                self.logger.warning(
+                    "fallback_strategy is 'assign_admin' but no fallback_admin_user_id configured"
+                )
+            
+            self.logger.debug(
+                "Staleness config loaded: refresh_interval=%ds, fallback_strategy=%s",
+                self.refresh_interval_seconds, self.fallback_strategy
+            )
+            
+        except Exception as e:
+            self.logger.warning("Failed to load staleness configuration: %s", e)
+            # Set defaults
+            self.refresh_interval_seconds = 24 * 60 * 60  # 24 hours
+            self.fallback_strategy = "skip"
+            self.admin_user_id = None
+
+    def _parse_duration(self, duration_str: str) -> int:
+        """Parse duration string to seconds.
+        
+        Args:
+            duration_str: Duration string (e.g., "24h", "2d", "30m")
+            
+        Returns:
+            Duration in seconds
+            
+        Raises:
+            ValueError: If duration format is invalid
+        """
+        if not duration_str:
+            raise ValueError("Duration string cannot be empty")
+        
+        # Pattern to match duration strings like "24h", "2d", "30m", "45s"
+        pattern = r'^(\d+)([smhd])$'
+        match = re.match(pattern, duration_str.lower())
+        
+        if not match:
+            raise ValueError(
+                f"Invalid duration format: {duration_str}. "
+                "Expected format: <number><unit> where unit is s, m, h, or d"
+            )
+        
+        value, unit = match.groups()
+        value = int(value)
+        
+        multipliers = {
+            's': 1,          # seconds
+            'm': 60,         # minutes
+            'h': 3600,       # hours
+            'd': 86400,      # days
+        }
+        
+        return value * multipliers[unit]
+
+    def _validate_fallback_strategy(self, strategy: str) -> FallbackStrategy:
+        """Validate fallback strategy value.
+        
+        Args:
+            strategy: Strategy string to validate
+            
+        Returns:
+            Validated fallback strategy
+            
+        Raises:
+            ValueError: If strategy is invalid
+        """
+        valid_strategies: tuple[FallbackStrategy, ...] = ("skip", "assign_admin", "create_placeholder")
+        
+        if strategy not in valid_strategies:
+            raise ValueError(
+                f"Invalid fallback_strategy: {strategy}. "
+                f"Valid options: {', '.join(valid_strategies)}"
+            )
+        
+        return strategy  # type: ignore[return-value] 

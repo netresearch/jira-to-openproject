@@ -46,6 +46,7 @@ class TestEnhancedUserAssociationMigrator:
     @pytest.fixture
     def sample_enhanced_mapping(self):
         """Create sample enhanced user mapping."""
+        current_time = "2024-01-15T12:00:00+00:00"
         return {
             "john.doe": UserAssociationMapping(
                 jira_username="john.doe",
@@ -57,7 +58,8 @@ class TestEnhancedUserAssociationMigrator:
                 openproject_email="john.doe@company.com",
                 mapping_status="mapped",
                 fallback_user_id=None,
-                metadata={"jira_active": True, "openproject_active": True}
+                metadata={"jira_active": True, "openproject_active": True},
+                lastRefreshed=current_time
             ),
             "jane.smith": UserAssociationMapping(
                 jira_username="jane.smith",
@@ -69,7 +71,8 @@ class TestEnhancedUserAssociationMigrator:
                 openproject_email="jane.smith@company.com",
                 mapping_status="mapped",
                 fallback_user_id=None,
-                metadata={"jira_active": True, "openproject_active": True}
+                metadata={"jira_active": True, "openproject_active": True},
+                lastRefreshed=current_time
             ),
             "inactive.user": UserAssociationMapping(
                 jira_username="inactive.user",
@@ -81,7 +84,8 @@ class TestEnhancedUserAssociationMigrator:
                 openproject_email="inactive@company.com",
                 mapping_status="mapped",
                 fallback_user_id=None,
-                metadata={"jira_active": False, "openproject_active": False}
+                metadata={"jira_active": False, "openproject_active": False},
+                lastRefreshed=current_time
             ),
         }
 
