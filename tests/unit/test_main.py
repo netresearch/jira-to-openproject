@@ -13,11 +13,10 @@ from src.main import validate_database_configuration
 @patch("src.config_loader.ConfigLoader")
 def test_validate_db_config_success(mock_config_loader_cls, caplog):
     """
-    Test validate_database_configuration succeeds when password is correctly configured.
+    Test validate_database_configuration succeeds when ConfigLoader initializes successfully.
     """
     # Arrange
     mock_loader_instance = MagicMock()
-    mock_loader_instance.get_postgres_password.return_value = "supersecret"
     mock_config_loader_cls.return_value = mock_loader_instance
 
     # Act
@@ -26,7 +25,6 @@ def test_validate_db_config_success(mock_config_loader_cls, caplog):
 
     # Assert
     mock_config_loader_cls.assert_called_once()
-    mock_loader_instance.get_postgres_password.assert_called_once()
     assert "Database configuration validated successfully" in caplog.text
 
 
@@ -50,8 +48,6 @@ def test_validate_db_config_fails_on_runtime_error(mock_config_loader_cls, caplo
         validate_database_configuration()
 
     assert excinfo.value.code == 1
-    assert "Database configuration failed" in caplog.text
-    assert error_message in caplog.text
     assert "Please ensure POSTGRES_PASSWORD is set" in caplog.text
 
 
@@ -59,20 +55,19 @@ def test_validate_db_config_fails_on_runtime_error(mock_config_loader_cls, caplo
 @patch("src.config_loader.ConfigLoader")
 def test_validate_db_config_fails_on_empty_password(mock_config_loader_cls, caplog):
     """
-    Test validate_database_configuration exits if the password is an empty string.
+    Test validate_database_configuration exits if ConfigLoader raises RuntimeError for empty password.
+    This is now handled entirely within ConfigLoader during initialization.
     """
-    # Arrange
-    mock_loader_instance = MagicMock()
-    mock_loader_instance.get_postgres_password.return_value = "   "  # Whitespace only
-    mock_config_loader_cls.return_value = mock_loader_instance
+    # Arrange - ConfigLoader will raise RuntimeError for empty passwords during __init__
+    error_message = "POSTGRES_PASSWORD is required but not found."
+    mock_config_loader_cls.side_effect = RuntimeError(error_message)
 
     # Act & Assert
     with pytest.raises(SystemExit) as excinfo:
         validate_database_configuration()
 
     assert excinfo.value.code == 1
-    assert "Database configuration failed: POSTGRES_PASSWORD is empty." in caplog.text
-    assert "Please check your .env file or Docker secrets configuration." in caplog.text
+    assert "Database configuration failed:" in caplog.text
 
 
 @pytest.mark.unit

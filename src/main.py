@@ -22,18 +22,9 @@ def validate_database_configuration() -> None:
     """
     try:
         from src.config_loader import ConfigLoader
+        # ConfigLoader initialization will raise RuntimeError if POSTGRES_PASSWORD is missing
+        # or empty, so we don't need additional validation here
         config_loader = ConfigLoader()
-        
-        # This will raise RuntimeError if POSTGRES_PASSWORD is missing
-        postgres_password = config_loader.get_postgres_password()
-        
-        if not postgres_password or not postgres_password.strip():
-            logger.error(
-                "Database configuration failed: POSTGRES_PASSWORD is empty. "
-                "Please check your .env file or Docker secrets configuration."
-            )
-            sys.exit(1)
-            
         logger.debug("Database configuration validated successfully")
         
     except RuntimeError as e:
