@@ -159,7 +159,7 @@ class ConfigLoader:
                     postgres_password = secret_path.read_text().strip()
                     config_logger.debug("Successfully loaded PostgreSQL password from configured source")
                 except (IOError, OSError, PermissionError) as e:
-                    config_logger.warning("Failed to read Docker secret: %s", e)
+                    config_logger.warning("Failed to read Docker secret: %s", e.__class__.__name__)
             else:
                 config_logger.debug("Docker secret file not found: %s", secret_path)
         else:

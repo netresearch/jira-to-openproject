@@ -818,6 +818,7 @@ class EnhancedUserAssociationMigrator:
         Raises:
             ValueError: If duration format is invalid or zero/negative
         """
+        duration_str = duration_str.strip()  # Handle whitespace defensively
         pattern = r'^(\d+)([smhd])$'
         match = re.match(pattern, duration_str.lower())
         
