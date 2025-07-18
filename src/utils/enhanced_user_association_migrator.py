@@ -85,6 +85,11 @@ class EnhancedUserAssociationMigrator:
     - Assignee relationships with proper fallbacks
     - Staleness detection and automatic refresh
     """
+    
+    # Configuration constants
+    DEFAULT_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
+    DEFAULT_MAX_RETRIES = 3
+    DEFAULT_FALLBACK_STRATEGY = "skip"
 
     def __init__(
         self,
@@ -744,76 +749,69 @@ class EnhancedUserAssociationMigrator:
         
         return stale_mappings
 
-    def batch_refresh_stale_mappings(self, max_retries: int = 2) -> dict[str, Any]:
-        """Batch refresh all stale mappings with retry logic.
+    def batch_refresh_stale_mappings(self, usernames: list[str] | None = None, max_retries: int | None = None) -> dict[str, Any]:
+        """Refresh multiple stale mappings in batch with retry logic.
         
         Args:
-            max_retries: Maximum number of retry attempts per mapping
+            usernames: Optional list of usernames to refresh. If None, refreshes all stale mappings.
+            max_retries: Maximum retry attempts per mapping. If None, uses class default.
             
         Returns:
-            Dictionary with refresh results and statistics
+            Dictionary with batch refresh results including success/failure counts
         """
-        # Detect all stale mappings
-        stale_mappings = self.detect_stale_mappings()
+        current_time = datetime.now(tz=UTC)  # Single timestamp for entire batch operation
+        max_retries = max_retries or self.DEFAULT_MAX_RETRIES
         
-        if not stale_mappings:
-            return {
-                "total_stale": 0,
-                "refresh_attempted": 0,
-                "refresh_successful": 0,
-                "refresh_failed": 0,
-                "results": {},
-                "errors": []
-            }
+        # Detect stale mappings if no usernames provided
+        if usernames is None:
+            stale_mappings = self.detect_stale_mappings()
+            usernames = list(stale_mappings.keys())
+        else:
+            stale_mappings = self.detect_stale_mappings(usernames)
         
         results = {
-            "total_stale": len(stale_mappings),
-            "refresh_attempted": 0,
+            "refresh_attempted": len(usernames),
             "refresh_successful": 0,
             "refresh_failed": 0,
-            "results": {},
-            "errors": []
+            "errors": [],
+            "results": {}
         }
         
-        self.logger.info("Starting batch refresh of %d stale mappings", len(stale_mappings))
+        self.logger.info("Starting batch refresh for %d mappings", len(usernames))
         
-        for username, stale_reason in stale_mappings.items():
-            results["refresh_attempted"] += 1
+        for username in usernames:
+            stale_reason = stale_mappings.get(username, "Manual refresh requested")
             
             try:
-                self.logger.debug("Refreshing stale mapping: %s (reason: %s)", username, stale_reason)
-                
-                # Attempt refresh with retry logic
-                refresh_success = False
+                # Retry logic for individual mapping refresh
                 last_error = None
+                success = False
                 
                 for attempt in range(max_retries + 1):
                     try:
                         refreshed_mapping = self.refresh_user_mapping(username)
                         
                         if refreshed_mapping:
-                            refresh_success = True
                             results["refresh_successful"] += 1
                             results["results"][username] = {
                                 "status": "success",
                                 "attempts": attempt + 1,
-                                "stale_reason": stale_reason
+                                "stale_reason": stale_reason,
+                                "refreshed_at": refreshed_mapping["lastRefreshed"]
                             }
-                            self.logger.debug("Successfully refreshed mapping for %s (attempt %d)", username, attempt + 1)
+                            success = True
                             break
                         else:
                             last_error = "Refresh returned None"
-                            if attempt < max_retries:
-                                self.logger.debug("Retry %d for %s: refresh returned None", attempt + 1, username)
                             
-                    except Exception as e:
-                        last_error = str(e)
-                        if attempt < max_retries:
-                            self.logger.debug("Retry %d for %s failed: %s", attempt + 1, username, e)
-                        else:
-                            self.logger.warning("All retries exhausted for %s: %s", username, e)
+                    except Exception as refresh_error:
+                        last_error = str(refresh_error)
+                        self.logger.warning(
+                            "Refresh attempt %d/%d failed for %s: %s", 
+                            attempt + 1, max_retries + 1, username, refresh_error
+                        )
                 
-                if not refresh_success:
+                if not success:
                     results["refresh_failed"] += 1
                     results["results"][username] = {
                         "status": "failed",
@@ -1060,6 +1058,8 @@ class EnhancedUserAssociationMigrator:
                     
                     # Determine staleness reason for recommendation
                     last_refreshed = mapping.get("lastRefreshed")
+                    age_seconds = 0  # Initialize age_seconds outside try block
+                    
                     if not last_refreshed:
                         reason = "Never refreshed"
                     else:
@@ -1069,6 +1069,7 @@ class EnhancedUserAssociationMigrator:
                             reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
                         except ValueError:
                             reason = "Invalid timestamp"
+                            age_seconds = self.refresh_interval_seconds * 3  # Assume very stale for invalid timestamps
                     
                     validation_results["recommendations"].append({
                         "username": username,
@@ -1245,7 +1246,7 @@ class EnhancedUserAssociationMigrator:
 
         return "\n".join(script_lines)
 
-    def save_enhanced_mappings(self) -> None:
+    def _save_enhanced_mappings(self) -> None:
         """Save enhanced user mappings to file."""
         try:
             enhanced_mapping_file = config.get_path("data") / "enhanced_user_mappings.json"
@@ -1258,11 +1259,15 @@ class EnhancedUserAssociationMigrator:
             with enhanced_mapping_file.open("w") as f:
                 json.dump(serializable_mappings, f, indent=2)
             
-            self.logger.info("Saved enhanced user mappings to %s", enhanced_mapping_file)
+            self.logger.debug("Saved enhanced user mappings to %s", enhanced_mapping_file)
         except (IOError, json.JSONEncodeError, ValueError) as e:
             self.logger.error("Failed to save enhanced user mappings due to file/JSON error: %s", e)
         except Exception as e:
             self.logger.exception("Unexpected error saving enhanced user mappings: %s", e)
+
+    def save_enhanced_mappings(self) -> None:
+        """Public API to save enhanced user mappings to file."""
+        return self._save_enhanced_mappings()
 
     def generate_association_report(self) -> dict[str, Any]:
         """Generate comprehensive report on user association migration."""
@@ -1299,7 +1304,7 @@ class EnhancedUserAssociationMigrator:
             
             # Validate fallback_strategy
             self.fallback_strategy = self._validate_fallback_strategy(
-                mapping_config.get("fallback_strategy", "skip")
+                mapping_config.get("fallback_strategy", self.DEFAULT_FALLBACK_STRATEGY)
             )
             
             # Get admin user ID for assign_admin strategy
@@ -1316,15 +1321,15 @@ class EnhancedUserAssociationMigrator:
             
         except (IOError, json.JSONDecodeError, ValueError, KeyError) as e:
             self.logger.warning("Failed to load staleness configuration due to file/data error: %s", e)
-            # Set defaults
-            self.refresh_interval_seconds = 24 * 60 * 60  # 24 hours
-            self.fallback_strategy = "skip"
+            # Set defaults using class constants
+            self.refresh_interval_seconds = self.DEFAULT_REFRESH_INTERVAL_SECONDS
+            self.fallback_strategy = self.DEFAULT_FALLBACK_STRATEGY
             self.admin_user_id = None
         except Exception as e:
             self.logger.exception("Unexpected error loading staleness configuration: %s", e)
-            # Set defaults
-            self.refresh_interval_seconds = 24 * 60 * 60  # 24 hours
-            self.fallback_strategy = "skip"
+            # Set defaults using class constants
+            self.refresh_interval_seconds = self.DEFAULT_REFRESH_INTERVAL_SECONDS
+            self.fallback_strategy = self.DEFAULT_FALLBACK_STRATEGY
             self.admin_user_id = None
 
     def _parse_duration(self, duration_str: str) -> int:
