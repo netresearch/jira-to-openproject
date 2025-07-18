@@ -1498,11 +1498,25 @@
         ],
         "priority": "medium",
         "subtasks": []
+      },
+      {
+        "id": 79,
+        "title": "Address critical Docker security vulnerabilities and container startup failures",
+        "description": "Remove unsupported user directives in docker-compose.yml and harden DockerClient against command injection while adding input validation and documentation to unblock production deployment.",
+        "details": "1. docker-compose.yml updates:\n   a. Remove the user: directive from the Redis and PostgreSQL service definitions (Alpine base images don’t support arbitrary UIDs).\n   b. Ensure any other services retain correct non-root users only if they support it.\n2. DockerClient code changes:\n   a. Import shlex.quote in DockerClient module.\n   b. In run_container(), wrap every user-supplied parameter (image name, command arguments, environment variables, mounts) with shlex.quote before constructing the CLI string.\n   c. Audit all other DockerClient methods that build shell commands (e.g., exec, pull, stop) and quote container names or arguments to prevent injection.\n3. Input validation in run_container():\n   a. Enforce user format (e.g., /^[a-zA-Z0-9_\\-]+$/) and raise ValueError for invalid patterns.\n   b. Validate CPU and memory limits fall within acceptable ranges (e.g., CPU > 0, memory > 4MB) and coerce or reject out-of-range values.\n4. Documentation:\n   a. Update the project README or docs/docker.md to describe volume permission requirements for bind mounts, including uid/gid ownership and recommended chmod settings.\n   b. Include examples of proper mount declarations and troubleshooting tips for permission errors.",
+        "testStrategy": "1. Compose validation:\n   a. Run `docker-compose config` to ensure no errors from missing user directives.\n   b. Spin up Redis and PostgreSQL services (`docker-compose up -d redis postgres`) and verify both reach healthy state and accept basic queries (redis-cli PING, psql -c '\\l').\n2. Unit tests for DockerClient:\n   a. Mock subprocess or low-level Docker API; pass malicious inputs (e.g., `\"; rm -rf /\"`) to run_container() and assert that shlex.quote neutralizes them.\n   b. Verify that f-string-based methods now wrap container names correctly and do not allow injection.\n   c. Test that invalid user formats and out-of-range resource limits raise ValueError and do not invoke Docker commands.\n3. Documentation review:\n   a. Conduct a peer review of updated docs/docker.md or README to confirm volume permission guidance is accurate.\n   b. Follow provided documentation steps in a fresh environment to mount a host directory and confirm correct ownership and access.",
+        "status": "pending",
+        "dependencies": [
+          22,
+          54
+        ],
+        "priority": "high",
+        "subtasks": []
       }
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-17T23:15:01.017Z",
+      "updated": "2025-07-18T05:59:22.013Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",

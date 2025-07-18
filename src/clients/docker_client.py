@@ -74,8 +74,10 @@ class DockerClient:
 
         """
         try:
+            # SECURITY FIX: Quote container name to prevent injection
+            safe_container_name = quote(self.container_name)
             stdout, _, returncode = self.ssh_client.execute_command(
-                f"docker ps --filter name={self.container_name} --format '{{{{.Names}}}}'",
+                f"docker ps --filter name={safe_container_name} --format '{{{{.Names}}}}'",
             )
 
             if returncode == 0 and self.container_name in stdout:
@@ -84,7 +86,7 @@ class DockerClient:
 
             # Check if container exists but is not running
             stdout, _, returncode = self.ssh_client.execute_command(
-                f"docker ps -a --filter name={self.container_name} --format '{{{{.Names}}}}'",
+                f"docker ps -a --filter name={safe_container_name} --format '{{{{.Names}}}}'",
             )
 
             if returncode == 0 and self.container_name in stdout:
@@ -338,8 +340,10 @@ class DockerClient:
 
         try:
             # Use stat to check if file exists
+            # SECURITY FIX: Quote container name to prevent injection
+            safe_container_name = quote(self.container_name)
             cmd = (
-                f"docker exec {self.container_name} bash -c "
+                f"docker exec {safe_container_name} bash -c "
                 f'\'test -e {quote(container_path_str)} && echo "EXISTS" || echo "NOT_EXISTS"\''
             )
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
@@ -363,8 +367,10 @@ class DockerClient:
 
         try:
             # Use stat to get file size
+            # SECURITY FIX: Quote container name to prevent injection
+            safe_container_name = quote(self.container_name)
             cmd = (
-                f"docker exec {self.container_name} bash -c "
+                f"docker exec {safe_container_name} bash -c "
                 f"'stat -c %s {quote(container_path_str)} 2>/dev/null || echo \"NOT_EXISTS\"'"
             )
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
@@ -423,6 +429,18 @@ class DockerClient:
             Exception: If the container fails to start
 
         """
+        # INPUT VALIDATION: Validate critical parameters to prevent errors
+        import re
+        
+        if user and not re.match(r"^[\w]+:?[\w]*$", user):
+            raise ValueError(f"Invalid user format: {user}. Expected format: 'user' or 'uid:gid'")
+        
+        if memory_limit and not re.match(r"^\d+[mgMGT]?$", memory_limit):
+            raise ValueError(f"Invalid memory_limit format: {memory_limit}. Expected format: '512m', '1g', etc.")
+        
+        if cpu_limit and not re.match(r"^\d*\.?\d+$", cpu_limit):
+            raise ValueError(f"Invalid cpu_limit format: {cpu_limit}. Expected format: '0.5', '1', '2.0', etc.")
+        
         # Build docker run command
         docker_cmd = ["docker", "run"]
 
@@ -470,7 +488,8 @@ class DockerClient:
 
         # Add command if specified
         if command:
-            docker_cmd.extend(["bash", "-c", command])
+            # SECURITY FIX: Quote command to prevent injection
+            docker_cmd.extend(["bash", "-c", quote(command)])
 
         # Convert list to space-separated string
         docker_cmd_str = " ".join(docker_cmd)
@@ -490,7 +509,8 @@ class DockerClient:
         """
         try:
             # Get container inspection info
-            cmd = f"docker inspect {self.container_name}"
+            # SECURITY FIX: Quote container name to prevent injection
+            cmd = f"docker inspect {quote(self.container_name)}"
             stdout, stderr, returncode = self.ssh_client.execute_command(cmd)
 
             if returncode != 0:

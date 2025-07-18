@@ -42,21 +42,33 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
         assert len(compose_config["services"]) > 0, "No services defined in compose.yml"
 
     def test_all_services_have_user_mapping(self) -> None:
-        """Test that all services have user mapping configured."""
+        """Test that services requiring custom user mapping have it configured."""
         with open(self.compose_file, 'r') as f:
             compose_config = yaml.safe_load(f)
         
         services = compose_config.get("services", {})
         
+        # Services that should have custom user mapping (non-Alpine images)
+        services_needing_custom_user = ["app", "mock-jira", "mock-openproject"]
+        
+        # Services that should NOT have custom user mapping (Alpine images with built-in users)
+        services_with_builtin_users = ["redis", "postgres"]
+        
         for service_name, service_config in services.items():
             with self.subTest(service=service_name):
-                assert "user" in service_config, f"Service {service_name} missing user configuration"
+                if service_name in services_needing_custom_user:
+                    assert "user" in service_config, f"Service {service_name} missing user configuration"
+                    
+                    user_config = service_config["user"]
+                    
+                    # Should use environment variable format
+                    assert "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}" in user_config, \
+                        f"Service {service_name} user config should use UID/GID environment variables"
                 
-                user_config = service_config["user"]
-                
-                # Should use environment variable format
-                assert "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}" in user_config, \
-                    f"Service {service_name} user config should use UID/GID environment variables"
+                elif service_name in services_with_builtin_users:
+                    # These services should NOT have custom user mapping - they use built-in non-root users
+                    assert "user" not in service_config, \
+                        f"Service {service_name} should not have custom user mapping (uses built-in non-root user)"
 
     def test_all_services_have_resource_limits(self) -> None:
         """Test that all services have resource limits configured."""
@@ -151,15 +163,27 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
                 
                 for volume in volumes:
                     with self.subTest(service=service_name, volume=volume):
-                        # Named volumes are preferred over bind mounts for security
-                        if ":" in volume and not volume.startswith("."):
-                            # This is a bind mount - check it's appropriate
+                        # Check for different types of volume mounts
+                        if ":" in volume:
                             source_path = volume.split(":")[0]
                             
-                            # Only allow specific safe bind mounts
-                            safe_mounts = [".", "./api-specs"]
-                            if not any(source_path.startswith(safe) for safe in safe_mounts):
-                                self.fail(f"Service {service_name} has potentially unsafe bind mount: {volume}")
+                            # Named volumes (managed by Docker) are secure for data persistence
+                            # They don't expose host filesystem and are managed by Docker
+                            safe_named_volumes = ["redis_data", "postgres_data"]
+                            
+                            # Safe bind mounts for development
+                            safe_bind_mounts = [".", "./api-specs"]
+                            
+                            # Dangerous patterns to avoid
+                            if "docker.sock" in volume:
+                                self.fail(f"Service {service_name} has dangerous Docker socket mount: {volume}")
+                            
+                            # Check if it's a named volume or safe bind mount
+                            is_safe = (source_path in safe_named_volumes or 
+                                     any(source_path.startswith(safe) for safe in safe_bind_mounts))
+                            
+                            if not is_safe:
+                                self.fail(f"Service {service_name} has potentially unsafe volume mount: {volume}")
 
     def test_env_example_has_docker_security_vars(self) -> None:
         """Test that .env.example includes Docker security variables."""

@@ -15,6 +15,8 @@ services:
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     volumes:
       # Mount source code for live editing
+      # IMPORTANT: Ensure DOCKER_UID/GID in your .env file match your
+      # host user's UID/GID (`id -u`/`id -g`) to avoid permission issues
       - .:/app
       # SECURITY: Docker socket mount removed to prevent container escape
       # This migration tool uses SSH-based remote Docker client - no local Docker daemon access needed
@@ -76,8 +78,8 @@ services:
   # Redis for caching and task queues
   redis:
     image: redis:8.0-alpine
-    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     # SECURITY: No port exposure needed - internal service only
+    # NOTE: Redis Alpine runs as dedicated 'redis' user (not root) by default - no custom user needed
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -94,8 +96,8 @@ services:
   # PostgreSQL for data storage
   postgres:
     image: postgres:17-alpine
-    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     # SECURITY: No port exposure needed - internal service only
+    # NOTE: PostgreSQL Alpine runs as dedicated 'postgres' user (not root) by default - no custom user needed
     environment:
       POSTGRES_DB: jira_migration
       POSTGRES_USER: postgres
