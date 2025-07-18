@@ -10,7 +10,6 @@ This module provides advanced user association migration capabilities that:
 """
 
 import json
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
@@ -18,6 +17,7 @@ from typing import Any, TypedDict
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
+from src.utils.validators import validate_jira_key
 
 
 class UserAssociationMapping(TypedDict):
@@ -100,14 +100,7 @@ class EnhancedUserAssociationMigrator:
             return {}
 
     def _validate_jira_key(self, jira_key: str) -> None:
-        """
-        Validate JIRA key format to prevent injection attacks.
-        
-        Valid JIRA keys:
-        - Non-empty alphanumeric strings with hyphens
-        - Pattern: ^[A-Z0-9\-]+$
-        - Maximum 100 characters
-        - No control characters (ASCII < 32)
+        """Validate JIRA key format using the centralized validator.
         
         Args:
             jira_key: The JIRA key to validate
@@ -115,20 +108,7 @@ class EnhancedUserAssociationMigrator:
         Raises:
             ValueError: If jira_key format is invalid or contains potentially dangerous characters
         """
-        if not jira_key or not jira_key.strip():
-            raise ValueError("JIRA key cannot be empty or whitespace only.")
-        
-        if len(jira_key) > 100:
-            raise ValueError(f"JIRA key too long ({len(jira_key)} chars). Maximum allowed: 100 characters.")
-        
-        # Check for control characters (ASCII < 32)
-        for char in jira_key:
-            if ord(char) < 32:
-                raise ValueError(f"JIRA key contains control characters (ASCII {ord(char)}). Only A-Z, 0-9, and hyphens allowed.")
-        
-        # Validate against regex pattern
-        if not re.match(r'^[A-Z0-9\-]+$', jira_key):
-            raise ValueError(f"Invalid jira_key format: {jira_key}. Must contain only A-Z, 0-9, and hyphens.")
+        validate_jira_key(jira_key)
 
     def _load_enhanced_mappings(self) -> None:
         """Load enhanced user association mappings with metadata."""
