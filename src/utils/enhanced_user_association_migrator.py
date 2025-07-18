@@ -11,9 +11,11 @@ This module provides advanced user association migration capabilities that:
 
 import json
 import re
+import requests
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict
+from urllib.parse import quote
 
 from src import config
 from src.clients.jira_client import JiraClient
@@ -197,14 +199,16 @@ class EnhancedUserAssociationMigrator:
         Returns:
             User information dict or None if not found
         """
-        # Check if we should refresh stale mapping
-        if self.is_mapping_stale(username):
+        # Check staleness once and cache result to avoid double checking
+        is_stale = self.is_mapping_stale(username)
+        if is_stale:
             self.logger.debug("User mapping for %s is stale, will refresh if found", username)
         
         # Existing implementation continues here...
         try:
-            # Get user from Jira
-            response = self.jira_client.get(f"user/search?username={username}")
+            # Get user from Jira with URL-encoded username to prevent injection
+            safe_username = quote(username)
+            response = self.jira_client.get(f"user/search?username={safe_username}")
             
             if response.status_code == 200:
                 users = response.json()
@@ -212,7 +216,7 @@ class EnhancedUserAssociationMigrator:
                     user_info = users[0]
                     
                     # Auto-refresh stale mapping with fresh data
-                    if self.is_mapping_stale(username):
+                    if is_stale:
                         self.logger.info("Auto-refreshing stale mapping for %s", username)
                         self.refresh_user_mapping(username)
                     

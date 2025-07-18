@@ -112,7 +112,6 @@ class TestDurationParsing:
         ("24h", 86400),
         ("1d", 86400),
         ("7d", 604800),
-        ("0s", 0),
         ("999h", 3596400),
     ])
     def test_parse_duration_valid_formats(self, migrator_instance, duration_str, expected_seconds):
@@ -140,6 +139,12 @@ class TestDurationParsing:
         """Test parsing empty string raises specific error."""
         with pytest.raises(ValueError, match="Duration string cannot be empty"):
             migrator_instance._parse_duration("")
+
+    @pytest.mark.parametrize("zero_duration", ["0s", "0m", "0h", "0d"])
+    def test_parse_duration_rejects_zero_value(self, migrator_instance, zero_duration):
+        """Test that zero-value durations are correctly rejected."""
+        with pytest.raises(ValueError, match="Duration must be positive"):
+            migrator_instance._parse_duration(zero_duration)
 
 
 class TestFallbackStrategyValidation:
