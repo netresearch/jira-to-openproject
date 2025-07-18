@@ -385,6 +385,148 @@ class DockerClient:
             logger.warning("Error getting file size in container: %s", e)
             return None
 
+    def run_container(
+        self,
+        image: str,
+        name: str | None = None,
+        user: str | None = None,
+        environment: dict[str, str] | None = None,
+        volumes: dict[str, str] | None = None,
+        ports: dict[str, str] | None = None,
+        cpu_limit: str | None = None,
+        memory_limit: str | None = None,
+        network: str | None = None,
+        detach: bool = True,
+        remove: bool = False,
+        command: str | None = None,
+    ) -> tuple[str, str, int]:
+        """Run a new Docker container with security and resource constraints.
+
+        Args:
+            image: Docker image to run
+            name: Container name (optional)
+            user: User to run as (e.g., "1000:1000" for UID:GID)
+            environment: Environment variables
+            volumes: Volume mappings (host_path: container_path)
+            ports: Port mappings (host_port: container_port)
+            cpu_limit: CPU limit (e.g., "0.5" for half core)
+            memory_limit: Memory limit (e.g., "512m" for 512MB)
+            network: Network to connect to
+            detach: Run in detached mode
+            remove: Remove container when it exits
+            command: Command to run in container
+
+        Returns:
+            Tuple of (stdout, stderr, returncode)
+
+        Raises:
+            Exception: If the container fails to start
+
+        """
+        # Build docker run command
+        docker_cmd = ["docker", "run"]
+
+        # Add user if specified
+        if user:
+            docker_cmd.extend(["--user", user])
+
+        # Add resource limits
+        if cpu_limit:
+            docker_cmd.extend(["--cpus", cpu_limit])
+        if memory_limit:
+            docker_cmd.extend(["--memory", memory_limit])
+
+        # Add container name
+        if name:
+            docker_cmd.extend(["--name", name])
+
+        # Add environment variables
+        if environment:
+            for key, value in environment.items():
+                docker_cmd.extend(["-e", f"{key}={value}"])
+
+        # Add volume mappings
+        if volumes:
+            for host_path, container_path in volumes.items():
+                docker_cmd.extend(["-v", f"{host_path}:{container_path}"])
+
+        # Add port mappings
+        if ports:
+            for host_port, container_port in ports.items():
+                docker_cmd.extend(["-p", f"{host_port}:{container_port}"])
+
+        # Add network
+        if network:
+            docker_cmd.extend(["--network", network])
+
+        # Add flags
+        if detach:
+            docker_cmd.append("-d")
+        if remove:
+            docker_cmd.append("--rm")
+
+        # Add image
+        docker_cmd.append(image)
+
+        # Add command if specified
+        if command:
+            docker_cmd.extend(["bash", "-c", command])
+
+        # Convert list to space-separated string
+        docker_cmd_str = " ".join(docker_cmd)
+
+        # Execute via SSH
+        return self.ssh_client.execute_command(docker_cmd_str, timeout=self.command_timeout)
+
+    def get_container_info(self) -> dict[str, str]:
+        """Get information about the container including user and resource settings.
+
+        Returns:
+            Dictionary with container information
+
+        Raises:
+            Exception: If the inspection fails
+
+        """
+        try:
+            # Get container inspection info
+            cmd = f"docker inspect {self.container_name}"
+            stdout, stderr, returncode = self.ssh_client.execute_command(cmd)
+
+            if returncode != 0:
+                logger.error("Failed to inspect container: %s", stderr)
+                msg = f"Failed to inspect container: {stderr}"
+                raise ValueError(msg)
+
+            import json
+            inspect_data = json.loads(stdout)
+            if not inspect_data:
+                msg = f"No data returned for container: {self.container_name}"
+                raise ValueError(msg)
+
+            container_info = inspect_data[0]
+
+            # Extract relevant security and resource information
+            config = container_info.get("Config", {})
+            host_config = container_info.get("HostConfig", {})
+
+            return {
+                "user": config.get("User", "root"),
+                "image": config.get("Image", "unknown"),
+                "cpu_shares": str(host_config.get("CpuShares", 0)),
+                "memory": str(host_config.get("Memory", 0)),
+                "memory_swap": str(host_config.get("MemorySwap", 0)),
+                "cpu_quota": str(host_config.get("CpuQuota", 0)),
+                "cpu_period": str(host_config.get("CpuPeriod", 0)),
+                "security_opt": host_config.get("SecurityOpt", []),
+                "readonly_rootfs": str(host_config.get("ReadonlyRootfs", False)),
+            }
+
+        except Exception as e:
+            logger.exception("Error getting container info: %s", e)
+            msg = f"Failed to get container info: {e}"
+            raise ValueError(msg) from e
+
     def transfer_file_to_container(
         self,
         local_path: Path | str,

@@ -12,6 +12,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     volumes:
       # Mount source code for live editing
       - .:/app
@@ -25,47 +26,92 @@ services:
       - redis
       - postgres
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   # Mock Jira API server
   mock-jira:
     image: stoplight/prism:5.14.2
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     ports:
       - "4010:4010"
     command: mock -h 0.0.0.0 -p 4010 /app/api-specs/jira-api.yaml
     volumes:
       - ./api-specs:/app/api-specs
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
 
   # Mock OpenProject API server
   mock-openproject:
     image: stoplight/prism:5.14.2
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     ports:
       - "4011:4011"
     command: mock -h 0.0.0.0 -p 4011 /app/api-specs/openproject-api.yaml
     volumes:
       - ./api-specs:/app/api-specs
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
 
   # Redis for caching and task queues
   redis:
     image: redis:8.0-alpine
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     # SECURITY: No port exposure needed - internal service only
     volumes:
       - redis_data:/data
     restart: unless-stopped
     command: redis-server --appendonly yes
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   # PostgreSQL for data storage
   postgres:
     image: postgres:17-alpine
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     # SECURITY: No port exposure needed - internal service only
     environment:
       POSTGRES_DB: jira_migration
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
+      PGUSER: postgres
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
 volumes:
   redis_data:

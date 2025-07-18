@@ -186,7 +186,7 @@ class WorkPackageMigration(BaseMigration):
             JiraResourceNotFoundError: If the project is not found
         """
         start_at = 0
-        batch_size = getattr(config, 'jira', {}).get('batch_size', 100)
+        batch_size = config.migration_config.get('batch_size', 100)
         
         # Use existing JQL pattern from get_all_issues_for_project
         jql = f'project = "{project_key}" ORDER BY created ASC'
@@ -1983,7 +1983,7 @@ class WorkPackageMigration(BaseMigration):
                         all_issues.append(issue_dict)
                         
                         # Log progress periodically
-                        if len(all_issues) % getattr(config, 'jira', {}).get('batch_size', 100) == 0:
+                        if len(all_issues) % config.migration_config.get('batch_size', 100) == 0:
                             logger.info(f"Processed {len(all_issues)} issues so far...")
                             
             logger.info(f"Finished processing {len(all_issues)} total issues from all projects")

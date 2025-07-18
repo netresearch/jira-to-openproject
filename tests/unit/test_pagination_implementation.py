@@ -42,7 +42,7 @@ class TestPaginationImplementation:
         
         # Mock the global config to set batch_size
         with patch('src.migrations.work_package_migration.config') as mock_config:
-            mock_config.jira = {'batch_size': 50}
+            mock_config.migration_config = {'batch_size': 50}
             
             # Mock the _fetch_issues_with_retry to return proper list responses
             with patch.object(self.migration, '_fetch_issues_with_retry') as mock_fetch:
@@ -136,7 +136,7 @@ class TestPaginationImplementation:
         
         # Mock the global config to set batch_size
         with patch('src.migrations.work_package_migration.config') as mock_config:
-            mock_config.jira = {'batch_size': 50}
+            mock_config.migration_config = {'batch_size': 50}
             
             with patch.object(self.migration, 'iter_project_issues') as mock_iter:
                 mock_iter.return_value = [mock_issue1]
@@ -161,7 +161,7 @@ class TestPaginationImplementation:
         
         # Mock the global config to set batch_size
         with patch('src.migrations.work_package_migration.config') as mock_config:
-            mock_config.jira = {'batch_size': 50}
+            mock_config.migration_config = {'batch_size': 50}
             
             with patch.object(self.migration, '_fetch_issues_with_retry') as mock_fetch:
                 # Simulate 3 batches of 50 issues each (full batches trigger continuation)
