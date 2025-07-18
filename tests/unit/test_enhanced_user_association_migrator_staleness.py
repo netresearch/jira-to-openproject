@@ -21,8 +21,13 @@ class TestStalenessDetection:
     def mock_jira_client(self):
         """Create mock Jira client with get method."""
         client = MagicMock()
-        # Explicitly add the get method
+        # Add get method that returns a mock response by default
         client.get = MagicMock()
+        # Default successful response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = []
+        client.get.return_value = mock_response
         response = MagicMock()
         response.status_code = 200
         response.json.return_value = []
@@ -122,9 +127,9 @@ class TestFallbackStrategyValidation:
         return EnhancedUserAssociationMigrator(mock_jira, mock_op)
 
     @pytest.mark.parametrize("strategy", [
-        FallbackStrategy.ASSIGN_ADMIN,
-        FallbackStrategy.SKIP,
-        FallbackStrategy.CREATE_PLACEHOLDER,
+        "assign_admin",
+        "skip", 
+        "create_placeholder",
     ])
     def test_validate_fallback_strategy_valid(self, migrator_instance, strategy):
         """Test valid fallback strategies."""
@@ -133,7 +138,7 @@ class TestFallbackStrategyValidation:
 
     def test_validate_fallback_strategy_invalid(self, migrator_instance):
         """Test invalid fallback strategy."""
-        with pytest.raises(ValueError, match="Invalid fallback strategy"):
+        with pytest.raises(ValueError, match="Invalid fallback_strategy"):
             migrator_instance._validate_fallback_strategy("invalid_strategy")
 
 
@@ -156,13 +161,15 @@ class TestConfigurationLoading:
                 }
             }
         }
-        
+
         with patch("builtins.open", mock_open(read_data=json.dumps(config_data))):
             with patch("pathlib.Path.exists", return_value=True):
-                migrator_instance._load_staleness_config()
-                
+                with patch.object(migrator_instance, 'config') as mock_config:
+                    mock_config.get_path.return_value = Path("/fake/path")
+                    migrator_instance._load_staleness_config()
+
                 assert migrator_instance.refresh_interval_seconds == 7200  # 2 hours
-                assert migrator_instance.fallback_strategy == FallbackStrategy.ASSIGN_ADMIN
+                assert migrator_instance.fallback_strategy == "assign_admin"
 
     def test_load_staleness_config_missing_file(self, migrator_instance):
         """Test loading config when file doesn't exist uses defaults."""
@@ -171,7 +178,7 @@ class TestConfigurationLoading:
             
             # Should use defaults
             assert migrator_instance.refresh_interval_seconds == 86400  # 24 hours default
-            assert migrator_instance.fallback_strategy == FallbackStrategy.ASSIGN_ADMIN
+            assert migrator_instance.fallback_strategy == "skip"
 
     def test_load_staleness_config_invalid_json(self, migrator_instance):
         """Test loading config with invalid JSON."""
@@ -298,14 +305,10 @@ class TestRefreshUserMapping:
         with patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
             mock_config.get_path.return_value = Path("/tmp/test")
             
-            mock_jira = MagicMock()
-            mock_op = MagicMock()
-            migrator = EnhancedUserAssociationMigrator(mock_jira, mock_op)
-            migrator.jira_client = mock_jira_client
-            migrator.op_client = mock_op_client
+            migrator = EnhancedUserAssociationMigrator(mock_jira_client, mock_op_client)
             migrator.enhanced_user_mappings = {}
             migrator.refresh_interval_seconds = 3600
-            migrator.fallback_strategy = FallbackStrategy.ASSIGN_ADMIN
+            migrator.fallback_strategy = "assign_admin"
             migrator.admin_user_id = 1
             migrator.user_mapping = {}
             

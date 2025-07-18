@@ -12,6 +12,7 @@ This module provides advanced user association migration capabilities that:
 import json
 import re
 import requests
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict
@@ -107,8 +108,11 @@ class EnhancedUserAssociationMigrator:
                 with user_mapping_file.open() as f:
                     return json.load(f)
             return {}
+        except (IOError, json.JSONDecodeError, ValueError) as e:
+            self.logger.warning("Failed to load user mapping due to file/JSON error: %s", e)
+            return {}
         except Exception as e:
-            self.logger.warning("Failed to load user mapping: %s", e)
+            self.logger.exception("Unexpected error loading user mapping: %s", e)
             return {}
 
     def _validate_jira_key(self, jira_key: str) -> None:
@@ -149,8 +153,11 @@ class EnhancedUserAssociationMigrator:
             else:
                 # Create enhanced mappings from basic user mapping
                 self._create_enhanced_mappings()
+        except (IOError, json.JSONDecodeError, ValueError, KeyError) as e:
+            self.logger.warning("Failed to load enhanced user mappings due to file/data error: %s", e)
+            self._create_enhanced_mappings()
         except Exception as e:
-            self.logger.warning("Failed to load enhanced user mappings: %s", e)
+            self.logger.exception("Unexpected error loading enhanced user mappings: %s", e)
             self._create_enhanced_mappings()
 
     def _create_enhanced_mappings(self) -> None:
@@ -211,16 +218,22 @@ class EnhancedUserAssociationMigrator:
             
             return None
             
+        except (requests.RequestException, ValueError, KeyError) as e:
+            self.logger.error("Failed to fetch Jira user info for %s due to API/data error: %s", username, e)
+            return None
         except Exception as e:
-            self.logger.error("Failed to fetch Jira user info for %s: %s", username, e)
+            self.logger.exception("Unexpected error fetching Jira user info for %s: %s", username, e)
             return None
 
     def _get_openproject_user_info(self, user_id: int) -> dict[str, Any] | None:
         """Get detailed user information from OpenProject."""
         try:
             return self.op_client.get_user(user_id)
+        except (requests.RequestException, ValueError, KeyError, AttributeError) as e:
+            self.logger.debug("Failed to get OpenProject user info for %s due to API/data error: %s", user_id, e)
+            return None
         except Exception as e:
-            self.logger.debug("Failed to get OpenProject user info for %s: %s", user_id, e)
+            self.logger.exception("Unexpected error getting OpenProject user info for %s: %s", user_id, e)
             return None
 
     def _identify_fallback_users(self) -> dict[str, int]:
@@ -243,8 +256,10 @@ class EnhancedUserAssociationMigrator:
             if migration_users:
                 fallback_users["migration"] = migration_users[0]["id"]
             
+        except (requests.RequestException, ValueError, KeyError, AttributeError) as e:
+            self.logger.warning("Failed to identify fallback users due to API/data error: %s", e)
         except Exception as e:
-            self.logger.warning("Failed to identify fallback users: %s", e)
+            self.logger.exception("Unexpected error identifying fallback users: %s", e)
         
         return fallback_users
 
@@ -362,8 +377,10 @@ class EnhancedUserAssociationMigrator:
                                 "email": watcher.get("emailAddress"),
                                 "active": watcher.get("active", True),
                             })
+                except (requests.RequestException, ValueError, KeyError, AttributeError) as e:
+                    self.logger.warning("Failed to fetch watchers for %s due to API/data error: %s", jira_issue.key, e)
                 except Exception as e:
-                    self.logger.exception("Failed to fetch watchers for %s: %s", jira_issue.key, e)
+                    self.logger.exception("Unexpected error fetching watchers for %s: %s", jira_issue.key, e)
 
         associations["watchers"] = watchers
         return associations
@@ -488,11 +505,12 @@ class EnhancedUserAssociationMigrator:
         
         return None
 
-    def is_mapping_stale(self, username: str) -> bool:
+    def is_mapping_stale(self, username: str, current_time: datetime | None = None) -> bool:
         """Check if a user mapping is stale and needs refresh.
         
         Args:
             username: Jira username to check
+            current_time: Optional current timestamp for batch operations (caching)
             
         Returns:
             True if mapping is stale, False otherwise
@@ -509,7 +527,8 @@ class EnhancedUserAssociationMigrator:
         
         try:
             last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
-            current_time = datetime.now(tz=UTC)
+            if current_time is None:
+                current_time = datetime.now(tz=UTC)
             age_seconds = (current_time - last_refresh_time).total_seconds()
             
             # Fixed: Use >= for consistent threshold behavior
@@ -519,14 +538,14 @@ class EnhancedUserAssociationMigrator:
             self.logger.warning("Invalid lastRefreshed timestamp for %s: %s", username, e)
             return True  # Invalid timestamps are considered stale
 
-    def refresh_user_mapping(self, username: str) -> bool:
+    def refresh_user_mapping(self, username: str) -> UserAssociationMapping | None:
         """Refresh a stale user mapping by re-fetching from Jira.
         
         Args:
             username: Jira username to refresh
             
         Returns:
-            True if refresh succeeded, False otherwise
+            Updated UserAssociationMapping on success, None on failure
         """
         try:
             self.logger.debug("Refreshing user mapping for %s", username)
@@ -536,7 +555,7 @@ class EnhancedUserAssociationMigrator:
             
             if not jira_user_info:
                 self.logger.warning("Could not fetch fresh user info for %s", username)
-                return False
+                return None
             
             # Get existing mapping or create new one
             existing_mapping = self.enhanced_user_mappings.get(username)
@@ -577,14 +596,14 @@ class EnhancedUserAssociationMigrator:
                 self.enhanced_user_mappings[username] = mapping
             
             self.logger.debug("Successfully refreshed user mapping for %s", username)
-            return True
+            return self.enhanced_user_mappings.get(username)
             
         except (requests.RequestException, ValueError, KeyError) as e:
             self.logger.error("Failed to refresh user mapping for %s: %s", username, e)
-            return False
+            return None
         except Exception as e:
-            self.logger.error("Unexpected error refreshing user mapping for %s: %s", username, e)
-            return False
+            self.logger.exception("Unexpected error refreshing user mapping for %s: %s", username, e)
+            return None
 
     def _queue_rails_author_operation(
         self, jira_key: str, author_id: int, author_data: dict[str, Any]
@@ -620,8 +639,10 @@ class EnhancedUserAssociationMigrator:
                 "errors": [],
                 "result": result
             }
+        except (IOError, subprocess.SubprocessError, ValueError) as e:
+            self.logger.error("Failed to execute Rails author operations due to process/file error: %s", e)
         except Exception as e:
-            self.logger.error("Failed to execute Rails author operations: %s", e)
+            self.logger.exception("Unexpected error executing Rails author operations: %s", e)
             return {
                 "processed": 0,
                 "errors": [str(e)]
@@ -733,8 +754,10 @@ class EnhancedUserAssociationMigrator:
                 json.dump(serializable_mappings, f, indent=2)
             
             self.logger.info("Saved enhanced user mappings to %s", enhanced_mapping_file)
+        except (IOError, json.JSONEncodeError, ValueError) as e:
+            self.logger.error("Failed to save enhanced user mappings due to file/JSON error: %s", e)
         except Exception as e:
-            self.logger.error("Failed to save enhanced user mappings: %s", e)
+            self.logger.exception("Unexpected error saving enhanced user mappings: %s", e)
 
     def generate_association_report(self) -> dict[str, Any]:
         """Generate comprehensive report on user association migration."""
@@ -786,8 +809,14 @@ class EnhancedUserAssociationMigrator:
                 self.refresh_interval_seconds, self.fallback_strategy
             )
             
+        except (IOError, json.JSONDecodeError, ValueError, KeyError) as e:
+            self.logger.warning("Failed to load staleness configuration due to file/data error: %s", e)
+            # Set defaults
+            self.refresh_interval_seconds = 24 * 60 * 60  # 24 hours
+            self.fallback_strategy = "skip"
+            self.admin_user_id = None
         except Exception as e:
-            self.logger.warning("Failed to load staleness configuration: %s", e)
+            self.logger.exception("Unexpected error loading staleness configuration: %s", e)
             # Set defaults
             self.refresh_interval_seconds = 24 * 60 * 60  # 24 hours
             self.fallback_strategy = "skip"
@@ -828,14 +857,14 @@ class EnhancedUserAssociationMigrator:
         
         return value * multipliers[unit]
 
-    def _validate_fallback_strategy(self, strategy: str) -> FallbackStrategy:
+    def _validate_fallback_strategy(self, strategy: str) -> str:
         """Validate fallback strategy value.
         
         Args:
             strategy: Strategy string to validate
             
         Returns:
-            Validated fallback strategy
+            Validated fallback strategy string
             
         Raises:
             ValueError: If strategy is invalid
@@ -848,4 +877,4 @@ class EnhancedUserAssociationMigrator:
                 f"Valid options: {', '.join(valid_strategies)}"
             )
         
-        return strategy  # type: ignore[return-value] 
+        return strategy 
