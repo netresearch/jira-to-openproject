@@ -62,7 +62,7 @@ class EnhancedTimestampMigrator:
     # Jira timezone mappings (common timezone IDs)
     JIRA_TIMEZONE_MAPPINGS = {
         "UTC": "UTC",
-        "GMT": "GMT", 
+        "GMT": "UTC",  # Map GMT to UTC for consistency in modern usage
         "EST": "America/New_York",
         "PST": "America/Los_Angeles",
         "CST": "America/Chicago",
@@ -151,8 +151,12 @@ class EnhancedTimestampMigrator:
             self.logger.warning("No timezone information found in Jira server info, using default: %s", default_timezone)
             return default_timezone
             
-        except Exception as e:
+        except (AttributeError, KeyError, ValueError, TypeError) as e:
             self.logger.error("Failed to detect Jira timezone: %s", e)
+            self.logger.warning("Falling back to configured default timezone: %s", default_timezone)
+            return default_timezone
+        except Exception as e:
+            self.logger.exception("Unexpected error during timezone detection: %s", e)
             self.logger.warning("Falling back to configured default timezone: %s", default_timezone)
             return default_timezone
 
@@ -178,8 +182,11 @@ class EnhancedTimestampMigrator:
         try:
             ZoneInfo(timezone_id)
             return timezone_id
-        except Exception as e:
+        except (ValueError, FileNotFoundError, OSError) as e:
             self.logger.warning("Invalid timezone ID '%s': %s, falling back to UTC", timezone_id, e)
+            return "UTC"
+        except Exception as e:
+            self.logger.exception("Unexpected error validating timezone '%s': %s", timezone_id, e)
             return "UTC"
 
     def _validate_jira_key(self, jira_key: str) -> None:

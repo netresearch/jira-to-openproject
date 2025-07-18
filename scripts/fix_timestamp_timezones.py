@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
-import json
 
 # Add src directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -31,15 +30,20 @@ from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
 class TimestampCorrectionScript:
     """Corrects timezone metadata for previously migrated timestamps."""
 
-    def __init__(self, dry_run: bool = True, batch_size: int = 50) -> None:
+    def __init__(self, dry_run: bool = True, batch_size: int = 50, 
+                 custom_field_id: str = "customField29", page_size: int = 100) -> None:
         """Initialize the correction script.
         
         Args:
             dry_run: If True, only report changes without applying them
             batch_size: Number of work packages to process in each batch
+            custom_field_id: Custom field ID for Jira key references
+            page_size: Page size for API requests (will paginate through all)
         """
         self.dry_run = dry_run
         self.batch_size = batch_size
+        self.custom_field_id = custom_field_id
+        self.page_size = page_size
         self.logger = config.logger
         
         # Initialize clients
@@ -71,26 +75,28 @@ class TimestampCorrectionScript:
             self.logger.info("Mode: %s", "DRY RUN" if self.dry_run else "APPLY CHANGES")
             self.logger.info("Batch size: %d", self.batch_size)
             
-            # Get all work packages that need correction
-            work_packages = self._get_migrated_work_packages()
-            self.stats["total_packages"] = len(work_packages)
+            # Process work packages in streaming batches to control memory usage
+            total_processed = 0
+            batch_num = 1
             
-            if not work_packages:
+            for batch in self._get_migrated_work_packages_streaming():
+                if not batch:
+                    break
+                    
+                self.stats["total_packages"] += len(batch)
+                total_processed += len(batch)
+                
+                self.logger.info("Processing batch %d (%d packages, %d total so far)", 
+                               batch_num, len(batch), total_processed)
+                
+                self._process_batch(batch)
+                batch_num += 1
+            
+            if total_processed == 0:
                 self.logger.info("No migrated work packages found")
                 return
                 
-            self.logger.info("Found %d work packages to process", len(work_packages))
-            
-            # Process in batches
-            for i in range(0, len(work_packages), self.batch_size):
-                batch = work_packages[i:i + self.batch_size]
-                batch_num = (i // self.batch_size) + 1
-                total_batches = (len(work_packages) + self.batch_size - 1) // self.batch_size
-                
-                self.logger.info("Processing batch %d/%d (%d packages)", 
-                               batch_num, total_batches, len(batch))
-                
-                self._process_batch(batch)
+            self.logger.info("Processed %d total work packages", total_processed)
                 
             self._print_final_report()
             
@@ -98,37 +104,50 @@ class TimestampCorrectionScript:
             self.logger.error("Correction script failed: %s", e)
             raise
 
-    def _get_migrated_work_packages(self) -> list[dict[str, Any]]:
-        """Get all work packages that were previously migrated.
+    def _get_migrated_work_packages_streaming(self):
+        """Stream work packages that were previously migrated in batches.
         
-        Returns:
-            List of work package data dictionaries
+        Yields:
+            List of work package data dictionaries (batch size)
         """
-        try:
-            # Get work packages from OpenProject that have Jira references
-            params = {
-                "filters": json.dumps([
-                    {
-                        "customField29": {  # Assuming custom field for Jira key
-                            "operator": "!*",  # Not empty
-                            "values": []
+        offset = 0
+        
+        while True:
+            try:
+                # Get work packages from OpenProject that have Jira references
+                params = {
+                    "filters": json.dumps([
+                        {
+                            self.custom_field_id: {  # Configurable custom field for Jira key
+                                "operator": "!*",  # Not empty
+                                "values": []
+                            }
                         }
-                    }
-                ]),
-                "pageSize": 1000  # Adjust as needed
-            }
-            
-            response = self.op_client.get("/api/v3/work_packages", params=params)
-            
-            if response.get("_embedded", {}).get("elements"):
-                return response["_embedded"]["elements"]
-            else:
-                self.logger.warning("No work packages with Jira references found")
-                return []
+                    ]),
+                    "pageSize": self.page_size,
+                    "offset": offset
+                }
                 
-        except Exception as e:
-            self.logger.error("Failed to fetch work packages: %s", e)
-            return []
+                response = self.op_client.get("/api/v3/work_packages", params=params)
+                
+                elements = response.get("_embedded", {}).get("elements", [])
+                
+                if not elements:
+                    # No more results
+                    break
+                    
+                yield elements
+                
+                # Check if there are more pages
+                if len(elements) < self.page_size:
+                    # Last page (partial or complete)
+                    break
+                    
+                offset += self.page_size
+                
+            except Exception as e:
+                self.logger.error("Failed to fetch work packages at offset %d: %s", offset, e)
+                break
 
     def _process_batch(self, work_packages: list[dict[str, Any]]) -> None:
         """Process a batch of work packages.
@@ -357,31 +376,52 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Correct timezone metadata for previously migrated timestamps"
     )
-    parser.add_argument(
+    
+    # Create mutually exclusive group for dry-run vs apply
+    action_group = parser.add_mutually_exclusive_group()
+    action_group.add_argument(
         "--dry-run",
         action="store_true",
         default=True,
         help="Show what would be changed without applying changes (default)"
     )
-    parser.add_argument(
+    action_group.add_argument(
         "--apply",
         action="store_true",
-        help="Apply the corrections (overrides --dry-run)"
+        help="Apply the corrections"
     )
+    
     parser.add_argument(
         "--batch-size",
         type=int,
         default=50,
         help="Number of work packages to process in each batch (default: 50)"
     )
+    parser.add_argument(
+        "--custom-field-id",
+        type=str,
+        default="customField29",
+        help="Custom field ID for Jira key references (default: customField29)"
+    )
+    parser.add_argument(
+        "--page-size",
+        type=int,
+        default=100,
+        help="Page size for API requests (default: 100)"
+    )
     
     args = parser.parse_args()
     
-    # --apply overrides --dry-run
+    # Determine dry-run mode
     dry_run = not args.apply
     
     try:
-        script = TimestampCorrectionScript(dry_run=dry_run, batch_size=args.batch_size)
+        script = TimestampCorrectionScript(
+            dry_run=dry_run, 
+            batch_size=args.batch_size,
+            custom_field_id=args.custom_field_id,
+            page_size=args.page_size
+        )
         script.run()
     except KeyboardInterrupt:
         print("\nOperation cancelled by user")

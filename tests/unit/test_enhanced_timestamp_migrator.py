@@ -172,7 +172,7 @@ class TestEnhancedTimestampMigrator:
             ("America/New_York", "America/New_York"),
             ("Asia/Tokyo", "Asia/Tokyo"),
             ("UTC", "UTC"),
-            ("GMT", "GMT"),  # Should remain GMT according to mapping
+            ("GMT", "UTC"),  # GMT mapped to UTC for consistency
             ("EST", "America/New_York"),  # Mapped
             ("CET", "Europe/Paris"),  # Mapped
         ]
