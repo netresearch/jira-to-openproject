@@ -128,7 +128,7 @@ class EnhancedUserAssociationMigrator:
                 with enhanced_mapping_file.open() as f:
                     data = json.load(f)
                     self.enhanced_user_mappings = {}
-                    current_time = datetime.now(tz=UTC).isoformat()
+                    current_time = self._get_current_timestamp()
                     
                     for k, v in data.items():
                         # Handle backwards compatibility for existing cache files
@@ -171,21 +171,57 @@ class EnhancedUserAssociationMigrator:
                 mapping_status="mapped" if op_user_id else "unmapped",
                 fallback_user_id=None,
                 metadata={
-                    "created_at": datetime.now(tz=UTC).isoformat(),
+                    "created_at": self._get_current_timestamp(),
                     "jira_active": jira_user_info.get("active", True) if jira_user_info else None,
                     "openproject_active": op_user_info.get("status") == 1 if op_user_info else None,
                 },
-                lastRefreshed=datetime.now(tz=UTC).isoformat()
+                lastRefreshed=self._get_current_timestamp()
             )
             
             self.enhanced_user_mappings[jira_username] = mapping
 
+    def _get_current_timestamp(self) -> str:
+        """Get current timestamp in ISO format.
+        
+        Returns:
+            Current timestamp as ISO string
+        """
+        return datetime.now(tz=UTC).isoformat()
+
     def _get_jira_user_info(self, username: str) -> dict[str, Any] | None:
-        """Get detailed user information from Jira."""
+        """Fetch user information from Jira API with staleness check.
+        
+        Args:
+            username: Jira username to fetch
+            
+        Returns:
+            User information dict or None if not found
+        """
+        # Check if we should refresh stale mapping
+        if self.is_mapping_stale(username):
+            self.logger.debug("User mapping for %s is stale, will refresh if found", username)
+        
+        # Existing implementation continues here...
         try:
-            return self.jira_client.get_user_info(username)
+            # Get user from Jira
+            response = self.jira_client.get(f"user/search?username={username}")
+            
+            if response.status_code == 200:
+                users = response.json()
+                if users:
+                    user_info = users[0]
+                    
+                    # Auto-refresh stale mapping with fresh data
+                    if self.is_mapping_stale(username):
+                        self.logger.info("Auto-refreshing stale mapping for %s", username)
+                        self.refresh_user_mapping(username)
+                    
+                    return user_info
+            
+            return None
+            
         except Exception as e:
-            self.logger.debug("Failed to get Jira user info for %s: %s", username, e)
+            self.logger.error("Failed to fetch Jira user info for %s: %s", username, e)
             return None
 
     def _get_openproject_user_info(self, user_id: int) -> dict[str, Any] | None:
@@ -243,7 +279,7 @@ class EnhancedUserAssociationMigrator:
             status="success",
             warnings=[],
             metadata={
-                "migration_timestamp": datetime.now(tz=UTC).isoformat(),
+                "migration_timestamp": self._get_current_timestamp(),
                 "preserve_creator_via_rails": preserve_creator_via_rails,
             }
         )
@@ -468,44 +504,29 @@ class EnhancedUserAssociationMigrator:
             username: Jira username to check
             
         Returns:
-            True if mapping is stale or missing, False otherwise
+            True if mapping is stale, False otherwise
         """
         mapping = self.enhanced_user_mappings.get(username)
-        
         if not mapping:
-            # Missing mapping is considered stale
-            return True
+            return True  # Non-existent mappings are considered stale
         
         last_refreshed = mapping.get("lastRefreshed")
         if not last_refreshed:
-            # No refresh timestamp is considered stale
-            return True
+            return True  # Mappings without refresh timestamp are stale
+        
+        refresh_interval = self.staleness_config["refresh_interval"]
         
         try:
-            # Parse the ISO datetime string
             last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
             current_time = datetime.now(tz=UTC)
-            
-            # Calculate age in seconds
             age_seconds = (current_time - last_refresh_time).total_seconds()
             
-            # Check if age exceeds configured refresh interval
-            is_stale = age_seconds > self.refresh_interval_seconds
+            # Fixed: Use >= for consistent threshold behavior
+            return age_seconds >= refresh_interval
             
-            if is_stale:
-                self.logger.debug(
-                    "Mapping for %s is stale (age: %ds, limit: %ds)",
-                    username, int(age_seconds), self.refresh_interval_seconds
-                )
-            
-            return is_stale
-            
-        except (ValueError, TypeError) as e:
-            self.logger.warning(
-                "Failed to parse lastRefreshed timestamp for %s: %s. Treating as stale.",
-                username, e
-            )
-            return True
+        except ValueError as e:
+            self.logger.warning("Invalid lastRefreshed timestamp for %s: %s", username, e)
+            return True  # Invalid timestamps are considered stale
 
     def refresh_user_mapping(self, username: str) -> bool:
         """Refresh a stale user mapping by re-fetching from Jira.
@@ -528,7 +549,7 @@ class EnhancedUserAssociationMigrator:
             
             # Get existing mapping or create new one
             existing_mapping = self.enhanced_user_mappings.get(username)
-            current_time = datetime.now(tz=UTC).isoformat()
+            current_time = self._get_current_timestamp()
             
             if existing_mapping:
                 # Update existing mapping with fresh data
@@ -567,8 +588,11 @@ class EnhancedUserAssociationMigrator:
             self.logger.debug("Successfully refreshed user mapping for %s", username)
             return True
             
-        except Exception as e:
+        except (requests.RequestException, ValueError, KeyError) as e:
             self.logger.error("Failed to refresh user mapping for %s: %s", username, e)
+            return False
+        except Exception as e:
+            self.logger.error("Unexpected error refreshing user mapping for %s: %s", username, e)
             return False
 
     def _queue_rails_author_operation(
@@ -580,7 +604,7 @@ class EnhancedUserAssociationMigrator:
             "jira_key": jira_key,
             "author_id": author_id,
             "author_metadata": author_data,
-            "timestamp": datetime.now(tz=UTC).isoformat(),
+            "timestamp": self._get_current_timestamp(),
         }
         self._rails_operations_cache.append(operation)
 
@@ -739,7 +763,7 @@ class EnhancedUserAssociationMigrator:
             "fallback_users": self.fallback_users,
             "rails_operations_pending": len(self._rails_operations_cache),
             "detailed_mappings": dict(self.enhanced_user_mappings),
-            "generated_at": datetime.now(tz=UTC).isoformat(),
+            "generated_at": self._get_current_timestamp(),
         }
 
         return report 
@@ -779,32 +803,29 @@ class EnhancedUserAssociationMigrator:
             self.admin_user_id = None
 
     def _parse_duration(self, duration_str: str) -> int:
-        """Parse duration string to seconds.
+        """Parse duration string like '1h', '30m', '2d' into seconds.
         
         Args:
-            duration_str: Duration string (e.g., "24h", "2d", "30m")
+            duration_str: Duration string (e.g., '1h', '30m', '2d')
             
         Returns:
             Duration in seconds
             
         Raises:
-            ValueError: If duration format is invalid
+            ValueError: If duration format is invalid or zero/negative
         """
-        if not duration_str:
-            raise ValueError("Duration string cannot be empty")
-        
-        # Pattern to match duration strings like "24h", "2d", "30m", "45s"
         pattern = r'^(\d+)([smhd])$'
         match = re.match(pattern, duration_str.lower())
         
         if not match:
-            raise ValueError(
-                f"Invalid duration format: {duration_str}. "
-                "Expected format: <number><unit> where unit is s, m, h, or d"
-            )
+            raise ValueError(f"Invalid duration format: {duration_str}")
         
         value, unit = match.groups()
         value = int(value)
+        
+        # Validate positive non-zero duration
+        if value <= 0:
+            raise ValueError(f"Duration must be positive: {duration_str}")
         
         multipliers = {
             's': 1,          # seconds
