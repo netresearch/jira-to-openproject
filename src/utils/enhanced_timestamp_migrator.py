@@ -101,19 +101,85 @@ class EnhancedTimestampMigrator:
         self.jira_timezone = self._detect_jira_timezone()
 
     def _detect_jira_timezone(self) -> str:
-        """Detect the timezone used by the Jira instance."""
+        """Detect the timezone used by the Jira instance.
+        
+        Returns:
+            str: Timezone identifier (e.g., "Europe/Berlin", "UTC")
+        """
+        # Default timezone from configuration
+        default_timezone = config.jira_config.get("default_timezone", "UTC")
+        
         try:
-            # Try to get timezone from Jira server info
-            server_info = self.jira_client.get_server_info()
-            if server_info and "serverTimeZone" in server_info:
-                return server_info["serverTimeZone"]["timeZoneId"]
+            # Use correct Jira library method to get server info
+            if not self.jira_client.jira:
+                self.logger.warning("Jira client not initialized, using default timezone: %s", default_timezone)
+                return default_timezone
+                
+            server_info = self.jira_client.jira.server_info()
             
-            # Fallback to UTC if cannot detect
-            self.logger.warning("Could not detect Jira timezone, defaulting to UTC")
-            return "UTC"
+            if not server_info:
+                self.logger.warning("Jira server_info() returned empty response, using default timezone: %s", default_timezone)
+                return default_timezone
+            
+            # Extract timezone from server info
+            if "serverTimeZone" in server_info:
+                timezone_info = server_info["serverTimeZone"]
+                
+                # Handle different possible structures
+                if isinstance(timezone_info, dict):
+                    # Jira Cloud/Server format: {"timeZoneId": "Europe/Berlin", "displayName": "..."}
+                    timezone_id = timezone_info.get("timeZoneId")
+                    if timezone_id:
+                        self.logger.info("Detected Jira timezone from server info: %s", timezone_id)
+                        return self._normalize_timezone_id(timezone_id)
+                        
+                elif isinstance(timezone_info, str):
+                    # Simple string format
+                    self.logger.info("Detected Jira timezone from server info: %s", timezone_info)
+                    return self._normalize_timezone_id(timezone_info)
+            
+            # Check alternative field names
+            for field in ["timeZone", "timezone", "serverTz"]:
+                if field in server_info:
+                    tz_value = server_info[field]
+                    if isinstance(tz_value, str) and tz_value:
+                        self.logger.info("Detected Jira timezone from %s field: %s", field, tz_value)
+                        return self._normalize_timezone_id(tz_value)
+            
+            # Log available fields for debugging
+            self.logger.debug("Available server info fields: %s", list(server_info.keys()))
+            self.logger.warning("No timezone information found in Jira server info, using default: %s", default_timezone)
+            return default_timezone
             
         except Exception as e:
-            self.logger.warning("Failed to detect Jira timezone: %s", e)
+            self.logger.error("Failed to detect Jira timezone: %s", e)
+            self.logger.warning("Falling back to configured default timezone: %s", default_timezone)
+            return default_timezone
+
+    def _normalize_timezone_id(self, timezone_id: str) -> str:
+        """Normalize timezone ID to ensure compatibility.
+        
+        Args:
+            timezone_id: Raw timezone identifier from Jira
+            
+        Returns:
+            str: Normalized timezone identifier
+        """
+        if not timezone_id:
+            return "UTC"
+            
+        # Handle common timezone abbreviations
+        if timezone_id in self.JIRA_TIMEZONE_MAPPINGS:
+            normalized = self.JIRA_TIMEZONE_MAPPINGS[timezone_id]
+            self.logger.debug("Mapped timezone %s to %s", timezone_id, normalized)
+            return normalized
+        
+        # Validate timezone exists in zoneinfo
+        try:
+            ZoneInfo(timezone_id)
+            return timezone_id
+        except Exception as e:
+            self.logger.warning("Invalid timezone ID '%s': %s, falling back to UTC", timezone_id, e)
             return "UTC"
 
     def _validate_jira_key(self, jira_key: str) -> None:
