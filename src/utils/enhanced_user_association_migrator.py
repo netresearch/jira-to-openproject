@@ -191,7 +191,7 @@ class EnhancedUserAssociationMigrator:
         return datetime.now(tz=UTC).isoformat()
 
     def _get_jira_user_info(self, username: str) -> dict[str, Any] | None:
-        """Fetch user information from Jira API with staleness check.
+        """Fetch user information from Jira API.
         
         Args:
             username: Jira username to fetch
@@ -199,12 +199,6 @@ class EnhancedUserAssociationMigrator:
         Returns:
             User information dict or None if not found
         """
-        # Check staleness once and cache result to avoid double checking
-        is_stale = self.is_mapping_stale(username)
-        if is_stale:
-            self.logger.debug("User mapping for %s is stale, will refresh if found", username)
-        
-        # Existing implementation continues here...
         try:
             # Get user from Jira with URL-encoded username to prevent injection
             safe_username = quote(username)
@@ -213,14 +207,7 @@ class EnhancedUserAssociationMigrator:
             if response.status_code == 200:
                 users = response.json()
                 if users:
-                    user_info = users[0]
-                    
-                    # Auto-refresh stale mapping with fresh data
-                    if is_stale:
-                        self.logger.info("Auto-refreshing stale mapping for %s", username)
-                        self.refresh_user_mapping(username)
-                    
-                    return user_info
+                    return users[0]
             
             return None
             
@@ -518,7 +505,7 @@ class EnhancedUserAssociationMigrator:
         if not last_refreshed:
             return True  # Mappings without refresh timestamp are stale
         
-        refresh_interval = self.staleness_config["refresh_interval"]
+        refresh_interval = self.refresh_interval_seconds
         
         try:
             last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
