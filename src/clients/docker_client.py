@@ -135,7 +135,7 @@ class DockerClient:
 
         # Add user if specified
         if user:
-            docker_cmd.extend(["-u", user])
+            docker_cmd.extend(["-u", quote(user)])
 
         # Add working directory if specified
         if workdir:
@@ -147,10 +147,10 @@ class DockerClient:
         # Add environment variables if specified
         if env:
             for key, value in env.items():
-                docker_cmd.extend(["-e", f"{key}={quote(value)}"])
+                docker_cmd.extend(["-e", f"{quote(key)}={quote(value)}"])
 
         # Add container name and command
-        docker_cmd.append(self.container_name)
+        docker_cmd.append(quote(self.container_name))
 
         # For complex commands, use bash -c
         docker_cmd.extend(["bash", "-c", quote(command)])
@@ -189,7 +189,7 @@ class DockerClient:
 
         try:
             # Build docker cp command on remote
-            cmd = f"docker cp {quote(str(local_path))} {self.container_name}:{quote(str(container_path))}"
+            cmd = f"docker cp {quote(str(local_path))} {quote(self.container_name)}:{quote(str(container_path))}"
 
             # Execute the command
             stdout, stderr, returncode = self.ssh_client.execute_command(
@@ -272,7 +272,7 @@ class DockerClient:
             remote_temp_path = f"/tmp/{temp_filename}"
 
             # Step 1: Copy from container to temporary location on remote server
-            cmd = f"docker cp {self.container_name}:{quote(str(container_path))} {quote(remote_temp_path)}"
+            cmd = f"docker cp {quote(self.container_name)}:{quote(str(container_path))} {quote(remote_temp_path)}"
 
             stdout, stderr, returncode = self.ssh_client.execute_command(
                 cmd,
@@ -446,36 +446,36 @@ class DockerClient:
 
         # Add user if specified
         if user:
-            docker_cmd.extend(["--user", user])
+            docker_cmd.extend(["--user", quote(user)])
 
         # Add resource limits
         if cpu_limit:
-            docker_cmd.extend(["--cpus", cpu_limit])
+            docker_cmd.extend(["--cpus", quote(cpu_limit)])
         if memory_limit:
-            docker_cmd.extend(["--memory", memory_limit])
+            docker_cmd.extend(["--memory", quote(memory_limit)])
 
         # Add container name
         if name:
-            docker_cmd.extend(["--name", name])
+            docker_cmd.extend(["--name", quote(name)])
 
         # Add environment variables
         if environment:
             for key, value in environment.items():
-                docker_cmd.extend(["-e", f"{key}={value}"])
+                docker_cmd.extend(["-e", f"{quote(key)}={quote(value)}"])
 
         # Add volume mappings
         if volumes:
             for host_path, container_path in volumes.items():
-                docker_cmd.extend(["-v", f"{host_path}:{container_path}"])
+                docker_cmd.extend(["-v", f"{quote(host_path)}:{quote(container_path)}"])
 
         # Add port mappings
         if ports:
             for host_port, container_port in ports.items():
-                docker_cmd.extend(["-p", f"{host_port}:{container_port}"])
+                docker_cmd.extend(["-p", f"{quote(host_port)}:{quote(container_port)}"])
 
         # Add network
         if network:
-            docker_cmd.extend(["--network", network])
+            docker_cmd.extend(["--network", quote(network)])
 
         # Add flags
         if detach:
@@ -484,7 +484,7 @@ class DockerClient:
             docker_cmd.append("--rm")
 
         # Add image
-        docker_cmd.append(image)
+        docker_cmd.append(quote(image))
 
         # Add command if specified
         if command:

@@ -143,7 +143,7 @@ class TestDockerClientHardening(unittest.TestCase):
         # Assert
         self.mock_ssh_client.execute_command.assert_called_once()
         cmd_str = self.mock_ssh_client.execute_command.call_args[0][0]
-        assert cmd_str.endswith("test-image:latest python app.py")
+        assert cmd_str.endswith("bash -c 'python app.py'")
 
     def test_run_container_detach_false(self) -> None:
         """Test run_container without detach flag."""
@@ -175,6 +175,29 @@ class TestDockerClientHardening(unittest.TestCase):
         assert stdout == ""
         assert stderr == "Error: no such image"
         assert returncode == 1
+
+    def test_run_container_with_special_chars_in_args(self) -> None:
+        """Test run_container correctly quotes arguments with special characters."""
+        # Arrange
+        self.mock_ssh_client.execute_command.return_value = ("container_id", "", 0)
+        container_name = "my test container"
+        env_value = "value with spaces; and chars"
+        
+        # Act
+        self.docker_client.run_container(
+            image="test-image:latest",
+            name=container_name,
+            environment={"MY_VAR": env_value}
+        )
+        
+        # Assert
+        self.mock_ssh_client.execute_command.assert_called_once()
+        cmd_str = self.mock_ssh_client.execute_command.call_args[0][0]
+        
+        # Check that arguments are properly quoted
+        import shlex
+        assert f"--name {shlex.quote(container_name)}" in cmd_str
+        assert f"-e {shlex.quote('MY_VAR')}={shlex.quote(env_value)}" in cmd_str
 
     def test_get_container_info_success(self) -> None:
         """Test successful parsing of docker inspect output."""
