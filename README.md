@@ -93,7 +93,45 @@ This tool automates the migration of users, projects, issues (work packages), st
 3. Configure environment variables:
     * Copy `.env` to `.env.local` and fill in your credentials and server details.
     * Edit `config/config.yaml` for migration settings if needed.
-4. Build and start Docker container:
+
+4. **Configure PostgreSQL Credentials (REQUIRED)**:
+
+    Choose one of these secure methods for database authentication:
+
+    **Option A: Local Development (Environment Variables)**
+    ```bash
+    # Edit .env file and set a secure password
+    POSTGRES_PASSWORD=your_secure_password_here
+    POSTGRES_DB=migration_test
+    POSTGRES_USER=testuser
+    ```
+
+    **Option B: Production (Docker Secrets) - Recommended**
+    ```bash
+    # Create Docker secret
+    echo "your_secure_production_password" | docker secret create postgres_password -
+
+    # Deploy with secrets support
+    docker stack deploy -c compose.yml migration-stack
+    ```
+
+    **Option C: Docker Compose with Secrets (Alternative)**
+    ```bash
+    # Create local secret file (will be ignored by git)
+    cp secrets/postgres_password.txt.example secrets/postgres_password.txt
+    # Edit secrets/postgres_password.txt with your password
+
+    # Run with secrets support
+    docker-compose --compatibility up
+    ```
+
+    ⚠️ **Security Notes:**
+    - Never commit actual passwords to version control
+    - Use strong, randomly generated passwords in production
+    - The system will automatically detect and use Docker secrets if available
+    - If neither environment variable nor secret is found, the application will fail with a clear error message
+
+5. Build and start Docker container:
 
     ```bash
     docker compose up -d --build

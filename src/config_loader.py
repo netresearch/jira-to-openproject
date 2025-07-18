@@ -69,6 +69,9 @@ class ConfigLoader:
         # Override with environment variables
         self._apply_environment_overrides()
 
+        # Load and validate database configuration
+        self._load_database_config()
+
     def _load_environment_configuration(self) -> None:
         """Load environment variables from .env files based on execution context.
 
@@ -130,6 +133,54 @@ class ConfigLoader:
         except FileNotFoundError:
             config_logger.exception("Config file not found: %s", config_file_path)
             raise
+
+    def _load_database_config(self) -> None:
+        """Load and validate database configuration from environment or Docker secrets.
+        
+        Tries to load POSTGRES_PASSWORD from:
+        1. POSTGRES_PASSWORD environment variable
+        2. /run/secrets/postgres_password Docker secret file
+        
+        Raises:
+            RuntimeError: If POSTGRES_PASSWORD is not found or is empty
+        """
+        # Initialize database section if not present
+        if "database" not in self.config:
+            self.config["database"] = {}
+        
+        # Try to load PostgreSQL password from environment first
+        postgres_password = os.environ.get("POSTGRES_PASSWORD")
+        
+        if not postgres_password:
+            # Try to load from Docker secrets
+            secret_path = Path("/run/secrets/postgres_password")
+            if secret_path.exists():
+                try:
+                    postgres_password = secret_path.read_text().strip()
+                    config_logger.debug("Loaded PostgreSQL password from Docker secret")
+                except Exception as e:
+                    config_logger.warning("Failed to read Docker secret: %s", e)
+            else:
+                config_logger.debug("Docker secret file not found: %s", secret_path)
+        else:
+            config_logger.debug("Loaded PostgreSQL password from environment variable")
+        
+        # Validate password is present and non-empty
+        if not postgres_password or not postgres_password.strip():
+            raise RuntimeError(
+                "POSTGRES_PASSWORD is required but not found. "
+                "Please set the POSTGRES_PASSWORD environment variable "
+                "or create a Docker secret at /run/secrets/postgres_password"
+            )
+        
+        # Store in config
+        self.config["database"]["postgres_password"] = postgres_password
+        
+        # Also load other PostgreSQL environment variables with defaults
+        self.config["database"]["postgres_db"] = os.environ.get("POSTGRES_DB", "jira_migration")
+        self.config["database"]["postgres_user"] = os.environ.get("POSTGRES_USER", "postgres")
+        
+        config_logger.debug("Database configuration loaded successfully")
 
     def _apply_environment_overrides(self) -> None:
         """Override configuration settings with environment variables."""
@@ -245,6 +296,30 @@ class ConfigLoader:
 
         """
         return self.config["migration"]
+
+    def get_database_config(self) -> dict[str, str]:
+        """Get database-specific configuration.
+
+        Returns:
+            dict: Database configuration settings including postgres_password
+
+        """
+        return self.config.get("database", {})
+
+    def get_postgres_password(self) -> str:
+        """Get PostgreSQL password from configuration.
+
+        Returns:
+            str: PostgreSQL password
+
+        Raises:
+            RuntimeError: If password is not configured
+
+        """
+        password = self.config.get("database", {}).get("postgres_password")
+        if not password:
+            raise RuntimeError("PostgreSQL password not configured")
+        return password
 
     def get_value(self, section: SectionName, key: str, default: Any = None) -> Any:
         """Get a specific configuration value.

@@ -14,8 +14,45 @@ from src.config import logger, update_from_cli_args
 from src.migration import restore_backup, run_migration, setup_tmux_session
 
 
+def validate_database_configuration() -> None:
+    """Validate database configuration is properly set.
+    
+    Raises:
+        SystemExit: If database configuration is invalid
+    """
+    try:
+        from src.config_loader import ConfigLoader
+        config_loader = ConfigLoader()
+        
+        # This will raise RuntimeError if POSTGRES_PASSWORD is missing
+        postgres_password = config_loader.get_postgres_password()
+        
+        if not postgres_password or not postgres_password.strip():
+            logger.error(
+                "Database configuration failed: POSTGRES_PASSWORD is empty. "
+                "Please check your .env file or Docker secrets configuration."
+            )
+            sys.exit(1)
+            
+        logger.debug("Database configuration validated successfully")
+        
+    except RuntimeError as e:
+        logger.error("Database configuration failed: %s", e)
+        logger.error(
+            "Please ensure POSTGRES_PASSWORD is set in your .env file "
+            "or as a Docker secret at /run/secrets/postgres_password"
+        )
+        sys.exit(1)
+    except Exception as e:
+        logger.error("Unexpected error validating database configuration: %s", e)
+        sys.exit(1)
+
+
 def main() -> None:
     """Parse arguments and execute the appropriate command."""
+    # Validate database configuration early to fail fast
+    validate_database_configuration()
+    
     # Create the top-level parser
     parser = argparse.ArgumentParser(
         description="Jira to OpenProject migration tool",

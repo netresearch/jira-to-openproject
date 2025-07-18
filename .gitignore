@@ -6,6 +6,10 @@ repomix-output.txt
 .env.local
 .env.*.local
 
+# Docker secrets - ignore actual secrets but keep examples
+secrets/
+!secrets/*.example
+
 # Python virtual environment
 venv/
 env/
@@ -48,29 +52,7 @@ Thumbs.db
 # Migration specific
 id_mapping.json
 
-# Added by Claude Task Master
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-dev-debug.log
-# Dependency directories
-node_modules/
-# Environment variables
-.env
-# Editor directories and files
-.idea
-.vscode
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-# OS specific
-.cursor/mcp.json
-
-# Task files
-# tasks.json
-# tasks/
+# TaskMaster AI Rules (temporary local rules)
+.cursor/rules/*.mdc
+!.cursor/rules/taskmaster/
+!.cursor/rules/example.mdc
