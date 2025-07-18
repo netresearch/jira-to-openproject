@@ -1640,14 +1640,79 @@
         "description": "Add detection and automatic refresh for stale user mappings in EnhancedUserAssociationMigrator to prevent silent failures due to deactivated or changed users.",
         "details": "1. Configuration\n   • Add new config options under `migration.mapping`:\n     – `refresh_interval` (duration, e.g. \"24h\") for TTL\n     – `fallback_strategy` (enum: skip, assign_admin, create_placeholder)\n2. Caching and metadata\n   • In EnhancedUserAssociationMigrator, extend the in-memory mapping cache to store `{mappedUser, lastRefreshed: DateTime}`.\n3. Staleness detection logic\n   • Before any mapping lookup or write, calculate age = now – lastRefreshed.\n   • If age > refresh_interval or mappedUser not found, mark mapping stale.\n4. Automatic refresh\n   • On stale detection, call `JiraClient.get_user(userKey)` to re-fetch user info.\n   • Update cache with new user data and reset `lastRefreshed` timestamp.\n5. Validation and fallback\n   • After refresh, verify `user.active === true` and email/username match.\n   • If validation fails, apply `fallback_strategy`:\n     – skip: omit the association and log a warning\n     – assign_admin: map to a configurable admin user\n     – create_placeholder: insert a placeholder record and flag for manual review\n6. Monitoring and logging\n   • Emit logs at DEBUG for cache hits, misses, stale detections, and refreshes.\n   • Increment counters: `staleness_detected_total`, `staleness_refreshed_total`, `mapping_fallback_total` via existing metrics collector.\n7. Error handling\n   • On API failures during refresh, retry up to 2 times with exponential backoff, then apply fallback.",
         "testStrategy": "Unit tests:\n1. TTL expiry\n   • Seed cache entry with `lastRefreshed` older than `refresh_interval` and mock `JiraClient.get_user` to succeed. Assert cache is updated and `staleness_refreshed_total` increments.\n2. Active vs inactive\n   • Mock fresh user response with `active=false` and verify fallback logic for each `fallback_strategy` (skip, assign_admin, create_placeholder).\n3. API error handling\n   • Simulate `get_user` throwing on first two calls and succeeding on third; assert backoff logic and eventual cache update.\n4. No-refresh path\n   • Entry younger than TTL returns cache hit and does not call API.\nIntegration tests:\n1. End-to-end migration run where a Jira user is deactivated mid-process. Ensure the stale detection triggers a refresh and fallback as configured without aborting the run.\n2. Verify configured metrics are exposed (e.g. via REST or logs).\n3. Configuration overrides: change `refresh_interval` and `fallback_strategy` in test config and assert behavior changes accordingly.",
-        "status": "pending",
+        "status": "in-progress",
         "dependencies": [
           2,
           5,
           16
         ],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Configure Staleness Settings and Extend Cache",
+            "description": "Add new configuration options and extend the mapping cache data structure in EnhancedUserAssociationMigrator.",
+            "dependencies": [],
+            "details": "1. In the application config schema under `migration.mapping`, add `refresh_interval` (duration string) and `fallback_strategy` (enum: skip, assign_admin, create_placeholder) with validation rules and defaults. 2. In EnhancedUserAssociationMigrator, update the in-memory cache to store entries as `{ mappedUser: User, lastRefreshed: Date }` keyed by user identifier. 3. Initialize the cache on migrator startup.",
+            "status": "in-progress",
+            "testStrategy": "Unit test loading of new config options, default values, and verify that cache entries can store and retrieve both `mappedUser` and `lastRefreshed` fields."
+          },
+          {
+            "id": 2,
+            "title": "Implement Staleness Detection Engine",
+            "description": "Create logic to detect stale mappings based on last refresh timestamp and configured TTL.",
+            "dependencies": [
+              1
+            ],
+            "details": "1. Before any mapping lookup or write, compute `age = now() - entry.lastRefreshed`. 2. Compare `age` to `config.migration.mapping.refresh_interval` or check if `mappedUser` is missing. 3. Mark entry as stale if `age` exceeds TTL or `mappedUser` is undefined. 4. Return a flag or throw a specific `StaleMappingError` to trigger refresh.",
+            "status": "pending",
+            "testStrategy": "Unit tests seeding cache entries with timestamps older and newer than the TTL and asserting that stale flags/triggers occur only for expired entries."
+          },
+          {
+            "id": 3,
+            "title": "Integrate JiraClient Refresh with Retry",
+            "description": "Implement automatic refresh of stale mappings by calling JiraClient.get_user with retry and exponential backoff.",
+            "dependencies": [
+              2
+            ],
+            "details": "1. On stale detection, invoke `JiraClient.get_user(userKey)`. 2. Wrap the call in a retry loop with up to 2 retries and exponential backoff delays (e.g. 500ms, 1s). 3. On success, update the cache entry’s `mappedUser` and reset `lastRefreshed = now()`. 4. On total failure, propagate an error or signal fallback.",
+            "status": "pending",
+            "testStrategy": "Mock JiraClient to fail on first calls and succeed on retry; verify correct number of attempts and backoff timings. Also test total failure path leads to fallback invocation."
+          },
+          {
+            "id": 4,
+            "title": "Implement Validation and Fallback Strategies",
+            "description": "Validate refreshed user data and apply the configured fallback strategy when validation fails.",
+            "dependencies": [
+              3
+            ],
+            "details": "1. After refresh, check `user.active === true` and that email/username match original mapping. 2. If validation passes, proceed normally. 3. If validation fails, inspect `config.migration.mapping.fallback_strategy`:  • skip: remove mapping and log warning  • assign_admin: retrieve `config.migration.mapping.admin_user_key` and map to that admin  • create_placeholder: generate placeholder user record with a `needsReview` flag 4. Log fallback decisions.",
+            "status": "pending",
+            "testStrategy": "Simulate refreshed user with `active=false` or mismatched fields and test each fallback branch: skip omits mapping, assign_admin uses admin key, create_placeholder generates flagged record."
+          },
+          {
+            "id": 5,
+            "title": "Add Monitoring and Logging",
+            "description": "Instrument cache operations, staleness detection, refreshes, and fallbacks with logs and metrics counters.",
+            "dependencies": [
+              4
+            ],
+            "details": "1. Use the existing logger to emit DEBUG logs on cache hits, misses, stale detections, refresh attempts, and fallback executions. 2. Integrate with the metrics collector to increment: `staleness_detected_total`, `staleness_refreshed_total`, and `mapping_fallback_total`. 3. Ensure metrics tags include `fallback_strategy` where applicable.",
+            "status": "pending",
+            "testStrategy": "Use a test logger and metrics stub to verify that each event produces the correct log entry and that counter increments match expected behavior."
+          },
+          {
+            "id": 6,
+            "title": "Integrate with Migrator and Write End-to-End Tests",
+            "description": "Wire the staleness engine, refresh logic, fallback strategies, and monitoring into EnhancedUserAssociationMigrator and validate full workflow.",
+            "dependencies": [
+              5
+            ],
+            "details": "1. In EnhancedUserAssociationMigrator methods handling user mappings, invoke staleness detection, perform refresh via JiraClient, validate or fallback, and emit logs/metrics. 2. Ensure existing mapping lookup and write paths call the new logic. 3. Add end-to-end integration tests that seed cache entries, mock JiraClient responses, and exercise fresh, stale-success, stale-fail, and fallback scenarios.",
+            "status": "pending",
+            "testStrategy": "Integration tests covering all mapping flows: fresh hit, stale refresh success, stale refresh failure with each fallback, verifying cache updates, logs, and metrics."
+          }
+        ]
       },
       {
         "id": 77,
@@ -1694,7 +1759,7 @@
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-18T15:49:58.524Z",
+      "updated": "2025-07-18T17:19:48.409Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",

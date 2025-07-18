@@ -48,6 +48,12 @@ migration:
   mapping_file: "data/id_mapping.json"
   attachment_path: "data/attachments"
 
+  # User mapping staleness detection
+  mapping:
+    refresh_interval: "24h"  # TTL for user mapping cache entries
+    fallback_strategy: "skip"  # Options: skip, assign_admin, create_placeholder
+    fallback_admin_user_id: ""  # Admin user for assign_admin strategy (set via J2O_MAPPING_ADMIN_USER)
+
   # Performance settings
   batch_size: 1000
 

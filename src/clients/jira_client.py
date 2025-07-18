@@ -430,6 +430,46 @@ class JiraClient:
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 
+    def get_user_info(self, user_key: str) -> dict[str, Any] | None:
+        """Get information for a specific user by key.
+
+        Args:
+            user_key: The user key (account ID or username) to look up
+
+        Returns:
+            User dictionary with account ID, display name, email, and active status,
+            or None if user not found
+
+        Raises:
+            JiraApiError: If the API request fails
+
+        """
+        try:
+            # Try to get the user by account ID first
+            user = self.jira.user(user_key)
+            
+            if user:
+                return {
+                    "accountId": getattr(user, "accountId", None),
+                    "displayName": getattr(user, "displayName", None),
+                    "emailAddress": getattr(user, "emailAddress", ""),
+                    "active": getattr(user, "active", True),
+                    "key": getattr(user, "key", None),
+                    "name": getattr(user, "name", None),
+                }
+            
+            return None
+
+        except Exception as e:
+            # Log at debug level for not found cases, exception level for others
+            if "404" in str(e) or "not found" in str(e).lower():
+                logger.debug("User not found: %s", user_key)
+                return None
+            else:
+                error_msg = f"Failed to get user info for {user_key}: {e!s}"
+                logger.exception(error_msg)
+                raise JiraApiError(error_msg) from e
+
     def get_issue_count(self, project_key: str) -> int:
         """Get the total number of issues in a project.
 
