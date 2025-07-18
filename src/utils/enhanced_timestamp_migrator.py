@@ -115,6 +115,38 @@ class EnhancedTimestampMigrator:
             self.logger.warning("Failed to detect Jira timezone: %s", e)
             return "UTC"
 
+    # SECURITY: Validate JIRA key format to prevent injection attacks
+    def _validate_jira_key(self, jira_key: str) -> None:
+        """
+        Validate JIRA key format to prevent injection attacks.
+        
+        Valid JIRA keys:
+        - Non-empty alphanumeric strings with hyphens
+        - Pattern: ^[A-Z0-9\-]+$
+        - Maximum 100 characters
+        - No control characters (ASCII < 32)
+        
+        Args:
+            jira_key: The JIRA key to validate
+            
+        Raises:
+            ValueError: If jira_key format is invalid or contains potentially dangerous characters
+        """
+        if not jira_key or not jira_key.strip():
+            raise ValueError("JIRA key cannot be empty or whitespace only.")
+        
+        if len(jira_key) > 100:
+            raise ValueError(f"JIRA key too long ({len(jira_key)} chars). Maximum allowed: 100 characters.")
+        
+        # Check for control characters (ASCII < 32)
+        for char in jira_key:
+            if ord(char) < 32:
+                raise ValueError(f"JIRA key contains control characters (ASCII {ord(char)}). Only A-Z, 0-9, and hyphens allowed.")
+        
+        # Validate against regex pattern
+        if not re.match(r'^[A-Z0-9\-]+$', jira_key):
+            raise ValueError(f"Invalid jira_key format: {jira_key}. Must contain only A-Z, 0-9, and hyphens.")
+
     def migrate_timestamps(
         self,
         jira_issue: dict[str, Any],
@@ -511,7 +543,40 @@ class EnhancedTimestampMigrator:
     def _generate_timestamp_preservation_script(
         self, work_package_mapping: dict[str, Any]
     ) -> str:
-        """Generate Rails script for preserving timestamp information."""
+        """Generate Rails script for preserving timestamp information.
+        
+        SECURITY: This method generates Ruby code that will be executed in the Rails
+        console. To prevent injection attacks, all user-provided data (especially 
+        jira_key values) must be validated and properly escaped before inclusion.
+        
+        Security Measures Implemented:
+        1. Validates all jira_key values via _validate_jira_key() before use
+        2. Uses json.dumps() to escape jira_key AND field_name for safe Ruby hash literals  
+        3. Wraps each operation in begin/rescue blocks for error isolation
+        4. Uses parameterized database queries (WorkPackage.find(id))
+        5. Timestamp values are pre-validated and passed as string literals
+        
+        Generated Script Structure:
+        - Ruby requires json library for safe data handling
+        - Each operation wrapped in begin/rescue for error isolation
+        - Operations and errors tracked in arrays for audit trail
+        - Human-readable output for monitoring and debugging
+        - Field assignment uses DateTime.parse() for safe timestamp parsing
+        
+        Args:
+            work_package_mapping: Dict mapping work package IDs to their metadata,
+                                 including jira_key for cross-reference
+                                 
+        Returns:
+            str: Safe Ruby script ready for Rails console execution
+            
+        Raises:
+            ValueError: If any jira_key fails security validation
+            
+        Note:
+            This method assumes _rails_operations_cache contains validated operations.
+            Field names are derived from operation types and also escaped for safety.
+        """
         script_lines = [
             "# Enhanced Timestamp Preservation Script",
             "require 'json'",
@@ -526,6 +591,10 @@ class EnhancedTimestampMigrator:
             op_type = operation["type"]
             timestamp = operation["timestamp"]
             
+            # SECURITY: Validate jira_key before using in script generation
+            # This prevents injection attacks by rejecting malicious input
+            self._validate_jira_key(jira_key)
+            
             # Find OpenProject work package ID from mapping
             wp_id = None
             for mapping_entry in work_package_mapping.values():
@@ -535,15 +604,19 @@ class EnhancedTimestampMigrator:
 
             if wp_id:
                 field_name = op_type.replace("set_", "")
+                # SECURITY: Escape jira_key and field_name to prevent injection in Ruby hash literals
+                # json.dumps() ensures quotes, newlines, and special chars are properly escaped
+                # Example: "TEST'; DROP TABLE users;" becomes "\"TEST'; DROP TABLE users;\""
+                escaped_jira_key = json.dumps(jira_key)
                 script_lines.extend([
                     f"# Update {field_name} for work package {wp_id} (Jira: {jira_key})",
                     f"begin",
                     f"  wp = WorkPackage.find({wp_id})",
                     f"  wp.{field_name} = DateTime.parse('{timestamp}')",
                     f"  wp.save(validate: false)  # Skip validations for metadata updates",
-                    f"  operations << {{jira_key: '{jira_key}', wp_id: {wp_id}, field: '{field_name}', status: 'success'}}",
+                    f"  operations << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, field: {json.dumps(field_name)}, status: 'success'}}",
                     f"rescue => e",
-                    f"  errors << {{jira_key: '{jira_key}', wp_id: {wp_id}, field: '{field_name}', error: e.message}}",
+                    f"  errors << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, field: {json.dumps(field_name)}, error: e.message}}",
                     f"end",
                     "",
                 ])

@@ -10,6 +10,7 @@ This module provides advanced user association migration capabilities that:
 """
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
@@ -97,6 +98,37 @@ class EnhancedUserAssociationMigrator:
         except Exception as e:
             self.logger.warning("Failed to load user mapping: %s", e)
             return {}
+
+    def _validate_jira_key(self, jira_key: str) -> None:
+        """
+        Validate JIRA key format to prevent injection attacks.
+        
+        Valid JIRA keys:
+        - Non-empty alphanumeric strings with hyphens
+        - Pattern: ^[A-Z0-9\-]+$
+        - Maximum 100 characters
+        - No control characters (ASCII < 32)
+        
+        Args:
+            jira_key: The JIRA key to validate
+            
+        Raises:
+            ValueError: If jira_key format is invalid or contains potentially dangerous characters
+        """
+        if not jira_key or not jira_key.strip():
+            raise ValueError("JIRA key cannot be empty or whitespace only.")
+        
+        if len(jira_key) > 100:
+            raise ValueError(f"JIRA key too long ({len(jira_key)} chars). Maximum allowed: 100 characters.")
+        
+        # Check for control characters (ASCII < 32)
+        for char in jira_key:
+            if ord(char) < 32:
+                raise ValueError(f"JIRA key contains control characters (ASCII {ord(char)}). Only A-Z, 0-9, and hyphens allowed.")
+        
+        # Validate against regex pattern
+        if not re.match(r'^[A-Z0-9\-]+$', jira_key):
+            raise ValueError(f"Invalid jira_key format: {jira_key}. Must contain only A-Z, 0-9, and hyphens.")
 
     def _load_enhanced_mappings(self) -> None:
         """Load enhanced user association mappings with metadata."""
@@ -466,7 +498,39 @@ class EnhancedUserAssociationMigrator:
             }
 
     def _generate_author_preservation_script(self, work_package_mapping: dict[str, Any]) -> str:
-        """Generate Rails script for preserving author information."""
+        """Generate Rails script for preserving author information.
+        
+        SECURITY: This method generates Ruby code that will be executed in the Rails
+        console. To prevent injection attacks, all user-provided data (especially 
+        jira_key values) must be validated and properly escaped before inclusion.
+        
+        Security Measures Implemented:
+        1. Validates all jira_key values via _validate_jira_key() before use
+        2. Uses json.dumps() to escape jira_key for safe Ruby hash literals  
+        3. Wraps each operation in begin/rescue blocks for error isolation
+        4. Uses parameterized database queries (WorkPackage.find(id))
+        
+        Generated Script Structure:
+        - Ruby requires json library for safe data handling
+        - Each operation wrapped in begin/rescue for error isolation
+        - Operations and errors tracked in arrays for audit trail
+        - Human-readable output for monitoring and debugging
+        
+        Args:
+            work_package_mapping: Dict mapping work package IDs to their metadata,
+                                 including jira_key for cross-reference
+                                 
+        Returns:
+            str: Safe Ruby script ready for Rails console execution
+            
+        Raises:
+            ValueError: If any jira_key fails security validation
+            
+        Note:
+            This method assumes _rails_operations_cache contains validated operations
+            from _queue_rails_author_operation(). All external data should be 
+            validated before reaching this point.
+        """
         script_lines = [
             "# Enhanced Author Preservation Script",
             "require 'json'",
@@ -480,6 +544,10 @@ class EnhancedUserAssociationMigrator:
             jira_key = operation["jira_key"]
             author_id = operation["author_id"]
             
+            # SECURITY: Validate jira_key before using in script generation
+            # This prevents injection attacks by rejecting malicious input
+            self._validate_jira_key(jira_key)
+            
             # Find OpenProject work package ID from mapping
             wp_id = None
             for mapping_entry in work_package_mapping.values():
@@ -488,15 +556,19 @@ class EnhancedUserAssociationMigrator:
                     break
 
             if wp_id:
+                # SECURITY: Escape jira_key to prevent injection in Ruby hash literals
+                # json.dumps() ensures quotes, newlines, and special chars are properly escaped
+                # Example: "TEST'; DROP TABLE users;" becomes "\"TEST'; DROP TABLE users;\""
+                escaped_jira_key = json.dumps(jira_key)
                 script_lines.extend([
                     f"# Update author for work package {wp_id} (Jira: {jira_key})",
                     f"begin",
                     f"  wp = WorkPackage.find({wp_id})",
                     f"  wp.author_id = {author_id}",
                     f"  wp.save(validate: false)  # Skip validations for metadata updates",
-                    f"  operations << {{jira_key: '{jira_key}', wp_id: {wp_id}, status: 'success'}}",
+                    f"  operations << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, status: 'success'}}",
                     f"rescue => e",
-                    f"  errors << {{jira_key: '{jira_key}', wp_id: {wp_id}, error: e.message}}",
+                    f"  errors << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, error: e.message}}",
                     f"end",
                     "",
                 ])

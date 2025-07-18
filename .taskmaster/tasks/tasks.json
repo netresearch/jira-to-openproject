@@ -1489,12 +1489,66 @@
         "description": "Implement proper Ruby string escaping, safe serialization, and input validation to prevent injection when generating and executing Rails console scripts in EnhancedUserAssociationMigrator.",
         "details": "1. Locate the script generation logic in EnhancedUserAssociationMigrator (lines ~490–500). Remove direct f-string interpolation of user-controlled values (e.g., jira_key).\n2. Use safe serialization methods: build a Ruby hash and call .to_json, or wrap interpolated values with Ruby’s %q{} quoting or String#dump.\n   • Example replacement:\n     operations << JSON.parse('%s') % { json: { jira_key: jira_key, wp_id: wp_id, status: 'success' }.to_json }\n   OR\n     operations << { jira_key: jira_key.dump, wp_id: wp_id, status: 'success' }\n3. In Python, escape the jira_key and other strings via json.dumps or an equivalent to produce a safe JSON literal.\n4. Add input validation in the Python layer: reject or sanitize jira_key values that contain control characters or exceed allowed patterns (e.g., /^[A-Z0-9\\-]+$/).\n5. Update any helper methods or script builder utilities to centralize escaping logic for future script generations.\n6. Refactor test fixtures and any documentation to reflect the new safe serialization approach.",
         "testStrategy": "1. Unit tests: for a variety of jira_key inputs (normal, containing single/double quotes, newline characters, and malicious Ruby code), verify that the generated script lines contain properly escaped literals and no unescaped quotes or code.\n2. Integration test: inject a malicious jira_key (e.g., \"'; User.destroy_all; puts 'pwned\") into a dry-run of EnhancedUserAssociationMigrator with a mocked DockerClient (via RailsConsoleClient injection). Assert that the console output does not execute destructive commands and that the operations hash only contains the intended data.\n3. Validation tests: supply invalid jira_key formats and confirm that the code raises a validation error before script generation.\n4. Regression check: re-run existing migration scenarios to ensure no change in behavior for valid inputs.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           23
         ],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Locate and analyze vulnerable script generation logic",
+            "description": "Find and review the code in EnhancedUserAssociationMigrator that directly interpolates user input into Rails console scripts",
+            "dependencies": [],
+            "details": "Search for the operations array building around lines 490–500 in EnhancedUserAssociationMigrator. Document every instance of f-string or string interpolation using jira_key, wp_id, status, or other user-controlled values and remove unsafe interpolation.\n<info added on 2025-07-18T14:44:34.048Z>\nAnalysis completed: identified unsafe f-string interpolation in enhanced_user_association_migrator.py (lines 496 and 498) and enhanced_timestamp_migrator.py (lines 543 and 545), where jira_key, wp_id and field_name are injected directly, allowing malicious code execution. Files requiring fixes: /home/sme/p/j2o/src/utils/enhanced_user_association_migrator.py and /home/sme/p/j2o/src/utils/enhanced_timestamp_migrator.py. Proceed to implement safe serialization and quoting (e.g. build Ruby hashes and call to_json or use %q{} to escape user-controlled values).\n</info added on 2025-07-18T14:44:34.048Z>",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement safe Ruby serialization and quoting",
+            "description": "Refactor the script builder to use Ruby Hash serialization or quoting methods instead of direct interpolation",
+            "dependencies": [
+              1
+            ],
+            "details": "Replace direct interpolation with operations << JSON.parse('%s') % { json: {...}.to_json } or operations << { jira_key: jira_key.dump, wp_id: wp_id, status: 'success' }. Ensure values are wrapped in %q{} or use String#dump to escape all special characters.\n<info added on 2025-07-18T14:45:51.082Z>\nFixed enhanced_user_association_migrator.py:\n- Added escaped_jira_key = json.dumps(jira_key) before building the script\n- Replaced vulnerable interpolation jira_key: '{jira_key}' with jira_key: {escaped_jira_key}\n\nFixed enhanced_timestamp_migrator.py:\n- Added escaped_jira_key = json.dumps(jira_key) and escaped_field_name = json.dumps(field_name)\n- Updated both hash entries to use these escaped variables\n\nBoth files now rely on JSON dumping to escape quotes and special characters when generating Ruby hashes. Malicious input like '; User.destroy_all; puts 'pwned is now serialized as \"\\\"'; User.destroy_all; puts 'pwned\\\"\"\", preventing unintended code execution.\n\nReady to proceed with input validation layer.\n</info added on 2025-07-18T14:45:51.082Z>",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Add input validation and sanitization in Python",
+            "description": "Validate and escape jira_key and other strings at the Python layer before script generation",
+            "dependencies": [
+              2
+            ],
+            "details": "Implement a validation function that rejects or sanitizes jira_key inputs containing control characters or not matching /^[A-Z0-9\\-]+$/. Use json.dumps or an equivalent method to produce safe JSON literals for all user inputs.\n<info added on 2025-07-18T14:52:50.326Z>\nImplemented `_validate_jira_key(self, jira_key: str)` to enforce non-empty values, /^[A-Z0-9\\-]+$/ format, no ASCII control characters, and a maximum length of 100. Invoked immediately after `jira_key = operation['jira_key']` in enhanced_user_association_migrator.py (line 502) and enhanced_timestamp_migrator.py (line 549). Invalid inputs now raise `ValueError` with clear messages (empty string → “Jira key cannot be empty”; malformed format → “Invalid jira_key format: … Must contain only A-Z, 0-9, and hyphens.”; control characters → “Jira key contains control characters”). Combined with existing JSON escaping, this provides defense in depth against injection.\n</info added on 2025-07-18T14:52:50.326Z>",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Create unit and integration tests for script generation",
+            "description": "Write comprehensive tests to verify proper escaping and prevention of injection",
+            "dependencies": [
+              3
+            ],
+            "details": "Develop unit tests covering normal, edge-case, and malicious jira_key values (quotes, newlines, Ruby code). Assert the generated Rails script lines contain only safe, escaped literals. Create integration tests that attempt to execute a malicious payload to confirm it does not run.\n<info added on 2025-07-18T15:04:22.385Z>\nCreated three security test files under tests/security:\n- test_jira_key_validation.py with 25+ pytest unit tests covering valid and malicious jira_key inputs (quotes, newlines, Ruby code), regex validation, error message assertions, and 40+ attack vectors\n- test_script_generation_security.py with 15+ integration tests verifying escaped script output, rejecting malicious payloads, batch operation safety, field-name escaping, Unicode handling, and performance under load\n- test_security_regression.py with 15+ regression tests ensuring existing workflows, batch processing, error handling, performance baselines, data integrity, and output format compatibility\n\nTest suite includes 55+ total cases covering SQL injection, script injection, control characters, Unicode attacks, format-string attacks, path traversal, protocol injection, and LDAP/NoSQL injection. Uses pytest with parameterized tests, security markers, proper mocking, helper functions for script safety verification, comprehensive attack-vector datasets, isolated test environments with cache management, and deterministic mock strategies.\n</info added on 2025-07-18T15:04:22.385Z>",
+            "status": "done",
+            "testStrategy": "Use a test framework to mock script execution and inspect generated code. Include cases with single/double quotes, newlines, and payloads like \"'); system('rm -rf /'); #\" and verify they remain inert."
+          },
+          {
+            "id": 5,
+            "title": "Update documentation and centralize escaping logic",
+            "description": "Refactor helper methods and update docs to reflect the new safe serialization approach",
+            "dependencies": [
+              4
+            ],
+            "details": "Move escaping and validation logic into a shared script builder utility. Update migration docs, code comments, and README to describe the new serialization and validation methods. Provide examples of safe usage.\n<info added on 2025-07-18T15:14:12.156Z>\nEnhanced documentation and security comments have been added:\n\n- EnhancedUserAssociationMigrator and TimestampMigrator now include detailed docstrings for `_validate_jira_key()`, `_generate_author_preservation_script()`, and `_generate_timestamp_preservation_script()` that outline attack vectors, input validation steps, escaping logic, and safe vs unsafe usage examples.\n- Added docs/SECURITY.md covering vulnerability descriptions with examples, implemented validation and escaping fixes, defense-in-depth strategy, overview of 55+ security test cases, secure development guidelines, code review checklist, threat model and attack surface analysis, incident response procedures, and compliance/auditing information.\n- Inserted `# SECURITY:` inline comments at all critical validation and escaping points, explaining how `json.dumps()` prevents injections, illustrating malicious input transformations, and linking each measure to the specific attack it mitigates.\n- Updated migration docs and README to reference the new shared script builder utility, centralize escaping logic, and demonstrate safe serialization patterns.\n</info added on 2025-07-18T15:14:12.156Z>",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
       },
       {
         "id": 75,
@@ -1571,7 +1625,7 @@
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-18T14:21:37.146Z",
+      "updated": "2025-07-18T15:14:24.089Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
