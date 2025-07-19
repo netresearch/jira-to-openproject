@@ -101,7 +101,7 @@ class EnhancedUserAssociationMigrator:
     DEFAULT_REQUEST_TIMEOUT = 10.0  # 10s timeout per API call
     
     # Rate limiting constants  
-    MAX_CONCURRENT_REFRESHES = 3  # Prevent retry storms
+    MAX_CONCURRENT_REFRESHES = 5  # Prevent retry storms, increased for better performance
     
     def __init__(
         self,
@@ -831,10 +831,11 @@ class EnhancedUserAssociationMigrator:
             "refresh_successful": 0,
             "refresh_failed": 0,
             "errors": [],
-            "results": {}
+            "results": {},
+            "total_stale": len(stale_mappings)  # Track total number of stale mappings detected
         }
         
-        self.logger.info("Starting batch refresh for %d mappings", len(usernames))
+        self.logger.info("Starting batch refresh for %d mappings (%d total stale detected)", len(usernames), len(stale_mappings))
         
         for username in usernames:
             stale_reason = stale_mappings.get(username, "Manual refresh requested")
@@ -891,10 +892,11 @@ class EnhancedUserAssociationMigrator:
                 self.logger.exception("Unexpected error during batch refresh for %s: %s", username, e)
         
         self.logger.info(
-            "Batch refresh completed: %d/%d successful, %d failed",
+            "Batch refresh completed: %d/%d successful, %d failed (%d total stale detected)",
             results["refresh_successful"],
             results["refresh_attempted"],
-            results["refresh_failed"]
+            results["refresh_failed"],
+            results["total_stale"]
         )
         
         return results
@@ -960,12 +962,29 @@ class EnhancedUserAssociationMigrator:
                     last_error = e
                     
                     # Enhanced error context logging
+                    # Sanitize error message to prevent sensitive data exposure
+                    error_msg = str(e)
+                    if len(error_msg) > 100:
+                        error_msg = error_msg[:97] + "..."
+                    # Remove potential auth tokens, URLs, or sensitive patterns
+                    import re
+                    # JWT pattern: header.payload.signature (typical format)
+                    error_msg = re.sub(r'[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}', '[REDACTED]', error_msg)
+                    # Generic Base64 tokens (must have mixed characters to avoid false positives)
+                    error_msg = re.sub(r'(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9+/]{30,}={0,2}', '[REDACTED]', error_msg)
+                    error_msg = re.sub(r'https?://[^\s]+', '[URL]', error_msg)  # URLs
+                    
+                    # Calculate actual concurrent calls using semaphore state
+                    concurrent_active = self.MAX_CONCURRENT_REFRESHES - self._refresh_semaphore._value
+                    
                     error_context = {
                         'username': username,
                         'attempt': attempt + 1,
                         'total_attempts': retry_limit + 1,
                         'error_type': type(e).__name__,
-                        'error_message': str(e),
+                        'error_message': error_msg,
+                        'concurrent_limit': self.MAX_CONCURRENT_REFRESHES,
+                        'concurrent_active': concurrent_active
                     }
                     
                     if attempt < retry_limit:  # Not the final attempt

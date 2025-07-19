@@ -13,7 +13,7 @@ from tests.utils.mock_factory import create_mock_jira_client, create_mock_openpr
 
 
 class TestEnhancedUserAssociationMigratorEnhancedRetry:
-    """Test suite for enhanced retry logic with all YOLO fixes."""
+    """Test suite for enhanced retry logic with all YOLO improvements."""
 
     @pytest.fixture
     def migrator_instance(self, tmp_path):
@@ -374,33 +374,14 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             
             log_message = error_logs[0].message
             assert "Error context:" in log_message
-            assert "'concurrent_calls': 5" in log_message  # YOLO improvement
+            assert "'concurrent_limit': 5" in log_message  # YOLO improvement
+            assert "'concurrent_active':" in log_message  # YOLO improvement
             assert "'username': 'test.user'" in log_message
             assert "'error_type': 'JiraApiError'" in log_message
 
-    def test_concurrent_calls_field_in_error_context(self, migrator_instance, caplog):
-        """Test that concurrent_calls field is correctly set to 5 in error context."""
-        import logging
-        caplog.set_level(logging.ERROR)
-        
-        migrator_instance.jira_client.get_user_info.side_effect = JiraConnectionError("Connection failed")
-        
-        with patch('time.sleep'), \
-             patch('threading.Event') as mock_event_class:
-            
-            mock_event = Mock()
-            mock_event.wait.return_value = True
-            mock_event_class.return_value = mock_event
-            
-            with pytest.raises(JiraConnectionError):
-                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
-            
-            # Verify the specific concurrent_calls field
-            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
-            assert len(error_logs) == 1
-            
-            log_message = error_logs[0].message
-            assert "'concurrent_calls': 5" in log_message
+    # NOTE: This test was updated for YOLO review fixes
+    # Old field 'concurrent_calls' was replaced with 'concurrent_limit' and 'concurrent_active'
+    # See test_concurrent_calls_field_in_error_context_updated for the new implementation
 
     def test_different_exception_types_error_context(self, migrator_instance, caplog):
         """Test error context for different exception types."""
@@ -647,3 +628,250 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             
             assert result["total_stale"] == 2  # Only user1 and user3 are stale
             assert result["refresh_attempted"] == 3  # All 3 provided usernames attempted 
+
+    def test_concurrent_calls_field_in_error_context_updated(self, migrator_instance, caplog):
+        """Test that error context includes both concurrent_limit and concurrent_active fields."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        migrator_instance.jira_client.get_user_info.side_effect = JiraConnectionError("Connection failed")
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraConnectionError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Verify the updated concurrent tracking fields
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            assert "'concurrent_limit': 5" in log_message
+            assert "'concurrent_active':" in log_message  # Should be 1 during execution
+
+    def test_error_message_truncation(self, migrator_instance, caplog):
+        """Test that long error messages are truncated to 100 characters."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        # Create a long error message (over 100 chars)
+        long_message = "This is a very long error message " * 10  # ~340 characters
+        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError(long_message)
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraApiError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Verify message was truncated
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            # Check that the error message in context was truncated to 100 chars total (97 + "...")
+            assert "'error_message': 'This is a very long error message This is a very long error message This is a very long error mes...'" in log_message
+
+    def test_error_message_exactly_100_chars(self, migrator_instance, caplog):
+        """Test that error messages exactly 100 characters are not truncated."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        # Create exactly 100 character message
+        exact_message = "A" * 100
+        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError(exact_message)
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraApiError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Verify message was not truncated (100 'A's should not be redacted as it lacks mixed case)
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            assert f"'error_message': '{exact_message}'" in log_message
+            assert "..." not in log_message
+
+    def test_base64_token_redaction(self, migrator_instance, caplog):
+        """Test that Base64-like tokens are redacted from error messages."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        # Error message with Base64-like token
+        token_message = "Authentication failed with token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError(token_message)
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraApiError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Verify token was redacted
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            # The JWT should be redacted, and then the message truncated
+            assert "'error_message': 'Authentication failed with token: [REDACTED]" in log_message
+
+    def test_url_redaction(self, migrator_instance, caplog):
+        """Test that URLs are redacted from error messages."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        # Error message with URLs
+        url_message = "Failed to connect to https://api.example.com/users/12345 and http://backup.server.com/data"
+        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError(url_message)
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraApiError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Verify URLs were redacted
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            assert "'error_message': 'Failed to connect to [URL] and [URL]'" in log_message
+
+    def test_combined_sanitization_patterns(self, migrator_instance, caplog):
+        """Test error messages with both tokens and URLs are properly sanitized."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        # Long message with both token and URL
+        combined_message = "Authentication failed at https://api.jira.com/auth with token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 - server returned error " * 5
+        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError(combined_message)
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraApiError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Verify truncation, URL redaction, and token redaction
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            # Message should be sanitized (URLs and tokens redacted) then truncated
+            assert "'error_message': 'Authentication failed at [URL] with token [REDACTED]...'" in log_message
+
+    def test_concurrent_active_calculation_accuracy(self, migrator_instance, caplog):
+        """Test that concurrent_active accurately reflects semaphore usage."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        # Mock semaphore to simulate different active states
+        with patch.object(migrator_instance, '_refresh_semaphore') as mock_semaphore:
+            mock_semaphore._value = 2  # 5 - 2 = 3 active calls
+            mock_semaphore.__enter__ = Mock(return_value=mock_semaphore)
+            mock_semaphore.__exit__ = Mock(return_value=None)
+            
+            migrator_instance.jira_client.get_user_info.side_effect = JiraApiError("Test error")
+            
+            with patch('time.sleep'), \
+                 patch('threading.Event') as mock_event_class:
+                
+                mock_event = Mock()
+                mock_event.wait.return_value = True
+                mock_event_class.return_value = mock_event
+                
+                with pytest.raises(JiraApiError):
+                    migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+                
+                # Verify accurate active count
+                error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+                assert len(error_logs) == 1
+                
+                log_message = error_logs[0].message
+                assert "'concurrent_active': 3" in log_message
+                assert "'concurrent_limit': 5" in log_message
+
+    def test_empty_error_message_handling(self, migrator_instance, caplog):
+        """Test handling of empty or None error messages."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        # Custom exception with empty string
+        class EmptyMessageError(Exception):
+            def __str__(self):
+                return ""
+        
+        migrator_instance.jira_client.get_user_info.side_effect = EmptyMessageError()
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(EmptyMessageError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Verify empty message is handled gracefully
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            assert "'error_message': ''" in log_message
+
+    def test_regex_special_characters_not_affected(self, migrator_instance, caplog):
+        """Test that error messages with regex special characters are handled correctly."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        # Message with regex special chars that shouldn't match our patterns
+        special_chars_message = "Error: [invalid] (user) {not_found} $var ^start end$ +plus *star ?question"
+        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError(special_chars_message)
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraApiError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Verify message unchanged (no false positive redaction)
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            assert f"'error_message': '{special_chars_message}'" in log_message
+            assert "[REDACTED]" not in log_message
+            assert "[URL]" not in log_message 
