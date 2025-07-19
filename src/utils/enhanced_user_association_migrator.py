@@ -138,14 +138,13 @@ class EnhancedUserAssociationMigrator:
     DEFAULT_MAX_RETRIES = 2
     DEFAULT_FALLBACK_STRATEGY = "skip"
 
-    # Retry configuration constants
-    MAX_ALLOWED_RETRIES = 5  # Prevent excessive retry attempts
-    DEFAULT_BASE_DELAY = 0.5  # 500ms base delay
-    DEFAULT_MAX_DELAY = 2.0   # 2s maximum delay cap
-    DEFAULT_REQUEST_TIMEOUT = 10.0  # 10s timeout per API call
-    
-    # Rate limiting constants  
-    MAX_CONCURRENT_REFRESHES = 5  # Prevent retry storms, increased for better performance
+    # Rate limiting and retry configuration (YOLO FIXED: increased from 3 to 5)
+    DEFAULT_MAX_RETRIES = 2        # Default retry attempts for most operations  
+    ABSOLUTE_MAX_RETRIES = 5       # Hard limit to prevent resource exhaustion (was MAX_ALLOWED_RETRIES)
+    DEFAULT_BASE_DELAY = 0.5       # Default delay between retries (seconds)
+    DEFAULT_MAX_DELAY = 8.0        # Maximum delay cap (seconds) 
+    DEFAULT_REQUEST_TIMEOUT = 30.0 # Default request timeout (seconds)
+    MAX_CONCURRENT_REFRESHES = 5   # Prevent retry storms, increased for better performance
     
     def __init__(
         self,
@@ -206,6 +205,7 @@ class EnhancedUserAssociationMigrator:
         """Sanitize error message to prevent sensitive data exposure.
         
         YOLO FIX: Extracted duplicated sanitization logic to helper method.
+        CRITICAL FIX: Apply sanitization BEFORE truncation to prevent sensitive data exposure.
         
         Args:
             error_msg: Raw error message to sanitize
@@ -213,14 +213,15 @@ class EnhancedUserAssociationMigrator:
         Returns:
             Sanitized error message with sensitive data redacted
         """
-        # Truncate long messages
-        if len(error_msg) > ERROR_MSG_MAX_LENGTH:
-            error_msg = error_msg[:ERROR_MSG_TRUNCATE_LENGTH] + "..."
-        
-        # Apply security patterns (ReDoS protection via pre-compiled regex)
+        # CRITICAL FIX: Apply security patterns FIRST, then truncate
+        # This ensures sensitive tokens are redacted even if they get truncated
         error_msg = JWT_PATTERN.sub('[REDACTED]', error_msg)
         error_msg = BASE64_PATTERN.sub('[REDACTED]', error_msg)
         error_msg = URL_PATTERN.sub('[URL]', error_msg)
+        
+        # Then truncate the already-sanitized string
+        if len(error_msg) > ERROR_MSG_MAX_LENGTH:
+            error_msg = error_msg[:ERROR_MSG_TRUNCATE_LENGTH] + "..."
         
         return error_msg
 
@@ -231,8 +232,8 @@ class EnhancedUserAssociationMigrator:
         if not isinstance(config['max_retries'], int) or config['max_retries'] < 0:
             raise ValueError(f"max_retries must be a non-negative integer, got: {config['max_retries']}")
             
-        if config['max_retries'] > self.MAX_ALLOWED_RETRIES:
-            raise ValueError(f"max_retries cannot exceed {self.MAX_ALLOWED_RETRIES}, got: {config['max_retries']}")
+        if config['max_retries'] > self.ABSOLUTE_MAX_RETRIES:
+            raise ValueError(f"max_retries cannot exceed {self.ABSOLUTE_MAX_RETRIES}, got: {config['max_retries']}")
             
         if not isinstance(config['base_delay'], (int, float)) or config['base_delay'] <= 0:
             raise ValueError(f"base_delay must be a positive number, got: {config['base_delay']}")
@@ -1003,8 +1004,8 @@ class EnhancedUserAssociationMigrator:
         # Validate retry limit
         if not isinstance(retry_limit, int) or retry_limit < 0:
             raise ValueError(f"max_retries must be a non-negative integer, got: {retry_limit}")
-        if retry_limit > self.MAX_ALLOWED_RETRIES:
-            raise ValueError(f"max_retries cannot exceed {self.MAX_ALLOWED_RETRIES}, got: {retry_limit}")
+        if retry_limit > self.ABSOLUTE_MAX_RETRIES:
+            raise ValueError(f"max_retries cannot exceed {self.ABSOLUTE_MAX_RETRIES}, got: {retry_limit}")
         
         self.logger.debug(f"Starting Jira user lookup for '{username}' with max_retries={retry_limit}")
         
@@ -1058,7 +1059,7 @@ class EnhancedUserAssociationMigrator:
                         actual_delay = min(raw_delay, self.retry_config['max_delay'])
                         
                         # YOLO FIX: Use helper method for consistent sanitization
-                        sanitized_error = self._sanitize_error_message(str(e))
+                        sanitized_error = sanitized_error_msg
 
                         self.logger.warning(
                             f"Jira user lookup for '{username}' failed on attempt {attempt + 1}/{retry_limit + 1}. "
@@ -1069,7 +1070,7 @@ class EnhancedUserAssociationMigrator:
                         pass  # Semaphore is automatically released at end of 'with' block
                     else:
                         # YOLO FIX: Use helper method for consistent sanitization
-                        sanitized_error = self._sanitize_error_message(str(e))
+                        sanitized_error = sanitized_error_msg
 
                         # YOLO FIX: Include error context directly in log message
                         self.logger.error(
