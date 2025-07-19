@@ -13,6 +13,7 @@ import json
 import re
 import requests
 import subprocess
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict
@@ -842,6 +843,59 @@ class EnhancedUserAssociationMigrator:
         
         return results
 
+    def _get_jira_user_with_retry(self, username: str, max_retries: int = 2) -> dict[str, Any] | None:
+        """Get Jira user data with retry logic and exponential backoff.
+        
+        Args:
+            username: Jira username to fetch
+            max_retries: Maximum number of retries (default: 2, so 3 total attempts)
+            
+        Returns:
+            Jira user data if successful, None if user not found
+            
+        Raises:
+            Exception: If all retries fail due to API errors
+        """
+        base_delay = 0.5  # 500ms base delay
+        last_error = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                self.logger.debug(
+                    "Attempting to fetch user %s from Jira (attempt %d/%d)", 
+                    username, attempt + 1, max_retries + 1
+                )
+                
+                jira_user_data = self.jira_client.get_user_info(username)
+                
+                if attempt > 0:
+                    self.logger.info(
+                        "Successfully fetched user %s from Jira after %d attempts", 
+                        username, attempt + 1
+                    )
+                
+                return jira_user_data
+                
+            except Exception as e:
+                last_error = e
+                self.logger.warning(
+                    "Jira API call failed for user %s (attempt %d/%d): %s", 
+                    username, attempt + 1, max_retries + 1, e
+                )
+                
+                # Don't delay after the last attempt
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)  # Exponential backoff: 500ms, 1s
+                    self.logger.debug("Waiting %.1fs before retry...", delay)
+                    time.sleep(delay)
+        
+        # All retries exhausted - propagate the error for fallback handling
+        self.logger.error(
+            "All %d attempts failed to fetch user %s from Jira. Last error: %s",
+            max_retries + 1, username, last_error
+        )
+        raise last_error
+
     def refresh_user_mapping(self, username: str) -> UserAssociationMapping | None:
         """Refresh a stale user mapping by re-fetching from Jira.
         
@@ -857,8 +911,8 @@ class EnhancedUserAssociationMigrator:
         try:
             self.logger.info("Refreshing user mapping for: %s", username)
             
-            # Get fresh data from Jira
-            jira_user_data = self.jira_client.get_user_info(username)
+            # Get fresh data from Jira with retry logic and exponential backoff
+            jira_user_data = self._get_jira_user_with_retry(username)
             
             if not jira_user_data:
                 self.logger.warning("User %s not found in Jira during refresh", username)
