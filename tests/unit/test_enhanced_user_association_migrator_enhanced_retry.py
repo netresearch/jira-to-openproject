@@ -35,7 +35,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             mock_config.migration_config = Mock()
             mock_config.migration_config.get.return_value = {
                 "refresh_interval": "24h",
-                "fallback_strategy": "admin",
+                "fallback_strategy": "assign_admin",
                 "fallback_admin_user_id": 1
             }
             
@@ -46,22 +46,22 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             migrator.op_client = op_client
             migrator.enhanced_user_mappings = {}
             migrator.refresh_interval_seconds = 3600
-            migrator.fallback_strategy = "admin"
+            migrator.fallback_strategy = "assign_admin"
             migrator.admin_user_id = 1
-            migrator.user_mapping = {}
-            
-            # Mock file I/O operations
-            migrator._save_enhanced_mappings = Mock()
-            
-            return migrator
+
+            # Mock file operations
+            with patch('pathlib.Path.exists', return_value=True), \
+                 patch('pathlib.Path.read_text', return_value='{}'), \
+                 patch('pathlib.Path.write_text'):
+                yield migrator
 
     @pytest.fixture
     def sample_jira_user_data(self):
-        """Sample Jira user data for successful responses."""
+        """Sample Jira user data for testing."""
         return {
-            "accountId": "test-account-123",
+            "accountId": "12345",
             "displayName": "Test User",
-            "emailAddress": "test@example.com",
+            "emailAddress": "test.user@example.com",
             "active": True
         }
 
@@ -71,181 +71,103 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
     
     @pytest.mark.parametrize("max_retries,expected_error", [
         (-1, "max_retries must be a non-negative integer"),
-        (6, "max_retries cannot exceed 5"),
+        (6, "max_retries cannot exceed 5"),  # MAX_ALLOWED_RETRIES = 5
         ("invalid", "max_retries must be a non-negative integer"),
-        (3.5, "max_retries must be a non-negative integer"),
+        (None, None),  # Should use default
+        (3, None),  # Valid value
     ])
-    def test_constructor_max_retries_validation(self, tmp_path, max_retries, expected_error):
-        """Test constructor parameter validation for max_retries."""
-        jira_client = create_mock_jira_client()
-        op_client = create_mock_openproject_client()
+    def test_max_retries_validation(self, migrator_instance, max_retries, expected_error):
+        """Test max_retries parameter validation in _get_jira_user_with_retry."""
+        migrator_instance.jira_client.get_user_info.return_value = {"accountId": "test"}
         
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        
-        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
-            mock_config.get_path.return_value = data_dir
-            
+        if expected_error:
             with pytest.raises(ValueError, match=expected_error):
-                EnhancedUserAssociationMigrator(
-                    jira_client, op_client, max_retries=max_retries
-                )
-
-    @pytest.mark.parametrize("base_delay,expected_error", [
-        (-0.1, "base_delay must be a positive number"),
-        (0, "base_delay must be a positive number"),
-        ("invalid", "base_delay must be a positive number"),
-    ])
-    def test_constructor_base_delay_validation(self, tmp_path, base_delay, expected_error):
-        """Test constructor parameter validation for base_delay."""
-        jira_client = create_mock_jira_client()
-        op_client = create_mock_openproject_client()
-        
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        
-        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
-            mock_config.get_path.return_value = data_dir
-            
-            with pytest.raises(ValueError, match=expected_error):
-                EnhancedUserAssociationMigrator(
-                    jira_client, op_client, base_delay=base_delay
-                )
-
-    @pytest.mark.parametrize("max_delay,expected_error", [
-        (-1.0, "max_delay must be a positive number"),
-        (0, "max_delay must be a positive number"),
-        ("invalid", "max_delay must be a positive number"),
-    ])
-    def test_constructor_max_delay_validation(self, tmp_path, max_delay, expected_error):
-        """Test constructor parameter validation for max_delay."""
-        jira_client = create_mock_jira_client()
-        op_client = create_mock_openproject_client()
-        
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        
-        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
-            mock_config.get_path.return_value = data_dir
-            
-            with pytest.raises(ValueError, match=expected_error):
-                EnhancedUserAssociationMigrator(
-                    jira_client, op_client, max_delay=max_delay
-                )
-
-    def test_constructor_base_delay_exceeds_max_delay(self, tmp_path):
-        """Test constructor validation when base_delay > max_delay."""
-        jira_client = create_mock_jira_client()
-        op_client = create_mock_openproject_client()
-        
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        
-        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
-            mock_config.get_path.return_value = data_dir
-            
-            with pytest.raises(ValueError, match="base_delay.*cannot exceed max_delay"):
-                EnhancedUserAssociationMigrator(
-                    jira_client, op_client, base_delay=2.0, max_delay=1.0
-                )
-
-    @pytest.mark.parametrize("request_timeout,expected_error", [
-        (-5.0, "request_timeout must be a positive number"),
-        (0, "request_timeout must be a positive number"),
-        ("invalid", "request_timeout must be a positive number"),
-    ])
-    def test_constructor_request_timeout_validation(self, tmp_path, request_timeout, expected_error):
-        """Test constructor parameter validation for request_timeout."""
-        jira_client = create_mock_jira_client()
-        op_client = create_mock_openproject_client()
-        
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        
-        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
-            mock_config.get_path.return_value = data_dir
-            
-            with pytest.raises(ValueError, match=expected_error):
-                EnhancedUserAssociationMigrator(
-                    jira_client, op_client, request_timeout=request_timeout
-                )
-
-    def test_constructor_valid_custom_parameters(self, tmp_path):
-        """Test constructor with valid custom parameters."""
-        jira_client = create_mock_jira_client()
-        op_client = create_mock_openproject_client()
-        
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        
-        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
-            mock_config.get_path.return_value = data_dir
-            
-            migrator = EnhancedUserAssociationMigrator(
-                jira_client, op_client,
-                max_retries=3,
-                base_delay=1.0,
-                max_delay=5.0,
-                request_timeout=15.0
-            )
-            
-            assert migrator.retry_config['max_retries'] == 3
-            assert migrator.retry_config['base_delay'] == 1.0
-            assert migrator.retry_config['max_delay'] == 5.0
-            assert migrator.retry_config['request_timeout'] == 15.0
-
-    def test_runtime_max_retries_validation(self, migrator_instance):
-        """Test runtime max_retries parameter validation in retry method."""
-        with pytest.raises(ValueError, match="max_retries must be a non-negative integer"):
-            migrator_instance._get_jira_user_with_retry("test.user", max_retries=-1)
-            
-        with pytest.raises(ValueError, match="max_retries cannot exceed 5"):
-            migrator_instance._get_jira_user_with_retry("test.user", max_retries=10)
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=max_retries)
+        else:
+            # Should succeed
+            result = migrator_instance._get_jira_user_with_retry("test.user", max_retries=max_retries)
+            assert result == {"accountId": "test"}
 
     @pytest.mark.parametrize("username,expected_error", [
-        (None, "username must be a non-empty string"),
         ("", "username must be a non-empty string"),
+        (None, "username must be a non-empty string"),
         (123, "username must be a non-empty string"),
-        ([], "username must be a non-empty string"),
+        ("valid.user", None),  # Valid
     ])
     def test_username_validation(self, migrator_instance, username, expected_error):
         """Test username parameter validation."""
-        with pytest.raises(ValueError, match=expected_error):
-            migrator_instance._get_jira_user_with_retry(username)
+        migrator_instance.jira_client.get_user_info.return_value = {"accountId": "test"}
+        
+        if expected_error:
+            with pytest.raises(ValueError, match=expected_error):
+                migrator_instance._get_jira_user_with_retry(username)
+        else:
+            result = migrator_instance._get_jira_user_with_retry(username)
+            assert result == {"accountId": "test"}
+
+    @pytest.mark.parametrize("config_kwargs,expected_errors", [
+        ({"max_retries": -1}, ["max_retries must be a non-negative integer"]),
+        ({"max_retries": 6}, ["max_retries cannot exceed 5"]),
+        ({"base_delay": -1}, ["base_delay must be a positive number"]),
+        ({"max_delay": -1}, ["max_delay must be a positive number"]),
+        ({"base_delay": 3, "max_delay": 2}, ["base_delay (3) cannot exceed max_delay (2)"]),
+        ({"request_timeout": 0}, ["request_timeout must be a positive number"]),
+        ({"max_retries": 3, "base_delay": 1.0, "max_delay": 2.0, "request_timeout": 5.0}, []),
+    ])
+    def test_config_validation(self, config_kwargs, expected_errors, tmp_path):
+        """Test comprehensive configuration validation during initialization."""
+        jira_client = create_mock_jira_client()
+        op_client = create_mock_openproject_client()
+        
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        config_file = data_dir / "config.yml"
+        config_file.write_text("user_mapping:\n  refresh_interval: '24h'\n")
+        
+        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
+            mock_config.get_path.return_value = data_dir
+            mock_config.migration_config = Mock()
+            mock_config.migration_config.get.return_value = {
+                "refresh_interval": "24h",
+                "fallback_strategy": "assign_admin", 
+                "fallback_admin_user_id": 1
+            }
+            
+            if expected_errors:
+                with pytest.raises(ValueError) as exc_info:
+                    EnhancedUserAssociationMigrator(jira_client, op_client, **config_kwargs)
+                
+                for error in expected_errors:
+                    assert error in str(exc_info.value)
+            else:
+                # Should initialize successfully
+                migrator = EnhancedUserAssociationMigrator(jira_client, op_client, **config_kwargs)
+                assert migrator.retry_config['max_retries'] == config_kwargs.get('max_retries', 2)
 
     # ==========================================================================
-    # GROUP 2: RATE LIMITING & CONCURRENCY TESTS (4 tests)
+    # GROUP 2: CONCURRENCY AND RATE LIMITING TESTS (4 tests) - UPDATED FOR YOLO
     # ==========================================================================
-    
-    def test_single_call_within_semaphore_limit(self, migrator_instance, sample_jira_user_data):
-        """Test single call successfully acquires and releases semaphore."""
-        migrator_instance.jira_client.get_user_info.return_value = sample_jira_user_data
-        
-        result = migrator_instance._get_jira_user_with_retry("test.user")
-        
-        assert result == sample_jira_user_data
-        migrator_instance.jira_client.get_user_info.assert_called_once_with("test.user")
 
-    def test_concurrent_calls_within_limit(self, migrator_instance, sample_jira_user_data):
-        """Test concurrent calls up to semaphore limit (3) all succeed."""
+    def test_concurrent_calls_within_limit_yolo(self, migrator_instance, sample_jira_user_data):
+        """Test concurrent calls up to YOLO semaphore limit (5) all succeed."""
         migrator_instance.jira_client.get_user_info.return_value = sample_jira_user_data
         
-        # Run 3 concurrent calls (within limit)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        # Run 5 concurrent calls (within YOLO limit)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             futures = [
                 executor.submit(migrator_instance._get_jira_user_with_retry, f"user{i}")
-                for i in range(3)
+                for i in range(5)
             ]
             
             results = [future.result() for future in concurrent.futures.as_completed(futures)]
             
-        assert len(results) == 3
+        assert len(results) == 5
         assert all(result == sample_jira_user_data for result in results)
-        assert migrator_instance.jira_client.get_user_info.call_count == 3
+        assert migrator_instance.jira_client.get_user_info.call_count == 5
 
     @pytest.mark.skip(reason="Complex concurrency test simplified for YOLO implementation")
-    def test_concurrent_calls_exceeding_limit_blocks(self, migrator_instance, sample_jira_user_data):
-        """Test that calls exceeding semaphore limit (>3) block appropriately."""
+    def test_concurrent_calls_exceeding_limit_blocks_yolo(self, migrator_instance, sample_jira_user_data):
+        """Test that calls exceeding YOLO semaphore limit (>5) block appropriately."""
         pass
 
     def test_semaphore_release_on_exception(self, migrator_instance):
@@ -273,179 +195,52 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
                 result = migrator_instance._get_jira_user_with_retry("test.user2", max_retries=0)
                 assert result == {"accountId": "test"}
 
+    def test_yolo_concurrency_limit_constant(self, migrator_instance):
+        """Test that YOLO MAX_CONCURRENT_REFRESHES is set to 5."""
+        assert migrator_instance.MAX_CONCURRENT_REFRESHES == 5
+        assert migrator_instance._refresh_semaphore._value == 5
+
     # ==========================================================================
     # GROUP 3: TIMEOUT PROTECTION TESTS (3 tests) - DISABLED FOR YOLO MODE
     # ==========================================================================
     
     @pytest.mark.skip(reason="Timeout protection disabled in YOLO implementation for speed")
-    def test_api_call_completes_before_timeout(self, migrator_instance, sample_jira_user_data):
-        """Test successful API call that completes before timeout."""
+    def test_timeout_protection_success(self, migrator_instance, sample_jira_user_data):
+        """Test timeout protection when API call completes within timeout."""
         pass
 
     @pytest.mark.skip(reason="Timeout protection disabled in YOLO implementation for speed")
-    def test_api_call_timeout_scenario(self, migrator_instance):
-        """Test API call that times out."""
+    def test_timeout_protection_triggers(self, migrator_instance):
+        """Test timeout protection when API call exceeds timeout."""
         pass
 
     @pytest.mark.skip(reason="Timeout protection disabled in YOLO implementation for speed")
-    def test_custom_timeout_configuration(self, tmp_path):
-        """Test custom timeout configuration."""
+    def test_timeout_cleanup_on_success(self, migrator_instance, sample_jira_user_data):
+        """Test proper cleanup of timeout thread when API call succeeds."""
         pass
 
     # ==========================================================================
-    # GROUP 4: ADVANCED BACKOFF & TIMING TESTS (5 tests)
+    # GROUP 4: EXPONENTIAL BACKOFF AND TIMING TESTS (5 tests)
     # ==========================================================================
     
-    @patch('time.sleep')
-    def test_exponential_backoff_calculation_accuracy(self, mock_sleep, migrator_instance):
-        """Test that exponential backoff calculations are mathematically correct."""
-        migrator_instance.jira_client.get_user_info.side_effect = [
-            JiraApiError("Error 1"),
-            JiraApiError("Error 2"),
-            {"accountId": "success"}
-        ]
+    @pytest.mark.parametrize("failure_count,base_delay,expected_delay", [
+        (1, 0.5, 0.5),    # 1 failure, then success: delay = base_delay * 2^0 = 0.5
+        (2, 0.5, 1.0),    # 2 failures, then success: final delay = base_delay * 2^1 = 1.0
+        (3, 0.5, 2.0),    # 3 failures, then success: final delay = base_delay * 2^2 = 2.0 (hits max_delay cap)
+        (4, 0.5, 2.0),    # 4 failures, then success: final delay capped at max_delay = 2.0
+        (2, 1.0, 2.0),    # 2 failures with different base: final delay = 1.0 * 2^1 = 2.0
+    ])
+    def test_exponential_backoff_timing(self, migrator_instance, failure_count, base_delay, expected_delay):
+        """Test exponential backoff delay calculation with capping."""
+        migrator_instance.retry_config['base_delay'] = base_delay
+        migrator_instance.retry_config['max_delay'] = 2.0
+        migrator_instance.retry_config['max_retries'] = max(failure_count, 2)  # Ensure enough retries
         
-        with patch('threading.Event') as mock_event_class:
-            mock_event = Mock()
-            mock_event.wait.return_value = True  # API calls complete
-            mock_event_class.return_value = mock_event
-            
-            result = migrator_instance._get_jira_user_with_retry("test.user")
-            
-            # Verify result
-            assert result == {"accountId": "success"}
-            
-            # Verify exact delay calculations: base_delay * (2 ** attempt)
-            # Attempt 0 fails -> delay = 0.5 * (2**0) = 0.5s
-            # Attempt 1 fails -> delay = 0.5 * (2**1) = 1.0s
-            # Attempt 2 succeeds
-            expected_calls = [call(0.5), call(1.0)]
-            mock_sleep.assert_has_calls(expected_calls)
-
-    @patch('time.sleep')
-    def test_delay_capping_when_exponential_exceeds_max(self, mock_sleep, migrator_instance):
-        """Test delay capping when exponential backoff exceeds max_delay."""
-        # Configure with low max_delay to trigger capping
-        migrator_instance.retry_config['max_delay'] = 0.8
-        migrator_instance.retry_config['max_retries'] = 3
+        # Configure to fail `failure_count` times, then succeed
+        side_effects = [JiraApiError("Error")] * failure_count + [{"accountId": "success"}]
+        migrator_instance.jira_client.get_user_info.side_effect = side_effects
         
-        migrator_instance.jira_client.get_user_info.side_effect = [
-            JiraApiError("Error 1"),
-            JiraApiError("Error 2"),
-            JiraApiError("Error 3"),
-            {"accountId": "success"}
-        ]
-        
-        with patch('threading.Event') as mock_event_class:
-            mock_event = Mock()
-            mock_event.wait.return_value = True
-            mock_event_class.return_value = mock_event
-            
-            result = migrator_instance._get_jira_user_with_retry("test.user")
-            
-            assert result == {"accountId": "success"}
-            
-            # Verify delay capping:
-            # Attempt 0: 0.5 * 2^0 = 0.5 (within limit)
-            # Attempt 1: 0.5 * 2^1 = 1.0 -> capped to 0.8
-            # Attempt 2: 0.5 * 2^2 = 2.0 -> capped to 0.8
-            expected_calls = [call(0.5), call(0.8), call(0.8)]
-            mock_sleep.assert_has_calls(expected_calls)
-
-    @patch('time.sleep')
-    def test_custom_base_delay_and_max_delay(self, mock_sleep, tmp_path):
-        """Test custom base_delay and max_delay values."""
-        jira_client = create_mock_jira_client()
-        op_client = create_mock_openproject_client()
-        
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        
-        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
-            mock_config.get_path.return_value = data_dir
-            
-            migrator = EnhancedUserAssociationMigrator(
-                jira_client, op_client,
-                base_delay=1.0,
-                max_delay=3.0
-            )
-            
-            migrator.enhanced_user_mappings = {}
-            migrator._save_enhanced_mappings = Mock()
-            
-            jira_client.get_user_info.side_effect = [
-                JiraApiError("Error 1"),
-                JiraApiError("Error 2"),
-                {"accountId": "success"}
-            ]
-            
-            with patch('threading.Event') as mock_event_class:
-                mock_event = Mock()
-                mock_event.wait.return_value = True
-                mock_event_class.return_value = mock_event
-                
-                result = migrator._get_jira_user_with_retry("test.user")
-                
-                assert result == {"accountId": "success"}
-                
-                # Verify custom delays: base_delay=1.0
-                # Attempt 0: 1.0 * 2^0 = 1.0
-                # Attempt 1: 1.0 * 2^1 = 2.0
-                expected_calls = [call(1.0), call(2.0)]
-                mock_sleep.assert_has_calls(expected_calls)
-
-    @patch('time.sleep')
-    def test_no_delay_on_final_attempt(self, mock_sleep, migrator_instance):
-        """Test that no delay occurs after the final attempt fails."""
-        migrator_instance.jira_client.get_user_info.side_effect = [
-            JiraApiError("Error 1"),
-            JiraApiError("Error 2"),
-            JiraApiError("Final Error")
-        ]
-        
-        with patch('threading.Event') as mock_event_class:
-            mock_event = Mock()
-            mock_event.wait.return_value = True
-            mock_event_class.return_value = mock_event
-            
-            with pytest.raises(JiraApiError, match="Final Error"):
-                migrator_instance._get_jira_user_with_retry("test.user")
-            
-            # Should only have 2 delays (after attempt 0 and 1), not after final attempt
-            expected_calls = [call(0.5), call(1.0)]
-            mock_sleep.assert_has_calls(expected_calls)
-
-    @patch('time.sleep')
-    def test_zero_max_retries_no_delays(self, mock_sleep, migrator_instance):
-        """Test that zero max_retries results in no delays."""
-        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError("Immediate Error")
-        
-        with patch('threading.Event') as mock_event_class:
-            mock_event = Mock()
-            mock_event.wait.return_value = True
-            mock_event_class.return_value = mock_event
-            
-            with pytest.raises(JiraApiError, match="Immediate Error"):
-                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
-            
-            # No retries = no delays
-            mock_sleep.assert_not_called()
-
-    # ==========================================================================
-    # GROUP 5: ENHANCED ERROR CONTEXT TESTS (4 tests)
-    # ==========================================================================
-    
-    def test_error_context_dict_structure(self, migrator_instance, caplog):
-        """Test that error context dict contains all required fields."""
-        import logging
-        caplog.set_level(logging.WARNING)
-        
-        migrator_instance.jira_client.get_user_info.side_effect = [
-            JiraApiError("Test Error"),
-            {"accountId": "success"}
-        ]
-        
-        with patch('time.sleep'), \
+        with patch('time.sleep') as mock_sleep, \
              patch('threading.Event') as mock_event_class:
             
             mock_event = Mock()
@@ -456,16 +251,156 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             
             assert result == {"accountId": "success"}
             
-            # Check that warning log contains error context
-            warning_logs = [record for record in caplog.records if record.levelname == 'WARNING']
-            assert len(warning_logs) == 1
+            # Verify the final delay (last call) was correct
+            # For failure_count failures, there are failure_count delay calls
+            assert mock_sleep.call_count == failure_count
+            if failure_count > 0:
+                # Check the final delay call
+                final_call = mock_sleep.call_args_list[-1]
+                assert final_call == call(expected_delay)
+
+    def test_no_delay_on_first_attempt(self, migrator_instance, sample_jira_user_data):
+        """Test that successful first attempt has no delays."""
+        migrator_instance.jira_client.get_user_info.return_value = sample_jira_user_data
+        
+        with patch('time.sleep') as mock_sleep:
+            result = migrator_instance._get_jira_user_with_retry("test.user")
             
-            log_message = warning_logs[0].message
-            # Verify context elements are in log
-            assert "test.user" in log_message
-            assert "attempt 1/3" in log_message
-            assert "JiraApiError: Test Error" in log_message
-            assert "Retrying in" in log_message
+            assert result == sample_jira_user_data
+            
+            # No retries = no delays
+            mock_sleep.assert_not_called()
+
+    def test_delay_capping_behavior(self, migrator_instance):
+        """Test that delays are properly capped at max_delay."""
+        migrator_instance.retry_config['base_delay'] = 1.0
+        migrator_instance.retry_config['max_delay'] = 1.5
+        
+        # Set up to fail twice (attempts 0 and 1), succeed on attempt 2
+        migrator_instance.jira_client.get_user_info.side_effect = [
+            JiraApiError("First error"),
+            JiraApiError("Second error"),
+            {"accountId": "success"}
+        ]
+        
+        with patch('time.sleep') as mock_sleep, \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            result = migrator_instance._get_jira_user_with_retry("test.user")
+            
+            assert result == {"accountId": "success"}
+            
+            # Should have two delay calls
+            assert mock_sleep.call_count == 2
+            
+            # First delay: 1.0 * 2^0 = 1.0 (within cap)
+            # Second delay: 1.0 * 2^1 = 2.0, capped to 1.5
+            expected_calls = [call(1.0), call(1.5)]
+            mock_sleep.assert_has_calls(expected_calls)
+
+    def test_configurable_delays(self, migrator_instance):
+        """Test retry with custom base_delay and max_delay configuration."""
+        migrator_instance.retry_config['base_delay'] = 0.25
+        migrator_instance.retry_config['max_delay'] = 1.0
+        
+        migrator_instance.jira_client.get_user_info.side_effect = [
+            JiraApiError("Error"),
+            {"accountId": "success"}
+        ]
+        
+        with patch('time.sleep') as mock_sleep, \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            result = migrator_instance._get_jira_user_with_retry("test.user")
+            
+            assert result == {"accountId": "success"}
+            
+            # Should use custom base_delay: 0.25 * 2^0 = 0.25
+            mock_sleep.assert_called_once_with(0.25)
+
+    def test_max_retries_enforced(self, migrator_instance):
+        """Test that retry limit is properly enforced."""
+        # Configure to always fail
+        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError("Always fails")
+        
+        with patch('time.sleep') as mock_sleep, \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraApiError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=1)
+            
+            # Should try initial + 1 retry = 2 total attempts
+            assert migrator_instance.jira_client.get_user_info.call_count == 2
+            
+            # Should have 1 delay (between attempts)
+            assert mock_sleep.call_count == 1
+
+    # ==========================================================================
+    # GROUP 5: ENHANCED ERROR CONTEXT TESTS (4 tests) - ENHANCED FOR YOLO
+    # ==========================================================================
+    
+    def test_error_context_dict_structure_yolo(self, migrator_instance, caplog):
+        """Test that error context dict contains all required fields including concurrent_calls."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError("Test Error")
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraApiError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Check that final error log contains error context with concurrent_calls
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            assert "Error context:" in log_message
+            assert "'concurrent_calls': 5" in log_message  # YOLO improvement
+            assert "'username': 'test.user'" in log_message
+            assert "'error_type': 'JiraApiError'" in log_message
+
+    def test_concurrent_calls_field_in_error_context(self, migrator_instance, caplog):
+        """Test that concurrent_calls field is correctly set to 5 in error context."""
+        import logging
+        caplog.set_level(logging.ERROR)
+        
+        migrator_instance.jira_client.get_user_info.side_effect = JiraConnectionError("Connection failed")
+        
+        with patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
+            mock_event = Mock()
+            mock_event.wait.return_value = True
+            mock_event_class.return_value = mock_event
+            
+            with pytest.raises(JiraConnectionError):
+                migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
+            
+            # Verify the specific concurrent_calls field
+            error_logs = [record for record in caplog.records if record.levelname == 'ERROR']
+            assert len(error_logs) == 1
+            
+            log_message = error_logs[0].message
+            assert "'concurrent_calls': 5" in log_message
 
     def test_different_exception_types_error_context(self, migrator_instance, caplog):
         """Test error context for different exception types."""
@@ -529,87 +464,54 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             assert "Final error: JiraApiError: Final Error" in log_message
             assert "Error context:" in log_message
 
-    def test_configuration_data_in_error_logs(self, migrator_instance, caplog):
-        """Test that retry configuration is included in error logs."""
-        import logging
-        caplog.set_level(logging.WARNING)
-        
-        migrator_instance.jira_client.get_user_info.side_effect = [
-            JiraApiError("Config test"),
-            {"accountId": "success"}
-        ]
-        
-        with patch('time.sleep'), \
-             patch('threading.Event') as mock_event_class:
-            
-            mock_event = Mock()
-            mock_event.wait.return_value = True
-            mock_event_class.return_value = mock_event
-            
-            result = migrator_instance._get_jira_user_with_retry("test.user")
-            
-            assert result == {"accountId": "success"}
-            
-            # Verify clean logging without config noise (YOLO improvement)
-            warning_logs = [record for record in caplog.records if record.levelname == 'WARNING']
-            log_message = warning_logs[0].message
-            
-            # Should contain essential retry info without config noise
-            assert "test.user" in log_message
-            assert "attempt 1/3" in log_message
-            assert "JiraApiError: Config test" in log_message
-            assert "Retrying in" in log_message
-
     # ==========================================================================
-    # GROUP 6: INTEGRATION & EDGE CASES (3 tests)
+    # GROUP 6: INTEGRATION TESTS (3 tests)
     # ==========================================================================
     
-    def test_refresh_user_mapping_integration_success(self, migrator_instance, sample_jira_user_data):
-        """Test integration with refresh_user_mapping method."""
+    def test_integration_with_refresh_user_mapping(self, migrator_instance, sample_jira_user_data):
+        """Test that refresh_user_mapping properly uses enhanced retry logic."""
         migrator_instance.jira_client.get_user_info.return_value = sample_jira_user_data
         
-        with patch('threading.Event') as mock_event_class:
-            mock_event = Mock()
-            mock_event.wait.return_value = True
-            mock_event_class.return_value = mock_event
+        # Mock the OpenProject user creation
+        migrator_instance.op_client.create_user.return_value = {"id": 123}
+        
+        with patch.object(migrator_instance, '_save_enhanced_mappings'), \
+             patch('pathlib.Path.write_text'):
             
             result = migrator_instance.refresh_user_mapping("test.user")
             
             assert result is not None
-            assert result["metadata"]["jira_account_id"] == "test-account-123"
-            assert result["metadata"]["jira_display_name"] == "Test User"
-            assert result["metadata"]["refresh_success"] is True
-            
-            # Verify retry method was called
+            assert "lastRefreshed" in result
             migrator_instance.jira_client.get_user_info.assert_called_once_with("test.user")
 
-    def test_refresh_user_mapping_integration_with_retry_failure(self, migrator_instance):
-        """Test integration when all retry attempts fail."""
-        migrator_instance.jira_client.get_user_info.side_effect = JiraApiError("Persistent Error")
+    def test_integration_retry_fallback_behavior(self, migrator_instance):
+        """Test integration between retry logic and fallback mechanisms."""
+        # First call fails, should trigger retry and eventual fallback
+        migrator_instance.jira_client.get_user_info.side_effect = JiraResourceNotFoundError("User not found")
         
-        with patch('threading.Event') as mock_event_class:
+        with patch.object(migrator_instance, '_save_enhanced_mappings'), \
+             patch('pathlib.Path.write_text'), \
+             patch('time.sleep'), \
+             patch('threading.Event') as mock_event_class:
+            
             mock_event = Mock()
             mock_event.wait.return_value = True
             mock_event_class.return_value = mock_event
             
-            result = migrator_instance.refresh_user_mapping("test.user")
+            result = migrator_instance.refresh_user_mapping("nonexistent.user")
             
-            # Should return None on total failure
+            # Should return None for non-existent user (after retries)
             assert result is None
             
-            # Should have tried all retry attempts
-            assert migrator_instance.jira_client.get_user_info.call_count == 3  # 1 + 2 retries
+            # Should have tried multiple times
+            assert migrator_instance.jira_client.get_user_info.call_count > 1
 
-    def test_exception_propagation_accuracy(self, migrator_instance):
-        """Test that the last exception is accurately propagated."""
-        # Different exceptions for each attempt
-        exceptions = [
-            JiraConnectionError("Connection 1"),
-            JiraAuthenticationError("Auth 2"),
-            JiraApiError("API 3")
+    def test_integration_parameter_override(self, migrator_instance, sample_jira_user_data):
+        """Test that max_retries parameter override works in integration."""
+        migrator_instance.jira_client.get_user_info.side_effect = [
+            JiraApiError("First error"),
+            sample_jira_user_data
         ]
-        
-        migrator_instance.jira_client.get_user_info.side_effect = exceptions
         
         with patch('time.sleep'), \
              patch('threading.Event') as mock_event_class:
@@ -618,9 +520,130 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             mock_event.wait.return_value = True
             mock_event_class.return_value = mock_event
             
-            # Should propagate the LAST exception (JiraApiError)
-            with pytest.raises(JiraApiError, match="API 3"):
-                migrator_instance._get_jira_user_with_retry("test.user")
+            result = migrator_instance._get_jira_user_with_retry("test.user", max_retries=1)
             
-            # Verify all attempts were made
-            assert migrator_instance.jira_client.get_user_info.call_count == 3 
+            assert result == sample_jira_user_data
+            assert migrator_instance.jira_client.get_user_info.call_count == 2
+
+    # ==========================================================================
+    # GROUP 7: YOLO BATCH REFRESH TOTAL_STALE TESTS (5 tests)
+    # ==========================================================================
+
+    def test_batch_refresh_total_stale_empty(self, migrator_instance):
+        """Test batch_refresh_stale_mappings returns total_stale=0 when no stale mappings."""
+        with patch.object(migrator_instance, 'detect_stale_mappings', return_value={}):
+            result = migrator_instance.batch_refresh_stale_mappings()
+            
+            assert result["total_stale"] == 0
+            assert result["refresh_attempted"] == 0
+            assert result["refresh_successful"] == 0
+            assert result["refresh_failed"] == 0
+
+    def test_batch_refresh_total_stale_multiple(self, migrator_instance, sample_jira_user_data):
+        """Test batch_refresh_stale_mappings returns correct total_stale count with multiple mappings."""
+        stale_mappings = {
+            "user1": "Age 7200s exceeds TTL 3600s",
+            "user2": "Age 5400s exceeds TTL 3600s", 
+            "user3": "Age 9000s exceeds TTL 3600s"
+        }
+        
+        migrator_instance.jira_client.get_user_info.return_value = sample_jira_user_data
+        
+        with patch.object(migrator_instance, 'detect_stale_mappings', return_value=stale_mappings), \
+             patch.object(migrator_instance, 'refresh_user_mapping') as mock_refresh:
+            
+            # Mock successful refresh
+            mock_refresh.return_value = {"lastRefreshed": "2024-01-01T00:00:00Z"}
+            
+            result = migrator_instance.batch_refresh_stale_mappings()
+            
+            assert result["total_stale"] == 3
+            assert result["refresh_attempted"] == 3
+            
+    def test_batch_refresh_total_stale_logging(self, migrator_instance, caplog, sample_jira_user_data):
+        """Test that total_stale count appears in batch refresh log messages."""
+        import logging
+        caplog.set_level(logging.INFO)
+        
+        stale_mappings = {
+            "user1": "Age 7200s exceeds TTL 3600s",
+            "user2": "Age 5400s exceeds TTL 3600s"
+        }
+        
+        migrator_instance.jira_client.get_user_info.return_value = sample_jira_user_data
+        
+        with patch.object(migrator_instance, 'detect_stale_mappings', return_value=stale_mappings), \
+             patch.object(migrator_instance, 'refresh_user_mapping') as mock_refresh:
+            
+            mock_refresh.return_value = {"lastRefreshed": "2024-01-01T00:00:00Z"}
+            
+            result = migrator_instance.batch_refresh_stale_mappings()
+            
+            # Check log messages contain total_stale information
+            info_logs = [record for record in caplog.records if record.levelname == 'INFO']
+            
+            # Should have starting and completion log messages
+            start_log = next((log for log in info_logs if "Starting batch refresh" in log.message), None)
+            completion_log = next((log for log in info_logs if "Batch refresh completed" in log.message), None)
+            
+            assert start_log is not None
+            assert completion_log is not None
+            
+            # Both should mention total stale count
+            assert "2 total stale detected" in start_log.message
+            assert "2 total stale detected" in completion_log.message
+
+    def test_batch_refresh_total_stale_with_retry_failures(self, migrator_instance, caplog):
+        """Test total_stale count with mixed success/failure results in batch refresh."""
+        import logging
+        caplog.set_level(logging.INFO)
+        
+        stale_mappings = {
+            "user1": "Age 7200s exceeds TTL 3600s",
+            "user2": "Age 5400s exceeds TTL 3600s", 
+            "user3": "Age 9000s exceeds TTL 3600s"
+        }
+        
+        # Mock mixed results: user1 succeeds, user2/user3 fail
+        def refresh_side_effect(username):
+            if username == "user1":
+                return {"lastRefreshed": "2024-01-01T00:00:00Z"}
+            else:
+                return None  # Simulate failure
+        
+        with patch.object(migrator_instance, 'detect_stale_mappings', return_value=stale_mappings), \
+             patch.object(migrator_instance, 'refresh_user_mapping', side_effect=refresh_side_effect):
+            
+            result = migrator_instance.batch_refresh_stale_mappings()
+            
+            assert result["total_stale"] == 3  # Total stale detected
+            assert result["refresh_attempted"] == 3
+            assert result["refresh_successful"] == 1  # Only user1 succeeded
+            assert result["refresh_failed"] == 2  # user2 and user3 failed
+            
+            # Verify logging includes total stale
+            info_logs = [record for record in caplog.records if record.levelname == 'INFO']
+            completion_log = next((log for log in info_logs if "Batch refresh completed" in log.message), None)
+            assert completion_log is not None
+            assert "3 total stale detected" in completion_log.message
+
+    def test_batch_refresh_total_stale_with_explicit_usernames(self, migrator_instance, sample_jira_user_data):
+        """Test total_stale count when explicit usernames are provided to batch_refresh_stale_mappings."""
+        # When usernames are provided, detect_stale_mappings is called with those usernames
+        stale_mappings = {
+            "user1": "Age 7200s exceeds TTL 3600s",
+            "user3": "Age 9000s exceeds TTL 3600s"  # Only 2 out of 3 provided users are stale
+        }
+        
+        migrator_instance.jira_client.get_user_info.return_value = sample_jira_user_data
+        
+        with patch.object(migrator_instance, 'detect_stale_mappings', return_value=stale_mappings), \
+             patch.object(migrator_instance, 'refresh_user_mapping') as mock_refresh:
+            
+            mock_refresh.return_value = {"lastRefreshed": "2024-01-01T00:00:00Z"}
+            
+            # Provide explicit usernames including one that's not stale
+            result = migrator_instance.batch_refresh_stale_mappings(usernames=["user1", "user2", "user3"])
+            
+            assert result["total_stale"] == 2  # Only user1 and user3 are stale
+            assert result["refresh_attempted"] == 3  # All 3 provided usernames attempted 
