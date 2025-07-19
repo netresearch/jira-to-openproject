@@ -19,13 +19,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, TypedDict, Optional
 from urllib.parse import quote
-from threading import Lock, Semaphore, Timer, Event
+from threading import Lock, Semaphore
 
 from src import config
 from src.clients.jira_client import JiraClient, JiraApiError
 from src.clients.openproject_client import OpenProjectClient
 from src.utils.validators import validate_jira_key
 
+
+# Constants for error message handling (YOLO FIX: extracted magic numbers)
+ERROR_MSG_MAX_LENGTH = 100
+ERROR_MSG_TRUNCATE_LENGTH = 97
 
 # Pre-compiled regex patterns for error message sanitization (ReDoS protection)
 JWT_PATTERN = re.compile(r'[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}')
@@ -186,7 +190,6 @@ class EnhancedUserAssociationMigrator:
         
         # Initialize rate limiting
         self._refresh_tracker = ThreadSafeConcurrentTracker(self.MAX_CONCURRENT_REFRESHES)
-        self._refresh_lock = Lock()
         
         # Configurable retry settings
         self.retry_config = {
@@ -198,6 +201,28 @@ class EnhancedUserAssociationMigrator:
         
         # Validate retry configuration
         self._validate_retry_config()
+
+    def _sanitize_error_message(self, error_msg: str) -> str:
+        """Sanitize error message to prevent sensitive data exposure.
+        
+        YOLO FIX: Extracted duplicated sanitization logic to helper method.
+        
+        Args:
+            error_msg: Raw error message to sanitize
+            
+        Returns:
+            Sanitized error message with sensitive data redacted
+        """
+        # Truncate long messages
+        if len(error_msg) > ERROR_MSG_MAX_LENGTH:
+            error_msg = error_msg[:ERROR_MSG_TRUNCATE_LENGTH] + "..."
+        
+        # Apply security patterns (ReDoS protection via pre-compiled regex)
+        error_msg = JWT_PATTERN.sub('[REDACTED]', error_msg)
+        error_msg = BASE64_PATTERN.sub('[REDACTED]', error_msg)
+        error_msg = URL_PATTERN.sub('[URL]', error_msg)
+        
+        return error_msg
 
     def _validate_retry_config(self) -> None:
         """Validate retry configuration parameters to prevent resource exhaustion."""
@@ -1011,15 +1036,8 @@ class EnhancedUserAssociationMigrator:
                 except Exception as e:
                     last_error = e
                     
-                    # Enhanced error context logging with pre-compiled patterns (FIXED: ReDoS protection)
-                    error_msg = str(e)
-                    if len(error_msg) > 100:
-                        error_msg = error_msg[:97] + "..."
-                    
-                    # Use pre-compiled patterns for security (FIXED: no redundant import)
-                    error_msg = JWT_PATTERN.sub('[REDACTED]', error_msg)
-                    error_msg = BASE64_PATTERN.sub('[REDACTED]', error_msg)
-                    error_msg = URL_PATTERN.sub('[URL]', error_msg)
+                    # Enhanced error context logging with helper method (YOLO FIX: no duplication)
+                    sanitized_error_msg = self._sanitize_error_message(str(e))
                     
                     # Get accurate concurrent call count (FIXED: thread-safe access)
                     concurrent_active = self._refresh_tracker.get_active_count()
@@ -1029,7 +1047,7 @@ class EnhancedUserAssociationMigrator:
                         'attempt': attempt + 1,
                         'total_attempts': retry_limit + 1,
                         'error_type': type(e).__name__,
-                        'error_message': error_msg,
+                        'error_message': sanitized_error_msg,
                         'concurrent_limit': self.MAX_CONCURRENT_REFRESHES,
                         'concurrent_active': concurrent_active
                     }
@@ -1039,13 +1057,8 @@ class EnhancedUserAssociationMigrator:
                         raw_delay = self.retry_config['base_delay'] * (2 ** attempt)
                         actual_delay = min(raw_delay, self.retry_config['max_delay'])
                         
-                        # Apply same sanitization as above for consistency
-                        sanitized_error = str(e)
-                        if len(sanitized_error) > 100:
-                            sanitized_error = sanitized_error[:97] + "..."
-                        sanitized_error = JWT_PATTERN.sub('[REDACTED]', sanitized_error)
-                        sanitized_error = BASE64_PATTERN.sub('[REDACTED]', sanitized_error)
-                        sanitized_error = URL_PATTERN.sub('[URL]', sanitized_error)
+                        # YOLO FIX: Use helper method for consistent sanitization
+                        sanitized_error = self._sanitize_error_message(str(e))
 
                         self.logger.warning(
                             f"Jira user lookup for '{username}' failed on attempt {attempt + 1}/{retry_limit + 1}. "
@@ -1055,13 +1068,8 @@ class EnhancedUserAssociationMigrator:
                         # CRITICAL FIX: Release semaphore during sleep to avoid blocking other threads
                         pass  # Semaphore is automatically released at end of 'with' block
                     else:
-                        # Final attempt failed - apply same sanitization as above for consistency
-                        sanitized_error = str(e)
-                        if len(sanitized_error) > 100:
-                            sanitized_error = sanitized_error[:97] + "..."
-                        sanitized_error = JWT_PATTERN.sub('[REDACTED]', sanitized_error)
-                        sanitized_error = BASE64_PATTERN.sub('[REDACTED]', sanitized_error)
-                        sanitized_error = URL_PATTERN.sub('[URL]', sanitized_error)
+                        # YOLO FIX: Use helper method for consistent sanitization
+                        sanitized_error = self._sanitize_error_message(str(e))
 
                         # YOLO FIX: Include error context directly in log message
                         self.logger.error(
