@@ -465,7 +465,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             assert "test.user" in log_message
             assert "attempt 1/3" in log_message
             assert "JiraApiError: Test Error" in log_message
-            assert "Config:" in log_message
+            assert "Retrying in" in log_message
 
     def test_different_exception_types_error_context(self, migrator_instance, caplog):
         """Test error context for different exception types."""
@@ -550,15 +550,15 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             
             assert result == {"accountId": "success"}
             
-            # Verify config is in log
+            # Verify clean logging without config noise (YOLO improvement)
             warning_logs = [record for record in caplog.records if record.levelname == 'WARNING']
             log_message = warning_logs[0].message
             
-            # Should contain retry config details
-            assert "'max_retries': 2" in log_message
-            assert "'base_delay': 0.5" in log_message
-            assert "'max_delay': 2.0" in log_message
-            assert "'request_timeout': 10.0" in log_message
+            # Should contain essential retry info without config noise
+            assert "test.user" in log_message
+            assert "attempt 1/3" in log_message
+            assert "JiraApiError: Config test" in log_message
+            assert "Retrying in" in log_message
 
     # ==========================================================================
     # GROUP 6: INTEGRATION & EDGE CASES (3 tests)

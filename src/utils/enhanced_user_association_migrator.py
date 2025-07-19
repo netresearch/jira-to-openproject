@@ -966,7 +966,6 @@ class EnhancedUserAssociationMigrator:
                         'total_attempts': retry_limit + 1,
                         'error_type': type(e).__name__,
                         'error_message': str(e),
-                        'retry_config': self.retry_config
                     }
                     
                     if attempt < retry_limit:  # Not the final attempt
@@ -976,8 +975,7 @@ class EnhancedUserAssociationMigrator:
                         
                         self.logger.warning(
                             f"Jira user lookup for '{username}' failed on attempt {attempt + 1}/{retry_limit + 1}. "
-                            f"Error: {type(e).__name__}: {e}. Retrying in {actual_delay}s... "
-                            f"Config: {self.retry_config}"
+                            f"Error: {type(e).__name__}: {e}. Retrying in {actual_delay}s..."
                         )
                         
                         time.sleep(actual_delay)
@@ -1082,8 +1080,8 @@ class EnhancedUserAssociationMigrator:
             
             try:
                 self._save_enhanced_mappings()
-            except Exception as save_error:
-                self.logger.error("Failed to save error mapping for %s: %s", username, save_error)
+            except (IOError, json.JSONDecodeError, ValueError) as e:
+                self.logger.error("Failed to save error mapping for %s: %s", username, e)
             
             return None
 
@@ -1410,7 +1408,7 @@ class EnhancedUserAssociationMigrator:
                 json.dump(serializable_mappings, f, indent=2)
             
             self.logger.debug("Saved enhanced user mappings to %s", enhanced_mapping_file)
-        except (IOError, json.JSONEncodeError, ValueError) as e:
+        except (IOError, json.JSONDecodeError, ValueError) as e:
             self.logger.error("Failed to save enhanced user mappings due to file/JSON error: %s", e)
         except Exception as e:
             self.logger.exception("Unexpected error saving enhanced user mappings: %s", e)
