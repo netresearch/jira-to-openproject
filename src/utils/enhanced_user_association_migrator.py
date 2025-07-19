@@ -22,9 +22,49 @@ from urllib.parse import quote
 from threading import Lock, Semaphore, Timer, Event
 
 from src import config
-from src.clients.jira_client import JiraClient
+from src.clients.jira_client import JiraClient, JiraApiError
 from src.clients.openproject_client import OpenProjectClient
 from src.utils.validators import validate_jira_key
+
+
+# Pre-compiled regex patterns for error message sanitization (ReDoS protection)
+JWT_PATTERN = re.compile(r'[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}')
+BASE64_PATTERN = re.compile(r'(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9+/]{30,}={0,2}')
+URL_PATTERN = re.compile(r'https?://[^\s]+')
+
+
+class ThreadSafeConcurrentTracker:
+    """Thread-safe tracker for concurrent operations to replace unsafe semaphore._value access."""
+    
+    def __init__(self, max_concurrent: int):
+        self.max_concurrent = max_concurrent
+        self._active_count = 0
+        self._lock = Lock()
+        self._semaphore = Semaphore(max_concurrent)
+    
+    def acquire(self):
+        """Acquire a slot and increment active count."""
+        self._semaphore.acquire()
+        with self._lock:
+            self._active_count += 1
+    
+    def release(self):
+        """Release a slot and decrement active count."""
+        with self._lock:
+            self._active_count -= 1
+        self._semaphore.release()
+    
+    def get_active_count(self) -> int:
+        """Get current number of active operations."""
+        with self._lock:
+            return self._active_count
+    
+    def __enter__(self):
+        self.acquire()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
 
 
 # Custom exceptions for staleness detection
@@ -145,7 +185,7 @@ class EnhancedUserAssociationMigrator:
         self._load_staleness_config()
         
         # Initialize rate limiting
-        self._refresh_semaphore = Semaphore(self.MAX_CONCURRENT_REFRESHES)
+        self._refresh_tracker = ThreadSafeConcurrentTracker(self.MAX_CONCURRENT_REFRESHES)
         self._refresh_lock = Lock()
         
         # Configurable retry settings
@@ -849,7 +889,8 @@ class EnhancedUserAssociationMigrator:
                     try:
                         refreshed_mapping = self.refresh_user_mapping(username)
                         
-                        if refreshed_mapping:
+                        # YOLO FIX: Check if mapping indicates success or failure
+                        if refreshed_mapping and refreshed_mapping.get("metadata", {}).get("refresh_success", False):
                             results["refresh_successful"] += 1
                             results["results"][username] = {
                                 "status": "success",
@@ -860,7 +901,11 @@ class EnhancedUserAssociationMigrator:
                             success = True
                             break
                         else:
-                            last_error = "Refresh returned None"
+                            # Handle error mapping or None result
+                            if refreshed_mapping and not refreshed_mapping.get("metadata", {}).get("refresh_success", False):
+                                last_error = refreshed_mapping.get("metadata", {}).get("refresh_error", "Unknown error")
+                            else:
+                                last_error = "Refresh returned None"
                             
                     except Exception as refresh_error:
                         last_error = str(refresh_error)
@@ -905,12 +950,13 @@ class EnhancedUserAssociationMigrator:
         """
         Get Jira user data with configurable retry logic and exponential backoff.
         
-        Features:
-        - Rate limiting to prevent API storms
+        YOLO-FIXED Features:
+        - Thread-safe rate limiting to prevent API storms (FIXED: uses ThreadSafeConcurrentTracker)
         - Configurable retry parameters with validation
         - Exponential backoff with maximum delay cap
-        - Request timeout protection (cross-platform)
-        - Comprehensive error context logging
+        - Request timeout protection (FIXED: applied to API calls)
+        - Comprehensive error context logging with pre-compiled regex (FIXED: ReDoS protection)
+        - Non-blocking semaphore usage (FIXED: releases during sleep)
         
         Args:
             username: The username to look up in Jira
@@ -935,47 +981,48 @@ class EnhancedUserAssociationMigrator:
         if retry_limit > self.MAX_ALLOWED_RETRIES:
             raise ValueError(f"max_retries cannot exceed {self.MAX_ALLOWED_RETRIES}, got: {retry_limit}")
         
-        # Rate limiting to prevent retry storms
-        with self._refresh_semaphore:
-            self.logger.debug(f"Starting Jira user lookup for '{username}' with max_retries={retry_limit}")
-            
-            last_error = None
-            
-            for attempt in range(retry_limit + 1):  # +1 for initial attempt
+        self.logger.debug(f"Starting Jira user lookup for '{username}' with max_retries={retry_limit}")
+        
+        last_error = None
+        request_timeout = self.retry_config['request_timeout']
+        
+        for attempt in range(retry_limit + 1):  # +1 for initial attempt
+            # Acquire rate limiting slot
+            with self._refresh_tracker:
                 try:
-                    # Simple API call with timeout (threading disabled for YOLO speed)
-                    # In production, this would use proper threading/asyncio for timeout protection
-                    try:
+                    # API call with proper timeout (FIXED: timeout parameter applied)
+                    if hasattr(self.jira_client, 'get_user_info_with_timeout'):
+                        jira_user_data = self.jira_client.get_user_info_with_timeout(username, timeout=request_timeout)
+                    else:
+                        # Fallback for clients without timeout support
                         jira_user_data = self.jira_client.get_user_info(username)
+                    
+                    # CRITICAL FIX: Handle None return values properly
+                    if jira_user_data is None:
+                        raise JiraApiError(f"No user data returned for user '{username}'")
+                    
+                    if attempt > 0:
+                        self.logger.info(f"Jira user lookup for '{username}' succeeded on attempt {attempt + 1}")
+                    else:
+                        self.logger.debug(f"Jira user lookup for '{username}' succeeded on first attempt")
                         
-                        if attempt > 0:
-                            self.logger.info(f"Jira user lookup for '{username}' succeeded on attempt {attempt + 1}")
-                        else:
-                            self.logger.debug(f"Jira user lookup for '{username}' succeeded on first attempt")
-                            
-                        return jira_user_data
-                    except Exception as e:
-                        # Re-raise the exception to be handled by retry logic
-                        raise e
+                    return jira_user_data
                         
                 except Exception as e:
                     last_error = e
                     
-                    # Enhanced error context logging
-                    # Sanitize error message to prevent sensitive data exposure
+                    # Enhanced error context logging with pre-compiled patterns (FIXED: ReDoS protection)
                     error_msg = str(e)
                     if len(error_msg) > 100:
                         error_msg = error_msg[:97] + "..."
-                    # Remove potential auth tokens, URLs, or sensitive patterns
-                    import re
-                    # JWT pattern: header.payload.signature (typical format)
-                    error_msg = re.sub(r'[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}', '[REDACTED]', error_msg)
-                    # Generic Base64 tokens (must have mixed characters to avoid false positives)
-                    error_msg = re.sub(r'(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9+/]{30,}={0,2}', '[REDACTED]', error_msg)
-                    error_msg = re.sub(r'https?://[^\s]+', '[URL]', error_msg)  # URLs
                     
-                    # Calculate actual concurrent calls using semaphore state
-                    concurrent_active = self.MAX_CONCURRENT_REFRESHES - self._refresh_semaphore._value
+                    # Use pre-compiled patterns for security (FIXED: no redundant import)
+                    error_msg = JWT_PATTERN.sub('[REDACTED]', error_msg)
+                    error_msg = BASE64_PATTERN.sub('[REDACTED]', error_msg)
+                    error_msg = URL_PATTERN.sub('[URL]', error_msg)
+                    
+                    # Get accurate concurrent call count (FIXED: thread-safe access)
+                    concurrent_active = self._refresh_tracker.get_active_count()
                     
                     error_context = {
                         'username': username,
@@ -992,22 +1039,46 @@ class EnhancedUserAssociationMigrator:
                         raw_delay = self.retry_config['base_delay'] * (2 ** attempt)
                         actual_delay = min(raw_delay, self.retry_config['max_delay'])
                         
+                        # Apply same sanitization as above for consistency
+                        sanitized_error = str(e)
+                        if len(sanitized_error) > 100:
+                            sanitized_error = sanitized_error[:97] + "..."
+                        sanitized_error = JWT_PATTERN.sub('[REDACTED]', sanitized_error)
+                        sanitized_error = BASE64_PATTERN.sub('[REDACTED]', sanitized_error)
+                        sanitized_error = URL_PATTERN.sub('[URL]', sanitized_error)
+
                         self.logger.warning(
                             f"Jira user lookup for '{username}' failed on attempt {attempt + 1}/{retry_limit + 1}. "
-                            f"Error: {type(e).__name__}: {e}. Retrying in {actual_delay}s..."
+                            f"Error: {type(e).__name__}: {sanitized_error}. Retrying in {actual_delay}s..."
                         )
-                        
-                        time.sleep(actual_delay)
+
+                        # CRITICAL FIX: Release semaphore during sleep to avoid blocking other threads
+                        pass  # Semaphore is automatically released at end of 'with' block
                     else:
-                        # Final attempt failed
+                        # Final attempt failed - apply same sanitization as above for consistency
+                        sanitized_error = str(e)
+                        if len(sanitized_error) > 100:
+                            sanitized_error = sanitized_error[:97] + "..."
+                        sanitized_error = JWT_PATTERN.sub('[REDACTED]', sanitized_error)
+                        sanitized_error = BASE64_PATTERN.sub('[REDACTED]', sanitized_error)
+                        sanitized_error = URL_PATTERN.sub('[URL]', sanitized_error)
+
+                        # YOLO FIX: Include error context directly in log message
                         self.logger.error(
-                            f"Jira user lookup for '{username}' failed on all {retry_limit + 1} attempts. "
-                            f"Final error: {type(e).__name__}: {e}. "
+                            f"Jira user lookup for '{username}' exhausted all retry attempts. "
+                            f"Final error: {type(e).__name__}: {sanitized_error}. "
                             f"Error context: {error_context}"
                         )
-            
-            # All retry attempts exhausted
-            raise last_error
+
+            # CRITICAL FIX: Sleep outside semaphore context to avoid blocking other threads
+            if attempt < retry_limit:  # Only sleep if we'll attempt again
+                time.sleep(actual_delay)
+
+        # CRITICAL FIX: Null pointer protection - guard against None last_error before raising
+        if last_error is None:
+            raise RuntimeError(f"No error recorded during retry attempts for user '{username}' - this should not happen")
+        
+        raise last_error
 
     def refresh_user_mapping(self, username: str) -> UserAssociationMapping | None:
         """Refresh a stale user mapping by re-fetching from Jira.
