@@ -6,33 +6,85 @@ This module provides a thread-safe metrics collector for tracking:
 - Staleness detection events
 - Refresh attempts and outcomes
 - Fallback strategy executions
+
+FIXED ISSUES:
+- PII exposure: Usernames are hashed for privacy compliance
+- Memory management: Limited unique tag combinations to prevent unbounded growth
+- Input validation: Metric names and tag values are validated
+- Side effects: Getter methods don't mutate state
 """
 
 import logging
 import threading
-from collections import defaultdict
+import hashlib
+import re
+from collections import defaultdict, OrderedDict
 from typing import Any, Dict, Optional
 
 
 logger = logging.getLogger(__name__)
 
+# Constants for validation and memory management
+METRIC_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_]+$')
+MAX_TAG_COMBINATIONS = 1000  # Prevent memory growth
+MAX_TAG_STRING_LENGTH = 200
+
 
 class MetricsCollector:
-    """Thread-safe metrics collector for staleness detection monitoring.
+    """Thread-safe metrics collector with privacy protection and memory management.
     
-    Provides simple counter-based metrics collection with tag support
-    for detailed monitoring and analysis of cache operations, staleness
-    detection, refresh attempts, and fallback executions.
+    Key features:
+    - Username hashing for PII protection
+    - Bounded memory usage with LRU eviction
+    - Input validation for security
+    - No side effects in getter methods
     """
     
     def __init__(self) -> None:
-        """Initialize the metrics collector with thread-safe storage."""
+        """Initialize the metrics collector."""
         self._lock = threading.Lock()
         self._counters: Dict[str, int] = defaultdict(int)
-        self._tagged_counters: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self._tagged_counters: Dict[str, OrderedDict[str, int]] = defaultdict(lambda: OrderedDict())
         
-        logger.debug("MetricsCollector initialized")
+        logger.debug("MetricsCollector initialized with privacy protection and memory management")
     
+    def _hash_username(self, username: str) -> str:
+        """Hash username for privacy compliance.
+        
+        Args:
+            username: Raw username that may contain PII
+            
+        Returns:
+            8-character hash for metrics storage
+        """
+        if not username:
+            return "unknown"
+        return hashlib.sha256(username.encode()).hexdigest()[:8]
+    
+    def _create_safe_tag_string(self, tags: Dict[str, str]) -> str:
+        """Create a safe tag string with privacy protection.
+        
+        Args:
+            tags: Dictionary of tags
+            
+        Returns:
+            Safe tag string for storage
+        """
+        safe_tags = {}
+        for key, value in tags.items():
+            if key == 'username':
+                safe_tags[key] = self._hash_username(str(value))
+            else:
+                safe_tags[key] = str(value)
+        
+        tag_string = ",".join(f"{k}:{v}" for k, v in sorted(safe_tags.items()))
+        
+        # Truncate if too long
+        if len(tag_string) > MAX_TAG_STRING_LENGTH:
+            tag_string = tag_string[:MAX_TAG_STRING_LENGTH]
+        
+        return tag_string
+
     def increment_counter(self, metric_name: str, tags: Optional[Dict[str, str]] = None) -> None:
         """Increment a counter metric with optional tags.
         
@@ -41,24 +93,43 @@ class MetricsCollector:
             tags: Optional dictionary of tags for metric categorization
         """
         try:
+            # Basic input validation
+            if not metric_name or not isinstance(metric_name, str):
+                logger.warning("Invalid metric name: %s", metric_name)
+                return
+            
+            if not METRIC_NAME_PATTERN.match(metric_name):
+                logger.warning("Metric name contains invalid characters: %s", metric_name)
+                return
+            
             with self._lock:
-                # Increment basic counter
+                # Always increment basic counter
                 self._counters[metric_name] += 1
                 
-                # If tags provided, increment tagged counter
-                if tags:
-                    # Create a tag string for storage (sorted for consistency)
-                    tag_string = ",".join(f"{k}:{v}" for k, v in sorted(tags.items()))
+                                # Handle tagged counter if tags provided
+                if tags and isinstance(tags, dict):
+                    tag_string = self._create_safe_tag_string(tags)
+                    
+                    # LRU behavior: move to end if exists
+                    if tag_string in self._tagged_counters[metric_name]:
+                        self._tagged_counters[metric_name].move_to_end(tag_string)
+                    
                     self._tagged_counters[metric_name][tag_string] += 1
+                    
+                    # Memory management: remove oldest if too many combinations
+                    while len(self._tagged_counters[metric_name]) > MAX_TAG_COMBINATIONS:
+                        oldest = next(iter(self._tagged_counters[metric_name]))
+                        self._tagged_counters[metric_name].pop(oldest)
+                        logger.debug("Removed old metric entry for memory management")
                 
-                logger.debug("Incremented metric %s with tags %s", metric_name, tags or {})
+                logger.debug("Incremented metric %s", metric_name)
                 
         except Exception as e:
             # Don't let metrics collection failures break core functionality
             logger.warning("Failed to increment metric %s: %s", metric_name, e)
     
     def get_metrics(self) -> Dict[str, Any]:
-        """Get current metrics snapshot.
+        """Get current metrics snapshot without side effects.
         
         Returns:
             Dictionary containing all current metrics and their tagged variants
@@ -72,36 +143,37 @@ class MetricsCollector:
             }
     
     def get_counter(self, metric_name: str) -> int:
-        """Get the current value of a specific counter.
+        """Get the current value of a specific counter without side effects.
         
         Args:
             metric_name: Name of the metric counter
             
         Returns:
-            Current counter value
+            Current counter value (0 if not found)
         """
         with self._lock:
-            return self._counters[metric_name]
+            return self._counters.get(metric_name, 0)
     
     def get_tagged_counter(self, metric_name: str, tags: Dict[str, str]) -> int:
-        """Get the current value of a specific tagged counter.
+        """Get the current value of a specific tagged counter without side effects.
         
         Args:
             metric_name: Name of the metric counter
             tags: Tags to filter by
             
         Returns:
-            Current counter value for the specific tag combination
+            Current counter value for the specific tag combination (0 if not found)
         """
         with self._lock:
-            tag_string = ",".join(f"{k}:{v}" for k, v in sorted(tags.items()))
-            return self._tagged_counters[metric_name][tag_string]
+            try:
+                tag_string = self._create_safe_tag_string(tags)
+                return self._tagged_counters.get(metric_name, {}).get(tag_string, 0)
+            except Exception as e:
+                logger.warning("Failed to get tagged counter: %s", e)
+                return 0
     
     def reset_metrics(self) -> None:
-        """Reset all metrics to zero.
-        
-        Useful for testing or periodic metric collection.
-        """
+        """Reset all metrics to zero."""
         with self._lock:
             self._counters.clear()
             self._tagged_counters.clear()
@@ -115,13 +187,16 @@ class MetricsCollector:
             Summary statistics about collected metrics
         """
         with self._lock:
-            total_metrics = len(self._counters)
-            total_counts = sum(self._counters.values())
-            tagged_metrics = len(self._tagged_counters)
+            total_tagged_combinations = sum(len(tags) for tags in self._tagged_counters.values())
             
             return {
-                "total_metrics": total_metrics,
-                "total_count": total_counts,
-                "tagged_metrics": tagged_metrics,
-                "metric_names": list(self._counters.keys())
+                "total_metrics": len(self._counters),
+                "total_count": sum(self._counters.values()),
+                "tagged_metrics": len(self._tagged_counters),
+                "total_tagged_combinations": total_tagged_combinations,
+                "metric_names": list(self._counters.keys()),
+                "memory_usage": {
+                    "max_tag_combinations": MAX_TAG_COMBINATIONS,
+                    "current_tagged_combinations": total_tagged_combinations
+                }
             } 
