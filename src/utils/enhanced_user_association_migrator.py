@@ -25,6 +25,7 @@ from src import config
 from src.clients.jira_client import JiraClient, JiraApiError
 from src.clients.openproject_client import OpenProjectClient
 from src.utils.validators import validate_jira_key
+from src.utils.metrics_collector import MetricsCollector
 
 
 # Constants for error message handling (YOLO FIX: extracted magic numbers)
@@ -151,6 +152,7 @@ class EnhancedUserAssociationMigrator:
         jira_client: JiraClient,
         op_client: OpenProjectClient,
         user_mapping: dict[str, Any] | None = None,
+        metrics_collector: MetricsCollector | None = None,
         **kwargs,
     ) -> None:
         """Initialize the enhanced user association migrator.
@@ -159,6 +161,8 @@ class EnhancedUserAssociationMigrator:
             jira_client: Initialized Jira client for user lookups
             op_client: Initialized OpenProject client for project operations
             user_mapping: Pre-loaded user mapping (optional)
+            metrics_collector: Optional metrics collector for monitoring cache operations,
+                              staleness detection, refresh attempts, and fallback executions
             **kwargs: Additional configuration options:
                 - max_retries: Maximum retry attempts (default: 2)
                 - base_delay: Base delay between retries in seconds (default: 0.5)
@@ -170,6 +174,9 @@ class EnhancedUserAssociationMigrator:
         
         self.jira_client = jira_client
         self.op_client = op_client
+        
+        # Set up metrics collection (optional for backward compatibility)
+        self.metrics_collector = metrics_collector
         
         # Load user mapping
         self.user_mapping = user_mapping or self._load_user_mapping()
@@ -733,14 +740,14 @@ class EnhancedUserAssociationMigrator:
             return True  # Invalid timestamps are considered stale
 
     def check_and_handle_staleness(self, username: str, raise_on_stale: bool = True) -> UserAssociationMapping | None:
-        """Check for staleness and handle it according to configuration.
+        """Check if a user mapping is stale and handle accordingly.
         
         Args:
             username: Jira username to check
-            raise_on_stale: Whether to raise StaleMappingError on staleness detection
+            raise_on_stale: Whether to raise an exception if mapping is stale
             
         Returns:
-            Fresh mapping if available, None if mapping unavailable after handling
+            Mapping if fresh, None if stale/missing
             
         Raises:
             StaleMappingError: If mapping is stale and raise_on_stale is True
@@ -751,7 +758,15 @@ class EnhancedUserAssociationMigrator:
         mapping = self.enhanced_user_mappings.get(username)
         if not mapping:
             stale_reason = "Mapping does not exist"
-            self.logger.debug("Staleness detected for %s: %s", username, stale_reason)
+            # MONITORING: Cache miss logging
+            self.logger.debug("Cache miss for %s: %s", username, stale_reason)
+            
+            # MONITORING: Staleness detection metrics
+            if hasattr(self, 'metrics_collector') and self.metrics_collector:
+                self.metrics_collector.increment_counter(
+                    'staleness_detected_total',
+                    tags={'reason': 'missing', 'username': username}
+                )
             
             if raise_on_stale:
                 raise StaleMappingError(username, stale_reason)
@@ -763,22 +778,34 @@ class EnhancedUserAssociationMigrator:
             last_refreshed = mapping.get("lastRefreshed")
             if not last_refreshed:
                 stale_reason = "No lastRefreshed timestamp"
+                reason_tag = "no_timestamp"
             else:
                 try:
                     last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
                     age_seconds = (current_time - last_refresh_time).total_seconds()
                     stale_reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
+                    reason_tag = "expired"
                 except ValueError:
                     stale_reason = "Invalid lastRefreshed timestamp"
+                    reason_tag = "invalid_timestamp"
             
+            # MONITORING: Staleness detection logging
             self.logger.debug("Staleness detected for %s: %s", username, stale_reason)
+            
+            # MONITORING: Staleness detection metrics
+            if hasattr(self, 'metrics_collector') and self.metrics_collector:
+                self.metrics_collector.increment_counter(
+                    'staleness_detected_total',
+                    tags={'reason': reason_tag, 'username': username}
+                )
             
             if raise_on_stale:
                 raise StaleMappingError(username, stale_reason)
             return None
         
         # Mapping is fresh
-        self.logger.debug("Fresh mapping found for %s", username)
+        # MONITORING: Cache hit logging
+        self.logger.debug("Cache hit for %s: mapping is fresh", username)
         return mapping
 
     def get_mapping_with_staleness_check(self, username: str, auto_refresh: bool = False) -> UserAssociationMapping | None:
@@ -801,16 +828,35 @@ class EnhancedUserAssociationMigrator:
             
             # Mapping is stale or missing
             if auto_refresh:
-                self.logger.info("Attempting automatic refresh for stale mapping: %s", username)
+                # MONITORING: Refresh attempt logging
+                self.logger.debug("Attempting automatic refresh for stale mapping: %s", username)
                 
                 # Attempt refresh
                 refreshed_mapping = self.refresh_user_mapping(username)
                 
                 if refreshed_mapping:
-                    self.logger.info("Successfully refreshed mapping for %s", username)
+                    # MONITORING: Refresh success logging and metrics
+                    self.logger.debug("Successfully refreshed mapping for %s", username)
+                    
+                    # MONITORING: Refresh success metrics
+                    if hasattr(self, 'metrics_collector') and self.metrics_collector:
+                        self.metrics_collector.increment_counter(
+                            'staleness_refreshed_total',
+                            tags={'success': 'true', 'username': username, 'trigger': 'auto_refresh'}
+                        )
+                    
                     return refreshed_mapping
                 else:
-                    self.logger.warning("Failed to refresh mapping for %s", username)
+                    # MONITORING: Refresh failure logging and metrics
+                    self.logger.debug("Failed to refresh mapping for %s", username)
+                    
+                    # MONITORING: Refresh failure metrics
+                    if hasattr(self, 'metrics_collector') and self.metrics_collector:
+                        self.metrics_collector.increment_counter(
+                            'staleness_refreshed_total',
+                            tags={'success': 'false', 'username': username, 'trigger': 'auto_refresh'}
+                        )
+                    
                     return None
             else:
                 # No auto-refresh, just log and return None
@@ -840,6 +886,9 @@ class EnhancedUserAssociationMigrator:
         # Determine which usernames to check
         check_usernames = usernames if usernames is not None else list(self.enhanced_user_mappings.keys())
         
+        # MONITORING: Bulk staleness detection logging
+        self.logger.debug("Starting bulk staleness detection for %d users", len(check_usernames))
+        
         for username in check_usernames:
             try:
                 if self.is_mapping_stale(username, current_time):
@@ -847,27 +896,42 @@ class EnhancedUserAssociationMigrator:
                     
                     if not mapping:
                         stale_reason = "Mapping does not exist"
+                        reason_tag = "missing"
                     else:
                         last_refreshed = mapping.get("lastRefreshed")
                         if not last_refreshed:
                             stale_reason = "No lastRefreshed timestamp"
+                            reason_tag = "no_timestamp"
                         else:
                             try:
                                 last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
                                 age_seconds = (current_time - last_refresh_time).total_seconds()
                                 stale_reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
+                                reason_tag = "expired"
                             except ValueError:
                                 stale_reason = "Invalid lastRefreshed timestamp"
+                                reason_tag = "invalid_timestamp"
                     
                     stale_mappings[username] = stale_reason
+                    
+                    # MONITORING: Individual staleness detection metrics (for bulk operations)
+                    if hasattr(self, 'metrics_collector') and self.metrics_collector:
+                        self.metrics_collector.increment_counter(
+                            'staleness_detected_total',
+                            tags={'reason': reason_tag, 'username': username, 'detection_mode': 'bulk'}
+                        )
                     
             except Exception as e:
                 self.logger.warning("Error checking staleness for %s: %s", username, e)
                 stale_mappings[username] = f"Error during check: {e}"
         
+        # MONITORING: Bulk detection results logging
         if stale_mappings:
+            self.logger.debug("Bulk staleness detection found %d stale mappings out of %d checked", 
+                            len(stale_mappings), len(check_usernames))
             self.logger.info("Detected %d stale mappings: %s", len(stale_mappings), list(stale_mappings.keys()))
         else:
+            self.logger.debug("Bulk staleness detection found no stale mappings in %d checked users", len(check_usernames))
             self.logger.debug("No stale mappings detected in %d checked users", len(check_usernames))
         
         return stale_mappings
@@ -901,10 +965,15 @@ class EnhancedUserAssociationMigrator:
             "total_stale": len(stale_mappings)  # Track total number of stale mappings detected
         }
         
+        # MONITORING: Batch operation logging
         self.logger.info("Starting batch refresh for %d mappings (%d total stale detected)", len(usernames), len(stale_mappings))
+        self.logger.debug("Batch refresh operation details: %d users, max_retries=%d", len(usernames), max_retries)
         
         for username in usernames:
             stale_reason = stale_mappings.get(username, "Manual refresh requested")
+            
+            # MONITORING: Individual refresh attempt logging
+            self.logger.debug("Starting batch refresh for user %s (reason: %s)", username, stale_reason)
             
             try:
                 # Retry logic for individual mapping refresh
@@ -913,6 +982,10 @@ class EnhancedUserAssociationMigrator:
                 
                 for attempt in range(max_retries + 1):
                     try:
+                        # MONITORING: Retry attempt logging
+                        if attempt > 0:
+                            self.logger.debug("Batch refresh retry attempt %d/%d for %s", attempt + 1, max_retries + 1, username)
+                        
                         refreshed_mapping = self.refresh_user_mapping(username)
                         
                         # YOLO FIX: Check if mapping indicates success or failure
@@ -924,6 +997,17 @@ class EnhancedUserAssociationMigrator:
                                 "stale_reason": stale_reason,
                                 "refreshed_at": refreshed_mapping["lastRefreshed"]
                             }
+                            
+                            # MONITORING: Batch refresh success logging and metrics
+                            self.logger.debug("Batch refresh successful for %s after %d attempts", username, attempt + 1)
+                            
+                            # MONITORING: Batch refresh success metrics
+                            if hasattr(self, 'metrics_collector') and self.metrics_collector:
+                                self.metrics_collector.increment_counter(
+                                    'staleness_refreshed_total',
+                                    tags={'success': 'true', 'username': username, 'trigger': 'batch_refresh', 'attempts': str(attempt + 1)}
+                                )
+                            
                             success = True
                             break
                         else:
@@ -948,27 +1032,37 @@ class EnhancedUserAssociationMigrator:
                         "stale_reason": stale_reason,
                         "error": last_error
                     }
+                    
+                    # MONITORING: Batch refresh failure logging and metrics
+                    self.logger.debug("Batch refresh failed for %s after %d attempts: %s", username, max_retries + 1, last_error)
+                    
+                    # MONITORING: Batch refresh failure metrics
+                    if hasattr(self, 'metrics_collector') and self.metrics_collector:
+                        self.metrics_collector.increment_counter(
+                            'staleness_refreshed_total',
+                            tags={'success': 'false', 'username': username, 'trigger': 'batch_refresh', 'attempts': str(max_retries + 1)}
+                        )
+                    
                     results["errors"].append(f"{username}: {last_error}")
                     
             except Exception as e:
+                # Outer exception handling for unexpected errors
                 results["refresh_failed"] += 1
-                error_msg = f"Unexpected error refreshing {username}: {e}"
+                error_msg = f"Unexpected error during batch refresh for {username}: {e}"
                 results["errors"].append(error_msg)
                 results["results"][username] = {
-                    "status": "error",
+                    "status": "failed", 
                     "attempts": 0,
                     "stale_reason": stale_reason,
                     "error": str(e)
                 }
+                
+                # MONITORING: Unexpected batch refresh error logging
                 self.logger.exception("Unexpected error during batch refresh for %s: %s", username, e)
         
-        self.logger.info(
-            "Batch refresh completed: %d/%d successful, %d failed (%d total stale detected)",
-            results["refresh_successful"],
-            results["refresh_attempted"],
-            results["refresh_failed"],
-            results["total_stale"]
-        )
+        # MONITORING: Batch operation summary logging
+        self.logger.info("Batch refresh completed: %d successful, %d failed out of %d attempted", 
+                        results["refresh_successful"], results["refresh_failed"], results["refresh_attempted"])
         
         return results
 
@@ -1102,29 +1196,19 @@ class EnhancedUserAssociationMigrator:
             Refreshed mapping if successful, None if refresh failed
         """
         try:
+            # MONITORING: Refresh attempt logging
+            self.logger.debug("Starting refresh for user mapping: %s", username)
             self.logger.info("Refreshing user mapping for: %s", username)
             
             # Get fresh data from Jira with retry logic and exponential backoff
             jira_user_data = self._get_jira_user_with_retry(username)
             
             if not jira_user_data:
+                # MONITORING: User not found logging
+                self.logger.debug("User %s not found in Jira during refresh - applying fallback", username)
                 self.logger.warning("User %s not found in Jira during refresh", username)
-                # Update mapping to mark as inactive/not found
-                current_mapping = self.enhanced_user_mappings.get(username, {})
-                current_mapping.update({
-                    "mapping_status": "not_found",
-                    "lastRefreshed": datetime.now(tz=UTC).isoformat(),
-                    "metadata": {
-                        **current_mapping.get("metadata", {}),
-                        "refresh_error": "User not found in Jira",
-                        "jira_active": False
-                    }
-                })
-                self.enhanced_user_mappings[username] = current_mapping
-                return current_mapping
-            
-            # Check if user is active in Jira
-            jira_active = jira_user_data.get("active", True)
+                # Apply fallback strategy for not found user
+                return self._apply_fallback_strategy(username, None, "user_not_found")
             
             # Get current mapping or create new one
             current_mapping = self.enhanced_user_mappings.get(username, {})
@@ -1135,7 +1219,7 @@ class EnhancedUserAssociationMigrator:
                 "lastRefreshed": datetime.now(tz=UTC).isoformat(),
                 "metadata": {
                     **current_mapping.get("metadata", {}),
-                    "jira_active": jira_active,
+                    "jira_active": jira_user_data.get("active", True),
                     "jira_display_name": jira_user_data.get("displayName"),
                     "jira_email": jira_user_data.get("emailAddress"),
                     "jira_account_id": jira_user_data.get("accountId"),
@@ -1144,13 +1228,32 @@ class EnhancedUserAssociationMigrator:
                 }
             }
             
-            # If user is inactive in Jira, mark mapping as inactive but don't lose OpenProject mapping
-            if not jira_active:
-                self.logger.warning("User %s is inactive in Jira", username)
-                refreshed_mapping["mapping_status"] = "inactive_jira"
-            elif not refreshed_mapping.get("openproject_user_id"):
-                # Try to find OpenProject mapping if we don't have one
+            # Validate refreshed user data
+            validation_result = self._validate_refreshed_user(username, jira_user_data, current_mapping)
+            
+            if not validation_result["is_valid"]:
+                # MONITORING: Validation failure logging
+                self.logger.debug("User %s failed validation after refresh: %s - applying fallback", 
+                                username, validation_result["reason"])
+                self.logger.warning("User %s failed validation after refresh: %s", 
+                                  username, validation_result["reason"])
+                # Apply fallback strategy for validation failure
+                return self._apply_fallback_strategy(username, jira_user_data, validation_result["reason"])
+            
+            # MONITORING: Validation success logging
+            self.logger.debug("User %s passed validation after refresh", username)
+            
+            # If validation passes and user is active, try OpenProject mapping if needed
+            if not refreshed_mapping.get("openproject_user_id"):
+                # MONITORING: OpenProject mapping attempt logging
+                self.logger.debug("Attempting OpenProject mapping for %s", username)
                 refreshed_mapping = self._attempt_openproject_mapping(refreshed_mapping, jira_user_data)
+            else:
+                # MONITORING: OpenProject mapping already exists
+                self.logger.debug("OpenProject mapping already exists for %s", username)
+            
+            # Mark as successfully mapped
+            refreshed_mapping["mapping_status"] = "mapped"
             
             # Update the mapping
             self.enhanced_user_mappings[username] = refreshed_mapping
@@ -1158,10 +1261,14 @@ class EnhancedUserAssociationMigrator:
             # Save updated mappings
             self._save_enhanced_mappings()
             
+            # MONITORING: Refresh success logging
+            self.logger.debug("Successfully completed refresh for %s", username)
             self.logger.info("Successfully refreshed mapping for %s", username)
             return refreshed_mapping
             
         except Exception as e:
+            # MONITORING: Refresh error logging
+            self.logger.debug("Refresh failed for %s with error: %s", username, str(e))
             self.logger.exception("Error refreshing user mapping for %s: %s", username, e)
             
             # Update mapping with error information but preserve existing data
@@ -1183,6 +1290,222 @@ class EnhancedUserAssociationMigrator:
                 self.logger.error("Failed to save error mapping for %s: %s", username, e)
             
             return None
+
+    def _validate_refreshed_user(self, username: str, jira_user_data: dict[str, Any], 
+                                current_mapping: UserAssociationMapping) -> dict[str, Any]:
+        """Validate refreshed user data to ensure it's suitable for mapping.
+        
+        Args:
+            username: Jira username being validated
+            jira_user_data: Fresh user data from Jira
+            current_mapping: Current mapping data for comparison
+            
+        Returns:
+            Dictionary with validation result: {"is_valid": bool, "reason": str}
+        """
+        # Check if user is active in Jira
+        jira_active = jira_user_data.get("active", True)
+        if not jira_active:
+            return {
+                "is_valid": False,
+                "reason": "user_inactive_in_jira"
+            }
+        
+        # Check for email/username consistency if we have previous data
+        current_metadata = current_mapping.get("metadata", {})
+        previous_email = current_metadata.get("jira_email")
+        current_email = jira_user_data.get("emailAddress")
+        
+        if previous_email and current_email and previous_email.lower() != current_email.lower():
+            return {
+                "is_valid": False,
+                "reason": f"email_mismatch_previous:{previous_email}_current:{current_email}"
+            }
+        
+        # Check for account ID consistency if we have previous data
+        previous_account_id = current_metadata.get("jira_account_id")
+        current_account_id = jira_user_data.get("accountId")
+        
+        if previous_account_id and current_account_id and previous_account_id != current_account_id:
+            return {
+                "is_valid": False,
+                "reason": f"account_id_mismatch_previous:{previous_account_id}_current:{current_account_id}"
+            }
+        
+        # All validations passed
+        return {
+            "is_valid": True,
+            "reason": "validation_passed"
+        }
+
+    def _apply_fallback_strategy(self, username: str, jira_user_data: dict[str, Any] | None, 
+                                reason: str) -> UserAssociationMapping | None:
+        """Apply the configured fallback strategy when user validation fails.
+        
+        Args:
+            username: Jira username that failed validation
+            jira_user_data: Jira user data (None if user not found)
+            reason: Reason for fallback
+            
+        Returns:
+            Updated mapping after applying fallback, or None if skipped
+        """
+        strategy = self.fallback_strategy
+        current_mapping = self.enhanced_user_mappings.get(username, {})
+        
+        self.logger.info("Applying fallback strategy '%s' for user %s (reason: %s)", 
+                        strategy, username, reason)
+        
+        if strategy == "skip":
+            return self._execute_skip_fallback(username, reason, current_mapping)
+        elif strategy == "assign_admin":
+            return self._execute_assign_admin_fallback(username, reason, current_mapping, jira_user_data)
+        elif strategy == "create_placeholder":
+            return self._execute_create_placeholder_fallback(username, reason, current_mapping, jira_user_data)
+        else:
+            self.logger.error("Unknown fallback strategy: %s", strategy)
+            return self._execute_skip_fallback(username, f"unknown_strategy_{strategy}", current_mapping)
+
+    def _execute_skip_fallback(self, username: str, reason: str, 
+                              current_mapping: UserAssociationMapping) -> None:
+        """Execute 'skip' fallback strategy - remove mapping and log warning.
+        
+        Args:
+            username: Username to skip
+            reason: Reason for skipping
+            current_mapping: Current mapping data
+        """
+        self.logger.warning("Skipping user mapping for %s due to: %s", username, reason)
+        
+        # Remove from mappings if exists
+        if username in self.enhanced_user_mappings:
+            del self.enhanced_user_mappings[username]
+        
+        # Update metrics
+        if hasattr(self, 'metrics_collector') and self.metrics_collector:
+            self.metrics_collector.increment_counter(
+                'mapping_fallback_total',
+                tags={'fallback_strategy': 'skip', 'reason': reason}
+            )
+        
+        try:
+            self._save_enhanced_mappings()
+        except (IOError, json.JSONDecodeError, ValueError) as e:
+            self.logger.error("Failed to save after skip fallback for %s: %s", username, e)
+        
+        return None
+
+    def _execute_assign_admin_fallback(self, username: str, reason: str, 
+                                      current_mapping: UserAssociationMapping,
+                                      jira_user_data: dict[str, Any] | None) -> UserAssociationMapping:
+        """Execute 'assign_admin' fallback strategy - map to configured admin user.
+        
+        Args:
+            username: Username to assign to admin
+            reason: Reason for admin assignment
+            current_mapping: Current mapping data
+            jira_user_data: Jira user data (may be None)
+            
+        Returns:
+            Updated mapping pointing to admin user
+        """
+        if not self.admin_user_id:
+            self.logger.error("Cannot execute assign_admin fallback: no admin_user_id configured")
+            return self._execute_skip_fallback(username, f"no_admin_configured_{reason}", current_mapping)
+        
+        self.logger.warning("Assigning user %s to admin user %s due to: %s", 
+                           username, self.admin_user_id, reason)
+        
+        # Create mapping to admin user
+        admin_mapping = {
+            "jira_username": username,
+            "openproject_user_id": self.admin_user_id,
+            "mapping_status": "fallback_admin",
+            "lastRefreshed": datetime.now(tz=UTC).isoformat(),
+            "metadata": {
+                **current_mapping.get("metadata", {}),
+                "fallback_strategy": "assign_admin",
+                "fallback_reason": reason,
+                "fallback_admin_user_id": self.admin_user_id,
+                "fallback_timestamp": datetime.now(tz=UTC).isoformat(),
+                "jira_active": jira_user_data.get("active", False) if jira_user_data else False,
+                "jira_display_name": jira_user_data.get("displayName") if jira_user_data else None,
+                "jira_email": jira_user_data.get("emailAddress") if jira_user_data else None,
+                "jira_account_id": jira_user_data.get("accountId") if jira_user_data else None,
+                "needs_review": True
+            }
+        }
+        
+        # Update mappings
+        self.enhanced_user_mappings[username] = admin_mapping
+        
+        # Update metrics
+        if hasattr(self, 'metrics_collector') and self.metrics_collector:
+            self.metrics_collector.increment_counter(
+                'mapping_fallback_total',
+                tags={'fallback_strategy': 'assign_admin', 'reason': reason}
+            )
+        
+        try:
+            self._save_enhanced_mappings()
+        except (IOError, json.JSONDecodeError, ValueError) as e:
+            self.logger.error("Failed to save after assign_admin fallback for %s: %s", username, e)
+        
+        return admin_mapping
+
+    def _execute_create_placeholder_fallback(self, username: str, reason: str,
+                                           current_mapping: UserAssociationMapping,
+                                           jira_user_data: dict[str, Any] | None) -> UserAssociationMapping:
+        """Execute 'create_placeholder' fallback strategy - create placeholder with review flag.
+        
+        Args:
+            username: Username to create placeholder for
+            reason: Reason for placeholder creation
+            current_mapping: Current mapping data
+            jira_user_data: Jira user data (may be None)
+            
+        Returns:
+            Updated mapping with placeholder and review flag
+        """
+        self.logger.warning("Creating placeholder mapping for user %s due to: %s", username, reason)
+        
+        # Create placeholder mapping
+        placeholder_mapping = {
+            "jira_username": username,
+            "openproject_user_id": None,
+            "mapping_status": "placeholder",
+            "lastRefreshed": datetime.now(tz=UTC).isoformat(),
+            "metadata": {
+                **current_mapping.get("metadata", {}),
+                "fallback_strategy": "create_placeholder",
+                "fallback_reason": reason,
+                "fallback_timestamp": datetime.now(tz=UTC).isoformat(),
+                "needs_review": True,
+                "is_placeholder": True,
+                "jira_active": jira_user_data.get("active", False) if jira_user_data else False,
+                "jira_display_name": jira_user_data.get("displayName") if jira_user_data else None,
+                "jira_email": jira_user_data.get("emailAddress") if jira_user_data else None,
+                "jira_account_id": jira_user_data.get("accountId") if jira_user_data else None,
+                "placeholder_created": datetime.now(tz=UTC).isoformat()
+            }
+        }
+        
+        # Update mappings
+        self.enhanced_user_mappings[username] = placeholder_mapping
+        
+        # Update metrics
+        if hasattr(self, 'metrics_collector') and self.metrics_collector:
+            self.metrics_collector.increment_counter(
+                'mapping_fallback_total',
+                tags={'fallback_strategy': 'create_placeholder', 'reason': reason}
+            )
+        
+        try:
+            self._save_enhanced_mappings()
+        except (IOError, json.JSONDecodeError, ValueError) as e:
+            self.logger.error("Failed to save after create_placeholder fallback for %s: %s", username, e)
+        
+        return placeholder_mapping
 
     def _attempt_openproject_mapping(self, mapping: UserAssociationMapping, jira_user_data: dict[str, Any]) -> UserAssociationMapping:
         """Attempt to find OpenProject mapping for a user during refresh.

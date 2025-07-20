@@ -1687,7 +1687,7 @@
               3
             ],
             "details": "1. After refresh, check `user.active === true` and that email/username match original mapping. 2. If validation passes, proceed normally. 3. If validation fails, inspect `config.migration.mapping.fallback_strategy`:  • skip: remove mapping and log warning  • assign_admin: retrieve `config.migration.mapping.admin_user_key` and map to that admin  • create_placeholder: generate placeholder user record with a `needsReview` flag 4. Log fallback decisions.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Simulate refreshed user with `active=false` or mismatched fields and test each fallback branch: skip omits mapping, assign_admin uses admin key, create_placeholder generates flagged record."
           },
           {
@@ -1697,8 +1697,8 @@
             "dependencies": [
               4
             ],
-            "details": "1. Use the existing logger to emit DEBUG logs on cache hits, misses, stale detections, refresh attempts, and fallback executions. 2. Integrate with the metrics collector to increment: `staleness_detected_total`, `staleness_refreshed_total`, and `mapping_fallback_total`. 3. Ensure metrics tags include `fallback_strategy` where applicable.",
-            "status": "pending",
+            "details": "1. Use the existing logger to emit DEBUG logs on cache hits, misses, stale detections, refresh attempts, and fallback executions. 2. Integrate with the metrics collector to increment: `staleness_detected_total`, `staleness_refreshed_total`, and `mapping_fallback_total`. 3. Ensure metrics tags include `fallback_strategy` where applicable.\n<info added on 2025-07-20T05:38:52.886Z>\n4. Enhance the _get_fallback_user method to emit a DEBUG log whenever a fallback user is returned (including strategy, original username, and context) and increment mapping_fallback_total with tags {'fallback_strategy': strategy, 'trigger': '_get_fallback_user'}.  \n5. Instrument migration methods for assignee, author, and watcher updates to emit DEBUG logs when a fallback user is applied and increment mapping_fallback_total with tags {'fallback_strategy': strategy, 'trigger': '<method_name>'}.  \n6. Implement unit and end-to-end tests verifying that fallback usage logs and metrics are emitted correctly for all strategies (skip, assign_admin, create_placeholder) during migration.  \n7. Run the full test suite to ensure these monitoring enhancements work as expected without affecting existing functionality.\n</info added on 2025-07-20T05:38:52.886Z>",
+            "status": "in-progress",
             "testStrategy": "Use a test logger and metrics stub to verify that each event produces the correct log entry and that counter increments match expected behavior."
           },
           {
@@ -1759,7 +1759,7 @@
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-19T16:08:28.905Z",
+      "updated": "2025-07-19T20:33:29.313Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
