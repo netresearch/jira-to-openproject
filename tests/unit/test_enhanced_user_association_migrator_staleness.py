@@ -10,23 +10,90 @@ from src.utils.enhanced_user_association_migrator import EnhancedUserAssociation
 from src.clients.jira_client import JiraApiError, JiraConnectionError
 
 
+# YOLO FIX: Module-level shared fixtures to eliminate nuclear mocking across all test classes
+@pytest.fixture
+def mock_jira_client():
+    """Mock Jira client with concrete return values."""
+    client = MagicMock()
+    client.get = MagicMock()
+    client.get_user_info_with_timeout = MagicMock()
+    client.get_user_info_with_timeout.return_value = {
+        'displayName': 'Test User',
+        'emailAddress': 'test@example.com',
+        'accountId': 'test-123',
+        'active': True
+    }
+    client.get.return_value = {
+        'displayName': 'Test User',
+        'emailAddress': 'test@example.com',
+        'accountId': 'test-123',
+        'active': True
+    }
+    return client
+
+
+@pytest.fixture
+def mock_op_client():
+    """Mock OpenProject client with concrete return values."""
+    client = MagicMock()
+    client.get_user = MagicMock()
+    client.get_user.return_value = {
+        'id': 123,
+        'login': 'test.user',
+        'email': 'test@example.com',
+        'firstName': 'Test',
+        'lastName': 'User',
+        'status': 'active'
+    }
+    return client
+
+
+@pytest.fixture
+def clean_migrator_instance(mock_jira_client, mock_op_client):
+    """Create migrator instance with clean, minimal mocking."""
+    # YOLO FIX: Simplified mocking approach - patch only essential dependencies
+    with patch('src.utils.enhanced_user_association_migrator.config') as mock_config, \
+         patch.object(EnhancedUserAssociationMigrator, '_load_enhanced_mappings'), \
+         patch.object(EnhancedUserAssociationMigrator, '_save_enhanced_mappings'), \
+         patch('src.utils.enhanced_user_association_migrator.MetricsCollector'):
+
+        # Clean config setup
+        mock_config.get_path.return_value = Path("/tmp/test_clean")
+        mock_config.migration_config = {
+            "mapping": {
+                "refresh_interval": "1h",
+                "fallback_strategy": "skip",
+                "fallback_admin_user_id": "admin123"
+            }
+        }
+
+        # Create migrator with clean state
+        migrator = EnhancedUserAssociationMigrator(
+            jira_client=mock_jira_client,
+            op_client=mock_op_client
+        )
+        
+        # YOLO FIX: Attach the mock config to the migrator instance
+        migrator.config = mock_config
+        
+        # Clean cache setup - no file system dependencies
+        migrator.enhanced_user_mappings = {}
+        
+        # Automatically mock save method
+        migrator._save_enhanced_mappings = MagicMock()
+        
+        return migrator
+
+
 class TestStalenessDetection:
     """Test suite for staleness detection functionality."""
 
-    @pytest.fixture(autouse=True)
-    def setup_save_mock(self, migrator_instance):
-        """Automatically mock the save method for all tests in this class."""
-        migrator_instance._save_enhanced_mappings = MagicMock()
-        yield
-        
     @pytest.fixture
     def mock_jira_client(self):
-        """Mock JiraClient for testing."""
+        """Mock Jira client with concrete return values."""
         client = MagicMock()
         client.get = MagicMock()
         client.get_user_info_with_timeout = MagicMock()
-        
-        # Set default return values to prevent MagicMock leakage
         client.get_user_info_with_timeout.return_value = {
             'displayName': 'Test User',
             'emailAddress': 'test@example.com',
@@ -39,16 +106,13 @@ class TestStalenessDetection:
             'accountId': 'test-123',
             'active': True
         }
-        
         return client
 
     @pytest.fixture
     def mock_op_client(self):
-        """Mock OpenProjectClient for testing."""
+        """Mock OpenProject client with concrete return values."""
         client = MagicMock()
         client.get_user = MagicMock()
-        
-        # Set default return values to prevent MagicMock leakage
         client.get_user.return_value = {
             'id': 123,
             'login': 'test.user',
@@ -57,49 +121,49 @@ class TestStalenessDetection:
             'lastName': 'User',
             'status': 'active'
         }
-        
         return client
 
     @pytest.fixture
-    def migrator_instance(self, mock_jira_client, mock_op_client):
-        """Create migrator instance with ULTIMATE cache isolation."""
-        
-        # NUCLEAR APPROACH: Mock the cache loading AND saving methods at MODULE level to return EMPTY dict
-        with patch.object(EnhancedUserAssociationMigrator, '_load_enhanced_mappings', return_value={}), \
-             patch.object(EnhancedUserAssociationMigrator, '_save_enhanced_mappings', return_value=None):
-            with patch('builtins.open', mock_open(read_data='{}')) as mock_file, \
-                 patch('pathlib.Path.exists', return_value=False), \
-                 patch('pathlib.Path.mkdir'), \
-                 patch('pathlib.Path.is_file', return_value=False), \
-                 patch('pathlib.Path.read_text', return_value='{}'), \
-                 patch('pathlib.Path.write_text'), \
-                 patch('os.path.exists', return_value=False), \
-                 patch('os.makedirs'), \
-                 patch('json.dump'), \
-                 patch('json.load', return_value={}), \
-                 patch('src.utils.enhanced_user_association_migrator.config') as mock_config, \
-                 patch('src.utils.enhanced_user_association_migrator.MetricsCollector') as mock_metrics:
+    def clean_migrator_instance(self, mock_jira_client, mock_op_client):
+        """Create migrator instance with clean, minimal mocking."""
+        # YOLO FIX: Simplified mocking approach - patch only essential dependencies
+        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config, \
+             patch.object(EnhancedUserAssociationMigrator, '_load_enhanced_mappings'), \
+             patch.object(EnhancedUserAssociationMigrator, '_save_enhanced_mappings'), \
+             patch('src.utils.enhanced_user_association_migrator.MetricsCollector'):
 
-                # Mock config
-                mock_config.get_path.return_value = Path("/tmp/test_cache_nuclear")
-                mock_config.migration_config = {
-                    "mapping": {
-                        "refresh_interval": "1h",
-                        "fallback_strategy": "skip",
-                        "fallback_admin_user_id": "admin123"
-                    }
+            # Clean config setup
+            mock_config.get_path.return_value = Path("/tmp/test_clean")
+            mock_config.migration_config = {
+                "mapping": {
+                    "refresh_interval": "1h",
+                    "fallback_strategy": "skip",
+                    "fallback_admin_user_id": "admin123"
                 }
+            }
 
-                # Create migrator with proper mocks
-                migrator = EnhancedUserAssociationMigrator(
-                    jira_client=mock_jira_client,
-                    op_client=mock_op_client
-                )
+            # Create migrator with clean state
+            migrator = EnhancedUserAssociationMigrator(
+                jira_client=mock_jira_client,
+                op_client=mock_op_client
+            )
+            
+            # Clean cache setup - no file system dependencies
+            migrator.enhanced_user_mappings = {}
+            
+            return migrator
 
-                # FORCE the cache to be completely empty and isolated
-                migrator.enhanced_user_mappings = {}
+    @pytest.fixture(autouse=True) 
+    def setup_clean_save_mock(self, clean_migrator_instance):
+        """Automatically mock save method with clean approach."""
+        clean_migrator_instance._save_enhanced_mappings = MagicMock()
+        yield
 
-                return migrator
+    # YOLO FIX: Simplified the old nuclear mocking approach
+    @pytest.fixture
+    def migrator_instance(self, clean_migrator_instance):
+        """Legacy fixture name for backward compatibility."""
+        return clean_migrator_instance
 
     def test_is_mapping_stale_fresh_mapping(self, migrator_instance):
         """Test staleness detection with fresh mapping."""
@@ -179,34 +243,12 @@ class TestStalenessDetection:
 class TestDurationParsing:
     """Test duration parsing functionality."""
 
-    @pytest.fixture(autouse=True)
-    def setup_save_mock(self, duration_migrator):
-        """Automatically mock the save method for all tests in this class."""
-        duration_migrator._save_enhanced_mappings = MagicMock()
-        yield
-
     @pytest.fixture
-    def duration_migrator(self, mock_jira_client, mock_op_client):
-        """Create a simple migrator instance for duration parsing tests."""
-        with patch('src.utils.enhanced_user_association_migrator.EnhancedUserAssociationMigrator._load_enhanced_mappings', return_value={}):
-            with patch('builtins.open', mock_open(read_data='{}')), \
-                 patch('pathlib.Path.exists', return_value=False), \
-                 patch('src.utils.enhanced_user_association_migrator.config') as mock_config:
-                
-                mock_config.get_path.return_value = Path("/tmp/test_duration")
-                mock_config.migration_config = {
-                    "mapping": {
-                        "refresh_interval": "1h",
-                        "fallback_strategy": "raise_error"
-                    }
-                }
-                
-                migrator = EnhancedUserAssociationMigrator(
-                    jira_client=mock_jira_client,
-                    op_client=mock_op_client
-                )
-                migrator.enhanced_user_mappings = {}
-                return migrator
+    def duration_migrator(self, clean_migrator_instance):
+        """YOLO FIX: Reuse clean migrator instance for duration parsing tests."""
+        # Override config for duration-specific tests  
+        clean_migrator_instance.config.migration_config["mapping"]["fallback_strategy"] = "raise_error"
+        return clean_migrator_instance
 
     @pytest.mark.parametrize("duration_str, expected_seconds", [
         ("1h", 3600),       # 1 hour
@@ -276,51 +318,14 @@ class TestConfigurationLoading:
 class TestRefreshUserMapping:
     """Test user mapping refresh functionality."""
 
-    @pytest.fixture(autouse=True)
-    def setup_save_mock(self, migrator_instance):
-        """Automatically mock the save method for all tests in this class."""
-        migrator_instance._save_enhanced_mappings = MagicMock()
-        yield
-
-    @pytest.fixture
-    def mock_jira_client(self):
-        """Create mock Jira client with all required methods."""
-        client = MagicMock()
-        client.get = MagicMock()
-        client.get_user_info_with_timeout = MagicMock()
-        client.get_user_info = MagicMock()
-        return client
-
-    @pytest.fixture
-    def mock_op_client(self):
-        """Create mock 1Password client."""
-        return MagicMock()
-
-    @pytest.fixture
-    def migrator_instance(self, mock_jira_client, mock_op_client):
-        """Create migrator instance for refresh tests."""
-        with patch('src.utils.enhanced_user_association_migrator.config') as mock_config, \
-             patch('builtins.open', mock_open(read_data='{}')) as mock_file, \
-             patch('pathlib.Path.exists', return_value=False), \
-             patch('src.utils.enhanced_user_association_migrator.MetricsCollector'):
-            
-            mock_config.get_path.return_value = Path("/tmp/test")
-            mock_config.migration_config = {
-                "mapping": {
-                    "refresh_interval": "1h",
-                    "fallback_admin_user_id": "admin123"
-                },
-                "retry": {"max_retries": 3}
-            }
-            
-            migrator = EnhancedUserAssociationMigrator(
-                jira_client=mock_jira_client,
-                op_client=mock_op_client,
-                basic_mapping={}
-            )
-            migrator.refresh_interval_seconds = 3600
-            migrator.fallback_admin_user_id = "admin123"
-            return migrator
+    @pytest.fixture  
+    def migrator_instance(self, clean_migrator_instance):
+        """YOLO FIX: Reuse clean migrator with refresh-specific config."""
+        # Override config for refresh tests
+        clean_migrator_instance.config.migration_config["retry"] = {"max_retries": 3}
+        clean_migrator_instance.refresh_interval_seconds = 3600
+        clean_migrator_instance.fallback_admin_user_id = "admin123"
+        return clean_migrator_instance
 
     def test_refresh_user_mapping_success(self, migrator_instance, mock_jira_client, mock_op_client):
         """Test successful refresh of user mapping."""
@@ -528,93 +533,12 @@ class TestBackwardsCompatibility:
 class TestSecurityFeatures:
     """Test security features including URL encoding and input sanitization."""
 
-    @pytest.fixture(autouse=True)
-    def setup_save_mock(self, migrator_instance_security):
-        """Automatically mock the save method for all tests in this class."""
-        migrator_instance_security._save_enhanced_mappings = MagicMock()
-        yield
-
-    @pytest.fixture
-    def mock_jira_client(self):
-        """Create mock Jira client."""
-        client = MagicMock()
-        client.get = MagicMock()
-        client.get_user_info_with_timeout = MagicMock()
-        return client
-
-    @pytest.fixture
-    def mock_op_client(self):
-        """Create mock 1Password client."""
-        return MagicMock()
-
-    @pytest.fixture
-    def migrator_instance_security(self, mock_jira_client, mock_op_client):
-        """Create migrator instance with NUCLEAR security testing setup and complete cache isolation."""
-        # Ensure mock clients have required methods with concrete return values
-        mock_jira_client.get_user_info_with_timeout = MagicMock()
-        mock_jira_client.get = MagicMock()
-        mock_op_client.get_user = MagicMock()
-        
-        # Set concrete return values to prevent MagicMock leakage
-        mock_jira_client.get_user_info_with_timeout.return_value = {
-            'displayName': 'Test User',
-            'emailAddress': 'test@example.com',
-            'accountId': 'test-123',
-            'active': True
-        }
-        mock_jira_client.get.return_value = {
-            'displayName': 'Test User',
-            'emailAddress': 'test@example.com',
-            'accountId': 'test-123',
-            'active': True
-        }
-        mock_op_client.get_user.return_value = {
-            'id': 123,
-            'login': 'test.user',
-            'email': 'test@example.com',
-            'firstName': 'Test',
-            'lastName': 'User',
-            'status': 'active'
-        }
-        
-        # NUCLEAR APPROACH: Mock the cache loading method at MODULE level to return EMPTY dict
-        with patch.object(EnhancedUserAssociationMigrator, '_load_enhanced_mappings', return_value={}):
-            with patch('builtins.open', mock_open(read_data='{}')) as mock_file, \
-                 patch('pathlib.Path.exists', return_value=False), \
-                 patch('pathlib.Path.mkdir'), \
-                 patch('pathlib.Path.is_file', return_value=False), \
-                 patch('pathlib.Path.read_text', return_value='{}'), \
-                 patch('pathlib.Path.write_text'), \
-                 patch('os.path.exists', return_value=False), \
-                 patch('os.makedirs'), \
-                 patch('json.dump'), \
-                 patch('json.load', return_value={}), \
-                 patch('src.utils.enhanced_user_association_migrator.config') as mock_config, \
-                 patch('src.utils.enhanced_user_association_migrator.MetricsCollector') as mock_metrics:
-
-                # Mock config for security tests - use "skip" strategy to prevent exceptions
-                mock_config.get_path.return_value = Path("/tmp/test_nuclear_security_isolated")
-                mock_config.migration_config = {
-                    "mapping": {
-                        "refresh_interval": "1h",
-                        "fallback_strategy": "skip",
-                        "fallback_admin_user_id": "admin123"
-                    }
-                }
-
-                # Create migrator with complete cache prevention
-                migrator = EnhancedUserAssociationMigrator(
-                    jira_client=mock_jira_client,
-                    op_client=mock_op_client
-                )
-
-                # FORCE the cache to be completely empty and override any loaded data
-                migrator.enhanced_user_mappings = {}
-                
-                # Verify it's actually empty
-                assert len(migrator.enhanced_user_mappings) == 0, f"Cache should be empty but has {len(migrator.enhanced_user_mappings)} items"
-
-                return migrator
+    @pytest.fixture  
+    def migrator_instance_security(self, clean_migrator_instance):
+        """YOLO FIX: Reuse clean migrator for security tests."""
+        # Use skip strategy for security tests to prevent exceptions
+        clean_migrator_instance.config.migration_config["mapping"]["fallback_strategy"] = "skip"
+        return clean_migrator_instance
 
     @pytest.mark.parametrize("username, expected_passed", [
         ("user@example.com", "user@example.com"),           # No encoding applied
