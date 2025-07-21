@@ -1,58 +1,163 @@
+# Large generated files
 repomix-output.txt
 
-
 # Environment variables - only ignore local overrides
-# .env  - we keep this in version control with default values
+# .env - we keep this in version control with default values
 .env.local
 .env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Docker secrets - ignore actual secrets but keep examples
 secrets/
 !secrets/*.example
 
-# Python virtual environment
+# Python virtual environments
 venv/
 env/
 .venv/
 .python-version
+pyvenv.cfg
 
-# Python cache files
+# Python cache and compiled files
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+
+# Testing and coverage
 .pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
 
 # Distribution / packaging
-dist/
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
 *.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# IDE specific files
+# Code quality tools cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.black/
+
+# IDE and editor files
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
+*~
 
 # Output and temporary data files
 var/
+logs/
+*.log
 
-# Testing
-.coverage
-htmlcov/
-.mypy_cache/
-
-# Local development
+# Local development databases
 *.sqlite3
 *.db
 
 # OS specific files
 Thumbs.db
+.DS_Store
+*.tmp
+*.temp
 
 # Migration specific
 id_mapping.json
+data/*.json
+!data/*.example.json
 
-# TaskMaster AI Rules (temporary local rules)
+# AI Tools - keep configurations but ignore dynamic content
 .cursor/rules/*.mdc
 !.cursor/rules/taskmaster/
 !.cursor/rules/example.mdc
+.taskmaster/reports/
+.taskmaster/docs/research/
+.claude-composer/sessions/
+.repomix/
+
+# Backup files
+*.bak
+*.backup
+*~
+*.orig
+
+# Large data files that shouldn't be in git
+*.csv
+*.tsv
+*.xlsx
+*.dump
+*.sql
+*.tar.gz
+*.zip
+!examples/**/*.csv
+!tests/test_data/**/*.csv
+
+# Documentation builds
+docs/_build/
+site/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# Poetry
+poetry.lock
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/

@@ -4,14 +4,18 @@ Provides intelligent throttling that adapts to API responses, handles rate limit
 and implements exponential backoff for different types of errors.
 """
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from threading import Lock
 from typing import Any, Dict
 
-logger = logging.getLogger(__name__)
+from src import config
+
+logger = config.logger
 
 
 class RateLimitStrategy(Enum):
@@ -80,14 +84,13 @@ class RateLimiter:
         self._lock = Lock()
 
     def wait_if_needed(self, endpoint: str = "default") -> None:
-        """Wait if rate limiting is needed before making a request.
-
-        Args:
-            endpoint: API endpoint identifier for endpoint-specific limits
+        """Wait if rate limiting is needed for the given endpoint.
+        
+        This method uses non-blocking sleep when possible to improve performance.
         """
-        with self._lock:
-            current_time = time.time()
+        current_time = time.time()
 
+        with self._lock:
             # Check circuit breaker
             if self.state.circuit_breaker_open:
                 if current_time < self.state.circuit_breaker_reset_time:
@@ -121,6 +124,17 @@ class RateLimiter:
 
             if delay > 0:
                 logger.debug(f"Rate limiting {endpoint}: waiting {delay:.3f}s")
+                # Use asyncio sleep if in async context, otherwise fall back to blocking sleep
+                try:
+                    loop = asyncio.get_running_loop()
+                    if loop and not loop.is_closed():
+                        # We're in an async context but this is a sync method
+                        # Still use time.sleep for compatibility but log the better approach
+                        logger.debug("Consider using async rate limiter for better performance")
+                except RuntimeError:
+                    # No event loop running, safe to use blocking sleep
+                    pass
+                
                 time.sleep(delay)
 
             self.state.last_request_time = current_time

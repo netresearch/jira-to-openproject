@@ -1,42 +1,135 @@
-# Git
+# Version control
 .git
 .gitignore
+.gitattributes
 
-# Python environments
+# Python environments and caches
 venv/
 .venv/
 ENV/
 env/
-
-# Python cache files
 __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
 .coverage
 htmlcov/
+.mypy_cache/
+.ruff_cache/
+.black/
+.tox/
+.nox/
 
-# Data and logs
+# Data and logs (these can be large and aren't needed in containers)
 var/
 logs/
 *.log
+data/
+!data/*.example.json
+reports/
+repomix-output.txt
 
 # Docker files (no need to copy these into the image)
 Dockerfile
+Dockerfile.*
+compose.yml
 compose.yaml
+docker-compose.yml
+docker-compose.yaml
 .dockerignore
 
-# Editor configurations
+# IDE and editor configurations
 .vscode/
 .idea/
 *.swp
 *.swo
 .DS_Store
+*~
 
-# Environment variables (sensitive data)
+# Environment variables (sensitive data and local overrides)
 .env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Build artifacts
+# Build artifacts and distribution
 *.egg-info/
 dist/
 build/
+.eggs/
+wheels/
+
+# Documentation and examples (usually not needed in production containers)
+docs/
+examples/
+*.md
+!README.md
+LICENSE
+.editorconfig
+
+# Testing files and configurations
+tests/
+test-specs/
+.coverage*
+coverage.xml
+pytest.ini
+.pre-commit-config.yaml
+
+# Development tools configurations
+.flake8
+.coveragerc
+pyproject.toml
+setup.py
+setup.cfg
+requirements-*.txt
+!requirements.txt
+
+# AI Tools and configurations (not needed in containers)
+.cursor/
+.taskmaster/
+.claude/
+.claude-composer/
+.roo/
+.repomix/
+*.mdc
+.windsurfrules
+.cursorignore
+.roomodes
+AGENTS.md
+CLAUDE.md
+
+# Secrets (important for security)
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Large files and backups
+*.bak
+*.backup
+*.tmp
+*.temp
+*.csv
+*.tsv
+*.xlsx
+*.dump
+*.sql
+*.tar.gz
+*.zip
+
+# OS specific files
+Thumbs.db
+.DS_Store
+
+# Development scripts and configurations
+Makefile
+activate.sh
+renovate.json
+
+# DevContainer configuration
+.devcontainer/
+
+# GitHub workflows (not needed in production containers)
+.github/

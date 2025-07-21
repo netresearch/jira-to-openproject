@@ -149,4 +149,17 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Migration interrupted by user")
+        sys.exit(1)
+    except (FileNotFoundError, PermissionError) as e:
+        logger.error("File system error: %s", e)
+        sys.exit(1)
+    except (ConnectionError, TimeoutError) as e:
+        logger.error("Network connectivity error: %s", e)
+        sys.exit(1)
+    except Exception as e:
+        logger.exception("Unexpected error occurred during migration: %s", e)
+        sys.exit(1)
