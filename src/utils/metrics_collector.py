@@ -101,26 +101,32 @@ class MetricsCollector:
             if not METRIC_NAME_PATTERN.match(metric_name):
                 logger.warning("Metric name contains invalid characters: %s", metric_name)
                 return
-            
+
             with self._lock:
                 # Always increment basic counter
                 self._counters[metric_name] += 1
                 
-                                # Handle tagged counter if tags provided
+                # Handle tagged counter if tags provided
                 if tags and isinstance(tags, dict):
-                    tag_string = self._create_safe_tag_string(tags)
-                    
-                    # LRU behavior: move to end if exists
-                    if tag_string in self._tagged_counters[metric_name]:
-                        self._tagged_counters[metric_name].move_to_end(tag_string)
-                    
-                    self._tagged_counters[metric_name][tag_string] += 1
-                    
-                    # Memory management: remove oldest if too many combinations
-                    while len(self._tagged_counters[metric_name]) > MAX_TAG_COMBINATIONS:
-                        oldest = next(iter(self._tagged_counters[metric_name]))
-                        self._tagged_counters[metric_name].pop(oldest)
-                        logger.debug("Removed old metric entry for memory management")
+                    try:
+                        tag_string = self._create_safe_tag_string(tags)
+                        
+                        # LRU behavior: move to end if exists
+                        if tag_string in self._tagged_counters[metric_name]:
+                            self._tagged_counters[metric_name].move_to_end(tag_string)
+                            self._tagged_counters[metric_name][tag_string] += 1
+                        else:
+                            # Create new entry
+                            self._tagged_counters[metric_name][tag_string] = 1
+                        
+                        # Memory management: remove oldest if too many combinations
+                        while len(self._tagged_counters[metric_name]) > MAX_TAG_COMBINATIONS:
+                            oldest = next(iter(self._tagged_counters[metric_name]))
+                            self._tagged_counters[metric_name].pop(oldest)
+                            logger.debug("Removed old metric entry for memory management")
+                    except Exception as tag_error:
+                        logger.warning("Failed to process tags for metric %s: %s", metric_name, tag_error)
+                        # Continue execution - basic counter was already incremented
                 
                 logger.debug("Incremented metric %s", metric_name)
                 
