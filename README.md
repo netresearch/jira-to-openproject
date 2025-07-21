@@ -1,225 +1,281 @@
 # Jira to OpenProject Migration Tool
 
-This project provides a robust, modular, and configurable toolset for migrating project management data from Jira Server 9.11 to OpenProject 15. It is designed for one-time, current-state migrations, with no backward compatibility or changelogs, following the "Immutable Now" philosophy.
+A robust, modular migration toolset for transferring project management data from Jira Server 9.11 to OpenProject 15. Built with Python 3.13, this tool handles users, projects, work packages, custom fields, statuses, workflows, and attachments.
 
-**Key Documentation:**
+## Features
 
-* **Project Goals:** [PROJECT_GOALS.md](PROJECT_GOALS.md)
-* **Tasks & Status:** [TASKS.md](TASKS.md)
-* **Configuration:** [docs/configuration.md](docs/configuration.md)
-* **Development Setup & Guidelines:** [docs/development.md](docs/development.md)
-* **Client Architecture:** [docs/client_architecture.md](docs/client_architecture.md)
-* **Initial Plan:** [PLANNING.md](PLANNING.md)
-* **Source Code Overview:** [src/README.md](src/README.md)
-* **Scripts Overview:** [scripts/README.md](scripts/README.md)
-* **Tests Overview:** [tests/README.md](tests/README.md)
-* **Status Migration:** [docs/status_migration.md](docs/status_migration.md)
-* **Workflow Configuration:** [docs/workflow_configuration.md](docs/workflow_configuration.md)
+**Migration Components:**
+- **Customer Migration:** Tempo Customers → Top-level OpenProject projects
+- **Account Migration:** Tempo Accounts → Custom field values on projects  
+- **Project Migration:** Jira Projects → Sub-projects under customer hierarchy
+- **Work Package Migration:** Issues → Work packages with full metadata
+- **User Migration:** Jira users → OpenProject users with role mapping
+- **Custom Field Migration:** Field definitions and values
+- **Status & Workflow Migration:** Status creation and workflow configuration guidance
+- **Attachment Migration:** Issue attachments → Work package files
+- **Time Log Migration:** Tempo worklogs → OpenProject time entries
 
-## Architecture
-
-This project uses a layered architecture for interacting with OpenProject. For a detailed overview with visual diagrams of the client architecture, see [docs/client_architecture.md](docs/client_architecture.md).
-
-```plain
-┌───────────────────────────────────────┐
-│          OpenProjectClient            │  High-level API & Main Orchestrator
-└───┬──────────────┬─────────────┬──────┘
-    │              │             │
-    │ owns         │ owns        │ owns
-    ▼              ▼             ▼
-┌─────────┐   ┌──────────┐  ┌────────────────┐
-│SSHClient│◄──┤DockerClient│ │RailsConsoleClient│
-└─────────┘   └──────────┘  └────────────────┘
-    │
-┌───┴─────────────────────────────────┐
-│              FileManager            │  Manages file operations and tracking
-└─────────────────────────────────────┘
-```
-
-Each layer has a specific responsibility in the dependency hierarchy:
-
-* **OpenProjectClient**: The top-level orchestrator that initializes and owns all client components. It provides high-level methods for record management while coordinating the workflow between components.
-
-* **SSHClient**: The foundation layer that handles all SSH operations including connection management, command execution, and file transfers. It provides robust error handling and retry logic for network operations.
-
-* **DockerClient**: Uses SSHClient (via dependency injection) to execute Docker commands. It's responsible for container operations and file transfers to/from the Docker container.
-
-* **RailsConsoleClient**: Focused exclusively on interacting with Rails console via tmux sessions. It implements a sophisticated marker-based error detection system to reliably distinguish between actual errors and text in command outputs.
-
-* **FileManager**: Centralized utility for managing file operations, including tracking temporary files and creating debug sessions.
-
-The architecture follows a clear dependency injection pattern, where:
-1. OpenProjectClient initializes and owns all other clients
-2. DockerClient receives SSHClient as a constructor parameter
-3. Each component has a single, well-defined responsibility
-
-This layered design ensures clean separation of concerns and makes the system highly testable and maintainable.
-
-## Introduction
-
-This tool automates the migration of users, projects, issues (work packages), statuses, workflows, custom fields, issue types, link types, attachments, comments, and plugin-specific data (e.g., Tempo Accounts) from Jira to OpenProject. It handles API limitations by integrating with the OpenProject Rails console (via SSH/Docker) and can generate Ruby scripts for manual execution if needed.
-
-* **Language:** Python 3.13
-* **Environment:** Docker (required for development and recommended for production)
-* **Key Libraries:** `requests`, `httpx`, `rich`, `python-dotenv`, `pyyaml`
-* **APIs Used:** Jira Server REST API v2, OpenProject API v3
+**Key Capabilities:**
+- **Batch Processing:** Configurable batch sizes for large datasets
+- **Progress Tracking:** Real-time progress monitoring with detailed logging
+- **Error Recovery:** Comprehensive error handling with retry mechanisms
+- **Security:** Input validation and injection attack prevention
+- **Flexible Deployment:** Local execution or Docker containerization
+- **Testing Infrastructure:** Comprehensive test suite with multiple test types
 
 ## Quick Start
 
-### Prerequisites
-
-* Docker and Docker Compose
-* Python 3.13
-* Access credentials for Jira Server 9.11 and OpenProject 15
-* (Optional) SSH access to the OpenProject server for direct Rails console integration
-
-### Installation & Setup
-
-1. Clone the repository and enter the directory:
-
-    ```bash
-    git clone <repository-url>
-    cd jira-to-openproject-migration
-    ```
-
-2. Set up Python environment:
-
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-    pip install -e .
-    ```
-
-3. Configure environment variables:
-    * Copy `.env` to `.env.local` and fill in your credentials and server details.
-    * Edit `config/config.yaml` for migration settings if needed.
-
-4. **Configure PostgreSQL Credentials (REQUIRED)**:
-
-    Choose one of these secure methods for database authentication:
-
-    **Option A: Local Development (Environment Variables)**
-    ```bash
-    # Edit .env file and set a secure password
-    POSTGRES_PASSWORD=your_secure_password_here
-    POSTGRES_DB=migration_test
-    POSTGRES_USER=testuser
-    ```
-
-    **Option B: Production (Docker Secrets) - Recommended**
-    ```bash
-    # Create Docker secret
-    echo "your_secure_production_password" | docker secret create postgres_password -
-
-    # Deploy with secrets support
-    docker stack deploy -c compose.yml migration-stack
-    ```
-
-    **Option C: Docker Compose with Secrets (Alternative)**
-    ```bash
-    # Create local secret file (will be ignored by git)
-    cp secrets/postgres_password.txt.example secrets/postgres_password.txt
-    # Edit secrets/postgres_password.txt with your password
-
-    # Run with secrets support
-    docker-compose --compatibility up
-    ```
-
-    ⚠️ **Security Notes:**
-    - Never commit actual passwords to version control
-    - Use strong, randomly generated passwords in production
-    - The system will automatically detect and use Docker secrets if available
-    - If neither environment variable nor secret is found, the application will fail with a clear error message
-
-5. Build and start Docker container:
-
-    ```bash
-    docker compose up -d --build
-    ```
-
-### Persistent Rails Console with tmux
-
-For operations requiring Rails console access, a persistent tmux session is recommended to maintain connection stability during long-running migrations:
-
-```sh
-# Create a new named tmux session with logging
-tmux new-session -s rails_console \; \
-  pipe-pane -o 'cat >>~/rails_console.log' \; \
-  send-keys 'ssh -t [OPENPROJECT_HOST] "docker exec -ti openproject-web-1 bundle exec rails console"' \
-  C-m
-
-# Reconnect to an existing session
-tmux attach-session -t rails_console
-
-# Detach from session (without killing it)
-# Use Ctrl+b, then d
-
-# List all sessions
-tmux list-sessions
-
-# Kill a session when done
-tmux kill-session -t rails_console
-```
-
-**Session Management Tips:**
-
-* Use `Ctrl+b, d` to detach from the session without terminating it
-* If the connection drops, simply reattach using `tmux attach-session -t rails_console`
-* Split panes with `Ctrl+b, "` (horizontal) or `Ctrl+b, %` (vertical) for monitoring multiple processes
-* The migration tool handles Rails 3.4's Reline library compatibility issues with IO handling
-
-**Note on Ruby 3.4 compatibility:**
-If you encounter Rails console errors related to "ungetbyte failed (IOError)" in Ruby 3.4's Reline library, the migration tool now includes workarounds to stabilize console state after command execution. These fixes help prevent IO errors during migration operations.
-
-### Usage
-
-Run the migration tool using the CLI or directly via Python:
+### Installation
 
 ```bash
-# Dry run (no changes made)
-j2o migrate --dry-run
-# Migrate specific components
-j2o migrate --components users projects
-# Full migration (use with caution!)
-j2o migrate
-# Force re-extraction
-j2o migrate --force --components users
+# Clone and setup
+git clone <repository-url>
+cd jira-to-openproject-migration
+python -m venv .venv
+source .venv/bin/activate  # or activate.sh
+pip install -e .
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your Jira and OpenProject credentials
 ```
 
-Or run directly:
+### Development Environment
 
 ```bash
-python src/main.py --dry-run
+# Full development setup with services
+make dev-full
+
+# Run tests
+make test
+
+# Code quality checks
+make lint
+make type-check
 ```
 
-**Important:** Always test in a staging environment before production migration.
+### Migration Execution
 
-## Key Concepts
+```bash
+# Run specific migration components
+python src/main.py migrate --components users,projects,workpackages
 
-* **Components:** Migration is modular; each component (users, projects, etc.) can be run independently.
-* **Mappings:** Mapping files in `var/data/*.json` translate IDs and values between systems.
-* **Project Hierarchy:** Projects are organized hierarchically with Tempo companies as top-level projects and Jira projects as their sub-projects.
-* **Rails Console Integration:** For entities not supported by the OpenProject API, the tool can:
-  * Execute commands via SSH/Docker
-  * Generate Ruby scripts for manual execution
-* **Dry Run:** The `--dry-run` flag simulates migration without making changes.
-* **Data Directory:** The `var/` directory stores extracted data, logs, scripts, and mapping files.
+# Run with custom configuration
+python src/main.py migrate --config custom_config.yaml --components all
 
-## API Limitations & Workarounds
+# Dry run mode
+python src/main.py migrate --dry-run --components users
+```
 
-* **OpenProject:**
-  * Custom fields and work package types are created via Rails console integration.
-  * Some fields (e.g., author/creation date) cannot be set via API.
-  * Link types (relations) cannot be retrieved via API or created/modified. The migration tool:
-    * Maps Jira link types to OpenProject's five default relation types (relates, blocks, duplicates, precedes, includes)
-    * Allows users to customize mappings via a JSON configuration file
-    * Falls back to creating custom fields for unmapped link types
-* **Jira:** For large instances, use the ScriptRunner Add-On for efficient custom field option extraction.
+## Architecture
+
+### System Overview
+
+The migration tool uses a **layered client architecture** for reliable remote operations:
+
+```
+Local Migration Tool
+    ↓ (SSH Connection)
+Remote OpenProject Server  
+    ↓ (Docker Commands)
+OpenProject Container
+    ↓ (Rails Console)
+OpenProject Application
+```
+
+### Client Components
+
+- **OpenProjectClient**: High-level orchestration and API
+- **SSHClient**: Foundation layer for remote connections
+- **DockerClient**: Container operations via SSH
+- **RailsConsoleClient**: Rails console interaction via tmux
+
+### Migration Flow
+
+1. **Extract**: Data extracted from Jira via REST API
+2. **Transform**: Data mapping and validation
+3. **Load**: Data insertion via OpenProject Rails console
+4. **Verify**: Validation and error reporting
+
+## Configuration
+
+### Environment Variables
+
+Critical settings in `.env`:
+
+```bash
+# Jira Configuration
+JIRA_URL=https://your-jira-server
+JIRA_USERNAME=your-username
+JIRA_PASSWORD=your-password
+
+# OpenProject Configuration  
+OPENPROJECT_URL=https://your-openproject
+OPENPROJECT_API_KEY=your-api-key
+
+# SSH Connection (for remote OpenProject)
+SSH_HOST=openproject-server
+SSH_USER=username
+SSH_KEY_FILE=/path/to/ssh/key
+
+# Docker Configuration
+DOCKER_CONTAINER_NAME=openproject-web-1
+TMUX_SESSION_NAME=rails_console
+```
+
+### YAML Configuration
+
+Structured settings in `config/config.yaml`:
+
+```yaml
+migration:
+  batch_size: 100
+  parallel_workers: 4
+  enable_dry_run: false
+  skip_validation: false
+  
+logging:
+  level: INFO
+  format: detailed
+  file: migration.log
+```
+
+## Documentation
+
+### Core Documentation
+
+- **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Development standards, testing, and compliance
+- **[System Architecture](docs/ARCHITECTURE.md)** - Client architecture and component design
+- **[Security Documentation](docs/SECURITY.md)** - Security measures and vulnerability prevention
+- **[Configuration Guide](docs/configuration.md)** - Detailed configuration options
+- **[Workflow & Status Guide](docs/WORKFLOW_STATUS_GUIDE.md)** - Status migration and workflow setup
+
+### Quick Reference
+
+**Development:**
+```bash
+# Quick unit tests (~30s)
+python scripts/test_helper.py quick
+
+# Full test suite (~5-10min)
+python scripts/test_helper.py full
+
+# Type checking
+mypy src/
+```
+
+**Migration:**
+```bash
+# Status and workflow migration
+python src/main.py migrate --components status,workflow --force
+
+# Full migration with progress tracking
+python src/main.py migrate --components all --verbose
+```
 
 ## Development
 
-See [docs/development.md](docs/development.md) for setup, coding standards, and contribution process.
+### Prerequisites
+
+- **Python 3.13+**
+- **Docker & Docker Compose** (for development environment)
+- **SSH access** to OpenProject server (for production migration)
+- **tmux** (for Rails console interaction)
+
+### Development Standards
+
+- **Exception-based error handling** (no return codes)
+- **Optimistic execution** (validate in exception handlers)
+- **Modern Python typing** (built-in types, pipe operators)
+- **Comprehensive testing** (unit, functional, integration)
+- **Security-first** (input validation, injection prevention)
+
+### Testing
+
+```bash
+# Test organization
+tests/
+├── unit/          # Fast, isolated component tests
+├── functional/    # Component interaction tests  
+├── integration/   # External service tests
+├── end_to_end/    # Complete workflow tests
+└── utils/         # Shared testing utilities
+```
+
+## Security
+
+### Input Validation
+
+All user inputs (especially Jira keys) are validated:
+- Character whitelisting (`A-Z`, `0-9`, `-` only)
+- Length limits (max 100 characters)
+- Control character blocking
+
+### Injection Prevention
+
+- Ruby script generation uses safe `inspect` method
+- No direct string interpolation in generated code
+- Comprehensive validation before execution
+
+## Performance
+
+### Optimization Features
+
+- **Batch processing** with configurable sizes
+- **Connection pooling** for SSH connections
+- **Adaptive polling** for console operations
+- **Parallel processing** for independent operations
+- **Progress tracking** with minimal overhead
+
+### Monitoring
+
+- Real-time progress reporting
+- Detailed logging with configurable levels
+- Error aggregation and reporting
+- Performance metrics collection
+
+## Troubleshooting
+
+### Common Issues
+
+**Connection Problems:**
+- Verify SSH key permissions (`chmod 600`)
+- Check OpenProject container status
+- Validate tmux session configuration
+
+**Migration Errors:**
+- Review logs in `var/logs/`
+- Check data validation reports
+- Verify OpenProject permissions
+
+**Performance Issues:**
+- Adjust batch sizes in configuration
+- Monitor system resources
+- Check network connectivity
+
+### Debug Commands
+
+```bash
+# Test connections
+python scripts/test_connections.py
+
+# Validate configuration
+python scripts/validate_config.py
+
+# Debug specific migration
+python src/main.py migrate --debug --components users --limit 10
+```
 
 ## License
 
-MIT License
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## Contributing
+
+1. **Follow development standards** outlined in [Developer Guide](docs/DEVELOPER_GUIDE.md)
+2. **Write comprehensive tests** for all changes
+3. **Validate security** for any user input processing
+4. **Update documentation** as needed
+5. **Run full test suite** before submitting changes
+
+For architecture changes, see [System Architecture](docs/ARCHITECTURE.md) for design patterns and component responsibilities.
