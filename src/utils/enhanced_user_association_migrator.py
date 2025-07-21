@@ -28,9 +28,32 @@ from src.utils.validators import validate_jira_key
 from src.utils.metrics_collector import MetricsCollector
 
 
-# Constants for error message handling (YOLO FIX: extracted magic numbers)
-ERROR_MSG_MAX_LENGTH = 100
-ERROR_MSG_TRUNCATE_LENGTH = 97
+# =============================================================================
+# CONFIGURATION CONSTANTS - CENTRALIZED FOR MAINTAINABILITY
+# =============================================================================
+
+# Error message handling configuration
+class ErrorConfig:
+    MAX_LENGTH = 100
+    TRUNCATE_LENGTH = 97
+    
+# JSON serialization configuration  
+class JsonConfig:
+    MAX_RECURSION_DEPTH = 10
+    
+# Retry and rate limiting configuration
+class RetryConfig:
+    DEFAULT_MAX_RETRIES = 2
+    ABSOLUTE_MAX_RETRIES = 5  
+    DEFAULT_BASE_DELAY = 0.5
+    DEFAULT_MAX_DELAY = 8.0
+    DEFAULT_REQUEST_TIMEOUT = 30.0
+    MAX_CONCURRENT_REFRESHES = 5
+
+# Staleness detection configuration
+class StalenessConfig:
+    DEFAULT_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
+    DEFAULT_FALLBACK_STRATEGY = "skip"
 
 # Pre-compiled regex patterns for error message sanitization (ReDoS protection)
 JWT_PATTERN = re.compile(r'[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}')
@@ -70,6 +93,72 @@ class ThreadSafeConcurrentTracker:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
+
+
+class CircuitBreaker:
+    """Simple circuit breaker pattern for external service calls."""
+    
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 60):
+        """
+        Initialize circuit breaker.
+        
+        Args:
+            failure_threshold: Number of failures before opening circuit
+            recovery_timeout: Seconds to wait before attempting recovery
+        """
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.failure_count = 0
+        self.last_failure_time = 0
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        self._lock = Lock()
+    
+    def call(self, func, *args, **kwargs):
+        """
+        Execute function with circuit breaker protection.
+        
+        Args:
+            func: Function to execute
+            *args, **kwargs: Arguments to pass to function
+            
+        Returns:
+            Function result
+            
+        Raises:
+            Exception: If circuit is open or function fails
+        """
+        with self._lock:
+            now = time.time()
+            
+            # Check if circuit should recover
+            if (self.state == "OPEN" and 
+                now - self.last_failure_time > self.recovery_timeout):
+                self.state = "HALF_OPEN"
+            
+            # Reject if circuit is open
+            if self.state == "OPEN":
+                raise Exception(f"Circuit breaker OPEN - too many failures ({self.failure_count})")
+        
+        try:
+            result = func(*args, **kwargs)
+            
+            # Success - reset failure count and close circuit
+            with self._lock:
+                self.failure_count = 0
+                self.state = "CLOSED"
+            
+            return result
+            
+        except Exception as e:
+            with self._lock:
+                self.failure_count += 1
+                self.last_failure_time = time.time()
+                
+                # Open circuit if threshold exceeded
+                if self.failure_count >= self.failure_threshold:
+                    self.state = "OPEN"
+            
+            raise
 
 
 # Custom exceptions for staleness detection
@@ -134,18 +223,17 @@ class EnhancedUserAssociationMigrator:
     - Staleness detection and automatic refresh
     """
     
-    # Configuration constants
-    DEFAULT_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
-    DEFAULT_MAX_RETRIES = 2
-    DEFAULT_FALLBACK_STRATEGY = "skip"
+    # Configuration constants (now centralized in config classes above)
+    DEFAULT_REFRESH_INTERVAL_SECONDS = StalenessConfig.DEFAULT_REFRESH_INTERVAL_SECONDS
+    DEFAULT_MAX_RETRIES = RetryConfig.DEFAULT_MAX_RETRIES
+    DEFAULT_FALLBACK_STRATEGY = StalenessConfig.DEFAULT_FALLBACK_STRATEGY
 
     # Rate limiting and retry configuration (YOLO FIXED: increased from 3 to 5)
-    DEFAULT_MAX_RETRIES = 2        # Default retry attempts for most operations  
-    ABSOLUTE_MAX_RETRIES = 5       # Hard limit to prevent resource exhaustion (was MAX_ALLOWED_RETRIES)
-    DEFAULT_BASE_DELAY = 0.5       # Default delay between retries (seconds)
-    DEFAULT_MAX_DELAY = 8.0        # Maximum delay cap (seconds) 
-    DEFAULT_REQUEST_TIMEOUT = 30.0 # Default request timeout (seconds)
-    MAX_CONCURRENT_REFRESHES = 5   # Prevent retry storms, increased for better performance
+    ABSOLUTE_MAX_RETRIES = RetryConfig.ABSOLUTE_MAX_RETRIES       # Hard limit to prevent resource exhaustion
+    DEFAULT_BASE_DELAY = RetryConfig.DEFAULT_BASE_DELAY          # Default delay between retries (seconds)
+    DEFAULT_MAX_DELAY = RetryConfig.DEFAULT_MAX_DELAY            # Maximum delay cap (seconds) 
+    DEFAULT_REQUEST_TIMEOUT = RetryConfig.DEFAULT_REQUEST_TIMEOUT # Default request timeout (seconds)
+    MAX_CONCURRENT_REFRESHES = RetryConfig.MAX_CONCURRENT_REFRESHES   # Prevent retry storms, increased for better performance
     
     def __init__(
         self,
@@ -224,16 +312,29 @@ class EnhancedUserAssociationMigrator:
             # Never let metrics failures break core functionality
             self.logger.debug("Metrics collection failed for %s: %s", counter_name, e)
 
-    def _make_json_serializable(self, obj: Any) -> Any:
-        """YOLO FIX: Convert objects to JSON-serializable format, handling Mock objects."""
+    def _make_json_serializable(self, obj: Any, max_depth: int = JsonConfig.MAX_RECURSION_DEPTH, current_depth: int = 0) -> Any:
+        """YOLO FIX: Convert objects to JSON-serializable format, handling Mock objects.
+        
+        Args:
+            obj: Object to serialize
+            max_depth: Maximum recursion depth to prevent stack overflow
+            current_depth: Current recursion depth
+            
+        Returns:
+            JSON-serializable representation of the object
+        """
+        # Prevent infinite recursion/stack overflow
+        if current_depth >= max_depth:
+            return f"<MAX_DEPTH_REACHED: {type(obj).__name__}>"
+            
         if hasattr(obj, '_mock_name'):  # Mock object detection
             return f"<Mock: {getattr(obj, '_mock_name', 'unknown')}>"
         elif hasattr(obj, '__dict__') and hasattr(obj, '__module__') and 'mock' in str(type(obj)):
             return f"<Mock: {type(obj).__name__}>"
         elif isinstance(obj, dict):
-            return {k: self._make_json_serializable(v) for k, v in obj.items()}
+            return {k: self._make_json_serializable(v, max_depth, current_depth + 1) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple)):
-            return [self._make_json_serializable(item) for item in obj]
+            return [self._make_json_serializable(item, max_depth, current_depth + 1) for item in obj]
         elif isinstance(obj, (str, int, float, bool)) or obj is None:
             return obj
         elif hasattr(obj, 'isoformat'):  # datetime objects
@@ -261,8 +362,8 @@ class EnhancedUserAssociationMigrator:
         error_msg = URL_PATTERN.sub('[URL]', error_msg)
         
         # Then truncate the already-sanitized string
-        if len(error_msg) > ERROR_MSG_MAX_LENGTH:
-            error_msg = error_msg[:ERROR_MSG_TRUNCATE_LENGTH] + "..."
+        if len(error_msg) > ErrorConfig.MAX_LENGTH:
+            error_msg = error_msg[:ErrorConfig.TRUNCATE_LENGTH] + "..."
         
         return error_msg
 

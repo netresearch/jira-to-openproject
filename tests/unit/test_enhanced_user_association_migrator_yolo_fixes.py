@@ -285,6 +285,63 @@ class TestYoloJsonSerialization:
         assert parsed["user_mappings"]["user1"]["jira_user"] == "<Mock: jira_user_mock>"
         assert parsed["user_mappings"]["user1"]["lastRefreshed"] == "2023-01-15T00:00:00+00:00"
 
+    def test_make_json_serializable_depth_limit_protection(self, migrator_instance):
+        """Test that _make_json_serializable prevents stack overflow with depth limits."""
+        # Create deeply nested structure
+        def create_nested_dict(depth):
+            if depth == 0:
+                return "leaf_value"
+            return {"nested": create_nested_dict(depth - 1)}
+        
+        # Create structure deeper than default limit (10)
+        deep_data = create_nested_dict(15)
+        
+        # Should handle gracefully without stack overflow
+        result = migrator_instance._make_json_serializable(deep_data)
+        
+        # Should truncate at max depth and indicate truncation
+        # Navigate to the max depth and verify truncation marker
+        current = result
+        for _ in range(10):  # Default max depth is 10
+            if isinstance(current, dict) and "nested" in current:
+                current = current["nested"]
+            else:
+                break
+        
+        # At max depth, should find the truncation marker
+        assert isinstance(current, str)
+        assert current.startswith("<MAX_DEPTH_REACHED:")
+
+    def test_make_json_serializable_custom_depth_limit(self, migrator_instance):
+        """Test that _make_json_serializable respects custom max_depth parameter."""
+        # Create nested structure
+        nested_data = {"level1": {"level2": {"level3": {"level4": "deep_value"}}}}
+        
+        # Test with low depth limit
+        result = migrator_instance._make_json_serializable(nested_data, max_depth=2)
+        
+        # Should truncate at specified depth
+        assert result["level1"]["level2"].startswith("<MAX_DEPTH_REACHED:")
+
+    def test_make_json_serializable_depth_limit_with_lists(self, migrator_instance):
+        """Test depth limiting works correctly with nested lists."""
+        # Create deeply nested list structure
+        nested_list = [[[[["deep_value"]]]]]
+        
+        result = migrator_instance._make_json_serializable(nested_list, max_depth=3)
+        
+        # Should truncate nested lists at specified depth
+        # Navigate through the structure
+        current = result
+        for _ in range(3):
+            if isinstance(current, list) and len(current) > 0:
+                current = current[0]
+            else:
+                break
+        
+        assert isinstance(current, str)
+        assert current.startswith("<MAX_DEPTH_REACHED:")
+
 
 class TestYoloIntegrationScenarios:
     """Test integration scenarios where YOLO fixes are used."""
