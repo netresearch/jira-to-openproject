@@ -125,11 +125,66 @@
         "id": 13,
         "title": "Performance Optimization",
         "description": "Optimize migration performance for large datasets",
-        "status": "pending",
+        "status": "done",
         "priority": "medium",
         "dependencies": [],
         "details": "Implement efficient batching for API calls, optimize data extraction and processing, and provide progress indicators for long-running operations. Handle rate limiting and implement retry mechanisms.",
-        "testStrategy": "Test with large datasets to verify performance improvements. Measure extraction and migration times."
+        "testStrategy": "Test with large datasets to verify performance improvements. Measure extraction and migration times.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Efficient Batching Mechanism",
+            "description": "Design and implement configurable batching for API calls to process large datasets in chunks.",
+            "dependencies": [],
+            "details": "Collect entity IDs into batches of configurable size (default 100), invoke a bulk fetch endpoint (e.g., client.batch_find_records), and aggregate responses for downstream processing.",
+            "status": "done",
+            "testStrategy": "Unit test with mocked batch API to verify correct batch sizes, number of calls (O(n/batch_size)), and handling of empty or partial batches."
+          },
+          {
+            "id": 2,
+            "title": "Optimize Data Extraction and Processing Pipeline",
+            "description": "Enhance JSON-to-OpenAPI migration pipeline for high performance and low memory usage.",
+            "dependencies": [
+              "13.1"
+            ],
+            "details": "Implement streaming or chunked parsing of JSON files, use parallel processing or asynchronous I/O where applicable, and minimize intermediate data structures.",
+            "status": "done",
+            "testStrategy": "Benchmark end-to-end extraction and transformation times on sample large datasets and compare against baseline metrics."
+          },
+          {
+            "id": 3,
+            "title": "Implement Rate Limiting Handling",
+            "description": "Detect and throttle API calls to comply with service rate limits.",
+            "dependencies": [
+              "13.1"
+            ],
+            "details": "Monitor API response headers for rate-limit indicators, implement a token-bucket or leaky-bucket algorithm, and pause or delay subsequent batches when limits are reached.",
+            "status": "done",
+            "testStrategy": "Simulate 429 Too Many Requests responses in integration tests to verify that batching pauses and resumes correctly respecting configured limits."
+          },
+          {
+            "id": 4,
+            "title": "Implement Retry Mechanisms with Exponential Backoff",
+            "description": "Add robust retry logic for transient API failures to improve reliability.",
+            "dependencies": [
+              "13.3"
+            ],
+            "details": "Configure maximum retry attempts, use exponential backoff with jitter, and integrate retry logic into both batched and individual API calls.",
+            "status": "done",
+            "testStrategy": "Mock transient network errors (e.g., timeouts, 5xx responses) to verify retries occur with increasing delays and that permanent failures abort after max retries."
+          },
+          {
+            "id": 5,
+            "title": "Provide Progress Indicators for Long-Running Operations",
+            "description": "Implement real-time progress reporting for migration jobs processing large datasets.",
+            "dependencies": [
+              "13.1"
+            ],
+            "details": "Emit progress updates after each batch or processing milestone via logging, callbacks, or a progress bar UI component, including counts of processed, pending, and failed records.",
+            "status": "done",
+            "testStrategy": "Run end-to-end migration on a test dataset and assert that progress events fire at expected intervals matching batch completions."
+          }
+        ]
       },
       {
         "id": 14,
@@ -1640,7 +1695,7 @@
         "description": "Add detection and automatic refresh for stale user mappings in EnhancedUserAssociationMigrator to prevent silent failures due to deactivated or changed users.",
         "details": "1. Configuration\n   • Add new config options under `migration.mapping`:\n     – `refresh_interval` (duration, e.g. \"24h\") for TTL\n     – `fallback_strategy` (enum: skip, assign_admin, create_placeholder)\n2. Caching and metadata\n   • In EnhancedUserAssociationMigrator, extend the in-memory mapping cache to store `{mappedUser, lastRefreshed: DateTime}`.\n3. Staleness detection logic\n   • Before any mapping lookup or write, calculate age = now – lastRefreshed.\n   • If age > refresh_interval or mappedUser not found, mark mapping stale.\n4. Automatic refresh\n   • On stale detection, call `JiraClient.get_user(userKey)` to re-fetch user info.\n   • Update cache with new user data and reset `lastRefreshed` timestamp.\n5. Validation and fallback\n   • After refresh, verify `user.active === true` and email/username match.\n   • If validation fails, apply `fallback_strategy`:\n     – skip: omit the association and log a warning\n     – assign_admin: map to a configurable admin user\n     – create_placeholder: insert a placeholder record and flag for manual review\n6. Monitoring and logging\n   • Emit logs at DEBUG for cache hits, misses, stale detections, and refreshes.\n   • Increment counters: `staleness_detected_total`, `staleness_refreshed_total`, `mapping_fallback_total` via existing metrics collector.\n7. Error handling\n   • On API failures during refresh, retry up to 2 times with exponential backoff, then apply fallback.",
         "testStrategy": "Unit tests:\n1. TTL expiry\n   • Seed cache entry with `lastRefreshed` older than `refresh_interval` and mock `JiraClient.get_user` to succeed. Assert cache is updated and `staleness_refreshed_total` increments.\n2. Active vs inactive\n   • Mock fresh user response with `active=false` and verify fallback logic for each `fallback_strategy` (skip, assign_admin, create_placeholder).\n3. API error handling\n   • Simulate `get_user` throwing on first two calls and succeeding on third; assert backoff logic and eventual cache update.\n4. No-refresh path\n   • Entry younger than TTL returns cache hit and does not call API.\nIntegration tests:\n1. End-to-end migration run where a Jira user is deactivated mid-process. Ensure the stale detection triggers a refresh and fallback as configured without aborting the run.\n2. Verify configured metrics are exposed (e.g. via REST or logs).\n3. Configuration overrides: change `refresh_interval` and `fallback_strategy` in test config and assert behavior changes accordingly.",
-        "status": "in-progress",
+        "status": "done",
         "dependencies": [
           2,
           5,
@@ -1759,7 +1814,7 @@
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-21T12:48:01.051Z",
+      "updated": "2025-07-22T09:30:05.114Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",

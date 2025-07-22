@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Master migration script for Jira to OpenProject migration.
-This script orchestrates the complete migration process.
+This script orchestrates the complete migration process with performance optimization.
 """
 
 import argparse
@@ -33,6 +33,10 @@ from src.migrations.status_migration import StatusMigration
 from src.migrations.user_migration import UserMigration
 from src.migrations.work_package_migration import WorkPackageMigration
 from src.models import ComponentResult, MigrationResult
+from src.performance.migration_performance_manager import (
+    MigrationPerformanceManager,
+    PerformanceConfig
+)
 from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler
 
@@ -159,22 +163,89 @@ def restore_backup(backup_dir: Path) -> bool:
     return True
 
 
+def create_performance_config(
+    batch_size: int = 100,
+    max_concurrent_batches: int = 5,
+    enable_performance_tracking: bool = True
+) -> PerformanceConfig:
+    """Create performance configuration based on migration settings.
+    
+    Args:
+        batch_size: Size of batches for API processing
+        max_concurrent_batches: Maximum concurrent batch operations
+        enable_performance_tracking: Whether to enable performance tracking
+    
+    Returns:
+        Configured PerformanceConfig instance
+    """
+    # Get rate limiting settings from config or use defaults
+    max_requests_per_minute = getattr(config, 'max_requests_per_minute', 100)
+    
+    # Determine if this is a large migration (affects performance tuning)
+    is_large_migration = batch_size > 50 or max_concurrent_batches > 3
+    
+    return PerformanceConfig(
+        # Batching configuration
+        batch_size=batch_size,
+        max_concurrent_batches=max_concurrent_batches,
+        batch_timeout=60.0 if is_large_migration else 30.0,
+        
+        # Rate limiting configuration
+        max_requests_per_minute=max_requests_per_minute,
+        burst_size=min(20, batch_size // 5),
+        adaptive_rate_limiting=True,
+        
+        # Retry configuration
+        max_retries=3,
+        base_delay=1.0,
+        max_delay=60.0,
+        
+        # Progress tracking
+        enable_progress_tracking=enable_performance_tracking,
+        progress_update_interval=2.0,
+        save_progress_to_file=True,
+        
+        # Performance tuning
+        enable_parallel_processing=is_large_migration,
+        memory_limit_mb=1024 if is_large_migration else 512,
+        enable_streaming=is_large_migration
+    )
+
+
 def run_migration(
     components: list[ComponentName] | None = None,
     stop_on_error: bool = False,
     no_confirm: bool = False,
+    batch_size: int = 100,
+    max_concurrent: int = 5,
+    enable_performance_optimization: bool = True,
 ) -> MigrationResult:
-    """Run the migration process.
+    """Run the migration process with performance optimization.
 
     Args:
         components: List of specific components to run (if None, run all)
         stop_on_error: If True, stop migration on the first error/exception
         no_confirm: If True, skip the 'Continue to next component' prompt
+        batch_size: Size of batches for API processing
+        max_concurrent: Maximum concurrent batch operations
+        enable_performance_optimization: Whether to enable performance optimization
 
     Returns:
         Dictionary with migration results
 
     """
+    # Initialize performance manager
+    performance_manager = None
+    if enable_performance_optimization:
+        perf_config = create_performance_config(
+            batch_size=batch_size,
+            max_concurrent_batches=max_concurrent,
+            enable_performance_tracking=True
+        )
+        performance_manager = MigrationPerformanceManager(perf_config)
+        config.logger.info("Performance optimization enabled")
+        config.logger.info(f"Batch size: {batch_size}, Max concurrent: {max_concurrent}")
+    
     try:
         # Check if we need a migration mode header
         if config.migration_config.get("dry_run", False):
@@ -204,6 +275,9 @@ def run_migration(
                     "components": components,
                     "no_backup": config.migration_config.get("no_backup", False),
                     "force": config.migration_config.get("force", False),
+                    "batch_size": batch_size,
+                    "max_concurrent": max_concurrent,
+                    "performance_optimization": enable_performance_optimization,
                 },
                 "confirm_after_component": True,  # Enable confirmation between components
             },
@@ -318,23 +392,53 @@ def run_migration(
         config.mappings = Mappings(data_dir=config.get_path("data"))
 
         # Define all available migration components
-        # Initialize work_packages with a dummy instance that will be replaced later
+        # Pass performance manager to components that support it
         available_components = AvailableComponents(
-            users=UserMigration(jira_client=jira_client, op_client=op_client),
+            users=UserMigration(
+                jira_client=jira_client, 
+                op_client=op_client,
+                performance_manager=performance_manager
+            ),
             custom_fields=CustomFieldMigration(
-                jira_client=jira_client, op_client=op_client
+                jira_client=jira_client, 
+                op_client=op_client,
+                performance_manager=performance_manager
             ),
-            companies=CompanyMigration(jira_client=jira_client, op_client=op_client),
-            projects=ProjectMigration(jira_client=jira_client, op_client=op_client),
-            link_types=LinkTypeMigration(jira_client=jira_client, op_client=op_client),
+            companies=CompanyMigration(
+                jira_client=jira_client, 
+                op_client=op_client,
+                performance_manager=performance_manager
+            ),
+            projects=ProjectMigration(
+                jira_client=jira_client, 
+                op_client=op_client,
+                performance_manager=performance_manager
+            ),
+            link_types=LinkTypeMigration(
+                jira_client=jira_client, 
+                op_client=op_client,
+                performance_manager=performance_manager
+            ),
             issue_types=IssueTypeMigration(
-                jira_client=jira_client, op_client=op_client
+                jira_client=jira_client, 
+                op_client=op_client,
+                performance_manager=performance_manager
             ),
-            status_types=StatusMigration(jira_client=jira_client, op_client=op_client),
+            status_types=StatusMigration(
+                jira_client=jira_client, 
+                op_client=op_client,
+                performance_manager=performance_manager
+            ),
             work_packages=WorkPackageMigration(
-                jira_client=jira_client, op_client=op_client
-            ),  # Will be re-initialized if needed
-            accounts=AccountMigration(jira_client=jira_client, op_client=op_client),
+                jira_client=jira_client, 
+                op_client=op_client,
+                performance_manager=performance_manager
+            ),
+            accounts=AccountMigration(
+                jira_client=jira_client, 
+                op_client=op_client,
+                performance_manager=performance_manager
+            ),
         )
 
         # If components parameter is not provided, use default component order
@@ -370,6 +474,7 @@ def run_migration(
             available_components["work_packages"] = WorkPackageMigration(
                 jira_client=jira_client,
                 op_client=op_client,
+                performance_manager=performance_manager,
             )
 
         # Run each component in order
@@ -395,6 +500,12 @@ def run_migration(
                                 time.time() - component_start_time
                             )
 
+                        # Add performance metrics if available
+                        if performance_manager:
+                            perf_summary = performance_manager.get_performance_summary()
+                            component_result.details = component_result.details or {}
+                            component_result.details["performance_metrics"] = perf_summary
+
                         # Store result in the results dictionary
                         results.components[component_name] = component_result
 
@@ -409,12 +520,21 @@ def run_migration(
                         total_count = details.get("total_count", 0)
                         component_time = details.get("time", 0)
 
+                        # Enhanced logging with performance metrics
                         if component_result.success:
-                            config.logger.success(
+                            log_msg = (
                                 f"Component '{component_name}' completed successfully "
                                 f"({success_count}/{total_count} items migrated), "
-                                f"took {component_time:.2f} seconds",
+                                f"took {component_time:.2f} seconds"
                             )
+                            
+                            if performance_manager and "performance_metrics" in details:
+                                perf = details["performance_metrics"]
+                                throughput = perf.get("throughput", {})
+                                items_per_sec = throughput.get("items_per_second", 0)
+                                log_msg += f", throughput: {items_per_sec:.1f} items/sec"
+                            
+                            config.logger.success(log_msg)
                         else:
                             config.logger.error(
                                 f"Component '{component_name}' failed or had errors "
@@ -565,11 +685,26 @@ def run_migration(
         total_seconds = (end_time - start_time).total_seconds()
         results.overall["total_time_seconds"] = total_seconds
 
-        # Print final status
+        # Add overall performance summary
+        if performance_manager:
+            overall_perf_summary = performance_manager.get_performance_summary()
+            results.overall["performance_summary"] = overall_perf_summary
+            
+            # Save detailed performance report
+            perf_report_path = config.get_path("data") / f"performance_report_{migration_timestamp}.json"
+            performance_manager.save_performance_report(perf_report_path)
+            config.logger.info(f"Performance report saved to: {perf_report_path}")
+
+        # Print final status with performance information
         if results.overall["status"] == "success":
-            config.logger.success(
-                "Migration completed successfully in %.2f seconds.", total_seconds
-            )
+            log_msg = f"Migration completed successfully in {total_seconds:.2f} seconds."
+            if performance_manager:
+                perf = results.overall.get("performance_summary", {})
+                throughput = perf.get("throughput", {})
+                overall_items_per_sec = throughput.get("items_per_second", 0)
+                if overall_items_per_sec > 0:
+                    log_msg += f" Overall throughput: {overall_items_per_sec:.1f} items/sec"
+            config.logger.success(log_msg)
         else:
             config.logger.error(
                 "Migration completed with status '%s' in %.2f seconds.",
@@ -602,6 +737,10 @@ def run_migration(
                 "timestamp": datetime.now(tz=UTC).isoformat(),
             },
         )
+    finally:
+        # Clean up performance manager
+        if performance_manager:
+            performance_manager.cleanup()
 
 
 def parse_args() -> argparse.Namespace:
@@ -651,6 +790,24 @@ def parse_args() -> argparse.Namespace:
         "--no-confirm",
         action="store_true",
         help="Skip the 'Continue to next component' prompt and run all components without pausing",
+    )
+    # Performance optimization arguments
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="Size of batches for API processing (default: 100)",
+    )
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=5,
+        help="Maximum concurrent batch operations (default: 5)",
+    )
+    parser.add_argument(
+        "--no-performance-optimization",
+        action="store_true",
+        help="Disable performance optimization features",
     )
     return parser.parse_args()
 
@@ -852,6 +1009,9 @@ def main() -> None:
             components=args.components,
             stop_on_error=getattr(args, "stop_on_error", False),
             no_confirm=getattr(args, "no_confirm", False),
+            batch_size=getattr(args, "batch_size", 100),
+            max_concurrent=getattr(args, "max_concurrent", 5),
+            enable_performance_optimization=not getattr(args, "no_performance_optimization", False),
         )
 
         # Display migration results summary
@@ -892,6 +1052,18 @@ def main() -> None:
                     config.logger.warning("⚠ %s: %s", component, status)
                 else:
                     config.logger.error("✗ %s: %s", component, status)
+
+            # Show performance summary if available
+            if hasattr(migration_result, "overall") and "performance_summary" in migration_result.overall:
+                perf_summary = migration_result.overall["performance_summary"]
+                timing = perf_summary.get("timing", {})
+                throughput = perf_summary.get("throughput", {})
+                
+                config.logger.info("Performance Summary:")
+                config.logger.info(f"  Total processing time: {timing.get('total_time_seconds', 0):.2f}s")
+                config.logger.info(f"  Overall throughput: {throughput.get('items_per_second', 0):.1f} items/sec")
+                config.logger.info(f"  Success rate: {throughput.get('success_rate', 0):.1%}")
+                config.logger.info(f"  Processing efficiency: {timing.get('processing_efficiency', 0):.1%}")
 
     except KeyboardInterrupt:
         console.print("\nMigration manually interrupted. Exiting...")

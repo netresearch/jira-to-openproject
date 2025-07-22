@@ -243,6 +243,7 @@ class BaseMigration:
         change_detector: ChangeDetector | None = None,
         state_manager: StateManager | None = None,
         data_preservation_manager: DataPreservationManager | None = None,
+        performance_manager = None,
     ) -> None:
         """Initialize the base migration with common attributes.
 
@@ -254,6 +255,7 @@ class BaseMigration:
             change_detector: Initialized change detector for idempotent operations
             state_manager: Initialized state manager for entity mapping and history
             data_preservation_manager: Initialized data preservation manager for conflict resolution
+            performance_manager: Performance optimization manager for efficient batch processing
 
         """
         # Initialize clients using dependency injection
@@ -267,6 +269,7 @@ class BaseMigration:
                 jira_client=self.jira_client, openproject_client=self.op_client
             )
         )
+        self.performance_manager = performance_manager
 
         self.data_dir: Path = config.get_path("data")
         self.output_dir: Path = config.get_path("output")
