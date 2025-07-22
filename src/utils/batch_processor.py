@@ -41,15 +41,20 @@ class BatchProcessor(Generic[T, R]):
         enable_progress_tracking: bool = True,
         retry_attempts: int = 3,
     ):
-        """Initialize the batch processor.
-        
-        Args:
-            batch_size: Number of items to process in each batch
-            max_workers: Maximum number of concurrent workers
-            rate_limiter: Optional rate limiter for API throttling
-            enable_progress_tracking: Whether to track and emit progress events
-            retry_attempts: Number of retry attempts for failed batches
-        """
+        # Input validation
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if batch_size > 10000:
+            raise ValueError("batch_size too large (max 10000)")
+        if max_workers <= 0:
+            raise ValueError("max_workers must be positive")
+        if max_workers > 100:
+            raise ValueError("max_workers too large (max 100)")
+        if retry_attempts < 0:
+            raise ValueError("retry_attempts cannot be negative")
+        if retry_attempts > 20:
+            raise ValueError("retry_attempts too large (max 20)")
+            
         self.batch_size = batch_size
         self.max_workers = max_workers
         self.rate_limiter = rate_limiter

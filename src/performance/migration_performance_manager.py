@@ -18,9 +18,10 @@ from src.utils.batch_processor import BatchProcessor, BatchResult
 from src.utils.enhanced_rate_limiter import (
     EnhancedRateLimiter, 
     RateLimitConfig, 
-    global_rate_limiter_manager
+    global_rate_limiter_manager,
+    RateLimitStrategy
 )
-from src.utils.retry_manager import RetryManager, RetryConfig
+from src.utils.retry_manager import RetryManager, RetryConfig, RetryStrategy
 from src.utils.progress_tracker import ProgressTracker
 
 T = TypeVar('T')
@@ -57,6 +58,37 @@ class PerformanceConfig:
     enable_parallel_processing: bool = True
     memory_limit_mb: int = 512
     enable_streaming: bool = True
+    
+    def __post_init__(self):
+        """Validate configuration parameters."""
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if self.batch_size > 10000:
+            raise ValueError("batch_size too large (max 10000)")
+        if self.max_concurrent_batches <= 0:
+            raise ValueError("max_concurrent_batches must be positive")
+        if self.max_concurrent_batches > 100:
+            raise ValueError("max_concurrent_batches too large (max 100)")
+        if self.batch_timeout <= 0:
+            raise ValueError("batch_timeout must be positive")
+        if self.max_requests_per_minute <= 0:
+            raise ValueError("max_requests_per_minute must be positive")
+        if self.burst_size <= 0:
+            raise ValueError("burst_size must be positive")
+        if self.max_retries < 0:
+            raise ValueError("max_retries cannot be negative")
+        if self.max_retries > 10:
+            raise ValueError("max_retries too large (max 10)")
+        if self.base_delay <= 0:
+            raise ValueError("base_delay must be positive")
+        if self.max_delay <= 0:
+            raise ValueError("max_delay must be positive")
+        if self.max_delay < self.base_delay:
+            raise ValueError("max_delay must be >= base_delay")
+        if self.progress_update_interval <= 0:
+            raise ValueError("progress_update_interval must be positive")
+        if self.memory_limit_mb <= 0:
+            raise ValueError("memory_limit_mb must be positive")
 
 
 @dataclass
@@ -109,7 +141,7 @@ class MigrationPerformanceManager:
             max_workers=self.config.max_concurrent_batches,
             rate_limiter=None,  # Will be set separately
             enable_progress_tracking=self.config.enable_progress_tracking,
-            retry_attempts=3
+            retry_attempts=self.config.max_retries
         )
     
     def _setup_rate_limiter(self):
@@ -118,7 +150,7 @@ class MigrationPerformanceManager:
             max_requests=self.config.max_requests_per_minute,
             time_window=60.0,
             burst_size=self.config.burst_size,
-            strategy="adaptive" if self.config.adaptive_rate_limiting else "token_bucket"
+            strategy=RateLimitStrategy.ADAPTIVE if self.config.adaptive_rate_limiting else RateLimitStrategy.TOKEN_BUCKET
         )
         self.rate_limiter = global_rate_limiter_manager.get_limiter("migration", rate_config)
     
@@ -128,7 +160,7 @@ class MigrationPerformanceManager:
             max_attempts=self.config.max_retries,
             base_delay=self.config.base_delay,
             max_delay=self.config.max_delay,
-            strategy="exponential_backoff"
+            strategy=RetryStrategy.EXPONENTIAL_BACKOFF
         )
         self.retry_manager = RetryManager(retry_config)
     
@@ -154,7 +186,7 @@ class MigrationPerformanceManager:
         """Process a batch of migration items with full performance optimization."""
         
         if self.progress_tracker:
-            task_id = self.progress_tracker.add_task(description, total=len(items))
+            self.progress_tracker.start(total_items=len(items))
         
         self.metrics.total_items += len(items)
         start_time = time.time()
@@ -173,17 +205,20 @@ class MigrationPerformanceManager:
             self.metrics.processed_items += len(items)
             
             if self.progress_tracker:
-                self.progress_tracker.update(task_id, advance=len(items))
+                self.progress_tracker.update(processed=len(items))
             
             return results
             
         except Exception as e:
             self.metrics.failed_items += len(items)
             logger.error(f"Batch processing failed: {e}")
-            raise
-        finally:
             if self.progress_tracker:
-                self.progress_tracker.stop_task(task_id)
+                self.progress_tracker.finish(success=False, final_message=f"Batch failed: {e}")
+            raise
+        else:
+            # Success case - finish progress tracker if not already finished
+            if self.progress_tracker:
+                self.progress_tracker.finish(success=True, final_message=f"Processed {len(items)} items")
     
     async def _process_with_batching(
         self,
@@ -214,19 +249,20 @@ class MigrationPerformanceManager:
             # Apply retry logic
             return self.retry_manager.execute_with_retry(process_with_retry)
         
-        # Use batch processor
-        batch_results = await self.batch_processor.process_batches(
+        # Use batch processor (convert async to sync since BatchProcessor is sync)
+        def sync_processor(batch_items):
+            """Wrapper to convert async processor to sync for BatchProcessor."""
+            # Process the entire batch with rate limiting and retries
+            return rate_limited_processor(batch_items)
+        
+        batch_stats = self.batch_processor.process_parallel(
             items,
-            rate_limited_processor
+            sync_processor
         )
         
-        # Flatten results
-        results = []
-        for batch_result in batch_results:
-            if batch_result.success:
-                results.extend(batch_result.data)
-            else:
-                self.metrics.failed_items += batch_result.failed_count
+        # Extract results from the returned statistics dict
+        results = batch_stats["data"]
+        self.metrics.failed_items += batch_stats["failed_items"]
         
         return results
     
@@ -238,12 +274,10 @@ class MigrationPerformanceManager:
         """Process JSON files using streaming to optimize memory usage."""
         
         if self.progress_tracker:
-            task_id = self.progress_tracker.add_task(
-                "Processing JSON files", 
-                total=len(file_paths)
-            )
+            self.progress_tracker.start(total_items=len(file_paths))
         
         results = []
+        processed_count = 0
         
         for file_path in file_paths:
             try:
@@ -255,16 +289,19 @@ class MigrationPerformanceManager:
                     file_results = self._load_process_json_file(file_path, processor_func)
                 
                 results.extend(file_results)
+                processed_count += 1
                 
                 if self.progress_tracker:
-                    self.progress_tracker.update(task_id, advance=1)
+                    self.progress_tracker.update(processed=1)
                     
             except Exception as e:
                 logger.error(f"Failed to process file {file_path}: {e}")
                 self.metrics.failed_items += 1
+                if self.progress_tracker:
+                    self.progress_tracker.update(failed=1)
         
         if self.progress_tracker:
-            self.progress_tracker.stop_task(task_id)
+            self.progress_tracker.finish(success=True, final_message=f"Processed {processed_count} files")
         
         return results
     
@@ -392,7 +429,13 @@ class MigrationPerformanceManager:
                 )
             },
             "rate_limiter": self.rate_limiter.get_metrics().__dict__,
-            "batch_processor": self.batch_processor.get_metrics(),
+            "batch_processor": {
+                "batch_size": self.batch_processor.batch_size,
+                "max_workers": self.batch_processor.max_workers,
+                "total_items": getattr(self.batch_processor, 'total_items', 0),
+                "processed_items": getattr(self.batch_processor, 'processed_items', 0),
+                "failed_items": getattr(self.batch_processor, 'failed_items', 0)
+            },
             "retry_manager": self.retry_manager.get_metrics()
         }
     
@@ -456,10 +499,22 @@ class MigrationPerformanceManager:
         
         return recommendations
     
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """Get performance metrics in the format expected by tests and external APIs."""
+        summary = self.get_performance_summary()
+        
+        # Restructure to match expected API format
+        return {
+            "migration": summary["throughput"],
+            "rate_limiter": summary["rate_limiter"],
+            "batch_processor": summary["batch_processor"],
+            "retry_manager": summary["retry_manager"]
+        }
+    
     def cleanup(self):
         """Clean up resources."""
         if self.progress_tracker:
-            self.progress_tracker.stop()
+            self.progress_tracker.finish(success=True, final_message="Migration completed")
         
         if hasattr(self, '_executor'):
             self._executor.shutdown(wait=True)

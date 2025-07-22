@@ -205,6 +205,20 @@ class RetryManager:
             total_delay=total_delay
         )
 
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get retry manager metrics.
+        
+        Returns:
+            Dictionary with retry statistics
+        """
+        return {
+            "max_attempts": self.config.max_attempts,
+            "base_delay": self.config.base_delay,
+            "max_delay": self.config.max_delay,
+            "strategy": self.config.strategy.value,
+            "jitter_enabled": self.config.jitter
+        }
+
 
 # Decorator for easy retry functionality
 def retry(
