@@ -1,30 +1,16 @@
 #!/usr/bin/env python3
-"""OpenProjectClient.
-
-Main client interface for OpenProject operations.
-Coordinates SSHClient, DockerClient, and RailsConsoleClient in a layered architecture:
-
-Architecture:
-1. SSHClient - Base component for all SSH operations
-2. DockerClient - Uses SSHClient for remote Docker operations
-3. RailsConsoleClient - Interacts with Rails console via tmux
-4. OpenProjectClient - Coordinates all clients and operations
-
-Workflow:
-1. Creates Ruby script files locally
-2. Transfers files to remote server via SSHClient
-3. Transfers files to container via DockerClient
-4. Executes scripts in Rails console via RailsConsoleClient
-5. Processes and returns results
-"""
+"""OpenProject API client."""
 
 import json
+import logging
 import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
 from pathlib import Path
 from shlex import quote
-from typing import Any
+from typing import Any, Dict, List, Optional, Union, Callable, Iterator
 
 from src import config
 from src.clients.docker_client import DockerClient
@@ -32,6 +18,15 @@ from src.clients.rails_console_client import RailsConsoleClient, RubyError
 from src.clients.ssh_client import SSHClient
 from src.utils.file_manager import FileManager
 from src.utils.rate_limiter import create_openproject_rate_limiter
+from src.utils.performance_optimizer import (
+    PerformanceOptimizer,
+    StreamingPaginator,
+    cached,
+    rate_limited,
+    batched
+)
+from src.utils.config_validation import SecurityValidator, ConfigurationValidationError
+from src.utils.metrics_collector import MetricsCollector
 
 logger = config.logger
 
@@ -83,6 +78,7 @@ class OpenProjectClient:
         ssh_client: SSHClient | None = None,
         docker_client: DockerClient | None = None,
         rails_client: RailsConsoleClient | None = None,
+        **kwargs
     ) -> None:
         """Initialize the OpenProject client with dependency injection.
 
@@ -172,6 +168,39 @@ class OpenProjectClient:
             f"{'Using provided' if rails_client else 'Initialized'} "
             f"RailsConsoleClient with tmux session {self.tmux_session_name}",
         )
+
+        # ===== PERFORMANCE OPTIMIZER SETUP =====
+        # Performance configuration from kwargs (passed from migration.py)
+        
+        # Validate performance configuration parameters using SecurityValidator  
+        try:
+            cache_size = SecurityValidator.validate_numeric_parameter('cache_size', kwargs.get('cache_size', 1500))
+            cache_ttl = SecurityValidator.validate_numeric_parameter('cache_ttl', kwargs.get('cache_ttl', 2400))
+            batch_size = SecurityValidator.validate_numeric_parameter('batch_size', kwargs.get('batch_size', 50))
+            max_workers = SecurityValidator.validate_numeric_parameter('max_workers', kwargs.get('max_workers', 12))
+            rate_limit = SecurityValidator.validate_numeric_parameter('rate_limit_per_sec', kwargs.get('rate_limit', 12.0))
+            
+            # Validate resource allocation to prevent system overload
+            SecurityValidator.validate_resource_allocation(batch_size, max_workers, 2048)  # 2GB memory limit
+            
+        except ConfigurationValidationError as e:
+            logger.error(f"OpenProjectClient configuration validation failed: {e}")
+            raise
+        
+        # Initialize performance optimizer with validated parameters
+        self.performance_optimizer = PerformanceOptimizer(
+            cache_size=cache_size,
+            cache_ttl=cache_ttl,
+            batch_size=batch_size,
+            max_workers=max_workers,
+            rate_limit=rate_limit
+        )
+        
+        self.batch_size = batch_size
+        self.parallel_workers = max_workers
+
+        # Initialize metrics collector for observability (Zen's recommendation)
+        self.metrics = MetricsCollector()
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -1028,6 +1057,170 @@ class OpenProjectClient:
         except (QueryExecutionError, JsonParseError) as e:
             msg = f"Error finding record for {model}."
             raise QueryExecutionError(msg) from e
+
+    def _retry_with_exponential_backoff(
+        self,
+        operation: Callable[[], Any],
+        operation_name: str,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        max_delay: float = 60.0,
+        backoff_factor: float = 2.0,
+        jitter: bool = True,
+    ) -> Any:
+        """Execute an operation with exponential backoff retry logic.
+
+        Args:
+            operation: Function to execute
+            operation_name: Name of operation for logging
+            max_retries: Maximum number of retry attempts
+            base_delay: Initial delay between retries in seconds
+            max_delay: Maximum delay between retries in seconds
+            backoff_factor: Factor to multiply delay by on each retry
+            jitter: Whether to add random jitter to delays
+
+        Returns:
+            Result of the operation
+
+        Raises:
+            Exception: Last exception if all retries are exhausted
+        """
+        last_exception = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                result = operation()
+                # Track successful batch operations (Zen's observability recommendation)
+                if hasattr(self, 'metrics'):
+                    self.metrics.increment_counter('batch_success_total')
+                return result
+            except (ConnectionError, QueryExecutionError) as e:
+                last_exception = e
+                
+                # Check if this is a transient error worth retrying
+                error_message = str(e).lower()
+                transient_indicators = [
+                    'timeout', 'connection', 'network', 'temporary', 
+                    'retry', 'busy', 'overload', '503', '502', '504'
+                ]
+                
+                is_transient = any(indicator in error_message for indicator in transient_indicators)
+                
+                if not is_transient or attempt >= max_retries:
+                    # Track failed batch operations (Zen's observability recommendation)
+                    if hasattr(self, 'metrics'):
+                        self.metrics.increment_counter('batch_failure_total')
+                    # Don't retry for non-transient errors or if out of retries
+                    raise e
+                
+                # Track retry attempts (Zen's observability recommendation)
+                if hasattr(self, 'metrics'):
+                    self.metrics.increment_counter('batch_retry_total')
+                
+                # Calculate delay with exponential backoff
+                delay = min(base_delay * (backoff_factor ** attempt), max_delay)
+                
+                # Add jitter to prevent thundering herd
+                if jitter:
+                    delay = delay * (0.5 + random.random() * 0.5)
+                
+                self.logger.warning(
+                    "%s failed (attempt %d/%d): %s. Retrying in %.2f seconds...",
+                    operation_name, attempt + 1, max_retries + 1, e, delay
+                )
+                
+                time.sleep(delay)
+            
+            except (RecordNotFoundError, JsonParseError) as e:
+                # These are typically permanent errors - don't retry
+                self.logger.debug(
+                    "%s failed with non-transient error: %s", 
+                    operation_name, e
+                )
+                raise e
+        
+        # This should never be reached, but just in case
+        raise last_exception or Exception(f"{operation_name} failed after {max_retries} retries")
+
+    @rate_limited()
+    def batch_find_records(
+        self,
+        model: str,
+        ids: list[int | str],
+        batch_size: int | None = None,
+    ) -> dict[int | str, dict[str, Any]]:
+        """Find multiple records by IDs in batches.
+
+        Args:
+            model: Model name (e.g., "User", "Project")
+            ids: List of IDs to find
+            batch_size: Size of each batch (defaults to configured batch_size)
+
+        Returns:
+            Dictionary mapping ID to record data (missing IDs are omitted)
+
+        Raises:
+            QueryExecutionError: If query fails
+        """
+        if not ids:
+            return {}
+
+        # Validate and clamp batch size to prevent memory exhaustion
+        effective_batch_size = batch_size or getattr(self, 'batch_size', 100)
+        effective_batch_size = self._validate_batch_size(effective_batch_size)
+        
+        results = {}
+        
+        # Process IDs in batches
+        for i in range(0, len(ids), effective_batch_size):
+            batch_ids = ids[i:i + effective_batch_size]
+            
+            def batch_operation():
+                # Use safe query builder with ActiveRecord parameterization
+                query = self._build_safe_batch_query(model, 'id', batch_ids)
+                return self.execute_json_query(query)
+            
+            try:
+                # Execute batch operation with retry logic
+                batch_results = self._retry_with_exponential_backoff(
+                    batch_operation,
+                    f"Batch fetch {model} records {batch_ids[:3]}{'...' if len(batch_ids) > 3 else ''}"
+                )
+                
+                if batch_results:
+                    # Ensure we have a list
+                    if isinstance(batch_results, dict):
+                        batch_results = [batch_results]
+                    
+                    # Optimize ID mapping - create lookup sets for O(1) performance
+                    batch_id_set = {str(bid) for bid in batch_ids}
+                    original_id_map = {str(bid): bid for bid in batch_ids}
+                    
+                    # Map results by ID with O(1) lookups
+                    for record in batch_results:
+                        if isinstance(record, dict) and 'id' in record:
+                            record_id_str = str(record['id'])
+                            if record_id_str in batch_id_set:
+                                original_id = original_id_map[record_id_str]
+                                results[original_id] = record
+
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to fetch batch of %s records (IDs %s) after retries: %s",
+                    model,
+                    batch_ids,
+                    e
+                )
+                # Continue processing other batches rather than failing completely
+                # Log individual failures for post-run review
+                for batch_id in batch_ids:
+                    self.logger.debug(
+                        "Failed to fetch %s record ID %s: %s", 
+                        model, batch_id, e
+                    )
+                continue
+
+        return results
 
     def create_record(self, model: str, attributes: dict[str, Any]) -> dict[str, Any]:
         """Create a new record.
@@ -2202,3 +2395,540 @@ class OpenProjectClient:
         except Exception as e:
             msg = f"Failed to batch create time entries: {e}"
             raise QueryExecutionError(msg) from e
+
+    # ===== ENHANCED PERFORMANCE FEATURES =====
+    
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """Get comprehensive performance statistics."""
+        return self.performance_optimizer.get_comprehensive_stats()
+
+    # ===== BATCH OPERATIONS =====
+    
+    def batch_create_work_packages(self, work_packages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Create multiple work packages in batches for optimal performance."""
+        if not work_packages:
+            return {"created": 0, "failed": 0, "results": []}
+            
+        return self.performance_optimizer.batch_processor.process_batches(
+            work_packages,
+            self._create_work_packages_batch
+        )
+    
+    def _create_work_packages_batch(self, work_packages: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
+        """Create a batch of work packages using Rails."""
+        if not work_packages:
+            return {"created": 0, "failed": 0, "results": []}
+            
+        # Build batch work package creation script
+        work_packages_json = json.dumps(work_packages)
+        script = f"""
+        work_packages_data = {work_packages_json}
+        created_count = 0
+        failed_count = 0
+        results = []
+        
+        work_packages_data.each do |wp_data|
+          begin
+            # Create work package with provided attributes
+            wp = WorkPackage.new
+            
+            # Set basic attributes
+            wp.subject = wp_data['subject'] if wp_data['subject']
+            wp.description = wp_data['description'] if wp_data['description']
+            
+            # Set project (required)
+            if wp_data['project_id']
+              wp.project = Project.find(wp_data['project_id'])
+            end
+            
+            # Set type (required) 
+            if wp_data['type_id']
+              wp.type = Type.find(wp_data['type_id'])
+            elsif wp_data['type_name']
+              wp.type = Type.find_by(name: wp_data['type_name'])
+            end
+            
+            # Set status
+            if wp_data['status_id']
+              wp.status = Status.find(wp_data['status_id'])
+            elsif wp_data['status_name']
+              wp.status = Status.find_by(name: wp_data['status_name'])
+            end
+            
+            # Set priority
+            if wp_data['priority_id']
+              wp.priority = IssuePriority.find(wp_data['priority_id'])
+            elsif wp_data['priority_name']
+              wp.priority = IssuePriority.find_by(name: wp_data['priority_name'])
+            end
+            
+            # Set author
+            if wp_data['author_id']
+              wp.author = User.find(wp_data['author_id'])
+            end
+            
+            # Set assignee
+            if wp_data['assigned_to_id']
+              wp.assigned_to = User.find(wp_data['assigned_to_id'])
+            end
+            
+            # Save the work package
+            if wp.save
+              created_count += 1
+              results << {{ id: wp.id, status: 'created', subject: wp.subject }}
+            else
+              failed_count += 1
+              results << {{ 
+                subject: wp_data['subject'], 
+                status: 'failed', 
+                errors: wp.errors.full_messages 
+              }}
+            end
+            
+          rescue => e
+            failed_count += 1
+            results << {{ 
+              subject: wp_data['subject'], 
+              status: 'failed', 
+              error: e.message 
+            }}
+          end
+        end
+        
+        {{
+          created: created_count,
+          failed: failed_count,
+          results: results
+        }}
+        """
+        
+        try:
+            result = self.execute_json_query(script)
+            return result if isinstance(result, dict) else {"created": 0, "failed": len(work_packages), "results": []}
+        except Exception as e:
+            msg = f"Failed to batch create work packages: {e}"
+            raise QueryExecutionError(msg) from e
+    
+    @cached(ttl=1800)  # Cache for 30 minutes
+    def get_project_enhanced(self, project_id: int) -> Dict[str, Any]:
+        """Get comprehensive project information with caching."""
+        script = f"""
+        project = Project.find({project_id})
+        work_package_count = project.work_packages.count
+        
+        {{
+          project: {{
+            id: project.id,
+            name: project.name,
+            identifier: project.identifier,
+            description: project.description,
+            status: project.status,
+            created_on: project.created_on,
+            updated_on: project.updated_on
+          }},
+          statistics: {{
+            work_package_count: work_package_count,
+            active: project.active?
+          }}
+        }}
+        """
+        
+        try:
+            return self.execute_json_query(script)
+        except Exception as e:
+            msg = f"Failed to get enhanced project data for ID {project_id}: {e}"
+            raise QueryExecutionError(msg) from e
+
+    def batch_get_users_by_ids(self, user_ids: List[int]) -> Dict[int, dict]:
+        """Retrieve multiple users in batches."""
+        if not user_ids:
+            return {}
+            
+        # Get all users and filter to requested IDs
+        all_users = self.get_all_users()
+        return {
+            user['id']: user 
+            for user in all_users 
+            if user['id'] in user_ids
+        }
+
+    @rate_limited()
+    def stream_work_packages_for_project(self, project_id: int, batch_size: int = None) -> Iterator[Dict[str, Any]]:
+        """Stream work packages for a project with memory-efficient pagination."""
+        effective_batch_size = batch_size or self.batch_size
+        
+        script = f"""
+        project = Project.find({project_id})
+        work_packages = project.work_packages.limit({effective_batch_size})
+        
+        work_packages.map do |wp|
+          {{
+            id: wp.id,
+            subject: wp.subject,
+            description: wp.description,
+            status: wp.status.name,
+            priority: wp.priority.name,
+            type: wp.type.name,
+            author: wp.author.name,
+            assignee: wp.assigned_to&.name,
+            created_on: wp.created_on,
+            updated_on: wp.updated_on
+          }}
+        end
+        """
+        
+        try:
+            results = self.execute_json_query(script)
+            if isinstance(results, list):
+                for wp in results:
+                    yield wp
+        except Exception as e:
+            logger.error(f"Failed to stream work packages for project {project_id}: {e}")
+
+    def batch_update_work_packages(self, updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Update multiple work packages in batches."""
+        if not updates:
+            return {"updated": 0, "failed": 0, "results": []}
+            
+        # Build batch update script
+        updates_json = json.dumps(updates)
+        script = f"""
+        updates = {updates_json}
+        updated_count = 0
+        failed_count = 0
+        results = []
+        
+        updates.each do |update|
+          begin
+            wp = WorkPackage.find(update['id'])
+            update.each do |key, value|
+              next if key == 'id'
+              wp.send("#{key}=", value) if wp.respond_to?("#{key}=")
+            end
+            wp.save!
+            updated_count += 1
+            results << {{ id: wp.id, status: 'updated' }}
+          rescue => e
+            failed_count += 1
+            results << {{ id: update['id'], status: 'failed', error: e.message }}
+          end
+        end
+        
+        {{
+          updated: updated_count,
+          failed: failed_count,
+          results: results
+        }}
+        """
+        
+        try:
+            return self.execute_json_query(script)
+        except Exception as e:
+            msg = f"Failed to batch update work packages: {e}"
+            raise QueryExecutionError(msg) from e
+
+    @rate_limited()
+    def batch_get_users_by_emails(
+        self,
+        emails: list[str],
+        batch_size: int | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Find multiple users by email addresses in batches.
+
+        Args:
+            emails: List of email addresses to find
+            batch_size: Size of each batch (defaults to configured batch_size)
+
+        Returns:
+            Dictionary mapping email to user data (missing emails are omitted)
+
+        Raises:
+            QueryExecutionError: If query fails
+        """
+        if not emails:
+            return {}
+
+        # Validate and clamp batch size to prevent memory exhaustion
+        effective_batch_size = batch_size or getattr(self, 'batch_size', 100)
+        effective_batch_size = self._validate_batch_size(effective_batch_size)
+        
+        results = {}
+        
+        # Process emails in batches
+        for i in range(0, len(emails), effective_batch_size):
+            batch_emails = emails[i:i + effective_batch_size]
+            
+            def batch_operation():
+                # Use safe query builder with ActiveRecord parameterization
+                query = self._build_safe_batch_query('User', 'mail', batch_emails)
+                return self.execute_json_query(query)
+            
+            try:
+                # Execute batch operation with retry logic
+                batch_results = self._retry_with_exponential_backoff(
+                    batch_operation,
+                    f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}"
+                )
+                
+                if batch_results:
+                    # Ensure we have a list
+                    if isinstance(batch_results, dict):
+                        batch_results = [batch_results]
+                    
+                    # Map results by email
+                    for record in batch_results:
+                        if isinstance(record, dict) and 'mail' in record:
+                            email = record['mail']
+                            if email in batch_emails:
+                                results[email] = record
+
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to fetch batch of user emails %s after retries: %s",
+                    batch_emails,
+                    e
+                )
+                # Continue processing other batches rather than failing completely
+                # Log individual failures for post-run review
+                for email in batch_emails:
+                    self.logger.debug(
+                        "Failed to fetch user by email %s: %s", 
+                        email, e
+                    )
+                continue
+
+        return results
+
+    @rate_limited()
+    def batch_get_projects_by_identifiers(
+        self,
+        identifiers: list[str],
+        batch_size: int | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Find multiple projects by identifiers in batches.
+
+        Args:
+            identifiers: List of project identifiers to find
+            batch_size: Size of each batch (defaults to configured batch_size)
+
+        Returns:
+            Dictionary mapping identifier to project data (missing identifiers are omitted)
+
+        Raises:
+            QueryExecutionError: If query fails
+        """
+        if not identifiers:
+            return {}
+
+        # Validate and clamp batch size to prevent memory exhaustion
+        effective_batch_size = batch_size or getattr(self, 'batch_size', 100)
+        effective_batch_size = self._validate_batch_size(effective_batch_size)
+        
+        results = {}
+        
+        # Process identifiers in batches
+        for i in range(0, len(identifiers), effective_batch_size):
+            batch_identifiers = identifiers[i:i + effective_batch_size]
+            
+            def batch_operation():
+                # Use safe query builder with ActiveRecord parameterization  
+                query = self._build_safe_batch_query('Project', 'identifier', batch_identifiers)
+                return self.execute_json_query(query)
+            
+            try:
+                # Execute batch operation with retry logic
+                batch_results = self._retry_with_exponential_backoff(
+                    batch_operation,
+                    f"Batch fetch projects by identifier {batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}"
+                )
+                
+                if batch_results:
+                    # Ensure we have a list
+                    if isinstance(batch_results, dict):
+                        batch_results = [batch_results]
+                    
+                    # Map results by identifier
+                    for record in batch_results:
+                        if isinstance(record, dict) and 'identifier' in record:
+                            identifier = record['identifier']
+                            if identifier in batch_identifiers:
+                                results[identifier] = record
+
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to fetch batch of project identifiers %s after retries: %s",
+                    batch_identifiers,
+                    e
+                )
+                # Continue processing other batches rather than failing completely
+                # Log individual failures for post-run review
+                for identifier in batch_identifiers:
+                    self.logger.debug(
+                        "Failed to fetch project by identifier %s: %s", 
+                        identifier, e
+                    )
+                continue
+
+        return results
+
+    @rate_limited()
+    def batch_get_custom_fields_by_names(
+        self,
+        names: list[str],
+        batch_size: int | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Find multiple custom fields by names in batches.
+
+        Args:
+            names: List of custom field names to find
+            batch_size: Size of each batch (defaults to configured batch_size)
+
+        Returns:
+            Dictionary mapping name to custom field data (missing names are omitted)
+
+        Raises:
+            QueryExecutionError: If query fails
+        """
+        if not names:
+            return {}
+
+        # Validate and clamp batch size to prevent memory exhaustion
+        effective_batch_size = batch_size or getattr(self, 'batch_size', 100)
+        effective_batch_size = self._validate_batch_size(effective_batch_size)
+        
+        results = {}
+        
+        # Process names in batches
+        for i in range(0, len(names), effective_batch_size):
+            batch_names = names[i:i + effective_batch_size]
+            
+            def batch_operation():
+                # Use safe query builder with ActiveRecord parameterization
+                query = self._build_safe_batch_query('CustomField', 'name', batch_names)
+                return self.execute_json_query(query)
+            
+            try:
+                # Execute batch operation with retry logic
+                batch_results = self._retry_with_exponential_backoff(
+                    batch_operation,
+                    f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}"
+                )
+                
+                if batch_results:
+                    # Ensure we have a list
+                    if isinstance(batch_results, dict):
+                        batch_results = [batch_results]
+                    
+                    # Map results by name
+                    for record in batch_results:
+                        if isinstance(record, dict) and 'name' in record:
+                            name = record['name']
+                            if name in batch_names:
+                                results[name] = record
+
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to fetch batch of custom field names %s after retries: %s",
+                    batch_names,
+                    e
+                )
+                # Continue processing other batches rather than failing completely
+                # Log individual failures for post-run review
+                for name in batch_names:
+                    self.logger.debug(
+                        "Failed to fetch custom field by name %s: %s", 
+                        name, e
+                    )
+                continue
+
+        return results
+
+
+
+    def _validate_batch_size(self, batch_size: int) -> int:
+        """Validate and clamp batch size to safe limits.
+        
+        Args:
+            batch_size: Requested batch size
+            
+        Returns:
+            Safe batch size within limits
+            
+        Raises:
+            ValueError: If batch_size is invalid
+        """
+        if not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError(f"batch_size must be a positive integer, got: {batch_size}")
+        
+        # Enforce maximum batch size to prevent memory exhaustion
+        MAX_BATCH_SIZE = 1000
+        if batch_size > MAX_BATCH_SIZE:
+            self.logger.warning(
+                "batch_size %d exceeds maximum %d, clamping to maximum",
+                batch_size, MAX_BATCH_SIZE
+            )
+            return MAX_BATCH_SIZE
+        
+        return batch_size
+
+    def _validate_model_name(self, model: str) -> str:
+        """Validate model name against whitelist to prevent injection.
+        
+        Args:
+            model: Model name to validate
+            
+        Returns:
+            Validated model name
+            
+        Raises:
+            ValueError: If model name is not allowed
+        """
+        # Whitelist of allowed OpenProject model names
+        ALLOWED_MODELS = {
+            'User', 'Project', 'WorkPackage', 'CustomField', 
+            'Status', 'Type', 'Priority', 'Category', 'Version',
+            'TimeEntry', 'Attachment', 'Repository', 'News',
+            'Wiki', 'WikiPage', 'Forum', 'Message', 'Board'
+        }
+        
+        if model not in ALLOWED_MODELS:
+            raise ValueError(f"Model '{model}' not in allowed list: {sorted(ALLOWED_MODELS)}")
+        
+        return model
+
+    def _build_safe_batch_query(self, model: str, field: str, values: list[Any]) -> str:
+        """Build a safe batch query using ActiveRecord patterns.
+        
+        Args:
+            model: Validated model name
+            field: Field name to query (e.g., 'id', 'mail', 'identifier')
+            values: List of values to query for
+            
+        Returns:
+            Safe Ruby query string using ActiveRecord WHERE methods
+            
+        Raises:
+            ValueError: If field name is invalid or payload too large
+        """
+        import re
+        
+        # Validate model name first
+        safe_model = self._validate_model_name(model)
+        
+        # Validate field name to prevent injection (Zen's critical recommendation)
+        if not re.match(r"^[a-zA-Z_]+$", field):
+            raise ValueError(f"Illegal field name '{field}' - only letters and underscores allowed")
+        
+        # Use ActiveRecord's built-in parameterization instead of string building
+        # This approach delegates sanitization to Rails rather than DIY
+        values_json = json.dumps(values)
+        
+        # Add payload byte cap to prevent memory exhaustion (Zen's recommendation)
+        payload_bytes = len(values_json.encode("utf-8"))
+        MAX_PAYLOAD_BYTES = 256_000  # 256 KB limit
+        if payload_bytes > MAX_PAYLOAD_BYTES:
+            raise ValueError(f"Batch payload {payload_bytes} bytes exceeds {MAX_PAYLOAD_BYTES} limit")
+        
+        query = f"{safe_model}.where({field}: {values_json}).map(&:as_json)"
+        
+        return query

@@ -819,36 +819,149 @@ class DataPreservationManager:
         conflicts = []
         conflicts_by_resolution = {}
 
-        for entity_id, changes in jira_changes.items():
-            if not self.openproject_client:
-                # Can't check OpenProject state without client
-                continue
+        if not self.openproject_client:
+            # Can't check OpenProject state without client
+            return ConflictReport(
+                total_conflicts=0,
+                conflicts_by_type={},
+                conflicts_by_resolution={},
+                conflicts=[],
+                timestamp=datetime.now(tz=UTC).isoformat(),
+            )
 
-            try:
-                # Get current OpenProject data (would need actual client implementation)
-                current_op_data = self._get_openproject_entity_data(
-                    entity_id, entity_type
-                )
+        # Extract entity IDs for batch processing
+        entity_ids = list(jira_changes.keys())
+        
+        if not entity_ids:
+            return ConflictReport(
+                total_conflicts=0,
+                conflicts_by_type={},
+                conflicts_by_resolution={},
+                conflicts=[],
+                timestamp=datetime.now(tz=UTC).isoformat(),
+            )
 
-                if current_op_data:
-                    conflict = self.detect_conflicts(
-                        changes, entity_id, entity_type, current_op_data
-                    )
-                    if conflict:
-                        conflicts.append(conflict)
-                        resolution = conflict["resolution_strategy"].value
-                        conflicts_by_resolution[resolution] = (
-                            conflicts_by_resolution.get(resolution, 0) + 1
+        # Get and log batch configuration
+        from src import config
+        batch_size = config.migration_config.get("batch_size", 100)
+        estimated_batches = (len(entity_ids) + batch_size - 1) // batch_size
+        
+        self.logger.info(
+            "Starting batch analysis for %d %s entities (batch_size=%d, ~%d batches)", 
+            len(entity_ids), entity_type, batch_size, estimated_batches
+        )
+
+        try:
+            # Phase 1: Batch fetch all OpenProject entities
+            self.logger.debug("Phase 1: Starting batch fetch from OpenProject...")
+            start_time = datetime.now(tz=UTC)
+            
+            openproject_entities = self._batch_get_openproject_entities(
+                entity_ids, entity_type
+            )
+            
+            fetch_duration = (datetime.now(tz=UTC) - start_time).total_seconds()
+            success_rate = len(openproject_entities) / len(entity_ids) * 100 if entity_ids else 0
+            
+            self.logger.info(
+                "Phase 1 complete: Batch fetch returned %d/%d entities (%.1f%% success) in %.2fs",
+                len(openproject_entities), len(entity_ids), success_rate, fetch_duration
+            )
+
+            # Phase 2: Process conflict detection with batched data
+            self.logger.debug("Phase 2: Starting conflict detection analysis...")
+            analysis_start_time = datetime.now(tz=UTC)
+            processed_count = 0
+            missing_count = 0
+            
+            for entity_id, changes in jira_changes.items():
+                try:
+                    # Get OpenProject data from batch results
+                    current_op_data = openproject_entities.get(entity_id)
+
+                    if current_op_data:
+                        # Preserve all existing side-effects and data transforms
+                        conflict = self.detect_conflicts(
+                            changes, entity_id, entity_type, current_op_data
+                        )
+                        if conflict:
+                            conflicts.append(conflict)
+                            resolution = conflict["resolution_strategy"].value
+                            conflicts_by_resolution[resolution] = (
+                                conflicts_by_resolution.get(resolution, 0) + 1
+                            )
+                        processed_count += 1
+                    else:
+                        missing_count += 1
+                        self.logger.debug(
+                            "No OpenProject data found for %s %s in batch results", 
+                            entity_type, entity_id
                         )
 
-            except Exception as e:
-                self.logger.warning("Failed to analyze entity %s: %s", entity_id, e)
+                except Exception as e:
+                    self.logger.warning("Failed to analyze entity %s: %s", entity_id, e)
+            
+            analysis_duration = (datetime.now(tz=UTC) - analysis_start_time).total_seconds()
+            self.logger.debug(
+                "Phase 2 complete: Analyzed %d entities, %d missing, %d conflicts found in %.2fs",
+                processed_count, missing_count, len(conflicts), analysis_duration
+            )
+
+        except Exception as e:
+            self.logger.warning(
+                "Batch analysis failed for %s, falling back to individual processing: %s",
+                entity_type, e
+            )
+            
+            # Fallback to individual processing if batch fails
+            # This preserves backward compatibility and ensures identical behavior
+            self.logger.debug("Fallback: Using individual API calls to maintain compatibility")
+            fallback_start_time = datetime.now(tz=UTC)
+            
+            for entity_id, changes in jira_changes.items():
+                try:
+                    # Use original individual API call method - preserves all existing behavior
+                    current_op_data = self._get_openproject_entity_data(
+                        entity_id, entity_type
+                    )
+
+                    if current_op_data:
+                        # Identical conflict detection logic as before
+                        conflict = self.detect_conflicts(
+                            changes, entity_id, entity_type, current_op_data
+                        )
+                        if conflict:
+                            conflicts.append(conflict)
+                            resolution = conflict["resolution_strategy"].value
+                            conflicts_by_resolution[resolution] = (
+                                conflicts_by_resolution.get(resolution, 0) + 1
+                            )
+
+                except Exception as e:
+                    self.logger.warning("Failed to analyze entity %s: %s", entity_id, e)
+            
+            fallback_duration = (datetime.now(tz=UTC) - fallback_start_time).total_seconds()
+            self.logger.info(
+                "Fallback complete: Processed %d entities individually in %.2fs",
+                len(entity_ids), fallback_duration
+            )
 
         # Generate statistics
         conflicts_by_type = {}
         for conflict in conflicts:
-            entity_type = conflict["entity_type"]
-            conflicts_by_type[entity_type] = conflicts_by_type.get(entity_type, 0) + 1
+            entity_type_key = conflict["entity_type"]
+            conflicts_by_type[entity_type_key] = conflicts_by_type.get(entity_type_key, 0) + 1
+
+        # Calculate API call efficiency
+        total_duration = (datetime.now(tz=UTC) - start_time).total_seconds()
+        entities_per_second = len(entity_ids) / total_duration if total_duration > 0 else 0
+        
+        self.logger.info(
+            "Analysis complete for %s: %d conflicts found out of %d entities "
+            "(%.2fs total, %.1f entities/sec, batch_size=%d)",
+            entity_type, len(conflicts), len(entity_ids), 
+            total_duration, entities_per_second, batch_size
+        )
 
         return ConflictReport(
             total_conflicts=len(conflicts),
@@ -857,6 +970,202 @@ class DataPreservationManager:
             conflicts=conflicts,
             timestamp=datetime.now(tz=UTC).isoformat(),
         )
+
+    def _batch_get_openproject_entities(
+        self, entity_ids: list[str], entity_type: str
+    ) -> dict[str, dict[str, Any]]:
+        """Get multiple entity data from OpenProject using batch processing.
+
+        Args:
+            entity_ids: List of entity identifiers
+            entity_type: Type of entities
+
+        Returns:
+            Dictionary mapping entity_id to entity data (missing entities omitted)
+        """
+        if not entity_ids or not self.openproject_client:
+            return {}
+
+        try:
+            # Get batch size from configuration
+            from src import config
+            batch_size = config.migration_config.get("batch_size", 100)
+            
+            results = {}
+            
+            # Handle different entity types with their specific batch methods
+            if entity_type == "users":
+                # Separate numeric IDs from emails
+                numeric_ids = []
+                email_ids = []
+                
+                for entity_id in entity_ids:
+                    try:
+                        int(entity_id)
+                        numeric_ids.append(int(entity_id))
+                    except (ValueError, TypeError):
+                        email_ids.append(entity_id)
+                
+                # Batch fetch by ID
+                if numeric_ids:
+                    try:
+                        batch_results = self.openproject_client.batch_find_records(
+                            "User", numeric_ids, batch_size
+                        )
+                        # Map back to string IDs for consistency
+                        for user_id, user_data in batch_results.items():
+                            results[str(user_id)] = user_data
+                    except Exception as e:
+                        self.logger.warning("Failed to batch fetch users by ID: %s", e)
+                
+                # Batch fetch by email
+                if email_ids:
+                    try:
+                        batch_results = self.openproject_client.batch_get_users_by_emails(
+                            email_ids, batch_size
+                        )
+                        results.update(batch_results)
+                    except Exception as e:
+                        self.logger.warning("Failed to batch fetch users by email: %s", e)
+
+            elif entity_type == "projects":
+                # Separate numeric IDs from identifiers
+                numeric_ids = []
+                identifier_ids = []
+                
+                for entity_id in entity_ids:
+                    try:
+                        int(entity_id)
+                        numeric_ids.append(int(entity_id))
+                    except (ValueError, TypeError):
+                        identifier_ids.append(entity_id)
+                
+                # Batch fetch by ID
+                if numeric_ids:
+                    try:
+                        batch_results = self.openproject_client.batch_find_records(
+                            "Project", numeric_ids, batch_size
+                        )
+                        # Map back to string IDs for consistency
+                        for project_id, project_data in batch_results.items():
+                            results[str(project_id)] = project_data
+                    except Exception as e:
+                        self.logger.warning("Failed to batch fetch projects by ID: %s", e)
+                
+                # Batch fetch by identifier
+                if identifier_ids:
+                    try:
+                        batch_results = self.openproject_client.batch_get_projects_by_identifiers(
+                            identifier_ids, batch_size
+                        )
+                        results.update(batch_results)
+                    except Exception as e:
+                        self.logger.warning("Failed to batch fetch projects by identifier: %s", e)
+
+            elif entity_type == "custom_fields":
+                # Separate numeric IDs from names
+                numeric_ids = []
+                name_ids = []
+                
+                for entity_id in entity_ids:
+                    try:
+                        int(entity_id)
+                        numeric_ids.append(int(entity_id))
+                    except (ValueError, TypeError):
+                        name_ids.append(entity_id)
+                
+                # Batch fetch by ID
+                if numeric_ids:
+                    try:
+                        batch_results = self.openproject_client.batch_find_records(
+                            "CustomField", numeric_ids, batch_size
+                        )
+                        # Map back to string IDs for consistency
+                        for field_id, field_data in batch_results.items():
+                            results[str(field_id)] = field_data
+                    except Exception as e:
+                        self.logger.warning("Failed to batch fetch custom fields by ID: %s", e)
+                
+                # Batch fetch by name
+                if name_ids:
+                    try:
+                        batch_results = self.openproject_client.batch_get_custom_fields_by_names(
+                            name_ids, batch_size
+                        )
+                        results.update(batch_results)
+                    except Exception as e:
+                        self.logger.warning("Failed to batch fetch custom fields by name: %s", e)
+
+            elif entity_type in ["work_packages", "statuses", "status_types", 
+                                 "issue_types", "work_package_types", "link_types", "relation_types"]:
+                # These entity types only support ID-based lookup
+                # Convert to appropriate model name
+                model_mapping = {
+                    "work_packages": "WorkPackage",
+                    "statuses": "Status", 
+                    "status_types": "Status",
+                    "issue_types": "Type",
+                    "work_package_types": "Type",
+                    "link_types": "Relation",
+                    "relation_types": "Relation"
+                }
+                
+                model_name = model_mapping[entity_type]
+                numeric_ids = []
+                
+                for entity_id in entity_ids:
+                    try:
+                        numeric_ids.append(int(entity_id))
+                    except (ValueError, TypeError):
+                        self.logger.debug("Skipping non-numeric ID '%s' for %s", entity_id, entity_type)
+                
+                if numeric_ids:
+                    try:
+                        batch_results = self.openproject_client.batch_find_records(
+                            model_name, numeric_ids, batch_size
+                        )
+                        # Map back to string IDs for consistency
+                        for entity_id, entity_data in batch_results.items():
+                            results[str(entity_id)] = entity_data
+                    except Exception as e:
+                        self.logger.warning("Failed to batch fetch %s: %s", entity_type, e)
+
+            else:
+                # Unknown entity type - try generic lookup
+                self.logger.warning("Unknown entity type '%s', attempting generic batch lookup", entity_type)
+                model_name = entity_type.rstrip('s').capitalize()
+                numeric_ids = []
+                
+                for entity_id in entity_ids:
+                    try:
+                        numeric_ids.append(int(entity_id))
+                    except (ValueError, TypeError):
+                        self.logger.debug("Skipping non-numeric ID '%s' for %s", entity_id, entity_type)
+                
+                if numeric_ids:
+                    try:
+                        batch_results = self.openproject_client.batch_find_records(
+                            model_name, numeric_ids, batch_size
+                        )
+                        # Map back to string IDs for consistency
+                        for entity_id, entity_data in batch_results.items():
+                            results[str(entity_id)] = entity_data
+                    except Exception as e:
+                        self.logger.warning("Failed to batch fetch %s: %s", entity_type, e)
+
+            self.logger.debug(
+                "Batched fetch for %s %s entities returned %d results",
+                len(entity_ids), entity_type, len(results)
+            )
+            
+            return results
+
+        except Exception as e:
+            self.logger.warning(
+                "Failed to batch get OpenProject entity data for %s: %s",
+                entity_type, e
+            )
+            return {}
 
     def _get_openproject_entity_data(
         self, entity_id: str, entity_type: str
