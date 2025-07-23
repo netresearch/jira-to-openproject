@@ -1810,11 +1810,158 @@
         ],
         "priority": "high",
         "subtasks": []
+      },
+      {
+        "id": 80,
+        "title": "Fix Critical Thread Safety Issues in Performance System",
+        "description": "Add proper synchronization and resource management to the MigrationPerformanceManager and BatchProcessor components to eliminate race conditions, resource leaks, and runtime errors in production.",
+        "details": "1. MigrationPerformanceManager metrics locking:\n   • Identify all shared state in metrics collection (counters, timers, histograms).\n   • Introduce a threading.RLock or threading.Lock around each update and read operation. For example:\n     ```python\n     class MigrationPerformanceManager:\n         def __init__(self):\n             self._lock = threading.RLock()\n             self._metrics = {}\n\n         def record_metric(self, name, value):\n             with self._lock:\n                 self._metrics.setdefault(name, []).append(value)\n     ```\n2. BatchProcessor ThreadPoolExecutor cleanup:\n   • Refactor `BatchProcessor` to use a context manager for the executor:\n     ```python\n     class BatchProcessor:\n         def __enter__(self):\n             self._executor = ThreadPoolExecutor(max_workers=self.max_workers)\n             return self\n\n         def __exit__(self, exc_type, exc_val, exc_tb):\n             self._executor.shutdown(wait=True)\n     ```\n   • Ensure all submit/map calls occur within `with BatchProcessor() as bp:` and wrap in try/finally to guarantee shutdown on exceptions.\n3. _process_with_batching async/sync integration:\n   • Review the method to detect where async tasks yield to the event loop and where synchronous code runs.\n   • Use `asyncio.Lock` for any shared async state and `run_in_executor` for CPU‐bound sync calls.\n   • Example fix:\n     ```python\n     async def _process_with_batching(self, items):\n         async with self._async_lock:\n             loop = asyncio.get_event_loop()\n             results = await loop.run_in_executor(None, self._sync_batch_process, items)\n         return results\n     ```\n4. General shared resource synchronization:\n   • Audit all module‐level variables and caches used by performance components.\n   • Apply locking consistently (threading.Lock or asyncio.Lock) based on usage context.\n   • Add documentation on when to use each lock and include a section in CONTRIBUTING.md describing the locking strategy.",
+        "testStrategy": "1. Unit tests for MigrationPerformanceManager:\n   • Spawn multiple threads calling `record_metric` concurrently; assert final metric counts match expected totals and no exceptions occur.\n   • Use a mock workload to read and write metrics under lock, verifying no data corruption.\n2. BatchProcessor executor cleanup tests:\n   • Write a test that raises an exception inside the `with BatchProcessor()` block and confirm `ThreadPoolExecutor.shutdown` is called.\n   • Use a weakref to the executor to verify it is garbage‐collected after exit.\n3. Async/sync integration tests for _process_with_batching:\n   • Simulate mixed async and sync workloads; verify results are correct, no deadlocks, and locks release properly.\n   • Use pytest‐asyncio to assert that concurrent calls to `_process_with_batching` do not overlap critical sections.\n4. Stress and integration tests:\n   • Run a high‐concurrency stress test with 100+ threads and 50+ async tasks triggering performance code.\n   • Monitor for thread leaks, resource exhaustion, and validate the absence of race conditions over a 30-minute run.",
+        "status": "done",
+        "dependencies": [
+          13
+        ],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement locking in MigrationPerformanceManager",
+            "description": "Identify all shared state in MigrationPerformanceManager and introduce threading.RLock around each update and read operation",
+            "dependencies": [],
+            "details": "Scan the metrics collection code to locate counters, timers, and histograms; add self._lock = threading.RLock() in __init__; wrap record_metric, get_metric, and any read/write methods with with self._lock\n<info added on 2025-07-22T11:43:58.626Z>\nAdd a threading.Lock instance in MigrationPerformanceManager to guard all metric updates. Introduce threading.Event objects to coordinate thread start and stop. Refactor counter operations so they execute atomically under the lock. Wrap ThreadPoolExecutor creation and shutdown in a context manager to guarantee proper resource cleanup. Remove all legacy compatibility code to simplify and modernize the implementation.\n</info added on 2025-07-22T11:43:58.626Z>",
+            "status": "done",
+            "testStrategy": "Create unit tests that spawn multiple threads calling record_metric and get_metric concurrently; assert that metric values are consistent and no exceptions occur"
+          },
+          {
+            "id": 2,
+            "title": "Refactor BatchProcessor with context manager and cleanup",
+            "description": "Convert BatchProcessor to use a context manager for ThreadPoolExecutor and guarantee shutdown on exceptions",
+            "dependencies": [],
+            "details": "Implement __enter__ to initialize ThreadPoolExecutor and __exit__ to call shutdown(wait=True); update all code to use with BatchProcessor() as bp: for submit/map calls wrapped in try/finally to ensure executor shutdown on errors\n<info added on 2025-07-22T11:45:58.768Z>\nIdentified Issues:\n- progress_callbacks, batch_results, processed_items, and failed_items are accessed concurrently without synchronization\n- _emit_progress() can be invoked from multiple threads simultaneously\n- ThreadPoolExecutor is not used as a context manager, risking resource leaks on exceptions\n- Shared counters are updated non-atomically, causing race conditions\n\nImplementation Plan:\n- Add a threading.Lock to guard all shared state modifications\n- Wrap calls to _emit_progress() in the lock to ensure thread-safe progress reporting\n- Refactor BatchProcessor to use ThreadPoolExecutor as a context manager in __enter__/__exit__\n- Employ atomic counter operations using threading-safe constructs\n- Remove legacy compatibility layers and obsolete code paths\n</info added on 2025-07-22T11:45:58.768Z>",
+            "status": "done",
+            "testStrategy": "Write tests that raise exceptions inside the with block and verify executor.shutdown is invoked and no threads remain active after exit"
+          },
+          {
+            "id": 3,
+            "title": "Fix async/sync integration in _process_with_batching",
+            "description": "Review and refactor the _process_with_batching method to safely integrate async and synchronous code",
+            "dependencies": [],
+            "details": "Analyze the method for event loop yields and blocking code; introduce an asyncio.Lock for shared async state; use loop.run_in_executor to execute CPU‐bound synchronous batch processing functions\n<info added on 2025-07-22T11:47:31.318Z>\nCreate an async-compatible wrapper for BatchProcessor that delegates CPU‐bound methods via asyncio.to_thread. In _process_with_batching and process_migration_batch, replace direct sync calls and loop.run_in_executor usage with awaitable wrapper methods. Manage the ThreadPoolExecutor lifecycle inside an async context manager (for example, using AsyncExitStack) to ensure proper startup and teardown. Protect all shared async state and progress counters with an asyncio.Lock so that progress tracking callbacks and batch operations are coordinated on the event loop without race conditions.\n</info added on 2025-07-22T11:47:31.318Z>",
+            "status": "done",
+            "testStrategy": "Use pytest-asyncio to concurrently call _process_with_batching; verify that tasks properly queue, locks prevent concurrent state access, and results match expected outputs"
+          },
+          {
+            "id": 4,
+            "title": "Audit and synchronize module-level shared resources",
+            "description": "Audit all module‐level variables and caches used by performance components and apply appropriate locking",
+            "dependencies": [],
+            "details": "Perform a code audit to find global variables and in-memory caches; decide between threading.Lock or asyncio.Lock based on usage; wrap all accesses with proper locks or convert caches to thread-safe structures",
+            "status": "done",
+            "testStrategy": "Develop stress tests that simulate concurrent access via threads and coroutines; confirm no race conditions or data corruption under load"
+          },
+          {
+            "id": 5,
+            "title": "Document locking strategy in CONTRIBUTING.md",
+            "description": "Add guidelines and examples on when to use threading.Lock vs asyncio.Lock and outline the overall synchronization strategy",
+            "dependencies": [
+              "80.4"
+            ],
+            "details": "Draft a new section in CONTRIBUTING.md describing the locking strategy, including code examples for both threading and asyncio contexts; review and incorporate feedback from the team",
+            "status": "done",
+            "testStrategy": "Peer review of documentation; confirm that new contributors can follow guidelines to implement locks correctly in a sample feature"
+          }
+        ]
+      },
+      {
+        "id": 81,
+        "title": "Enhance Input Validation Security in Performance Components",
+        "description": "Strengthen input validation across all performance optimization components by adding comprehensive bounds checking, sanitization, and security-focused tests to prevent resource exhaustion and DoS vulnerabilities.",
+        "details": "1. Update the PerformanceConfig class:\n   • Define explicit min/max values for every numeric parameter (e.g. rate_limit_per_sec: 1–1000, batch_size: 1–500, max_workers: 1–CPU_count, retry_attempts: 0–10).\n   • Implement type checks (integers, floats, strings) and reject invalid types with clear exception messages.\n2. Rate limiting parameter validation:\n   • Ensure rate_limit_per_sec cannot be zero, negative, or exceed a configurable upper bound.\n   • Sanitize inputs by coercing numeric strings to integers only if they match /^[0-9]+$/.\n3. Batch processing parameters:\n   • Validate batch_size, max_workers, retry_attempts fall within defined ranges.\n   • Reject combinations that would allocate more threads than available system resources.\n4. Global sanitization and bounds checking:\n   • Apply a whitelist approach for any string parameters (e.g. file paths, identifiers), stripping control characters and SQL-like input.\n   • Centralize validation logic in a shared validation utility or pydantic model to avoid duplication.\n5. Error reporting:\n   • Raise a custom ConfigurationValidationError with detailed context (parameter name, invalid value, expected range).\n   • Log validation failures at WARN level before aborting initialization.\n6. Documentation and examples:\n   • Update component README and inline docs with valid ranges and examples of valid/invalid configurations.",
+        "testStrategy": "1. Unit tests for each parameter:\n   • Test lower boundary, upper boundary, below-minimum, above-maximum, type mismatches, empty strings, and injection payloads.\n   • Use parameterized tests to cover all edge cases across rate_limit_per_sec, batch_size, max_workers, retry_attempts, and string parameters.\n2. Fuzz testing:\n   • Generate random values (including extreme and non-numeric inputs) and assert that invalid values always raise ConfigurationValidationError.\n3. Integration tests:\n   • Initialize the performance component with a full config map loaded from JSON/YAML containing both valid and invalid entries; verify the component either loads successfully or fails fast with logged errors.\n4. Resource exhaustion simulation:\n   • Attempt to start processing with extreme valid configurations at scale and verify that bounds checks prevent resource over-allocation.\n5. Security review:\n   • Review validation utility code for injection attack patterns and ensure sanitization covers control characters and escape sequences.",
+        "status": "in-progress",
+        "dependencies": [
+          13
+        ],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define and enforce numeric parameter bounds in PerformanceConfig",
+            "description": "Update the PerformanceConfig class to define explicit minimum and maximum values for each numeric parameter and implement strict type checks.",
+            "dependencies": [],
+            "details": "Specify min/max for rate_limit_per_sec (1–1000), batch_size (1–500), max_workers (1–CPU_count), retry_attempts (0–10). Add integer/float type validation and reject invalid types with clear exception messages.",
+            "status": "pending",
+            "testStrategy": "Unit tests for each parameter covering below-minimum, at-minimum, at-maximum, above-maximum, and type mismatch scenarios; verify correct exception messages."
+          },
+          {
+            "id": 2,
+            "title": "Implement rate_limit_per_sec validation and sanitization",
+            "description": "Ensure rate_limit_per_sec cannot be zero, negative, or exceed the configured upper bound, and sanitize numeric string inputs.",
+            "dependencies": [
+              "81.1"
+            ],
+            "details": "Validate rate_limit_per_sec > 0 and <= configurable upper bound. Coerce numeric strings matching /^[0-9]+$/ to integers and reject all other string or injection patterns.",
+            "status": "pending",
+            "testStrategy": "Parameterized tests covering zero, negative, over-bound, valid numeric strings, invalid strings, and malicious payloads."
+          },
+          {
+            "id": 3,
+            "title": "Validate batch processing parameters with resource checks",
+            "description": "Enforce bounds on batch_size, max_workers, retry_attempts and reject configurations that exceed system resource limits.",
+            "dependencies": [
+              "81.1"
+            ],
+            "details": "Validate batch_size (1–500) and retry_attempts (0–10). Limit max_workers to CPU_count. Detect and reject combinations allocating more threads than available system resources.",
+            "status": "pending",
+            "testStrategy": "Unit tests for each parameter's boundary conditions, type mismatches, and combined scenarios leading to resource exhaustion."
+          },
+          {
+            "id": 4,
+            "title": "Centralize validation logic and sanitize string inputs",
+            "description": "Create a shared validation utility or Pydantic model for global sanitization, bounds checking, and whitelisting of string parameters.",
+            "dependencies": [
+              "81.1",
+              "81.2",
+              "81.3"
+            ],
+            "details": "Implement whitelist-based sanitization for file paths and identifiers, stripping control characters and SQL-like inputs. Consolidate numeric and string validation routines into a central module for reuse.",
+            "status": "pending",
+            "testStrategy": "Integration tests verifying the shared validator rejects disallowed characters, sanitizes inputs correctly, and prevents injection patterns."
+          },
+          {
+            "id": 5,
+            "title": "Implement custom error reporting, logging, and documentation updates",
+            "description": "Introduce a custom ConfigurationValidationError with detailed context, log WARN-level validation failures, and update documentation with examples.",
+            "dependencies": [
+              "81.1",
+              "81.2",
+              "81.3",
+              "81.4"
+            ],
+            "details": "Raise ConfigurationValidationError including parameter name, invalid value, and expected range. Log all validation failures at WARN level before aborting initialization. Update component README and inline docs with valid/invalid configuration examples.",
+            "status": "pending",
+            "testStrategy": "Tests to confirm invalid inputs raise ConfigurationValidationError with accurate messages, warnings are logged appropriately, and docs reflect current validation rules."
+          }
+        ]
+      },
+      {
+        "id": 82,
+        "title": "Simplify Performance System Architecture",
+        "description": "Refactor and streamline the performance optimization framework to remove over-engineering and improve maintainability while preserving core performance benefits.",
+        "details": "1. Analyze the existing ~2,281 lines of performance optimization code to identify overly complex or redundant components.\n2. Review strategy pattern implementations (e.g., for batching, retry, metrics) and replace multi‐class hierarchies with simpler functions or single‐class strategies where applicable.\n3. Refactor ProgressTracker:\n   • Remove file output capabilities and excessive ANSI/accented formatting.\n   • Expose a lightweight API that logs to console or accepts pluggable callbacks only when explicitly enabled.\n4. Simplify PerformanceConfig:\n   • Trim configuration parameters to the most common: batch_size and concurrency.\n   • Deprecate or hide advanced settings behind a new “advanced” sub-mode.\n5. Implement a new “simple mode” configuration entry point (e.g., `PerformanceConfig.simple()`), preloaded with sensible defaults for typical use cases.\n6. Update documentation and inline docstrings to clearly describe when to use the simple mode versus the full (complex) mode, including performance trade-offs and examples.",
+        "testStrategy": "1. Code review & complexity metrics:\n   • Run code complexity tools (e.g., Cyclomatic Complexity, SLOC) pre- and post-refactor to verify reduction.\n2. Performance benchmarks:\n   • Execute key migration and extraction scenarios under both simple and advanced modes; assert no regression (>5% degradation) in overall throughput.\n3. Unit tests for ProgressTracker:\n   • Validate that timeline and percentage calculations remain accurate with file output removed.\n   • Test that callback hooks fire correctly when enabled.\n4. Configuration tests:\n   • Parameterized tests for `simple()` mode defaults, boundary overrides, and advanced mode parameter inclusion.\n5. Documentation validation:\n   • Review updated README and code comments to ensure usage guidance is clear, then run automated documentation build to catch errors.",
+        "status": "pending",
+        "dependencies": [
+          13,
+          81
+        ],
+        "priority": "medium",
+        "subtasks": []
       }
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-22T09:30:05.114Z",
+      "updated": "2025-07-22T12:03:21.252Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",

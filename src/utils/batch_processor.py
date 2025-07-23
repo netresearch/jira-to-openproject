@@ -6,14 +6,17 @@ in chunks, with support for parallel processing, error handling, and progress tr
 
 import asyncio
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, List, Dict, Optional, TypeVar, Generic, Union
 from dataclasses import dataclass
 from pathlib import Path
 import json
+from contextlib import contextmanager
 
 from src import config
 from src.utils.rate_limiter import RateLimiter
+from src.utils.config_validation import SecurityValidator, ConfigurationValidationError
 
 T = TypeVar('T')
 R = TypeVar('R')
@@ -30,8 +33,8 @@ class BatchResult:
     execution_time: float
 
 
-class BatchProcessor(Generic[T, R]):
-    """High-performance batch processor for API operations with parallelization support."""
+class ThreadSafeBatchProcessor(Generic[T, R]):
+    """Thread-safe batch processor for API operations with parallelization support."""
     
     def __init__(
         self,
@@ -41,53 +44,75 @@ class BatchProcessor(Generic[T, R]):
         enable_progress_tracking: bool = True,
         retry_attempts: int = 3,
     ):
-        # Input validation
-        if batch_size <= 0:
-            raise ValueError("batch_size must be positive")
-        if batch_size > 10000:
-            raise ValueError("batch_size too large (max 10000)")
-        if max_workers <= 0:
-            raise ValueError("max_workers must be positive")
-        if max_workers > 100:
-            raise ValueError("max_workers too large (max 100)")
-        if retry_attempts < 0:
-            raise ValueError("retry_attempts cannot be negative")
-        if retry_attempts > 20:
-            raise ValueError("retry_attempts too large (max 20)")
+        # Comprehensive input validation using SecurityValidator
+        try:
+            self.batch_size = SecurityValidator.validate_numeric_parameter('batch_size', batch_size)
+            self.max_workers = SecurityValidator.validate_numeric_parameter('max_workers', max_workers)
+            self.retry_attempts = SecurityValidator.validate_numeric_parameter('retry_attempts', retry_attempts)
             
-        self.batch_size = batch_size
-        self.max_workers = max_workers
+            # Validate resource allocation to prevent system overload
+            SecurityValidator.validate_resource_allocation(self.batch_size, self.max_workers, 1024)  # Default 1GB memory limit
+            
+        except ConfigurationValidationError as e:
+            config.logger.error(f"BatchProcessor validation failed: {e}")
+            raise
+            
         self.rate_limiter = rate_limiter
         self.enable_progress_tracking = enable_progress_tracking
-        self.retry_attempts = retry_attempts
         self.logger = config.logger
         
-        # Progress tracking
-        self.total_items = 0
-        self.processed_items = 0
-        self.failed_items = 0
-        self.progress_callbacks: List[Callable[[int, int, int], None]] = []
+        # Thread-safe state management
+        self._lock = threading.RLock()
+        self._total_items = 0
+        self._processed_items = 0
+        self._failed_items = 0
+        self._progress_callbacks: List[Callable[[int, int, int], None]] = []
+        self._batch_results: List[BatchResult] = []
+        self._executor = None
+        self._shutdown_event = threading.Event()
         
-        # Results storage
-        self.batch_results: List[BatchResult] = []
+    def __enter__(self):
+        """Context manager entry - initialize executor."""
+        with self._lock:
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensure executor cleanup."""
+        self._shutdown_event.set()
+        with self._lock:
+            if self._executor:
+                self._executor.shutdown(wait=True)
+                self._executor = None
         
     def add_progress_callback(self, callback: Callable[[int, int, int], None]) -> None:
-        """Add a progress callback function.
+        """Thread-safely add a progress callback function.
         
         Args:
             callback: Function that receives (processed, total, failed) counts
         """
-        self.progress_callbacks.append(callback)
-        
+        with self._lock:
+            self._progress_callbacks.append(callback)
+            
     def _emit_progress(self) -> None:
-        """Emit progress to all registered callbacks."""
-        if self.enable_progress_tracking:
-            for callback in self.progress_callbacks:
-                try:
-                    callback(self.processed_items, self.total_items, self.failed_items)
-                except Exception as e:
-                    self.logger.warning(f"Progress callback error: {e}")
-                    
+        """Thread-safely emit progress to all registered callbacks."""
+        if not self.enable_progress_tracking:
+            return
+            
+        with self._lock:
+            processed = self._processed_items
+            total = self._total_items
+            failed = self._failed_items
+            callbacks = self._progress_callbacks.copy()
+        
+        # Call callbacks outside the lock to prevent deadlock
+        for callback in callbacks:
+            try:
+                callback(processed, total, failed)
+            except Exception as e:
+                self.logger.warning(f"Progress callback error: {e}")
+                
     def _create_batches(self, items: List[T]) -> List[List[T]]:
         """Split items into batches of configured size.
         
@@ -109,7 +134,7 @@ class BatchProcessor(Generic[T, R]):
         batch_id: int,
         processor_func: Callable[[List[T]], List[R]],
     ) -> BatchResult:
-        """Process a single batch with retry logic.
+        """Process a single batch with retry logic and thread safety.
         
         Args:
             batch: Batch of items to process
@@ -119,6 +144,9 @@ class BatchProcessor(Generic[T, R]):
         Returns:
             BatchResult with processing outcome
         """
+        if self._shutdown_event.is_set():
+            raise RuntimeError("Processor is shutting down")
+            
         start_time = time.time()
         last_exception = None
         
@@ -127,6 +155,10 @@ class BatchProcessor(Generic[T, R]):
                 # Apply rate limiting if configured
                 if self.rate_limiter:
                     self.rate_limiter.acquire()
+                
+                # Check for shutdown before processing
+                if self._shutdown_event.is_set():
+                    raise RuntimeError("Processing cancelled - shutting down")
                 
                 # Process the batch
                 results = processor_func(batch)
@@ -150,7 +182,7 @@ class BatchProcessor(Generic[T, R]):
                 )
                 
                 # Exponential backoff for retries
-                if attempt < self.retry_attempts:
+                if attempt < self.retry_attempts and not self._shutdown_event.is_set():
                     delay = 2 ** attempt
                     time.sleep(delay)
                     
@@ -166,12 +198,25 @@ class BatchProcessor(Generic[T, R]):
             execution_time=execution_time
         )
         
+    def _update_progress_atomically(self, batch_result: BatchResult) -> None:
+        """Atomically update progress counters."""
+        with self._lock:
+            self._batch_results.append(batch_result)
+            
+            if batch_result.success:
+                self._processed_items += batch_result.processed_count
+            else:
+                self._failed_items += batch_result.failed_count
+        
+        # Emit progress outside lock
+        self._emit_progress()
+        
     def process_parallel(
         self,
         items: List[T],
         processor_func: Callable[[List[T]], List[R]],
     ) -> Dict[str, Any]:
-        """Process items in parallel batches.
+        """Process items in parallel batches with thread safety.
         
         Args:
             items: List of items to process
@@ -180,13 +225,15 @@ class BatchProcessor(Generic[T, R]):
         Returns:
             Dictionary with processing results and statistics
         """
-        self.total_items = len(items)
-        self.processed_items = 0
-        self.failed_items = 0
-        self.batch_results = []
+        # Initialize state atomically
+        with self._lock:
+            self._total_items = len(items)
+            self._processed_items = 0
+            self._failed_items = 0
+            self._batch_results = []
         
         self.logger.info(
-            f"Starting parallel batch processing: {self.total_items} items, "
+            f"Starting parallel batch processing: {self._total_items} items, "
             f"batch_size={self.batch_size}, workers={self.max_workers}"
         )
         
@@ -195,11 +242,15 @@ class BatchProcessor(Generic[T, R]):
         all_results = []
         all_errors = []
         
+        # Ensure we have an executor
+        if self._executor is None:
+            raise RuntimeError("BatchProcessor must be used as context manager")
+        
         # Process batches in parallel
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        try:
             # Submit all batch jobs
             future_to_batch = {
-                executor.submit(
+                self._executor.submit(
                     self._process_batch_with_retry, 
                     batch, 
                     batch_id, 
@@ -210,18 +261,17 @@ class BatchProcessor(Generic[T, R]):
             
             # Collect results as they complete
             for future in as_completed(future_to_batch):
+                if self._shutdown_event.is_set():
+                    break
+                    
                 batch_result = future.result()
-                self.batch_results.append(batch_result)
+                self._update_progress_atomically(batch_result)
                 
                 if batch_result.success:
-                    self.processed_items += batch_result.processed_count
                     all_results.extend(batch_result.data)
                 else:
-                    self.failed_items += batch_result.failed_count
                     all_errors.extend(batch_result.errors)
                     
-                self._emit_progress()
-                
                 self.logger.debug(
                     f"Batch {batch_result.batch_id} completed: "
                     f"success={batch_result.success}, "
@@ -229,25 +279,36 @@ class BatchProcessor(Generic[T, R]):
                     f"time={batch_result.execution_time:.2f}s"
                 )
         
+        except Exception as e:
+            self.logger.error(f"Parallel processing error: {e}")
+            raise
+        
         total_time = time.time() - start_time
+        
+        # Get final counts atomically
+        with self._lock:
+            processed_count = self._processed_items
+            failed_count = self._failed_items
+            successful_batches = sum(1 for r in self._batch_results if r.success)
+            failed_batches = sum(1 for r in self._batch_results if not r.success)
         
         # Compile final results
         results = {
-            "success": self.failed_items == 0,
-            "total_items": self.total_items,
-            "processed_items": self.processed_items,
-            "failed_items": self.failed_items,
+            "success": failed_count == 0,
+            "total_items": self._total_items,
+            "processed_items": processed_count,
+            "failed_items": failed_count,
             "total_batches": len(batches),
-            "successful_batches": sum(1 for r in self.batch_results if r.success),
-            "failed_batches": sum(1 for r in self.batch_results if not r.success),
+            "successful_batches": successful_batches,
+            "failed_batches": failed_batches,
             "data": all_results,
             "errors": all_errors,
             "execution_time": total_time,
-            "throughput_items_per_second": self.processed_items / total_time if total_time > 0 else 0,
+            "throughput_items_per_second": processed_count / total_time if total_time > 0 else 0,
         }
         
         self.logger.info(
-            f"Batch processing completed: {self.processed_items}/{self.total_items} items "
+            f"Batch processing completed: {processed_count}/{self._total_items} items "
             f"in {total_time:.2f}s ({results['throughput_items_per_second']:.1f} items/s)"
         )
         
@@ -258,7 +319,7 @@ class BatchProcessor(Generic[T, R]):
         items: List[T],
         processor_func: Callable[[List[T]], List[R]],
     ) -> Dict[str, Any]:
-        """Process items in sequential batches (for rate-limited APIs).
+        """Process items in sequential batches with thread safety.
         
         Args:
             items: List of items to process
@@ -267,13 +328,15 @@ class BatchProcessor(Generic[T, R]):
         Returns:
             Dictionary with processing results and statistics
         """
-        self.total_items = len(items)
-        self.processed_items = 0
-        self.failed_items = 0
-        self.batch_results = []
+        # Initialize state atomically
+        with self._lock:
+            self._total_items = len(items)
+            self._processed_items = 0
+            self._failed_items = 0
+            self._batch_results = []
         
         self.logger.info(
-            f"Starting sequential batch processing: {self.total_items} items, "
+            f"Starting sequential batch processing: {self._total_items} items, "
             f"batch_size={self.batch_size}"
         )
         
@@ -284,18 +347,17 @@ class BatchProcessor(Generic[T, R]):
         
         # Process batches sequentially
         for batch_id, batch in enumerate(batches):
+            if self._shutdown_event.is_set():
+                break
+                
             batch_result = self._process_batch_with_retry(batch, batch_id, processor_func)
-            self.batch_results.append(batch_result)
+            self._update_progress_atomically(batch_result)
             
             if batch_result.success:
-                self.processed_items += batch_result.processed_count
                 all_results.extend(batch_result.data)
             else:
-                self.failed_items += batch_result.failed_count
                 all_errors.extend(batch_result.errors)
                 
-            self._emit_progress()
-            
             self.logger.debug(
                 f"Batch {batch_id} completed: "
                 f"success={batch_result.success}, "
@@ -305,27 +367,46 @@ class BatchProcessor(Generic[T, R]):
         
         total_time = time.time() - start_time
         
+        # Get final counts atomically
+        with self._lock:
+            processed_count = self._processed_items
+            failed_count = self._failed_items
+            successful_batches = sum(1 for r in self._batch_results if r.success)
+            failed_batches = sum(1 for r in self._batch_results if not r.success)
+        
         # Compile final results
         results = {
-            "success": self.failed_items == 0,
-            "total_items": self.total_items,
-            "processed_items": self.processed_items,
-            "failed_items": self.failed_items,
+            "success": failed_count == 0,
+            "total_items": self._total_items,
+            "processed_items": processed_count,
+            "failed_items": failed_count,
             "total_batches": len(batches),
-            "successful_batches": sum(1 for r in self.batch_results if r.success),
-            "failed_batches": sum(1 for r in self.batch_results if not r.success),
+            "successful_batches": successful_batches,
+            "failed_batches": failed_batches,
             "data": all_results,
             "errors": all_errors,
             "execution_time": total_time,
-            "throughput_items_per_second": self.processed_items / total_time if total_time > 0 else 0,
+            "throughput_items_per_second": processed_count / total_time if total_time > 0 else 0,
         }
         
         self.logger.info(
-            f"Sequential processing completed: {self.processed_items}/{self.total_items} items "
+            f"Sequential processing completed: {processed_count}/{self._total_items} items "
             f"in {total_time:.2f}s ({results['throughput_items_per_second']:.1f} items/s)"
         )
         
         return results
+        
+    def shutdown(self):
+        """Initiate graceful shutdown."""
+        self._shutdown_event.set()
+        with self._lock:
+            if self._executor:
+                self._executor.shutdown(wait=True)
+                self._executor = None
+
+
+# Maintain backward compatibility with existing code
+BatchProcessor = ThreadSafeBatchProcessor
 
 
 class StreamingJSONProcessor:
@@ -339,6 +420,7 @@ class StreamingJSONProcessor:
         """
         self.chunk_size = chunk_size
         self.logger = config.logger
+        self._shutdown_event = threading.Event()
         
     def process_large_json_file(
         self,
@@ -372,6 +454,9 @@ class StreamingJSONProcessor:
                 parser = ijson.parse(file)
                 
                 for prefix, event, value in parser:
+                    if self._shutdown_event.is_set():
+                        break
+                        
                     try:
                         if event == 'end_map':  # Complete JSON object
                             result = processor_func(value)
@@ -410,13 +495,17 @@ class StreamingJSONProcessor:
         )
         
         return result_summary
+    
+    def shutdown(self):
+        """Initiate graceful shutdown."""
+        self._shutdown_event.set()
 
 
 def create_default_batch_processor(
     batch_size: Optional[int] = None,
     max_workers: Optional[int] = None,
     enable_rate_limiting: bool = True,
-) -> BatchProcessor:
+) -> ThreadSafeBatchProcessor:
     """Create a batch processor with default configuration.
     
     Args:
@@ -425,7 +514,7 @@ def create_default_batch_processor(
         enable_rate_limiting: Whether to enable rate limiting
         
     Returns:
-        Configured BatchProcessor instance
+        Configured ThreadSafeBatchProcessor instance
     """
     # Get configuration from migration config
     default_batch_size = config.migration_config.get("batch_size", 100)
@@ -439,7 +528,7 @@ def create_default_batch_processor(
             burst_size=config.migration_config.get("burst_size", 20)
         )
     
-    return BatchProcessor(
+    return ThreadSafeBatchProcessor(
         batch_size=batch_size or default_batch_size,
         max_workers=max_workers or default_workers,
         rate_limiter=rate_limiter,

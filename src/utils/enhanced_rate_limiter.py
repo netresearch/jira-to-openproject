@@ -14,6 +14,7 @@ import math
 
 from src import config
 from src.utils.rate_limiter import RateLimiter
+from src.utils.config_validation import SecurityValidator, ConfigurationValidationError
 
 
 class RateLimitStrategy(Enum):
@@ -26,7 +27,7 @@ class RateLimitStrategy(Enum):
 
 @dataclass
 class RateLimitConfig:
-    """Configuration for rate limiting behavior."""
+    """Configuration for rate limiting behavior with comprehensive security validation."""
     max_requests: int = 100
     time_window: float = 60.0  # seconds
     burst_size: int = 10
@@ -35,6 +36,37 @@ class RateLimitConfig:
     recovery_factor: float = 1.1  # Increase rate when stable
     min_delay: float = 0.1  # Minimum delay between requests
     max_delay: float = 60.0  # Maximum delay for backoff
+
+    def __post_init__(self):
+        """Validate configuration parameters using SecurityValidator for comprehensive security checks."""
+        try:
+            # Validate core rate limiting parameters
+            self.max_requests = SecurityValidator.validate_numeric_parameter('max_requests_per_minute', self.max_requests)
+            self.time_window = SecurityValidator.validate_numeric_parameter('time_window', self.time_window)
+            self.burst_size = SecurityValidator.validate_numeric_parameter('burst_size', self.burst_size)
+            
+            # Validate timing parameters
+            self.min_delay = SecurityValidator.validate_numeric_parameter('min_delay', self.min_delay)
+            self.max_delay = SecurityValidator.validate_numeric_parameter('max_delay', self.max_delay)
+            
+            # Validate factor parameters
+            self.adaptive_factor = SecurityValidator.validate_numeric_parameter('adaptive_factor', self.adaptive_factor)
+            self.recovery_factor = SecurityValidator.validate_numeric_parameter('recovery_factor', self.recovery_factor)
+            
+            # Validate timing relationships
+            SecurityValidator.validate_timing_relationships(self.min_delay, self.max_delay)
+            
+            # Validate strategy enum
+            if not isinstance(self.strategy, RateLimitStrategy):
+                raise ConfigurationValidationError(
+                    'strategy', 
+                    self.strategy, 
+                    f"RateLimitStrategy enum value (got {type(self.strategy).__name__})"
+                )
+            
+        except ConfigurationValidationError as e:
+            config.logger.error(f"RateLimitConfig validation failed: {e}")
+            raise
 
 
 @dataclass

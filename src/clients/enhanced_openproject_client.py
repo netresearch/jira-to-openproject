@@ -26,6 +26,7 @@ from src.utils.performance_optimizer import (
     rate_limited,
     batched
 )
+from src.utils.config_validation import SecurityValidator, ConfigurationValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -37,17 +38,32 @@ class EnhancedOpenProjectClient(OpenProjectClient):
     def __init__(self, server: str, username: str, password: str, **kwargs):
         super().__init__(server, username, password, **kwargs)
         
-        # Initialize performance optimizer
+        # Validate performance configuration parameters using SecurityValidator
+        try:
+            cache_size = SecurityValidator.validate_numeric_parameter('cache_size', kwargs.get('cache_size', 1500))
+            cache_ttl = SecurityValidator.validate_numeric_parameter('cache_ttl', kwargs.get('cache_ttl', 2400))
+            batch_size = SecurityValidator.validate_numeric_parameter('batch_size', kwargs.get('batch_size', 50))
+            max_workers = SecurityValidator.validate_numeric_parameter('max_workers', kwargs.get('max_workers', 12))
+            rate_limit = SecurityValidator.validate_numeric_parameter('rate_limit_per_sec', kwargs.get('rate_limit', 12.0))
+            
+            # Validate resource allocation to prevent system overload
+            SecurityValidator.validate_resource_allocation(batch_size, max_workers, 2048)  # 2GB memory limit for enhanced client
+            
+        except ConfigurationValidationError as e:
+            logger.error(f"EnhancedOpenProjectClient configuration validation failed: {e}")
+            raise
+        
+        # Initialize performance optimizer with validated parameters
         self.performance_optimizer = PerformanceOptimizer(
-            cache_size=kwargs.get('cache_size', 1500),
-            cache_ttl=kwargs.get('cache_ttl', 2400),  # 40 minutes
-            batch_size=kwargs.get('batch_size', 50),
-            max_workers=kwargs.get('max_workers', 12),
-            rate_limit=kwargs.get('rate_limit', 12.0)
+            cache_size=cache_size,
+            cache_ttl=cache_ttl,
+            batch_size=batch_size,
+            max_workers=max_workers,
+            rate_limit=rate_limit
         )
         
-        self.batch_size = kwargs.get('batch_size', 50)
-        self.parallel_workers = kwargs.get('max_workers', 12)
+        self.batch_size = batch_size
+        self.parallel_workers = max_workers
 
     # ===== BATCH WORK PACKAGE OPERATIONS =====
     

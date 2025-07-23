@@ -14,6 +14,7 @@ from threading import Lock
 from typing import Any, Dict
 
 from src import config
+from src.utils.config_validation import SecurityValidator, ConfigurationValidationError
 
 logger = config.logger
 
@@ -29,7 +30,7 @@ class RateLimitStrategy(Enum):
 
 @dataclass
 class RateLimitConfig:
-    """Configuration for rate limiting behavior."""
+    """Configuration for rate limiting behavior with comprehensive security validation."""
 
     strategy: RateLimitStrategy = RateLimitStrategy.ADAPTIVE
     base_delay: float = 0.1  # Base delay in seconds
@@ -40,6 +41,51 @@ class RateLimitConfig:
     exponential_base: float = 2.0  # Base for exponential backoff
     adaptive_threshold: float = 0.5  # Response time threshold for adaptation
     circuit_breaker_threshold: int = 5  # Failures before circuit breaker
+
+    def __post_init__(self):
+        """Validate configuration parameters using SecurityValidator for comprehensive security checks."""
+        try:
+            # Validate timing parameters
+            self.base_delay = SecurityValidator.validate_numeric_parameter('base_delay', self.base_delay)
+            self.max_delay = SecurityValidator.validate_numeric_parameter('max_delay', self.max_delay)
+            self.min_delay = SecurityValidator.validate_numeric_parameter('min_delay', self.min_delay)
+            
+            # Validate capacity and rate parameters
+            self.burst_capacity = SecurityValidator.validate_numeric_parameter('burst_capacity', self.burst_capacity)
+            self.circuit_breaker_threshold = SecurityValidator.validate_numeric_parameter('retry_attempts', self.circuit_breaker_threshold)  # Reuse retry_attempts bounds
+            
+            # Validate factor parameters
+            self.exponential_base = SecurityValidator.validate_numeric_parameter('exponential_base', self.exponential_base)
+            self.adaptive_threshold = SecurityValidator.validate_numeric_parameter('adaptive_threshold', self.adaptive_threshold)
+            
+            # Validate burst recovery rate (custom bounds)
+            if not isinstance(self.burst_recovery_rate, (int, float)):
+                raise ConfigurationValidationError(
+                    'burst_recovery_rate', 
+                    self.burst_recovery_rate, 
+                    f"numeric value (got {type(self.burst_recovery_rate).__name__})"
+                )
+            if self.burst_recovery_rate <= 0 or self.burst_recovery_rate > 100:
+                raise ConfigurationValidationError(
+                    'burst_recovery_rate', 
+                    self.burst_recovery_rate, 
+                    "0.1 to 100.0 requests per second"
+                )
+            
+            # Validate timing relationships
+            SecurityValidator.validate_timing_relationships(self.base_delay, self.max_delay, self.min_delay)
+            
+            # Validate strategy enum
+            if not isinstance(self.strategy, RateLimitStrategy):
+                raise ConfigurationValidationError(
+                    'strategy', 
+                    self.strategy, 
+                    f"RateLimitStrategy enum value (got {type(self.strategy).__name__})"
+                )
+            
+        except ConfigurationValidationError as e:
+            logger.error(f"RateLimitConfig validation failed: {e}")
+            raise
 
 
 @dataclass
