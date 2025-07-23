@@ -21,7 +21,10 @@ class ConfigurationValidationError(Exception):
         self.expected_range = expected_range
         self.additional_context = additional_context
         
-        message = f"Invalid {parameter_name}: '{invalid_value}' (expected: {expected_range})"
+        # Security: Sanitize potentially sensitive values in error messages
+        sanitized_value = self._sanitize_error_value(invalid_value)
+        
+        message = f"Invalid {parameter_name}: '{sanitized_value}' (expected: {expected_range})"
         if additional_context:
             message += f" - {additional_context}"
         
@@ -29,6 +32,23 @@ class ConfigurationValidationError(Exception):
         
         # Log validation failure at WARN level before aborting
         logger.warning(f"Configuration validation failed: {message}")
+    
+    def _sanitize_error_value(self, value: Any) -> str:
+        """Sanitize error values to prevent information disclosure."""
+        if value is None:
+            return "None"
+        
+        value_str = str(value)
+        
+        # Truncate long values to prevent log pollution
+        if len(value_str) > 100:
+            return f"{value_str[:50]}...(truncated, {len(value_str)} chars total)"
+        
+        # Mask potential sensitive patterns
+        if any(pattern in value_str.lower() for pattern in ['password', 'token', 'key', 'secret']):
+            return "[REDACTED]"
+        
+        return value_str
 
 
 class SecurityValidator:
@@ -71,14 +91,24 @@ class SecurityValidator:
     
     # Dangerous characters and patterns for string sanitization
     CONTROL_CHARS_PATTERN = re.compile(r'[\x00-\x1f\x7f-\x9f]')
-    SQL_INJECTION_PATTERN = re.compile(r"[';\"\\]|--|\*|\bUNION\b|\bSELECT\b|\bINSERT\b|\bDELETE\b|\bDROP\b", re.IGNORECASE)
+    # Improved SQL injection pattern - more comprehensive, fewer false positives
+    SQL_INJECTION_PATTERN = re.compile(r"""
+        (--[^\r\n]*) |                      # SQL comment
+        (/\*.*?\*/) |                       # Multi-line comment  
+        (\b(UNION|SELECT|INSERT|DELETE|DROP|EXEC|EXECUTE|ALTER|CREATE|TRUNCATE|UPDATE)\b.*\b(SELECT|FROM|WHERE|INSERT|UPDATE|DELETE|DROP|TABLE|DATABASE|SCHEMA)\b) |
+        (\b(XP_CMDSHELL|SP_EXECUTESQL|OPENQUERY|OPENROWSET)\b) |  # SQL Server procedures
+        ([\s;]\s*['"][^'"]*['"]\s*=\s*['"][^'"]*['"];?) |       # Suspicious assignments
+        ([\s;]\s*\d+\s*=\s*\d+) |                              # Tautology like 1=1
+        (\b(CAST|CONVERT|CHAR|NCHAR|ASCII|SUBSTRING)\b\s*\() | # Type conversion functions
+        (0x[0-9a-fA-F]+)                                        # Hex encoding
+    """, re.IGNORECASE | re.VERBOSE)
     SCRIPT_INJECTION_PATTERN = re.compile(r'<script|javascript:|data:|vbscript:', re.IGNORECASE)
     PATH_TRAVERSAL_PATTERN = re.compile(r'\.\.|[<>|]')
     
     # Whitelist patterns for different string types
     SAFE_FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9._-]+$')
     SAFE_IDENTIFIER_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*$')
-    NUMERIC_STRING_PATTERN = re.compile(r'^[0-9]+$')
+    NUMERIC_STRING_PATTERN = re.compile(r'^[-+]?[0-9]*\.?[0-9]+$')
     
     @classmethod
     def validate_numeric_parameter(cls, name: str, value: Any, allow_none: bool = False) -> Union[int, float, None]:
@@ -284,8 +314,12 @@ class SecurityValidator:
         Raises:
             ConfigurationValidationError: If resource allocation is unsafe
         """
-        # Estimate memory usage per worker
-        estimated_memory_per_worker = (batch_size * 0.1) + 50  # Rough estimate in MB
+        # Improved memory estimation based on typical object sizes
+        # Base overhead per worker: 32MB (thread stack + Python overhead)
+        # Per-item overhead: 1KB (typical JSON object + processing overhead)
+        base_memory_per_worker = 32  # MB
+        item_memory_overhead = batch_size * 0.001  # 1KB per item in MB
+        estimated_memory_per_worker = base_memory_per_worker + item_memory_overhead
         total_estimated_memory = max_workers * estimated_memory_per_worker
         
         if total_estimated_memory > memory_limit_mb:
@@ -296,12 +330,14 @@ class SecurityValidator:
                 f"Estimated usage {total_estimated_memory:.1f}MB exceeds limit"
             )
         
-        # CPU oversubscription check
+        # CPU oversubscription check - more conservative for I/O bound tasks
         cpu_count = os.cpu_count() or 4
-        if max_workers > cpu_count * 2:
+        # Allow 1.5x CPU count for I/O bound tasks (migration is mostly I/O)
+        max_recommended_workers = int(cpu_count * 1.5)
+        if max_workers > max_recommended_workers:
             raise ConfigurationValidationError(
                 "max_workers", max_workers,
-                f"<= {cpu_count * 2} (2x CPU cores)",
+                f"<= {max_recommended_workers} (1.5x CPU cores for I/O bound tasks)",
                 f"Excessive worker count may cause system instability"
             )
     

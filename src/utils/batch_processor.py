@@ -51,7 +51,7 @@ class ThreadSafeBatchProcessor(Generic[T, R]):
             self.retry_attempts = SecurityValidator.validate_numeric_parameter('retry_attempts', retry_attempts)
             
             # Validate resource allocation to prevent system overload
-            SecurityValidator.validate_resource_allocation(self.batch_size, self.max_workers, 1024)  # Default 1GB memory limit
+            SecurityValidator.validate_resource_allocation(self.batch_size, self.max_workers, 2048)  # 2GB memory limit for consistency
             
         except ConfigurationValidationError as e:
             config.logger.error(f"BatchProcessor validation failed: {e}")
