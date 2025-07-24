@@ -9,13 +9,13 @@ from typing import Any
 
 import requests
 
-from src import config
+from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient, OpenProjectError
 from src.display import ProgressTracker
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 # Get batch size from migration config
 batch_size = config.migration_config.get("batch_size", 1000)
 # Get Jira connection settings

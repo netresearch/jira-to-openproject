@@ -16,9 +16,9 @@ import time
 from pathlib import Path
 from typing import Any, Self
 
-from src import config
+from src.display import configure_logging
 
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 class FileRegistry:

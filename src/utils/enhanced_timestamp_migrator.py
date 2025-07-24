@@ -1,3 +1,4 @@
+from src.display import configure_logging
 #!/usr/bin/env python3
 """Enhanced Timestamp Migration for comprehensive datetime metadata preservation.
 
@@ -88,7 +89,7 @@ class EnhancedTimestampMigrator:
         """
         self.jira_client = jira_client
         self.op_client = op_client
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         self.target_timezone = target_timezone
         
         # Rails operations cache for immutable field setting

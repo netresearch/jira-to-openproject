@@ -15,13 +15,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
-from src import config
+from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.utils.time_entry_transformer import TimeEntryTransformer
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 class TimeEntryMigrationResult(TypedDict):

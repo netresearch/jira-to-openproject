@@ -1,3 +1,4 @@
+from src.display import configure_logging
 #!/usr/bin/env python3
 """Timezone Correction Script for Previously Migrated Timestamps.
 
@@ -44,7 +45,7 @@ class TimestampCorrectionScript:
         self.batch_size = batch_size
         self.custom_field_id = custom_field_id
         self.page_size = page_size
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         
         # Initialize clients
         self.jira_client = JiraClient()

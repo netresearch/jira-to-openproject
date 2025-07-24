@@ -31,6 +31,21 @@ dependencies = [
     
     # Redis for caching and idempotency
     "redis==5.2.1",
+
+    # Error recovery and resilience
+    "tenacity==8.2.3",
+    "pybreaker==0.7.0",
+    "structlog==23.2.0",
+
+    # Database for checkpointing
+    "sqlalchemy==1.4.53",
+    
+    # Web dashboard
+    "fastapi==0.78.0",
+    "uvicorn==0.17.0",
+    "websockets==12.0",
+    "jinja2==3.1.2",
+    "aiofiles==23.2.1",
 ]
 
 [project.optional-dependencies]

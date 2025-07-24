@@ -7,13 +7,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src import config
+from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 class WorkflowMigration:

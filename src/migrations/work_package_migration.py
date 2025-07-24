@@ -13,7 +13,7 @@ from typing import Any, Iterator
 import requests
 from jira import Issue
 
-from src import config
+from src.display import configure_logging
 from src.clients.jira_client import JiraClient, JiraApiError, JiraResourceNotFoundError
 from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
 from src.display import ProgressTracker
@@ -27,7 +27,7 @@ from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
 from src.utils.time_entry_migrator import TimeEntryMigrator
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 @register_entity_types("work_packages", "issues")

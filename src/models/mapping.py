@@ -4,11 +4,11 @@ Defines the mapping strategies between Jira and OpenProject data models.
 """
 
 # Add the logger import
-from src import config
+from src.display import configure_logging
 from src.type_definitions import JiraData, OpenProjectData, StatusMapping, TypeMapping
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 class JiraToOPMapping:

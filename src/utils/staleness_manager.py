@@ -1,3 +1,4 @@
+from src.display import configure_logging
 #!/usr/bin/env python3
 """Staleness Manager for TTL-based user mapping cache with automatic refresh.
 
@@ -86,7 +87,7 @@ class StalenessManager:
         """
         self.jira_client = jira_client
         self.op_client = op_client
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         
         # Parse configuration
         self.refresh_interval = self._parse_duration(refresh_interval)

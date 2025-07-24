@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from src import config
+from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import console
@@ -16,7 +16,7 @@ from src.migrations.custom_field_migration import CustomFieldMigration
 from src.models import ComponentResult, MigrationError
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 # Default OpenProject relation types
 # These are built-in and cannot be modified or extended via API

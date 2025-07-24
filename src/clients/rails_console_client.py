@@ -9,10 +9,10 @@ import subprocess
 import time
 from typing import Any
 
-from src import config
+from src.display import configure_logging
 from src.utils.file_manager import FileManager
 
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 class RailsConsoleError(Exception):

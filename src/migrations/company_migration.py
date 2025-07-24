@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from src import config
+from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
@@ -16,7 +16,7 @@ from src.models import ComponentResult, MigrationError
 from src.utils import data_handler
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 @register_entity_types("companies", "tempo_companies")

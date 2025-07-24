@@ -1,3 +1,4 @@
+from src.display import configure_logging
 """Enhanced progress tracking system for migration operations.
 
 This module provides comprehensive progress tracking with real-time reporting,
@@ -112,7 +113,7 @@ class ProgressTracker:
         self.output_file = output_file
         self.update_interval = update_interval
         
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         self.console = Console()
         
         # Progress tracking
@@ -401,7 +402,7 @@ class MultiStageProgressTracker:
             operation_name: Name of the overall operation
         """
         self.operation_name = operation_name
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         self.console = Console()
         
         # Stage tracking

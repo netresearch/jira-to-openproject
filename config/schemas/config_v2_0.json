@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Jira to OpenProject Migration Configuration Schema v2.0",
+  "description": "Schema for validating migration configuration files",
+  "type": "object",
+  "properties": {
+    "jira": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Jira instance URL"
+        },
+        "username": {
+          "type": "string",
+          "description": "Jira username"
+        },
+        "api_token": {
+          "type": "string",
+          "description": "Jira API token"
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of Jira project keys to migrate"
+        }
+      },
+      "required": ["url", "username", "api_token", "projects"]
+    },
+    "openproject": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "OpenProject instance URL"
+        },
+        "api_token": {
+          "type": "string",
+          "description": "OpenProject API token"
+        },
+        "admin_user_id": {
+          "type": "integer",
+          "description": "OpenProject admin user ID"
+        }
+      },
+      "required": ["url", "api_token", "admin_user_id"]
+    },
+    "migration": {
+      "type": "object",
+      "properties": {
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100,
+          "description": "Number of items to process in each batch"
+        },
+        "max_concurrent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 3,
+          "description": "Maximum number of concurrent operations"
+        },
+        "stop_on_error": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to stop migration on first error"
+        },
+        "validate_data": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to validate data during migration"
+        },
+        "log_level": {
+          "type": "string",
+          "enum": ["DEBUG", "INFO", "WARNING", "ERROR"],
+          "default": "INFO",
+          "description": "Logging level"
+        }
+      },
+      "required": ["batch_size", "max_concurrent", "stop_on_error", "validate_data", "log_level"]
+    }
+  },
+  "required": ["jira", "openproject", "migration"]
+}

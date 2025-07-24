@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src import config
+from src.display import configure_logging
 from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 # Constants for filenames
 JIRA_PROJECTS_FILE = "jira_projects.json"

@@ -34,6 +34,45 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class MigrationMetrics:
+    """Metrics tracking for migration performance."""
+    
+    start_time: float = field(default_factory=time.time)
+    end_time: Optional[float] = None
+    total_items: int = 0
+    processed_items: int = 0
+    failed_items: int = 0
+    api_calls: int = 0
+    successful_api_calls: int = 0
+    retry_attempts: int = 0
+    rate_limit_hits: int = 0
+    total_batch_time: float = 0.0
+    total_wait_time: float = 0.0
+    memory_usage_mb: float = 0.0
+    
+    def __post_init__(self):
+        """Initialize metrics with current time."""
+        if self.end_time is None:
+            self.end_time = time.time()
+    
+    def get_duration(self) -> float:
+        """Get total duration in seconds."""
+        return (self.end_time or time.time()) - self.start_time
+    
+    def get_success_rate(self) -> float:
+        """Get success rate as percentage."""
+        if self.total_items == 0:
+            return 0.0
+        return (self.processed_items / self.total_items) * 100
+    
+    def get_api_success_rate(self) -> float:
+        """Get API call success rate as percentage."""
+        if self.api_calls == 0:
+            return 0.0
+        return (self.successful_api_calls / self.api_calls) * 100
+
+
+@dataclass
 class PerformanceConfig:
     """Configuration for migration performance optimization with comprehensive security validation."""
     

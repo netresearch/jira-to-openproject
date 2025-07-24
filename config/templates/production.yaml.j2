@@ -1,0 +1,90 @@
+# @description: Production environment configuration template
+# @version: 2.0
+# @environment: production
+# @variables: jira_url, jira_username, jira_api_token, op_url, op_api_token, admin_user_id
+# @dependencies: base_config
+
+# Jira to OpenProject Migration Configuration - Production Environment
+# Generated on {{ timestamp }}
+# Environment: {{ environment }}
+# Config Version: {{ config_version }}
+
+# Jira API settings
+jira:
+  # Base URL of your Jira instance
+  url: "{{ jira_url | default('https://jira.company.com/') }}"
+  # Authentication credentials
+  username: "{{ jira_username | default('') }}"  # Set via J2O_JIRA_USERNAME
+  api_token: "{{ jira_api_token | default('') }}"  # Set via J2O_JIRA_API_TOKEN
+  # Projects to migrate (leave empty to migrate all)
+  projects:
+    - "PROD-PROJECT1"
+    - "PROD-PROJECT2"
+    - "PROD-PROJECT3"
+  # API request settings
+  batch_size: 200  # Larger batch size for production
+  # Fields to retrieve from Jira
+  fields: "summary,description,issuetype,status,priority,assignee,reporter,created,updated,labels,components,fixVersions,versions,comment,attachment,worklog,customfield_*"
+  # ScriptRunner integration
+  scriptrunner:
+    enabled: true  # Set via J2O_JIRA_SCRIPTRUNNER_ENABLED
+    # Path relative to Jira URL (do not include https://jira.company.com/)
+    custom_field_options_endpoint: "/rest/scriptrunner/latest/custom/getAllCustomFieldsWithOptions"  # Set via J2O_JIRA_SCRIPTRUNNER_CUSTOM_FIELD_OPTIONS_ENDPOINT
+
+# OpenProject API settings
+openproject:
+  # Base URL of your OpenProject instance
+  url: "{{ op_url | default('https://op.company.com/') }}"
+  # Authentication credentials
+  api_token: "{{ op_api_token | default('') }}"  # Set via J2O_OPENPROJECT_API_KEY
+  # API request settings
+  batch_size: 100  # Larger batch size for production
+
+# Migration process settings
+migration:
+  # Component migration order
+  component_order:
+    - users
+    - custom_fields
+    - projects
+    - versions
+    - issues
+    - relations
+    - worklogs
+    - attachments
+    - comments
+
+  # Data storage
+  mapping_file: "data/id_mapping_prod.json"
+  attachment_path: "data/attachments_prod"
+
+  # User mapping staleness detection
+  mapping:
+    refresh_interval: "24h"  # Longer TTL for production
+    fallback_strategy: "assign_admin"  # Options: skip, assign_admin, create_placeholder
+    fallback_admin_user_id: "{{ admin_user_id | default('') }}"  # Admin user for assign_admin strategy (set via J2O_MAPPING_ADMIN_USER)
+
+  # Performance settings
+  batch_size: 2000  # Larger batch size for production
+
+  # Behavior settings
+  skip_existing: true  # Skip existing in production
+
+  # Security settings
+  ssl_verify: true  # Enable SSL verification for production
+
+  # Logging
+  log_level: "INFO"  # Standard logging for production
+
+  # Production-specific settings
+  production:
+    enable_backup: true
+    backup_interval: "6h"
+    enable_monitoring: true
+    enable_alerting: true
+    max_retry_attempts: 3
+    retry_delay: 30
+    enable_audit_logging: true
+    audit_log_path: "logs/audit.log"
+    enable_performance_monitoring: true
+    performance_metrics_path: "logs/performance.json" 

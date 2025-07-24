@@ -13,11 +13,11 @@ Part of the layered client architecture where:
 from pathlib import Path
 from shlex import quote
 
-from src import config
+from src.display import configure_logging
 from src.clients.ssh_client import SSHClient
 from src.utils.file_manager import FileManager
 
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 class DockerClient:

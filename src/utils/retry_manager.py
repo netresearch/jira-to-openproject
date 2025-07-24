@@ -1,3 +1,4 @@
+from src.display import configure_logging
 """Advanced retry mechanisms with exponential backoff for migration operations.
 
 This module provides robust retry logic for handling transient failures in API calls,
@@ -64,7 +65,7 @@ class RetryManager:
             config_param: Retry configuration. Uses defaults if not provided.
         """
         self.config = config_param or RetryConfig()
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         
     def _calculate_delay(self, attempt: int) -> float:
         """Calculate delay for the given attempt number.
@@ -280,7 +281,7 @@ class AsyncRetryManager:
             config: Retry configuration. Uses defaults if not provided.
         """
         self.config = config or RetryConfig()
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         
     def _calculate_delay(self, attempt: int) -> float:
         """Calculate delay for the given attempt number (same as sync version)."""

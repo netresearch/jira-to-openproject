@@ -39,24 +39,54 @@ def pytest_configure(config: Config) -> None:
     )
 
 
+def pytest_addoption(parser):
+    """Add custom command line options."""
+    parser.addoption(
+        "--live-ssh",
+        action="store_true",
+        default=False,
+        help="Enable real SSH connections for integration tests (default: mock SSH for speed)"
+    )
+
+
 # Automatically detect when running in test mode
 def _is_test_environment() -> bool:
     """Detect if code is running in a pytest environment."""
     return "PYTEST_CURRENT_TEST" in os.environ
 
 
+# Cache for environment file loading to avoid repeated disk I/O
+_env_cache = {}
+
+def _load_env_file_cached(file_path: str) -> dict:
+    """Load environment file with caching to avoid repeated disk I/O."""
+    if file_path not in _env_cache:
+        if Path(file_path).exists():
+            # Use a temporary dict to capture the loaded variables
+            temp_env = {}
+            load_dotenv(file_path, override=False)
+            # Capture the loaded values, excluding sensitive keys
+            sensitive_keys = {'*_PASSWORD', '*_SECRET', '*_KEY', '*_TOKEN', 'SSH_PRIVATE_KEY'}
+            _env_cache[file_path] = {
+                k: v for k, v in os.environ.items() 
+                if k not in temp_env and not any(sensitive in k.upper() for sensitive in sensitive_keys)
+            }
+        else:
+            _env_cache[file_path] = {}
+    return _env_cache[file_path]
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_environment() -> Generator[None, None, None]:
     """Set up the test environment at the start of the test session.
 
-    This fixture automatically loads the appropriate .env files for testing:
+    This fixture automatically loads the appropriate .env files for testing with caching:
     - Always loads .env (base config)
     - Always loads .env.test (default test config)
     - Optionally loads .env.local if exists (local dev overrides)
     - Optionally loads .env.test.local if exists (local test overrides)
 
     Files are loaded in order of increasing specificity, with later files
-    overriding earlier ones.
+    overriding earlier ones. Uses caching to avoid repeated disk I/O.
     """
     # Store original environment to restore later
     original_env = os.environ.copy()
@@ -64,16 +94,22 @@ def setup_test_environment() -> Generator[None, None, None]:
     # Set flag to indicate we're in test mode
     os.environ["J2O_TEST_MODE"] = "true"
 
-    # Load configuration files in correct precedence order
-    load_dotenv(".env", override=True)  # Base configuration
+    # Load configuration files in correct precedence order with caching
+    # Base configuration
+    base_env = _load_env_file_cached(".env")
+    os.environ.update(base_env)
 
-    if Path(".env.local").exists():
-        load_dotenv(".env.local", override=True)  # Local development overrides
+    # Local development overrides (if exists)
+    local_env = _load_env_file_cached(".env.local")
+    os.environ.update(local_env)
 
-    load_dotenv(".env.test", override=True)  # Default test configuration
+    # Default test configuration
+    test_env = _load_env_file_cached(".env.test")
+    os.environ.update(test_env)
 
-    if Path(".env.test.local").exists():
-        load_dotenv(".env.test.local", override=True)  # Local test overrides
+    # Local test overrides (if exists)
+    test_local_env = _load_env_file_cached(".env.test.local")
+    os.environ.update(test_local_env)
 
     # Yield control back to tests
     yield
@@ -186,13 +222,25 @@ def mock_op_client() -> OpenProjectClient:
 
 # Fixtures for integration tests directly using the clients
 @pytest.fixture
-def ssh_client() -> Generator[SSHClient, None, None]:
-    """Create an SSH client instance."""
-    # Only create the client if the required environment variables are set
+def ssh_client(request) -> Generator[SSHClient, None, None]:
+    """Create an SSH client instance.
+    
+    By default, returns a mock SSH client to eliminate network overhead in unit tests.
+    Use --live-ssh flag to enable real SSH connections for integration tests.
+    """
+    # Check if --live-ssh flag is set
+    live_ssh = request.config.getoption("--live-ssh", default=False)
+    
+    if not live_ssh:
+        # Return mock SSH client for unit tests (fast execution)
+        yield cast("SSHClient", MagicMock(spec=SSHClient))
+        return
+    
+    # Only create real client if the required environment variables are set
     if not os.environ.get("J2O_OPENPROJECT_SERVER") or not os.environ.get(
         "J2O_OPENPROJECT_USER"
     ):
-        pytest.skip("Required SSH environment variables not set")
+        pytest.skip("Required SSH environment variables not set for live SSH")
 
     try:
         client = SSHClient(

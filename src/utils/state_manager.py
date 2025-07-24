@@ -1,3 +1,4 @@
+from src.display import configure_logging
 #!/usr/bin/env python3
 """State preservation system for idempotent migration operations.
 
@@ -15,6 +16,11 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from src import config
+
+
+class StateCorruptionError(Exception):
+    """Raised when state corruption is detected."""
+    pass
 
 
 # Type definitions for state management
@@ -81,7 +87,7 @@ class StateManager:
             state_dir: Directory to store state files.
                       Defaults to var/state/
         """
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         self.state_dir = state_dir or config.get_path("data").parent / "state"
         self.state_dir.mkdir(parents=True, exist_ok=True)
 

@@ -46,6 +46,16 @@ class MetricsCollector:
         self._counters: Dict[str, int] = defaultdict(int)
         self._tagged_counters: Dict[str, OrderedDict[str, int]] = defaultdict(lambda: OrderedDict())
         
+        # Initialize idempotency metrics
+        self._idempotency_metrics = {
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "keys_generated": 0,
+            "keys_cached": 0,
+            "redis_errors": 0,
+            "fallback_used": 0,
+        }
+        
         logger.debug("MetricsCollector initialized with privacy protection and memory management")
     
     def _hash_username(self, username: str) -> str:
@@ -183,8 +193,33 @@ class MetricsCollector:
         with self._lock:
             self._counters.clear()
             self._tagged_counters.clear()
+            # Reset idempotency metrics
+            for key in self._idempotency_metrics:
+                self._idempotency_metrics[key] = 0
             
         logger.debug("All metrics reset to zero")
+    
+    def increment_idempotency_metric(self, metric_name: str) -> None:
+        """Increment an idempotency metric counter.
+        
+        Args:
+            metric_name: Name of the idempotency metric to increment
+        """
+        if metric_name not in self._idempotency_metrics:
+            logger.warning("Unknown idempotency metric: %s", metric_name)
+            return
+            
+        with self._lock:
+            self._idempotency_metrics[metric_name] += 1
+    
+    def get_idempotency_metrics(self) -> Dict[str, int]:
+        """Get all idempotency metrics.
+        
+        Returns:
+            Dictionary of idempotency metric names to their current values
+        """
+        with self._lock:
+            return self._idempotency_metrics.copy()
     
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of metrics activity.

@@ -1,58 +1,47 @@
 #!/usr/bin/env python3
-"""OpenProject API client."""
+"""OpenProject client for interacting with OpenProject instances via SSH and Rails console."""
 
 import json
 import logging
-import os
 import random
+import re
+import shlex
+import subprocess
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, datetime
 from pathlib import Path
-from shlex import quote
-from typing import Any, Dict, List, Optional, Union, Callable, Iterator
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
-from src import config
-from src.clients.docker_client import DockerClient
-from src.clients.rails_console_client import RailsConsoleClient, RubyError
-from src.clients.ssh_client import SSHClient
-from src.utils.file_manager import FileManager
-from src.utils.rate_limiter import create_openproject_rate_limiter
-from src.utils.performance_optimizer import (
-    PerformanceOptimizer,
-    StreamingPaginator,
-    cached,
-    rate_limited,
-    batched
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from src.display import configure_logging
+from src.clients.exceptions import (
+    ConnectionError,
+    JsonParseError,
+    QueryExecutionError,
+    RecordNotFoundError,
 )
-from src.utils.config_validation import SecurityValidator, ConfigurationValidationError
+from src.utils.performance_optimizer import PerformanceOptimizer
+from src.utils.rate_limiter import RateLimiter
+from src.clients.ssh_client import SSHClient
+from src.clients.docker_client import DockerClient
+from src.clients.rails_console_client import RailsConsoleClient
 from src.utils.metrics_collector import MetricsCollector
+from src.utils.idempotency_manager import get_idempotency_manager
+from src.utils.idempotency_decorators import batch_idempotent
 
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 class OpenProjectError(Exception):
-    """Base exception for all OpenProject client errors."""
+    """Base exception for OpenProject client errors."""
+    pass
 
 
-class ConnectionError(OpenProjectError):
-    """Error when connection to OpenProject fails."""
-
-
-class FileTransferError(OpenProjectError):
+class FileTransferError(Exception):
     """Error when transferring files to/from OpenProject container."""
-
-
-class QueryExecutionError(OpenProjectError):
-    """Error when executing a query in OpenProject."""
-
-
-class RecordNotFoundError(OpenProjectError):
-    """Error when a record is not found in OpenProject."""
-
-
-class JsonParseError(OpenProjectError):
-    """Error when parsing JSON output from OpenProject."""
 
 
 class OpenProjectClient:
@@ -1067,6 +1056,7 @@ class OpenProjectClient:
         max_delay: float = 60.0,
         backoff_factor: float = 2.0,
         jitter: bool = True,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Any:
         """Execute an operation with exponential backoff retry logic.
 
@@ -1078,6 +1068,7 @@ class OpenProjectClient:
             max_delay: Maximum delay between retries in seconds
             backoff_factor: Factor to multiply delay by on each retry
             jitter: Whether to add random jitter to delays
+            headers: Optional headers for idempotency key propagation
 
         Returns:
             Result of the operation
@@ -1142,19 +1133,21 @@ class OpenProjectClient:
         # This should never be reached, but just in case
         raise last_exception or Exception(f"{operation_name} failed after {max_retries} retries")
 
-    @rate_limited()
+    @batch_idempotent(ttl=3600)  # 1 hour TTL for batch record lookups
     def batch_find_records(
         self,
         model: str,
         ids: list[int | str],
         batch_size: int | None = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> dict[int | str, dict[str, Any]]:
-        """Find multiple records by IDs in batches.
+        """Find multiple records by IDs in batches with idempotency support.
 
         Args:
             model: Model name (e.g., "User", "Project")
             ids: List of IDs to find
             batch_size: Size of each batch (defaults to configured batch_size)
+            headers: Optional headers containing X-Idempotency-Key
 
         Returns:
             Dictionary mapping ID to record data (missing IDs are omitted)
@@ -1181,10 +1174,11 @@ class OpenProjectClient:
                 return self.execute_json_query(query)
             
             try:
-                # Execute batch operation with retry logic
+                # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch {model} records {batch_ids[:3]}{'...' if len(batch_ids) > 3 else ''}"
+                    f"Batch fetch {model} records {batch_ids[:3]}{'...' if len(batch_ids) > 3 else ''}",
+                    headers=headers
                 )
                 
                 if batch_results:
@@ -2509,7 +2503,6 @@ class OpenProjectClient:
             msg = f"Failed to batch create work packages: {e}"
             raise QueryExecutionError(msg) from e
     
-    @cached(ttl=1800)  # Cache for 30 minutes
     def get_project_enhanced(self, project_id: int) -> Dict[str, Any]:
         """Get comprehensive project information with caching."""
         script = f"""
@@ -2552,7 +2545,6 @@ class OpenProjectClient:
             if user['id'] in user_ids
         }
 
-    @rate_limited()
     def stream_work_packages_for_project(self, project_id: int, batch_size: int = None) -> Iterator[Dict[str, Any]]:
         """Stream work packages for a project with memory-efficient pagination."""
         effective_batch_size = batch_size or self.batch_size
@@ -2627,17 +2619,19 @@ class OpenProjectClient:
             msg = f"Failed to batch update work packages: {e}"
             raise QueryExecutionError(msg) from e
 
-    @rate_limited()
+    @batch_idempotent(ttl=3600)  # 1 hour TTL for user email lookups
     def batch_get_users_by_emails(
         self,
         emails: list[str],
         batch_size: int | None = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> dict[str, dict[str, Any]]:
-        """Find multiple users by email addresses in batches.
+        """Find multiple users by email addresses in batches with idempotency support.
 
         Args:
             emails: List of email addresses to find
             batch_size: Size of each batch (defaults to configured batch_size)
+            headers: Optional headers containing X-Idempotency-Key
 
         Returns:
             Dictionary mapping email to user data (missing emails are omitted)
@@ -2664,10 +2658,11 @@ class OpenProjectClient:
                 return self.execute_json_query(query)
             
             try:
-                # Execute batch operation with retry logic
+                # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}"
+                    f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}",
+                    headers=headers
                 )
                 
                 if batch_results:
@@ -2699,17 +2694,19 @@ class OpenProjectClient:
 
         return results
 
-    @rate_limited()
+    @batch_idempotent(ttl=3600)  # 1 hour TTL for project identifier lookups
     def batch_get_projects_by_identifiers(
         self,
         identifiers: list[str],
         batch_size: int | None = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> dict[str, dict[str, Any]]:
-        """Find multiple projects by identifiers in batches.
+        """Find multiple projects by identifiers in batches with idempotency support.
 
         Args:
             identifiers: List of project identifiers to find
             batch_size: Size of each batch (defaults to configured batch_size)
+            headers: Optional headers containing X-Idempotency-Key
 
         Returns:
             Dictionary mapping identifier to project data (missing identifiers are omitted)
@@ -2736,10 +2733,11 @@ class OpenProjectClient:
                 return self.execute_json_query(query)
             
             try:
-                # Execute batch operation with retry logic
+                # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch projects by identifier {batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}"
+                    f"Batch fetch projects by identifier {batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}",
+                    headers=headers
                 )
                 
                 if batch_results:
@@ -2771,17 +2769,19 @@ class OpenProjectClient:
 
         return results
 
-    @rate_limited()
+    @batch_idempotent(ttl=7200)  # 2 hour TTL for custom field lookups (less frequent changes)
     def batch_get_custom_fields_by_names(
         self,
         names: list[str],
         batch_size: int | None = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> dict[str, dict[str, Any]]:
-        """Find multiple custom fields by names in batches.
+        """Find multiple custom fields by names in batches with idempotency support.
 
         Args:
             names: List of custom field names to find
             batch_size: Size of each batch (defaults to configured batch_size)
+            headers: Optional headers containing X-Idempotency-Key
 
         Returns:
             Dictionary mapping name to custom field data (missing names are omitted)
@@ -2808,10 +2808,11 @@ class OpenProjectClient:
                 return self.execute_json_query(query)
             
             try:
-                # Execute batch operation with retry logic
+                # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}"
+                    f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}",
+                    headers=headers
                 )
                 
                 if batch_results:

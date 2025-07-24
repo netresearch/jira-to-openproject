@@ -1,3 +1,4 @@
+from src.display import configure_logging
 #!/usr/bin/env python3
 """Checkpoint management system for resilient migration operations.
 
@@ -97,7 +98,7 @@ class CheckpointManager:
             checkpoint_dir: Directory to store checkpoint files.
                            Defaults to var/state/checkpoints/
         """
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         self.checkpoint_dir = checkpoint_dir or config.get_path("data").parent / "state" / "checkpoints"
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 

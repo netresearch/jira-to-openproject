@@ -1,3 +1,4 @@
+from src.display import configure_logging
 """Efficient batching system for API calls in migration components.
 
 This module provides a configurable batching mechanism that can process large datasets
@@ -20,6 +21,16 @@ from src.utils.config_validation import SecurityValidator, ConfigurationValidati
 
 T = TypeVar('T')
 R = TypeVar('R')
+
+@dataclass
+class BatchConfig:
+    """Configuration for batch processing operations."""
+    batch_size: int = 100
+    max_workers: int = 4
+    retry_attempts: int = 3
+    enable_progress_tracking: bool = True
+    enable_rate_limiting: bool = True
+    chunk_size: int = 8192
 
 @dataclass
 class BatchResult:
@@ -59,7 +70,7 @@ class ThreadSafeBatchProcessor(Generic[T, R]):
             
         self.rate_limiter = rate_limiter
         self.enable_progress_tracking = enable_progress_tracking
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         
         # Thread-safe state management
         self._lock = threading.RLock()
@@ -419,7 +430,7 @@ class StreamingJSONProcessor:
             chunk_size: Size of chunks to read from file
         """
         self.chunk_size = chunk_size
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         self._shutdown_event = threading.Event()
         
     def process_large_json_file(

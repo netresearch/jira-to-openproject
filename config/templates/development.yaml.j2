@@ -1,0 +1,84 @@
+# @description: Development environment configuration template
+# @version: 2.0
+# @environment: development
+# @variables: jira_url, jira_username, jira_api_token, op_url, op_api_token
+# @dependencies: base_config
+
+# Jira to OpenProject Migration Configuration - Development Environment
+# Generated on {{ timestamp }}
+# Environment: {{ environment }}
+# Config Version: {{ config_version }}
+
+# Jira API settings
+jira:
+  # Base URL of your Jira instance
+  url: "{{ jira_url | default('https://jira-dev.local/') }}"
+  # Authentication credentials
+  username: "{{ jira_username | default('') }}"  # Set via J2O_JIRA_USERNAME
+  api_token: "{{ jira_api_token | default('') }}"  # Set via J2O_JIRA_API_TOKEN
+  # Projects to migrate (leave empty to migrate all)
+  projects:
+    - "DEV-PROJECT1"
+    - "DEV-PROJECT2"
+  # API request settings
+  batch_size: 50  # Smaller batch size for development
+  # Fields to retrieve from Jira
+  fields: "summary,description,issuetype,status,priority,assignee,reporter,created,updated,labels,components,fixVersions,versions,comment,attachment,worklog,customfield_*"
+  # ScriptRunner integration
+  scriptrunner:
+    enabled: false  # Set via J2O_JIRA_SCRIPTRUNNER_ENABLED
+    # Path relative to Jira URL (do not include https://jira-dev.local/)
+    custom_field_options_endpoint: "/rest/scriptrunner/latest/custom/getAllCustomFieldsWithOptions"  # Set via J2O_JIRA_SCRIPTRUNNER_CUSTOM_FIELD_OPTIONS_ENDPOINT
+
+# OpenProject API settings
+openproject:
+  # Base URL of your OpenProject instance
+  url: "{{ op_url | default('https://op-dev.local/') }}"
+  # Authentication credentials
+  api_token: "{{ op_api_token | default('') }}"  # Set via J2O_OPENPROJECT_API_KEY
+  # API request settings
+  batch_size: 25  # Smaller batch size for development
+
+# Migration process settings
+migration:
+  # Component migration order
+  component_order:
+    - users
+    - custom_fields
+    - projects
+    - versions
+    - issues
+    - relations
+    - worklogs
+    - attachments
+    - comments
+
+  # Data storage
+  mapping_file: "data/id_mapping_dev.json"
+  attachment_path: "data/attachments_dev"
+
+  # User mapping staleness detection
+  mapping:
+    refresh_interval: "1h"  # Shorter TTL for development
+    fallback_strategy: "skip"  # Options: skip, assign_admin, create_placeholder
+    fallback_admin_user_id: ""  # Admin user for assign_admin strategy (set via J2O_MAPPING_ADMIN_USER)
+
+  # Performance settings
+  batch_size: 500  # Smaller batch size for development
+
+  # Behavior settings
+  skip_existing: false  # Don't skip existing in development
+
+  # Security settings
+  ssl_verify: false  # Disable SSL verification for development
+
+  # Logging
+  log_level: "DEBUG"  # More verbose logging for development
+
+  # Development-specific settings
+  development:
+    enable_mock_mode: true
+    mock_data_size: 100
+    enable_debug_endpoints: true
+    auto_cleanup: true
+    cleanup_interval: "1h" 

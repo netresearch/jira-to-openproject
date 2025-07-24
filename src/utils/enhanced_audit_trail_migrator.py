@@ -16,12 +16,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
-from src import config
+from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 class AuditEventData(TypedDict):

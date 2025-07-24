@@ -1,20 +1,34 @@
 """Jira API client for the migration project.
 
 Provides a clean, exception-based interface for Jira resource access.
+Enhanced with performance optimizations including batch operations,
+caching, and parallel processing.
 """
 
+import asyncio
 import time
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, Iterator, List, Optional, Union
 from datetime import datetime
 
-from jira import JIRA, Issue
+from jira import JIRA, Issue, JIRAError
+from jira.exceptions import JIRAError as JiraApiError
 from requests import Response
 
 from src import config
 from src.utils.rate_limiter import create_jira_rate_limiter
+from src.utils.performance_optimizer import (
+    PerformanceOptimizer,
+    StreamingPaginator,
+    cached,
+    rate_limited,
+    batched
+)
+from src.utils.config_validation import SecurityValidator, ConfigurationValidationError
+from src.display import configure_logging
 
 # Get logger
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 class JiraError(Exception):
@@ -51,8 +65,8 @@ class JiraClient:
     exceptions that can be caught and handled by the caller.
     """
 
-    def __init__(self) -> None:
-        """Initialize the Jira client with proper exception handling."""
+    def __init__(self, **kwargs) -> None:
+        """Initialize the Jira client with proper exception handling and performance optimizations."""
         # Get connection details from config
         self.jira_url: str = config.jira_config.get("url", "")
         self.jira_username: str = config.jira_config.get("username", "")
@@ -93,6 +107,34 @@ class JiraClient:
         self.project_cache: list[dict[str, Any]] | None = None
         self.issue_type_cache: list[dict[str, Any]] | None = None
         self.field_options_cache: dict[str, Any] = {}
+
+        # ===== PERFORMANCE OPTIMIZER SETUP =====
+        # Validate performance configuration parameters using SecurityValidator
+        try:
+            cache_size = SecurityValidator.validate_numeric_parameter('cache_size', kwargs.get('cache_size', 2000))
+            cache_ttl = SecurityValidator.validate_numeric_parameter('cache_ttl', kwargs.get('cache_ttl', 1800))
+            batch_size = SecurityValidator.validate_numeric_parameter('batch_size', kwargs.get('batch_size', 100))
+            max_workers = SecurityValidator.validate_numeric_parameter('max_workers', kwargs.get('max_workers', 15))
+            rate_limit = SecurityValidator.validate_numeric_parameter('rate_limit_per_sec', kwargs.get('rate_limit', 15.0))
+            
+            # Validate resource allocation to prevent system overload  
+            SecurityValidator.validate_resource_allocation(batch_size, max_workers, 2048)  # 2GB memory limit
+            
+        except ConfigurationValidationError as e:
+            logger.error(f"JiraClient configuration validation failed: {e}")
+            raise
+        
+        # Initialize performance optimizer with validated parameters
+        self.performance_optimizer = PerformanceOptimizer(
+            cache_size=cache_size,
+            cache_ttl=cache_ttl,
+            batch_size=batch_size,
+            max_workers=max_workers,
+            rate_limit=rate_limit
+        )
+        
+        self.batch_size = batch_size
+        self.parallel_workers = max_workers
 
         # Connect to Jira
         self._connect()
@@ -1791,4 +1833,124 @@ class JiraClient:
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo time entries: {e!s}"
             logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    # ===== ENHANCED PERFORMANCE FEATURES =====
+    
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """Get comprehensive performance statistics."""
+        return self.performance_optimizer.get_comprehensive_stats()
+
+    # ===== BATCH OPERATIONS =====
+    
+    def batch_get_issues(self, issue_keys: List[str]) -> Dict[str, Issue]:
+        """Retrieve multiple issues in batches for optimal performance."""
+        if not issue_keys:
+            return {}
+            
+        return self.performance_optimizer.batch_processor.process_batches(
+            issue_keys,
+            self._fetch_issues_batch
+        )
+    
+    def _fetch_issues_batch(self, issue_keys: List[str], **kwargs) -> Dict[str, Issue]:
+        """Fetch a batch of issues from Jira API."""
+        if not issue_keys:
+            return {}
+            
+        # Use JQL to fetch multiple issues at once
+        jql = f"key in ({','.join(issue_keys)})"
+        
+        try:
+            issues = self.jira.search_issues(jql, maxResults=len(issue_keys), expand='changelog')
+            return {issue.key: issue for issue in issues}
+        except Exception as e:
+            logger.error(f"Batch issue fetch failed for {len(issue_keys)} issues: {e}")
+            return {}
+
+    def batch_get_projects(self, project_keys: List[str]) -> Dict[str, dict]:
+        """Retrieve multiple projects in batches for optimal performance."""
+        if not project_keys:
+            return {}
+            
+        # Get all projects and filter to requested keys
+        all_projects = self.get_projects()
+        return {
+            project['key']: project 
+            for project in all_projects 
+            if project['key'] in project_keys
+        }
+
+    @rate_limited()
+    def stream_all_issues_for_project(self, project_key: str, fields: str = None, batch_size: int = None) -> Iterator[dict[str, Any]]:
+        """Stream all issues for a project with memory-efficient pagination."""
+        effective_batch_size = batch_size or self.batch_size
+        
+        paginator = StreamingPaginator(
+            batch_size=effective_batch_size,
+            rate_limiter=self.rate_limiter
+        )
+        
+        return paginator.paginate_jql_search(
+            jira_client=self.jira,
+            jql=f"project = {project_key}",
+            fields=fields
+        )
+
+    def batch_get_users_by_keys(self, user_keys: List[str]) -> Dict[str, dict]:
+        """Retrieve multiple users in batches."""
+        if not user_keys:
+            return {}
+            
+        # Get all users and filter to requested keys
+        all_users = self.get_users()
+        user_dict = {user.get('key', user.get('accountId', '')): user for user in all_users}
+        
+        return {
+            key: user_dict[key] 
+            for key in user_keys 
+            if key in user_dict
+        }
+
+    @cached(ttl=3600)  # Cache for 1 hour
+    def get_project_metadata_enhanced(self, project_key: str) -> Dict[str, Any]:
+        """Get comprehensive project metadata with caching."""
+        try:
+            project = self.jira.project(project_key)
+            
+            # Get additional metadata
+            issue_types = self.jira.createmeta_issuetypes(project.key)
+            statuses = self.jira.project_status(project.key)
+            
+            return {
+                "project": {
+                    "id": project.id,
+                    "key": project.key,
+                    "name": project.name,
+                    "description": getattr(project, 'description', ''),
+                    "lead": getattr(project, 'lead', {}).get('name', 'Unknown') if hasattr(project, 'lead') else 'Unknown',
+                    "project_type_key": getattr(project, 'projectTypeKey', 'software'),
+                },
+                "issue_types": [
+                    {
+                        "id": it.id,
+                        "name": it.name,
+                        "description": getattr(it, 'description', ''),
+                        "subtask": getattr(it, 'subtask', False)
+                    }
+                    for it in issue_types
+                ],
+                "statuses": [
+                    {
+                        "id": status.id,
+                        "name": status.name,
+                        "description": getattr(status, 'description', ''),
+                        "category": getattr(status, 'statusCategory', {}).get('name', 'Unknown')
+                    }
+                    for status in statuses
+                ]
+            }
+        except Exception as e:
+            error_msg = f"Failed to get enhanced project metadata for {project_key}: {e}"
+            logger.error(error_msg)
             raise JiraApiError(error_msg) from e

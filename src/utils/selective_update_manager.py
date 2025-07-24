@@ -1,3 +1,4 @@
+from src.display import configure_logging
 #!/usr/bin/env python3
 """Selective update system for idempotent migration operations.
 
@@ -107,7 +108,7 @@ class SelectiveUpdateManager:
             state_manager: State manager for tracking entity mappings
             update_dir: Directory to store update plans and results
         """
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         self.jira_client = jira_client or JiraClient()
         self.op_client = op_client or OpenProjectClient()
         self.state_manager = state_manager or StateManager()

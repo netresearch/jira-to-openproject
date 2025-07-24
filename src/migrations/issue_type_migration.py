@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from src import config
+from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
 from src.display import console
@@ -19,7 +19,7 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 
 @register_entity_types("issue_types", "work_package_types")

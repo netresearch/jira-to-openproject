@@ -1,3 +1,4 @@
+from src.display import configure_logging
 #!/usr/bin/env python3
 """Change detection system for idempotent migration operations.
 
@@ -65,7 +66,7 @@ class ChangeDetector:
             snapshot_dir: Directory to store entity snapshots.
                          Defaults to var/snapshots/
         """
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         self.snapshot_dir = snapshot_dir or config.get_path("data").parent / "snapshots"
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
 

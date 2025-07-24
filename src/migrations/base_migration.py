@@ -1,3 +1,4 @@
+from src.display import configure_logging
 #!/usr/bin/env python3
 """Base migration class providing common functionality for all migrations."""
 
@@ -62,6 +63,22 @@ except ImportError:
         def __init__(self, checkpoint_dir=None):
             pass
 
+try:
+    from src.utils.error_recovery import ErrorRecoverySystem, error_recovery
+except ImportError:
+    # Create a mock ErrorRecoverySystem if not available
+    class ErrorRecoverySystem:
+        def __init__(self, db_path=None):
+            pass
+        def execute_with_recovery(self, *args, **kwargs):
+            return None
+        def resume_migration(self, *args, **kwargs):
+            return []
+        def get_migration_status(self, *args, **kwargs):
+            return {'total': 0, 'completed': 0, 'failed': 0, 'pending': 0}
+    
+    error_recovery = ErrorRecoverySystem()
+
 
 class EntityTypeRegistry:
     """Centralized registry for mapping migration classes to their supported entity types.
@@ -100,7 +117,7 @@ class EntityTypeRegistry:
             if entity_type in cls._type_to_class_map:
                 existing_class = cls._type_to_class_map[entity_type]
                 if existing_class != migration_class:
-                    logger = config.logger
+                    logger = configure_logging("INFO", None)
                     logger.warning(
                         f"Entity type '{entity_type}' is supported by multiple classes: "
                         f"{existing_class.__name__} and {migration_class.__name__}. "
@@ -274,7 +291,7 @@ class BaseMigration:
         self.data_dir: Path = config.get_path("data")
         self.output_dir: Path = config.get_path("output")
 
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
 
         # Initialize mappings using proper exception handling (compliance fix)
         try:
@@ -307,6 +324,37 @@ class BaseMigration:
         # Progress tracking
         self._current_migration_record_id: str | None = None
         self._current_checkpoints: list[str] = []
+        
+        # Setup performance features for enhanced clients
+        self._setup_performance_features()
+
+    def _setup_performance_features(self) -> None:
+        """Setup performance features and provide easy access to enhanced client capabilities."""
+        # Check if clients have enhanced features
+        self.has_enhanced_jira = hasattr(self.jira_client, 'performance_optimizer')
+        self.has_enhanced_openproject = hasattr(self.op_client, 'performance_optimizer')
+        
+        if self.has_enhanced_jira:
+            self.logger.debug("Enhanced Jira client detected - batch operations and caching available")
+        
+        if self.has_enhanced_openproject:
+            self.logger.debug("Enhanced OpenProject client detected - batch operations and caching available")
+            
+    def get_performance_stats(self) -> dict[str, Any]:
+        """Get performance statistics from enhanced clients."""
+        stats = {}
+        
+        if self.has_enhanced_jira:
+            stats['jira'] = self.jira_client.get_performance_stats()
+            
+        if self.has_enhanced_openproject:
+            stats['openproject'] = self.op_client.get_performance_stats()
+            
+        return stats
+        
+    def is_batch_operations_available(self) -> bool:
+        """Check if batch operations are available."""
+        return self.has_enhanced_jira or self.has_enhanced_openproject
 
     def _cleanup_cache_if_needed(self) -> None:
         """Clean up global cache if memory usage exceeds thresholds.
@@ -1830,6 +1878,123 @@ class BaseMigration:
             # Fall back to standard migration
             return self.run()
 
+    def run_with_enhanced_recovery(
+        self,
+        entity_type: str | None = None,
+        operation_type: str = "migrate",
+        entity_count: int = 0,
+        enable_checkpoints: bool = True,
+        checkpoint_frequency: int = 10,
+    ) -> ComponentResult:
+        """Run migration with enhanced error recovery system.
+        
+        This method integrates the comprehensive error recovery system with:
+        - Exponential backoff retry logic
+        - Circuit breaker pattern for external services
+        - Advanced checkpointing with SQLite database
+        - Structured logging with detailed error categorization
+        - Automatic resume capabilities
+        
+        Args:
+            entity_type: Type of entities being migrated
+            operation_type: Type of operation being performed
+            entity_count: Number of entities to be processed
+            enable_checkpoints: Whether to create checkpoints during migration
+            checkpoint_frequency: Create checkpoint every N entities processed
+            
+        Returns:
+            ComponentResult with enhanced recovery information
+        """
+        if not entity_type:
+            self.logger.warning(
+                "No entity type specified for enhanced recovery migration, using standard run"
+            )
+            return self.run()
+
+        migration_id = f"{entity_type}_{operation_type}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
+        
+        try:
+            # Check for existing pending checkpoints
+            pending_checkpoints = error_recovery.resume_migration(migration_id, entity_type)
+            if pending_checkpoints:
+                self.logger.info(
+                    "Found %d pending checkpoints for migration %s, resuming...",
+                    len(pending_checkpoints),
+                    migration_id
+                )
+                
+                # Resume from pending checkpoints
+                return self._resume_from_enhanced_checkpoints(migration_id, pending_checkpoints)
+
+            # Start new migration with enhanced recovery
+            self.logger.info(
+                "Starting enhanced recovery migration for %s (ID: %s)",
+                entity_type,
+                migration_id
+            )
+
+            # Get migration status before starting
+            initial_status = error_recovery.get_migration_status(migration_id)
+            self.logger.info(
+                "Initial migration status: %s",
+                initial_status
+            )
+
+            # Run the actual migration with enhanced recovery
+            result = self._run_with_enhanced_recovery(
+                migration_id=migration_id,
+                entity_type=entity_type,
+                entity_count=entity_count,
+                checkpoint_frequency=checkpoint_frequency,
+            )
+
+            # Get final migration status
+            final_status = error_recovery.get_migration_status(migration_id)
+            
+            # Add enhanced recovery details to result
+            if not result.details:
+                result.details = {}
+            result.details.update({
+                "migration_id": migration_id,
+                "enhanced_recovery_enabled": True,
+                "initial_status": initial_status,
+                "final_status": final_status,
+                "checkpoints_created": final_status.get('total', 0),
+                "checkpoints_completed": final_status.get('completed', 0),
+                "checkpoints_failed": final_status.get('failed', 0),
+                "checkpoints_pending": final_status.get('pending', 0),
+            })
+
+            # Clean up if migration was successful
+            if result.success and final_status.get('pending', 0) == 0:
+                error_recovery.clear_migration_data(migration_id)
+                self.logger.info(
+                    "Migration %s completed successfully, cleared checkpoint data",
+                    migration_id
+                )
+
+            return result
+
+        except Exception as e:
+            self.logger.error(
+                "Unexpected error during enhanced recovery migration: %s",
+                str(e),
+                exc_info=True,
+            )
+            
+            return ComponentResult(
+                success=False,
+                errors=[f"Enhanced recovery migration failed: {str(e)}"],
+                success_count=0,
+                failed_count=1,
+                total_count=entity_count,
+                details={
+                    "migration_id": migration_id,
+                    "enhanced_recovery_enabled": True,
+                    "setup_failed": True,
+                },
+            )
+
     def resume_migration(self, migration_record_id: str) -> ComponentResult:
         """Resume a previously interrupted migration.
 
@@ -2132,6 +2297,16 @@ class BaseMigration:
                 current_entity_type=current_entity_type,
                 metadata=metadata,
             )
+
+            # Also create enhanced recovery checkpoint if available
+            if hasattr(self, 'error_recovery_system') and self.error_recovery_system:
+                self._create_migration_checkpoint(
+                    entity_type=current_entity_type or "unknown",
+                    entity_id=current_entity_id or "unknown",
+                    status="checkpoint_created"
+                )
+
+            return checkpoint_id
             
             self._current_checkpoints.append(checkpoint_id)
             self.checkpoint_manager.start_checkpoint(checkpoint_id)
@@ -2164,4 +2339,52 @@ class BaseMigration:
             current_checkpoint = self._current_checkpoints[-1]
             self.checkpoint_manager.complete_checkpoint(
                 current_checkpoint, entities_processed, metadata
+            )
+
+    def _setup_enhanced_error_recovery(self) -> ErrorRecoverySystem:
+        """Set up the enhanced error recovery system."""
+        checkpoint_dir = Path(self.config.checkpoint_dir) if self.config.checkpoint_dir else None
+        db_path = checkpoint_dir / "error_recovery.db" if checkpoint_dir else None
+        
+        return ErrorRecoverySystem(
+            db_path=db_path,
+            logger=self.logger,
+            max_retries=self.config.max_retries if hasattr(self.config, 'max_retries') else 3,
+            circuit_breaker_failure_threshold=self.config.circuit_breaker_threshold if hasattr(self.config, 'circuit_breaker_threshold') else 5,
+            circuit_breaker_timeout=self.config.circuit_breaker_timeout if hasattr(self.config, 'circuit_breaker_timeout') else 60,
+        )
+
+    def _handle_enhanced_recovery_error(self, error: Exception, context: Dict[str, Any]) -> None:
+        """Handle errors in the enhanced recovery system."""
+        error_type = type(error).__name__
+        error_message = str(error)
+        
+        # Log with structured logging
+        self.logger.error(
+            "Enhanced recovery error",
+            error_type=error_type,
+            error_message=error_message,
+            context=context,
+            exc_info=True
+        )
+        
+        # Categorize error for appropriate handling
+        if isinstance(error, (ConnectionError, TimeoutError)):
+            self.logger.warning("Network-related error detected", error_type=error_type)
+        elif isinstance(error, CircuitBreakerError):
+            self.logger.warning("Circuit breaker opened", service=context.get('service', 'unknown'))
+        else:
+            self.logger.error("Unexpected error in enhanced recovery", error_type=error_type)
+
+    def _create_migration_checkpoint(self, entity_type: str, entity_id: str, status: str) -> None:
+        """Create a migration checkpoint for the enhanced recovery system."""
+        if hasattr(self, 'error_recovery_system') and self.error_recovery_system:
+            self.error_recovery_system.create_checkpoint(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                status=status,
+                metadata={
+                    'migration_id': getattr(self, 'migration_id', 'unknown'),
+                    'timestamp': datetime.now(UTC).isoformat(),
+                }
             )

@@ -1,3 +1,4 @@
+from src.display import configure_logging
 #!/usr/bin/env python3
 """Data preservation system for protecting manually modified OpenProject data.
 
@@ -112,7 +113,7 @@ class DataPreservationManager:
             jira_client: Jira client for data comparison
             openproject_client: OpenProject client for data comparison
         """
-        self.logger = config.logger
+        self.logger = configure_logging("INFO", None)
         self.preservation_dir = (
             preservation_dir or config.get_path("data").parent / "preservation"
         )

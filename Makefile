@@ -144,14 +144,23 @@ install: ## Install/update Python dependencies in container
 # Testing and Quality
 # =============================================================================
 
-test: ## Run tests in container
-	docker compose exec app python -m pytest
+test: ## Run tests in container (parallel execution)
+	docker compose exec app python -m pytest -n auto
 
-test-verbose: ## Run tests with verbose output
-	docker compose exec app python -m pytest -v
+test-verbose: ## Run tests with verbose output (parallel execution)
+	docker compose exec app python -m pytest -v -n auto
 
-test-coverage: ## Run tests with coverage report
-	docker compose exec app python -m pytest --cov=src --cov-report=html --cov-report=term
+test-coverage: ## Run tests with coverage report (parallel execution)
+	docker compose exec app python -m pytest -n auto --cov=src --cov-report=html --cov-report=term
+
+test-slow: ## Run slow tests only (integration/end-to-end)
+	docker compose exec app python -m pytest -m "slow or integration or end_to_end" -n auto
+
+test-fast: ## Run fast tests only (unit tests)
+	docker compose exec app python -m pytest -m "not slow and not integration and not end_to_end" -n auto
+
+test-live-ssh: ## Run tests with live SSH connections
+	docker compose exec app python -m pytest --live-ssh -n auto
 
 lint: ## Run linting (flake8, mypy)
 	docker compose exec app flake8 src tests
@@ -174,8 +183,31 @@ pre-commit: ## Run pre-commit hooks
 local-install: ## Install dependencies locally (for local venv usage)
 	pip install -r requirements.txt
 
-local-test: ## Run tests locally
-	python -m pytest
+# Fast development path - bypasses Docker overhead
+dev-test: ## Run tests locally for fast development feedback (recommended for daily use)
+	python -m pytest -n auto $(TEST_OPTS)
+
+dev-test-fast: ## Run fast tests locally for immediate feedback (unit tests only)
+	python -m pytest -m "not slow and not integration and not end_to_end" -n auto $(TEST_OPTS)
+
+dev-test-slow: ## Run slow tests locally (integration/end-to-end)
+	python -m pytest -m "slow or integration or end_to_end" -n auto $(TEST_OPTS)
+
+dev-test-live-ssh: ## Run tests locally with live SSH connections
+	python -m pytest --live-ssh -n auto $(TEST_OPTS)
+
+# Legacy local targets (kept for compatibility)
+local-test: ## Run tests locally (parallel execution)
+	python -m pytest -n auto
+
+local-test-fast: ## Run fast tests locally (unit tests only)
+	python -m pytest -m "not slow and not integration and not end_to_end" -n auto
+
+local-test-slow: ## Run slow tests locally (integration/end-to-end)
+	python -m pytest -m "slow or integration or end_to_end" -n auto
+
+local-test-live-ssh: ## Run tests locally with live SSH connections
+	python -m pytest --live-ssh -n auto
 
 local-lint: ## Run linting locally
 	flake8 src tests
@@ -231,3 +263,6 @@ COMPOSE_ARGS ?=
 
 # Default service profiles
 PROFILES ?= dev
+
+# Test options for flexible test execution
+TEST_OPTS ?=

@@ -1,1 +1,1 @@
-"""Tests package for the j2o project."""
+"""Test suite for Jira to OpenProject migration tool."""

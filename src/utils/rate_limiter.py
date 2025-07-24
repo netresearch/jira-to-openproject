@@ -13,10 +13,11 @@ from enum import Enum
 from threading import Lock
 from typing import Any, Dict
 
-from src import config
+from src.display import configure_logging
 from src.utils.config_validation import SecurityValidator, ConfigurationValidationError
 
-logger = config.logger
+# Create a simple logger for this module
+logger = configure_logging("INFO", None)
 
 
 class RateLimitStrategy(Enum):

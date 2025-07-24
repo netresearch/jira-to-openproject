@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any, TypeVar
 
-from src import config
+from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker
@@ -23,7 +23,7 @@ from src.models import ComponentResult
 from src.models.migration_error import MigrationError
 
 # Get logger from config
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 # Define a type variable for ProgressTracker
 T = TypeVar("T")

@@ -4,6 +4,7 @@ This script orchestrates the complete migration process with performance optimiz
 """
 
 import argparse
+import asyncio
 import json
 import os
 import shutil
@@ -44,6 +45,32 @@ if TYPE_CHECKING:
     from src.migrations.base_migration import BaseMigration
 
 console = Console()
+
+
+class Migration:
+    """Main migration orchestrator class."""
+    
+    def __init__(self, components: list[ComponentName] | None = None):
+        self.components = components or []
+        self.performance_manager = MigrationPerformanceManager()
+    
+    async def run(
+        self,
+        stop_on_error: bool = False,
+        no_confirm: bool = False,
+        batch_size: int = 100,
+        max_concurrent: int = 5,
+        enable_performance_optimization: bool = True,
+    ) -> MigrationResult:
+        """Run the migration with the specified components."""
+        return await run_migration(
+            components=self.components,
+            stop_on_error=stop_on_error,
+            no_confirm=no_confirm,
+            batch_size=batch_size,
+            max_concurrent=max_concurrent,
+            enable_performance_optimization=enable_performance_optimization,
+        )
 
 
 class AvailableComponents(TypedDict):
@@ -212,7 +239,7 @@ def create_performance_config(
     )
 
 
-def run_migration(
+async def run_migration(
     components: list[ComponentName] | None = None,
     stop_on_error: bool = False,
     no_confirm: bool = False,
@@ -358,11 +385,29 @@ def run_migration(
                 ),
             )
 
-        # 4. Finally, create the Jira client and OpenProject client (which uses the other clients)
-        jira_client = JiraClient()
+        # 4. Finally, create the enhanced Jira client and OpenProject client (which uses the other clients)
+        # Get performance configuration from migration config
+        performance_config = {
+            'cache_size': config.migration_config.get('cache_size', 2000),
+            'cache_ttl': config.migration_config.get('cache_ttl', 1800),
+            'batch_size': batch_size,
+            'max_workers': max_concurrent,
+            'rate_limit': config.migration_config.get('rate_limit_per_sec', 15.0)
+        }
+        
+        jira_client = JiraClient(**performance_config)
 
         if mock_mode:
             # For mock mode, create a simplified OpenProject client that doesn't require real connections
+            # Adjust performance config for OpenProject (typically lower rates)
+            op_performance_config = performance_config.copy()
+            op_performance_config.update({
+                'cache_size': config.migration_config.get('op_cache_size', 1500),
+                'cache_ttl': config.migration_config.get('op_cache_ttl', 2400),
+                'batch_size': config.migration_config.get('op_batch_size', 50),
+                'rate_limit': config.migration_config.get('op_rate_limit_per_sec', 12.0)
+            })
+            
             op_client = OpenProjectClient(
                 container_name=config.openproject_config.get(
                     "container", "mock_container"
@@ -375,8 +420,18 @@ def run_migration(
                 ssh_client=ssh_client,
                 docker_client=docker_client,
                 rails_client=rails_client,
+                **op_performance_config
             )
         else:
+            # Adjust performance config for OpenProject (typically lower rates)
+            op_performance_config = performance_config.copy()
+            op_performance_config.update({
+                'cache_size': config.migration_config.get('op_cache_size', 1500),
+                'cache_ttl': config.migration_config.get('op_cache_ttl', 2400),
+                'batch_size': config.migration_config.get('op_batch_size', 50),
+                'rate_limit': config.migration_config.get('op_rate_limit_per_sec', 12.0)
+            })
+            
             op_client = OpenProjectClient(
                 container_name=config.openproject_config.get("container", None),
                 ssh_host=config.openproject_config.get("server", None),
@@ -384,12 +439,166 @@ def run_migration(
                 tmux_session_name=config.openproject_config.get(
                     "tmux_session_name", None
                 ),
+                **op_performance_config
             )
 
         config.logger.success("All clients initialized successfully")
 
+        # Initialize validation framework
+        from src.utils.advanced_validation import ValidationFramework, validate_pre_migration
+        validation_framework = ValidationFramework()
+        config.logger.info("Validation framework initialized")
+
+        # Initialize advanced configuration manager
+        from src.utils.advanced_config_manager import ConfigurationManager, EnvironmentType
+        config_manager = ConfigurationManager(
+            config_dir=Path("config"),
+            templates_dir=Path("config/templates"),
+            schemas_dir=Path("config/schemas"),
+            backups_dir=Path("config/backups")
+        )
+        config_manager.create_directories()
+        config.logger.info("Advanced configuration manager initialized")
+
+        # Initialize advanced security system
+        from src.utils.advanced_security import SecurityManager, SecurityConfig, UserRole, SecurityLevel
+        security_config = SecurityConfig(
+            encryption_key_path=Path("config/security/encryption.key"),
+            credentials_path=Path("config/security/credentials.json"),
+            audit_log_path=Path("logs/security/audit.log"),
+            rate_limit_requests=100,
+            rate_limit_window=60,
+            password_min_length=12,
+            session_timeout=3600,
+            max_login_attempts=5,
+            lockout_duration=900
+        )
+        security_manager = SecurityManager(security_config)
+        security_manager.initialize()
+        config.logger.info("Advanced security system initialized")
+
+        # Initialize large-scale optimizer for performance
+        from src.utils.large_scale_optimizer import LargeScaleOptimizer, get_optimized_config_for_size
+        large_scale_config = get_optimized_config_for_size(100000)  # Default to 100k+ optimization
+        large_scale_optimizer = LargeScaleOptimizer(large_scale_config)
+        config.logger.info("Large-scale optimizer initialized")
+
+        # Initialize comprehensive logging and monitoring
+        from src.utils.comprehensive_logging import start_monitoring, log_migration_start
+        await start_monitoring()
+        config.logger.info("Comprehensive logging and monitoring initialized")
+
+        # Initialize automated testing suite
+        from src.utils.automated_testing_suite import AutomatedTestingSuite, TestSuiteConfig, TestType
+        test_config = TestSuiteConfig(
+            test_types=[TestType.UNIT, TestType.INTEGRATION],
+            parallel_workers=2,
+            enable_coverage=True
+        )
+        automated_test_suite = AutomatedTestingSuite(test_config)
+        config.logger.info("Automated testing suite initialized")
+
         # Initialize mappings
         config.mappings = Mappings(data_dir=config.get_path("data"))
+
+        # Run pre-migration validation
+        config.logger.info("Running pre-migration validation...")
+        try:
+            pre_migration_data = {
+                "jira_config": config.jira_config,
+                "openproject_config": config.openproject_config,
+                "migration_config": config.migration_config,
+                "mappings": config.mappings.get_all_mappings(),
+                "clients": {
+                    "jira_client": jira_client,
+                    "op_client": op_client
+                }
+            }
+            
+            validation_context = {
+                "migration_timestamp": migration_timestamp,
+                "batch_size": batch_size,
+                "max_concurrent": max_concurrent,
+                "dry_run": config.migration_config.get("dry_run", False)
+            }
+            
+            pre_validation_summary = await validate_pre_migration(pre_migration_data, validation_context)
+            
+            if pre_validation_summary.has_critical_errors():
+                config.logger.error("Pre-migration validation failed with critical errors")
+                config.logger.error(f"Validation summary: {pre_validation_summary.to_dict()}")
+                if not config.migration_config.get("force", False):
+                    raise Exception("Pre-migration validation failed. Use --force to override.")
+                else:
+                    config.logger.warning("Continuing despite validation errors due to --force flag")
+            elif pre_validation_summary.errors > 0:
+                config.logger.warning(f"Pre-migration validation completed with {pre_validation_summary.errors} errors")
+                config.logger.info(f"Success rate: {pre_validation_summary.get_success_rate():.1f}%")
+            else:
+                config.logger.success("Pre-migration validation passed successfully")
+                
+            # Store validation results
+            results.overall["pre_migration_validation"] = pre_validation_summary.to_dict()
+            
+            # Log migration start with comprehensive logging
+            from src.utils.comprehensive_logging import log_migration_start
+            log_migration_start(
+                migration_id=migration_timestamp,
+                components=components,
+                batch_size=batch_size,
+                max_concurrent=max_concurrent,
+                stop_on_error=stop_on_error,
+                dry_run=config.migration_config.get("dry_run", False)
+            )
+            
+        except Exception as e:
+            config.logger.error(f"Pre-migration validation failed: {e}")
+            if not config.migration_config.get("force", False):
+                raise
+            else:
+                config.logger.warning("Continuing despite validation failure due to --force flag")
+
+        # Run security validation and audit logging
+        config.logger.info("Running security validation and audit logging...")
+        try:
+            # Audit log the migration start
+            security_manager.audit_logger.log_event(
+                event_type="MIGRATION_START",
+                user_id="system",
+                details={
+                    "migration_id": migration_timestamp,
+                    "components": components,
+                    "batch_size": batch_size,
+                    "max_concurrent": max_concurrent,
+                    "dry_run": config.migration_config.get("dry_run", False)
+                }
+            )
+            
+            # Validate security configuration
+            security_scan_result = security_manager.security_scanner.scan_configuration(
+                config_path=Path("config/config.yaml"),
+                scan_type="configuration"
+            )
+            
+            if security_scan_result.vulnerabilities:
+                config.logger.warning(f"Security scan found {len(security_scan_result.vulnerabilities)} potential issues")
+                for vuln in security_scan_result.vulnerabilities:
+                    config.logger.warning(f"Security issue: {vuln.severity} - {vuln.description}")
+            else:
+                config.logger.success("Security validation passed")
+                
+            # Store security validation results
+            results.overall["security_validation"] = {
+                "scan_result": security_scan_result.to_dict(),
+                "audit_events": security_manager.audit_logger.get_recent_events(10)
+            }
+            
+        except Exception as e:
+            config.logger.error(f"Security validation failed: {e}")
+            if not config.migration_config.get("force", False):
+                raise
+            else:
+                config.logger.warning("Continuing despite security validation failure due to --force flag")
 
         # Define all available migration components
         # Pass performance manager to components that support it
@@ -721,12 +930,58 @@ def run_migration(
 
         config.logger.info("Migration results saved to %s", results_file)
 
+        # Log migration completion with comprehensive logging
+        from src.utils.comprehensive_logging import log_migration_complete, stop_monitoring
+        log_migration_complete(
+            migration_id=migration_timestamp,
+            success=results.overall["status"] == "success",
+            total_components=len(results.components),
+            successful_components=sum(1 for c in results.components.values() if c.get("status") == "success"),
+            total_seconds=total_seconds,
+            results_file=results_file
+        )
+        
+        # Stop monitoring
+        await stop_monitoring()
+
+        # Log security audit completion
+        try:
+            security_manager.audit_logger.log_event(
+                event_type="MIGRATION_COMPLETE",
+                user_id="system",
+                details={
+                    "migration_id": migration_timestamp,
+                    "success": results.overall["status"] == "success",
+                    "total_components": len(results.components),
+                    "successful_components": sum(1 for c in results.components.values() if c.get("status") == "success"),
+                    "total_seconds": total_seconds
+                }
+            )
+            config.logger.info("Security audit logging completed")
+        except Exception as e:
+            config.logger.warning(f"Security audit logging failed: {e}")
+
         return results
 
     except Exception as e:
         # Handle unexpected errors at the top level
         config.logger.exception(e)
         config.logger.error("Unexpected error during migration: %s", e)
+
+        # Log security audit for migration failure
+        try:
+            if 'security_manager' in locals():
+                security_manager.audit_logger.log_event(
+                    event_type="MIGRATION_FAILED",
+                    user_id="system",
+                    details={
+                        "migration_id": migration_timestamp,
+                        "error": str(e),
+                        "error_type": type(e).__name__
+                    }
+                )
+        except Exception as audit_error:
+            config.logger.warning(f"Security audit logging failed during error handling: {audit_error}")
 
         # Create a basic result object
         return MigrationResult(
@@ -942,7 +1197,26 @@ def main() -> None:
                 ),
             )
 
-            jira_client = JiraClient()
+            # Use default performance config for main() function
+            default_performance_config = {
+                'cache_size': config.migration_config.get('cache_size', 2000),
+                'cache_ttl': config.migration_config.get('cache_ttl', 1800),
+                'batch_size': config.migration_config.get('batch_size', 100),
+                'max_workers': config.migration_config.get('max_workers', 5),
+                'rate_limit': config.migration_config.get('rate_limit_per_sec', 15.0)
+            }
+            
+            jira_client = JiraClient(**default_performance_config)
+            
+            # Adjust performance config for OpenProject
+            op_performance_config = default_performance_config.copy()
+            op_performance_config.update({
+                'cache_size': config.migration_config.get('op_cache_size', 1500),
+                'cache_ttl': config.migration_config.get('op_cache_ttl', 2400),
+                'batch_size': config.migration_config.get('op_batch_size', 50),
+                'rate_limit': config.migration_config.get('op_rate_limit_per_sec', 12.0)
+            })
+            
             op_client = OpenProjectClient(
                 container_name=config.openproject_config.get("container", None),
                 ssh_host=config.openproject_config.get("server", None),
@@ -950,6 +1224,7 @@ def main() -> None:
                 tmux_session_name=config.openproject_config.get(
                     "tmux_session_name", None
                 ),
+                **op_performance_config
             )
 
             # List options to choose which mapping to update
@@ -1005,14 +1280,14 @@ def main() -> None:
         config.update_from_cli_args(args)
 
         # Run migration with provided arguments
-        migration_result = run_migration(
+        migration_result = asyncio.run(run_migration(
             components=args.components,
             stop_on_error=getattr(args, "stop_on_error", False),
             no_confirm=getattr(args, "no_confirm", False),
             batch_size=getattr(args, "batch_size", 100),
             max_concurrent=getattr(args, "max_concurrent", 5),
             enable_performance_optimization=not getattr(args, "no_performance_optimization", False),
-        )
+        ))
 
         # Display migration results summary
         if migration_result:

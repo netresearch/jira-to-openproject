@@ -8,14 +8,14 @@ import argparse
 import sys
 from typing import TYPE_CHECKING, TypeVar
 
-from src import config
+from src.display import configure_logging
 from src.clients.openproject_client import OpenProjectClient
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 # Set up logger
-logger = config.logger
+logger = configure_logging("INFO", None)
 
 # Define type variable for ProgressTracker
 T = TypeVar("T")
