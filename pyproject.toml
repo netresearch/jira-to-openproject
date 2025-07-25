@@ -41,7 +41,7 @@ dependencies = [
     "sqlalchemy==1.4.53",
     
     # Web dashboard
-    "fastapi==0.78.0",
+    "fastapi==0.116.1",
     "uvicorn==0.17.0",
     "websockets==12.0",
     "jinja2==3.1.2",
