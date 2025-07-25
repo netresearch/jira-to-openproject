@@ -3,6 +3,8 @@
 Handles mapping and creation of issue types from Jira to work package types in OpenProject.
 """
 
+from __future__ import annotations
+
 import json
 import re
 import subprocess

@@ -40,6 +40,10 @@ dependencies = [
     # Database for checkpointing
     "sqlalchemy==1.4.53",
     
+    # System monitoring and validation
+    "psutil==6.1.0",
+    "jsonschema==4.25.0",
+    
     # Web dashboard
     "fastapi==0.78.0",
     "uvicorn==0.17.0",

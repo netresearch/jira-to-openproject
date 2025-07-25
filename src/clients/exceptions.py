@@ -35,4 +35,12 @@ class CaptchaError(ClientError):
 
 
 class ApiError(ClientError):
-    """General API error.""" 
+    """General API error."""
+
+
+class RateLimitError(ClientError):
+    """Error when rate limit is exceeded."""
+    
+    def __init__(self, message: str, retry_after: int = None):
+        super().__init__(message)
+        self.retry_after = retry_after 

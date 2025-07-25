@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch, call
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
-from src.utils.state_manager import StateManager, StateCorruptionError, MigrationSnapshot
+from src.utils.state_manager import StateManager, StateCorruptionError, StateSnapshot
 from src.migrations.base_migration import BaseMigration, MigrationError
 from src.migration import Migration
 

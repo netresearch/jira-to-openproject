@@ -1197,14 +1197,6 @@
         "details": "Requirements: Create user guides, Develop training materials, Write API documentation, Create troubleshooting guides. Status: PENDING",
         "testStrategy": "Review documentation with users and gather feedback for improvements."
       }
-    ],
-    "metadata": {
-      "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-07-15T11:43:28.854Z",
-      "version": "1.0.0",
-      "projectName": "Jira to OpenProject Migration Tool",
-      "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
-      "description": "Tasks for master context"
-    }
+    ]
   }
 }

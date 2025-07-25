@@ -1,8 +1,9 @@
-from src.display import configure_logging
 #!/usr/bin/env python3
 """Base migration class providing common functionality for all migrations."""
 
 from __future__ import annotations
+
+from src.display import configure_logging
 
 import json
 import logging

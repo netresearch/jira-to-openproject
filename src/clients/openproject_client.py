@@ -22,6 +22,7 @@ from src.clients.exceptions import (
     JsonParseError,
     QueryExecutionError,
     RecordNotFoundError,
+    RateLimitError,
 )
 from src.utils.performance_optimizer import PerformanceOptimizer
 from src.utils.rate_limiter import RateLimiter

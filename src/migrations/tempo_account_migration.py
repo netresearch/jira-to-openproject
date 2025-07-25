@@ -13,15 +13,14 @@ from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient, OpenProjectError
 from src.display import ProgressTracker
+from src.config import logger, migration_config, jira_config, get_path
 
-# Get logger from config
-logger = configure_logging("INFO", None)
 # Get batch size from migration config
-batch_size = config.migration_config.get("batch_size", 1000)
+batch_size = migration_config.get("batch_size", 1000)
 # Get Jira connection settings
-jira_url = config.jira_config.get("url")
-jira_username = config.jira_config.get("username")
-jira_api_token = config.jira_config.get("api_token")
+jira_url = jira_config.get("url")
+jira_username = jira_config.get("username")
+jira_api_token = jira_config.get("api_token")
 
 
 class TempoAccountMigration:
@@ -43,17 +42,17 @@ class TempoAccountMigration:
         self.custom_field_id: int | None = None
 
         # Use the centralized config for var directories
-        self.data_dir: Path = config.get_path("data")
+        self.data_dir: Path = get_path("data")
 
         # Base Tempo API URL - typically {jira_url}/rest/tempo-accounts/1 for Server
         # or a separate endpoint for Cloud
         self.tempo_api_base = (
-            f"{config.jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
+            f"{jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
         )
 
         # Setup auth for Tempo API
         self.tempo_auth_headers = {
-            "Authorization": f"Bearer {config.jira_config.get('api_token', '')}",
+            "Authorization": f"Bearer {jira_config.get('api_token', '')}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
