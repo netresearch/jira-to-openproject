@@ -38,7 +38,7 @@ dependencies = [
     "structlog==23.2.0",
 
     # Database for checkpointing
-    "sqlalchemy==1.4.53",
+    "sqlalchemy==1.4.54",
     
     # Web dashboard
     "fastapi==0.78.0",
