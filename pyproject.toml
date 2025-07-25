@@ -35,7 +35,7 @@ dependencies = [
     # Error recovery and resilience
     "tenacity==8.2.3",
     "pybreaker==0.7.0",
-    "structlog==23.2.0",
+    "structlog==23.3.0",
 
     # Database for checkpointing
     "sqlalchemy==1.4.53",
