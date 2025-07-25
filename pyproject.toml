@@ -27,7 +27,7 @@ dependencies = [
     "pyyaml==6.0.2",
 
     # Console display and progress
-    "rich==14.0.0",
+    "rich==14.1.0",
     
     # Redis for caching and idempotency
     "redis==5.2.1",

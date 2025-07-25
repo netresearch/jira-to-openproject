@@ -46,7 +46,7 @@ requests-oauthlib==2.0.0
     # via jira
 requests-toolbelt==1.0.0
     # via jira
-rich==14.0.0
+rich==14.1.0
     # via jira-to-openproject (pyproject.toml)
 typing-extensions==4.14.1
     # via
