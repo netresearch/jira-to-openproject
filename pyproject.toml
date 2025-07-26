@@ -33,7 +33,7 @@ dependencies = [
     "redis==5.2.1",
 
     # Error recovery and resilience
-    "tenacity==8.2.3",
+    "tenacity==8.5.0",
     "pybreaker==0.7.0",
     "structlog==23.2.0",
 
