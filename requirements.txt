@@ -28,7 +28,7 @@ pillow==11.3.0
     # via jira
 pydantic==2.11.7
     # via jira-to-openproject (pyproject.toml)
-pydantic-core==2.33.2
+pydantic-core==2.37.2
     # via pydantic
 pygments==2.19.2
     # via rich
