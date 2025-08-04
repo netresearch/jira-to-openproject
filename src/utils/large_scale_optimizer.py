@@ -327,7 +327,13 @@ class LargeScaleOptimizer:
         
         # Initialize components
         self.batch_processor = BatchProcessor()
-        self.rate_limiter = EnhancedRateLimiter()
+        from src.utils.enhanced_rate_limiter import RateLimitConfig, RateLimitStrategy
+        rate_limit_config = RateLimitConfig(
+            max_requests=config.connection_pool_size,
+            time_window=60.0,
+            strategy=RateLimitStrategy.TOKEN_BUCKET
+        )
+        self.rate_limiter = EnhancedRateLimiter(rate_limit_config)
         self.retry_manager = RetryManager()
         
         # Performance tracking

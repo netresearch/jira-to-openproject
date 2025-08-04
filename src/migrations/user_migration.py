@@ -12,6 +12,7 @@ import contextlib
 from pathlib import Path
 from typing import Any
 
+from src import config
 from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient

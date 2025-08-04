@@ -180,6 +180,32 @@ class Mappings:
         logger.notice("Mapping '%s' not found", mapping_name)
         return {}
 
+    def get_all_mappings(self) -> dict[str, Any]:
+        """Get all mappings as a dictionary.
+
+        Returns:
+            Dictionary containing all mappings with their names as keys
+
+        """
+        mappings = {}
+        mapping_attrs = [
+            'user_mapping',
+            'project_mapping', 
+            'account_mapping',
+            'company_mapping',
+            'issue_type_mapping',
+            'status_mapping',
+            'link_type_mapping',
+            'custom_field_mapping',
+            'issue_type_id_mapping'
+        ]
+        
+        for attr in mapping_attrs:
+            if hasattr(self, attr):
+                mappings[attr] = getattr(self, attr)
+        
+        return mappings
+
     def set_mapping(self, mapping_name: str, mapping_data: dict[str, Any]) -> None:
         """Set or update a specific mapping and save it to file.
 

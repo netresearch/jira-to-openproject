@@ -4,6 +4,7 @@ Handles the migration of Tempo companies to OpenProject projects.
 
 import json
 import re
+from src import config
 from pathlib import Path
 from typing import Any
 

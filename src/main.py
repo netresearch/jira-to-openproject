@@ -122,11 +122,12 @@ def main() -> None:
             setup_tmux_session()
 
         # Run the migration with new options
-        result = run_migration(
+        import asyncio
+        result = asyncio.run(run_migration(
             components=args.components,
             stop_on_error=getattr(args, "stop_on_error", False),
             no_confirm=getattr(args, "no_confirm", False),
-        )
+        ))
 
         # Exit with appropriate code
         if hasattr(result, 'overall'):

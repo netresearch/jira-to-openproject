@@ -185,3 +185,21 @@ node_modules/
 # Task files
 # tasks.json
 # tasks/ 
+
+# Security and Cryptographic Keys - NEVER commit these!
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+config/security/keys/
+**/keys/
+**/security/keys/
+fernet.key
+rsa_private.pem
+rsa_public.pem
+id_rsa
+id_rsa.pub
+*.ssh
+auth_keys 

@@ -13,6 +13,7 @@ from typing import Any, Iterator
 import requests
 from jira import Issue
 
+from src import config
 from src.display import configure_logging
 from src.clients.jira_client import JiraClient, JiraApiError, JiraResourceNotFoundError
 from src.clients.openproject_client import OpenProjectClient, QueryExecutionError

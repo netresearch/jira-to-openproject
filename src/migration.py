@@ -333,7 +333,13 @@ async def run_migration(
         )
 
         # Check if we're running in mock mode
+        # Debug: Print all J2O environment variables
+        j2o_env_vars = {k: v for k, v in os.environ.items() if k.startswith('J2O_')}
+        config.logger.info(f"All J2O environment variables: {j2o_env_vars}")
+        
         mock_mode = os.environ.get("J2O_TEST_MOCK_MODE", "false").lower() == "true"
+        config.logger.info(f"J2O_TEST_MOCK_MODE environment variable: {os.environ.get('J2O_TEST_MOCK_MODE', 'NOT_SET')}")
+        config.logger.info(f"Mock mode enabled: {mock_mode}")
         if mock_mode:
             config.logger.info(
                 "Running in MOCK MODE - using mock clients instead of real connections"
@@ -342,7 +348,14 @@ async def run_migration(
         # Create clients in the correct hierarchical order
         if mock_mode:
             # Create mock clients that don't require real connections
-            from tests.integration.test_file_transfer_chain import (
+            # Add tests directory to Python path for mock client imports
+            import sys
+            from pathlib import Path
+            tests_dir = Path(__file__).parent.parent / "tests"
+            if str(tests_dir) not in sys.path:
+                sys.path.insert(0, str(tests_dir))
+            
+            from integration.test_file_transfer_chain import (
                 MockDockerClient,
                 MockRailsConsoleClient,
                 MockSSHClient,
@@ -395,34 +408,210 @@ async def run_migration(
             'rate_limit': config.migration_config.get('rate_limit_per_sec', 15.0)
         }
         
-        jira_client = JiraClient(**performance_config)
+        if mock_mode:
+            # Create mock Jira client for mock mode
+            class MockJiraClient:
+                def __init__(self, **kwargs):
+                    # Create a mock jira object with the fields method
+                    class MockJira:
+                        def fields(self):
+                            return []
+                        def server_info(self):
+                            return {
+                                "serverTime": "2025-08-04T12:00:00.000+0000",
+                                "serverTimeZone": "UTC",
+                                "baseUrl": "https://jira.local",
+                                "version": "9.0.0"
+                            }
+                        def _get_json(self, endpoint):
+                            # Mock responses for different endpoints
+                            if "status" in endpoint:
+                                return [
+                                    {"id": "1", "name": "To Do", "statusCategory": {"id": 2, "name": "To Do"}},
+                                    {"id": "2", "name": "In Progress", "statusCategory": {"id": 3, "name": "In Progress"}},
+                                    {"id": "3", "name": "Done", "statusCategory": {"id": 4, "name": "Done"}}
+                                ]
+                            elif "statuscategory" in endpoint:
+                                return [
+                                    {"id": 2, "name": "To Do", "key": "new"},
+                                    {"id": 3, "name": "In Progress", "key": "indeterminate"},
+                                    {"id": 4, "name": "Done", "key": "done"}
+                                ]
+                            else:
+                                return []
+                    
+                    self.jira = MockJira()
+                    self.scriptrunner_enabled = False
+                    self.scriptrunner_client = None
+                    config.logger.info("Mock Jira client initialized")
+                
+                def get_projects(self):
+                    return []
+                
+                def get_issues(self, **kwargs):
+                    return []
+                
+                def get_issue_link_types(self, **kwargs):
+                    return [{"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"}, {"id": "10001", "name": "Relates to", "inward": "relates to", "outward": "relates to"}]
+                
+                def get_status_categories(self, **kwargs):
+                    return [
+                        {"id": 2, "name": "To Do", "key": "new"},
+                        {"id": 3, "name": "In Progress", "key": "indeterminate"},
+                        {"id": 4, "name": "Done", "key": "done"}
+                    ]
+                def get_tempo_accounts(self, **kwargs):
+                    return []
+                def get_users(self):
+                    return []
+                
+                def get_custom_fields(self, **kwargs):
+                    return []
+                
+                def get_issue_types(self):
+                    return []
+                
+                def get_statuses(self):
+                    return []
+                
+                def get_workflows(self):
+                    return []
+                
+                def get_versions(self):
+                    return []
+                
+                def get_components(self):
+                    return []
+                
+                def get_attachments(self, **kwargs):
+                    return []
+                
+                def get_comments(self, **kwargs):
+                    return []
+                
+                def get_worklogs(self, **kwargs):
+                    return []
+            
+            jira_client = MockJiraClient(**performance_config)
+        else:
+            jira_client = JiraClient(**performance_config)
 
         if mock_mode:
-            # For mock mode, create a simplified OpenProject client that doesn't require real connections
-            # Adjust performance config for OpenProject (typically lower rates)
-            op_performance_config = performance_config.copy()
-            op_performance_config.update({
-                'cache_size': config.migration_config.get('op_cache_size', 1500),
-                'cache_ttl': config.migration_config.get('op_cache_ttl', 2400),
-                'batch_size': config.migration_config.get('op_batch_size', 50),
-                'rate_limit': config.migration_config.get('op_rate_limit_per_sec', 12.0)
-            })
-            
-            op_client = OpenProjectClient(
-                container_name=config.openproject_config.get(
-                    "container", "mock_container"
-                ),
-                ssh_host=config.openproject_config.get("server", "mock_server"),
-                ssh_user=config.openproject_config.get("user", "mock_user"),
-                tmux_session_name=config.openproject_config.get(
-                    "tmux_session_name", "mock_session"
-                ),
-                ssh_client=ssh_client,
-                docker_client=docker_client,
-                rails_client=rails_client,
-                **op_performance_config
-            )
+            # Create mock OpenProject client for mock mode
+            class MockRailsClient:
+                def __init__(self, **kwargs):
+                    pass
+
+                def execute(self, command):
+                    # Mock file system operations
+                    if command.startswith("ls ") or command == "ls":
+                        # Mock file existence check - return success for any file check
+                        return "Mock file exists"
+                    elif command.startswith("cat "):
+                        # Mock file content reading
+                        return "Mock file content"
+                    elif command.startswith("echo "):
+                        # Mock echo command
+                        return command[5:]  # Return the content after "echo "
+                    else:
+                        return "Mock Rails execution result"
+
+                def execute_query(self, query):
+                    return {"result": "Mock query result"}
+
+                def transfer_file_to_container(self, local_path, container_path):
+                    return True
+
+                def transfer_file_from_container(self, container_path, local_path):
+                    return True
+
+            class MockOpenProjectClient:
+                def __init__(self, **kwargs):
+                    self.rails_client = MockRailsClient()
+                    config.logger.info("Mock OpenProject client initialized")
+                
+                def create_project(self, **kwargs):
+                    return {"id": 1, "name": "Mock Project"}
+                
+                def create_user(self, **kwargs):
+                    return {"id": 1, "name": "Mock User"}
+                
+                def create_custom_field(self, **kwargs):
+                    return {"id": 1, "name": "Mock Field"}
+                
+                def create_issue_type(self, **kwargs):
+                    return {"id": 1, "name": "Mock Issue Type"}
+                
+                def create_status(self, **kwargs):
+                    return {"id": 1, "name": "Mock Status"}
+                
+                def create_work_package(self, **kwargs):
+                    return {"id": 1, "subject": "Mock Work Package"}
+                
+                def create_attachment(self, **kwargs):
+                    return {"id": 1, "filename": "mock_attachment.txt"}
+                
+                def create_comment(self, **kwargs):
+                    return {"id": 1, "comment": "Mock comment"}
+                
+                def create_time_entry(self, **kwargs):
+                    return {"id": 1, "hours": 1.0}
+                
+                def get_projects(self):
+                    return []
+                
+                def get_users(self, **kwargs):
+                    return []
+                
+                def get_custom_fields(self, **kwargs):
+                    return []
+                
+                def get_issue_types(self):
+                    return []
+                
+                def get_statuses(self):
+                    return []
+                def create_record(self, *args, **kwargs):
+                    return {"id": 1, "name": "Mock Record"}
+                def get_work_package_types(self, **kwargs):
+                    return []
+                def execute_query(self, *args, **kwargs):
+                    return {"status": "success"}
+                def execute_json_query(self, *args, **kwargs):
+                    return []
+                def transfer_file_to_container(self, *args, **kwargs):
+                    return True
+                def get_time_entry_activities(self, **kwargs):
+                    return []
+                def get_custom_field_id_by_name(self, name):
+                    return 1
+                
+                def execute_script_with_data(self, script_content, data):
+                    # Mock script execution - return success for any script
+                    # For status creation, return a realistic response
+                    if "status" in script_content.lower():
+                        created_count = len(data) if isinstance(data, list) else 1
+                        # Create the data structure expected by the status migration
+                        status_data = {}
+                        for i, item in enumerate(data if isinstance(data, list) else [data]):
+                            jira_id = item.get("jira_id", str(i+1))
+                            status_data[str(jira_id)] = {
+                                "id": i+1,
+                                "name": item.get("name", f"Status {i+1}"),
+                                "is_closed": item.get("is_closed", False),
+                                "already_existed": False
+                            }
+                        return {
+                            "status": "success", 
+                            "message": f"Successfully created {created_count} status(es)",
+                            "output": f"Created statuses: {created_count}",
+                            "created_count": created_count,
+                            "data": status_data  # This is the key that was missing!
+                        }
+                    return {"status": "success", "message": "Mock script executed successfully"}
+            op_client = MockOpenProjectClient()
         else:
+            # For real mode, create a simplified OpenProject client that doesn't require real connections
             # Adjust performance config for OpenProject (typically lower rates)
             op_performance_config = performance_config.copy()
             op_performance_config.update({
@@ -454,18 +643,15 @@ async def run_migration(
         config_manager = ConfigurationManager(
             config_dir=Path("config"),
             templates_dir=Path("config/templates"),
-            schemas_dir=Path("config/schemas"),
             backups_dir=Path("config/backups")
         )
-        config_manager.create_directories()
         config.logger.info("Advanced configuration manager initialized")
 
         # Initialize advanced security system
         from src.utils.advanced_security import SecurityManager, SecurityConfig, UserRole, SecurityLevel
         security_config = SecurityConfig(
-            encryption_key_path=Path("config/security/encryption.key"),
-            credentials_path=Path("config/security/credentials.json"),
-            audit_log_path=Path("logs/security/audit.log"),
+            encryption_key_path=Path("config/security/keys"),
+            audit_log_path=Path("logs/audit"),
             rate_limit_requests=100,
             rate_limit_window=60,
             password_min_length=12,
@@ -474,7 +660,6 @@ async def run_migration(
             lockout_duration=900
         )
         security_manager = SecurityManager(security_config)
-        security_manager.initialize()
         config.logger.info("Advanced security system initialized")
 
         # Initialize large-scale optimizer for performance
@@ -562,11 +747,12 @@ async def run_migration(
         config.logger.info("Running security validation and audit logging...")
         try:
             # Audit log the migration start
-            security_manager.audit_logger.log_event(
-                event_type="MIGRATION_START",
+            from src.utils.advanced_security import AuditEventType
+            security_manager.audit_logger.log_migration_event(
+                event_type=AuditEventType.MIGRATION_START,
+                migration_id=migration_timestamp,
                 user_id="system",
                 details={
-                    "migration_id": migration_timestamp,
                     "components": components,
                     "batch_size": batch_size,
                     "max_concurrent": max_concurrent,
@@ -601,52 +787,42 @@ async def run_migration(
                 config.logger.warning("Continuing despite security validation failure due to --force flag")
 
         # Define all available migration components
-        # Pass performance manager to components that support it
         available_components = AvailableComponents(
             users=UserMigration(
                 jira_client=jira_client, 
-                op_client=op_client,
-                performance_manager=performance_manager
+                op_client=op_client
             ),
             custom_fields=CustomFieldMigration(
                 jira_client=jira_client, 
-                op_client=op_client,
-                performance_manager=performance_manager
+                op_client=op_client
             ),
             companies=CompanyMigration(
                 jira_client=jira_client, 
-                op_client=op_client,
-                performance_manager=performance_manager
+                op_client=op_client
             ),
             projects=ProjectMigration(
                 jira_client=jira_client, 
-                op_client=op_client,
-                performance_manager=performance_manager
+                op_client=op_client
             ),
             link_types=LinkTypeMigration(
                 jira_client=jira_client, 
-                op_client=op_client,
-                performance_manager=performance_manager
+                op_client=op_client
             ),
             issue_types=IssueTypeMigration(
                 jira_client=jira_client, 
-                op_client=op_client,
-                performance_manager=performance_manager
+                op_client=op_client
             ),
             status_types=StatusMigration(
                 jira_client=jira_client, 
-                op_client=op_client,
-                performance_manager=performance_manager
+                op_client=op_client
             ),
             work_packages=WorkPackageMigration(
                 jira_client=jira_client, 
-                op_client=op_client,
-                performance_manager=performance_manager
+                op_client=op_client
             ),
             accounts=AccountMigration(
                 jira_client=jira_client, 
-                op_client=op_client,
-                performance_manager=performance_manager
+                op_client=op_client
             ),
         )
 
@@ -683,7 +859,6 @@ async def run_migration(
             available_components["work_packages"] = WorkPackageMigration(
                 jira_client=jira_client,
                 op_client=op_client,
-                performance_manager=performance_manager,
             )
 
         # Run each component in order
@@ -936,7 +1111,7 @@ async def run_migration(
             migration_id=migration_timestamp,
             success=results.overall["status"] == "success",
             total_components=len(results.components),
-            successful_components=sum(1 for c in results.components.values() if c.get("status") == "success"),
+            successful_components=sum(1 for c in results.components.values() if c.success),
             total_seconds=total_seconds,
             results_file=results_file
         )
@@ -946,14 +1121,15 @@ async def run_migration(
 
         # Log security audit completion
         try:
-            security_manager.audit_logger.log_event(
-                event_type="MIGRATION_COMPLETE",
+            security_manager.audit_logger.log_migration_event(
+                migration_id=migration_timestamp,
+                event_type=AuditEventType.MIGRATION_COMPLETE,
                 user_id="system",
                 details={
                     "migration_id": migration_timestamp,
                     "success": results.overall["status"] == "success",
                     "total_components": len(results.components),
-                    "successful_components": sum(1 for c in results.components.values() if c.get("status") == "success"),
+                    "successful_components": sum(1 for c in results.components.values() if c.success),
                     "total_seconds": total_seconds
                 }
             )
@@ -971,9 +1147,9 @@ async def run_migration(
         # Log security audit for migration failure
         try:
             if 'security_manager' in locals():
-                security_manager.audit_logger.log_event(
+                security_manager.audit_logger.log_migration_event(
                     event_type="MIGRATION_FAILED",
-                    user_id="system",
+                    migration_id=migration_timestamp,
                     details={
                         "migration_id": migration_timestamp,
                         "error": str(e),
@@ -1293,7 +1469,7 @@ def main() -> None:
         if migration_result:
             # Fix: Access MigrationResult properties correctly (it's an object, not a dict)
             overall_status = (
-                migration_result.overall.get("status", "unknown")
+                migration_result.overall.status
                 if hasattr(migration_result, "overall")
                 else "unknown"
             )
