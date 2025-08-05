@@ -1,0 +1,18 @@
+# Production Environment Configuration
+# This file contains production-specific overrides
+
+# Production-specific settings
+migration:
+  log_level: "INFO"
+  batch_size: 200  # Larger batches for production
+  ssl_verify: true
+
+# Production database settings
+database:
+  postgres_db: "jira_migration_prod"
+  postgres_user: "postgres"
+
+# Production testing settings
+test_mode: false
+test_mock_mode: false
+use_mock_apis: false 

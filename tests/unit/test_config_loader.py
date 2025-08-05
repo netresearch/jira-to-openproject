@@ -20,19 +20,19 @@ class ConfigLoaderTestHelper:
         """Create a test configuration with environment variable values."""
         config = {
             "jira": {
-                "server": env_vars["JIRA_SERVER"],
-                "username": env_vars["JIRA_USERNAME"],
-                "api_token": env_vars["JIRA_API_TOKEN"],
-                "project_key": env_vars["JIRA_PROJECT_KEY"],
+                "server": env_vars["J2O_JIRA_SERVER"],
+                "username": env_vars["J2O_JIRA_USERNAME"],
+                "api_token": env_vars["J2O_JIRA_API_TOKEN"],
+                "project_key": env_vars["J2O_JIRA_PROJECT_KEY"],
             },
             "openproject": {
-                "server": env_vars["OPENPROJECT_SERVER"],
-                "api_key": env_vars["OPENPROJECT_API_KEY"],
-                "project_id": int(env_vars["OPENPROJECT_PROJECT_ID"]),
+                "server": env_vars["J2O_OPENPROJECT_SERVER"],
+                "api_key": env_vars["J2O_OPENPROJECT_API_KEY"],
+                "project_id": int(env_vars["J2O_OPENPROJECT_PROJECT_ID"]),
             },
             "migration": {
-                "dry_run": env_vars.get("DRY_RUN", "false").lower() == "true",
-                "batch_size": int(env_vars.get("BATCH_SIZE", "10")),
+                "dry_run": env_vars.get("J2O_DRY_RUN", "false").lower() == "true",
+                "batch_size": int(env_vars.get("J2O_BATCH_SIZE", "10")),
             },
         }
 
@@ -57,13 +57,13 @@ def config_helper():
 def test_env():
     """Fixture providing test environment variables."""
     return {
-        "JIRA_SERVER": "https://test-jira.example.com",
-        "JIRA_USERNAME": "test_user",
-        "JIRA_API_TOKEN": "test_token",
-        "JIRA_PROJECT_KEY": "TEST",
-        "OPENPROJECT_SERVER": "https://test-openproject.example.com",
-        "OPENPROJECT_API_KEY": "test_api_key",
-        "OPENPROJECT_PROJECT_ID": "1",
+        "J2O_JIRA_SERVER": "https://test-jira.example.com",
+        "J2O_JIRA_USERNAME": "test_user",
+        "J2O_JIRA_API_TOKEN": "test_token",
+        "J2O_JIRA_PROJECT_KEY": "TEST",
+        "J2O_OPENPROJECT_SERVER": "https://test-openproject.example.com",
+        "J2O_OPENPROJECT_API_KEY": "test_api_key",
+        "J2O_OPENPROJECT_PROJECT_ID": "1",
         "POSTGRES_PASSWORD": "test_password",
     }
 

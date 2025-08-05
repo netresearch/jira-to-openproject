@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from abc import ABC, abstractmethod
@@ -540,7 +541,6 @@ class SecurityScanner:
     
     def scan_input(self, input_data: str) -> List[Dict[str, Any]]:
         """Scan input data for security threats."""
-        import re
         
         threats = []
         
@@ -557,6 +557,102 @@ class SecurityScanner:
                     })
         
         return threats
+    
+    def scan_configuration(self, config_path: Path, scan_type: str = "configuration") -> Dict[str, Any]:
+        """Scan configuration files for security vulnerabilities.
+        
+        Args:
+            config_path: Path to the configuration file to scan
+            scan_type: Type of scan to perform ("configuration", "credentials", etc.)
+            
+        Returns:
+            Dictionary containing scan results with vulnerabilities list
+        """
+        vulnerabilities = []
+        
+        try:
+            if not config_path.exists():
+                vulnerabilities.append({
+                    "type": "file_not_found",
+                    "severity": SecurityLevel.MEDIUM,
+                    "description": f"Configuration file not found: {config_path}",
+                    "recommendation": "Ensure configuration file exists and is accessible"
+                })
+                return {
+                    "vulnerabilities": vulnerabilities,
+                    "scan_type": scan_type,
+                    "config_path": str(config_path),
+                    "timestamp": datetime.now(UTC).isoformat()
+                }
+            
+            # Read configuration file
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config_content = f.read()
+            
+            # Scan for common configuration security issues
+            if scan_type == "configuration":
+                # Check for hardcoded credentials
+                credential_patterns = [
+                    r"password\s*[:=]\s*['\"][^'\"]+['\"]",
+                    r"api_key\s*[:=]\s*['\"][^'\"]+['\"]",
+                    r"token\s*[:=]\s*['\"][^'\"]+['\"]",
+                    r"secret\s*[:=]\s*['\"][^'\"]+['\"]"
+                ]
+                
+                for pattern in credential_patterns:
+                    matches = re.findall(pattern, config_content, re.IGNORECASE)
+                    if matches:
+                        vulnerabilities.append({
+                            "type": "hardcoded_credentials",
+                            "severity": SecurityLevel.HIGH,
+                            "description": f"Found {len(matches)} potential hardcoded credentials",
+                            "matches": matches[:3],  # Limit to first 3 matches
+                            "recommendation": "Use environment variables or secure credential storage"
+                        })
+                
+                # Check for insecure permissions
+                if "permissions" in config_content.lower() and "777" in config_content:
+                    vulnerabilities.append({
+                        "type": "insecure_permissions",
+                        "severity": SecurityLevel.MEDIUM,
+                        "description": "Found potentially insecure file permissions (777)",
+                        "recommendation": "Use more restrictive permissions (644, 755, etc.)"
+                    })
+                
+                # Check for debug mode in production
+                if "debug" in config_content.lower() and "true" in config_content.lower():
+                    vulnerabilities.append({
+                        "type": "debug_mode_enabled",
+                        "severity": SecurityLevel.MEDIUM,
+                        "description": "Debug mode may be enabled",
+                        "recommendation": "Disable debug mode in production environments"
+                    })
+            
+            # Scan for general security threats in content
+            content_threats = self.scan_input(config_content)
+            for threat in content_threats:
+                vulnerabilities.append({
+                    "type": f"content_{threat['type']}",
+                    "severity": threat['severity'],
+                    "description": f"Found {threat['type']} pattern in configuration",
+                    "pattern": threat['pattern'],
+                    "recommendation": "Review and sanitize configuration content"
+                })
+                
+        except Exception as e:
+            vulnerabilities.append({
+                "type": "scan_error",
+                "severity": SecurityLevel.MEDIUM,
+                "description": f"Error scanning configuration: {str(e)}",
+                "recommendation": "Check file permissions and format"
+            })
+        
+        return {
+            "vulnerabilities": vulnerabilities,
+            "scan_type": scan_type,
+            "config_path": str(config_path),
+            "timestamp": datetime.now(UTC).isoformat()
+        }
     
     def _get_threat_severity(self, threat_type: str) -> SecurityLevel:
         """Get the severity level for a threat type."""

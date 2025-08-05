@@ -105,13 +105,13 @@ Critical settings in `.env`:
 
 ```bash
 # Jira Configuration
-JIRA_URL=https://your-jira-server
-JIRA_USERNAME=your-username
-JIRA_PASSWORD=your-password
+J2O_JIRA_URL=https://your-jira-server
+J2O_JIRA_USERNAME=your-username
+J2O_JIRA_API_TOKEN=your-api-token
 
 # OpenProject Configuration  
-OPENPROJECT_URL=https://your-openproject
-OPENPROJECT_API_KEY=your-api-key
+J2O_OPENPROJECT_URL=https://your-openproject
+J2O_OPENPROJECT_API_KEY=your-api-key
 
 # SSH Connection (for remote OpenProject)
 SSH_HOST=openproject-server
