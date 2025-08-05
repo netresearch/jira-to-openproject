@@ -14,42 +14,42 @@ readme = "README.md"
 license = {text = "MIT"}
 dependencies = [
     # Core HTTP library for API calls
-    "requests==2.32.4",
+    "requests>=2.32.4",
 
     # Jira API
-    "jira==3.8.0",
+    "jira>=3.10.5",
 
     # Data validation
-    "pydantic==2.11.7",
+    "pydantic>=2.11.7",
 
     # Configuration and environment
-    "python-dotenv==1.1.1",
-    "pyyaml==6.0.2",
+    "python-dotenv>=1.1.1",
+    "pyyaml>=6.0.2",
 
     # Console display and progress
-    "rich==14.0.0",
+    "rich>=14.1.0",
     
     # Redis for caching and idempotency
-    "redis==5.2.1",
+    "redis>=6.3.0",
 
     # Error recovery and resilience
-    "tenacity==8.2.3",
-    "pybreaker==0.7.0",
-    "structlog==23.2.0",
+    "tenacity>=9.1.2",
+    "pybreaker>=1.4.0",
+    "structlog>=25.4.0",
 
     # Database for checkpointing
-    "sqlalchemy==1.4.53",
+    "sqlalchemy>=2.0.42",
     
     # System monitoring and validation
-    "psutil==6.1.0",
-    "jsonschema==4.25.0",
+    "psutil>=7.0.0",
+    "jsonschema>=4.25.0",
     
     # Web dashboard
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
-    "websockets==12.0",
-    "jinja2==3.1.2",
-    "aiofiles==23.2.1",
+    "websockets>=15.0.1",
+    "jinja2>=3.1.6",
+    "aiofiles>=24.1.0",
 ]
 
 [project.optional-dependencies]
@@ -64,8 +64,8 @@ dev = [
     "isort>=5.12.0",
     "flake8>=7.3.0",
     "pre-commit>=4.2.0",
-    "mypy>=1.17.0",
-    "ruff>=0.12.3",
+    "mypy>=1.17.1",
+    "ruff>=0.12.7",
 ]
 
 [project.scripts]
