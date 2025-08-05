@@ -203,3 +203,5 @@ id_rsa
 id_rsa.pub
 *.ssh
 auth_keys 
+.envrc.local
+.env
