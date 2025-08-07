@@ -141,4 +141,4 @@ j2o migrate
 pytest
 ```
 
-This cutting-edge configuration system provides a modern, type-safe, and maintainable approach to configuration management while preserving all existing functionality and settings. 
+This cutting-edge configuration system provides a modern, type-safe, and maintainable approach to configuration management while preserving all existing functionality and settings.

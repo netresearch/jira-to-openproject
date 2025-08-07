@@ -54,4 +54,4 @@ print(f"Batch Size: {settings.batch_size}")
 - Type safety with Pydantic v2
 - Automatic validation of URLs, tokens, paths
 - Clear error messages with actionable feedback
-- IDE support with autocomplete and type hints 
+- IDE support with autocomplete and type hints

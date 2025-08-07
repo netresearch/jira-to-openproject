@@ -382,4 +382,4 @@ cp config/environments/development.yaml config/environments/my-env.yaml
 
 ---
 
-**This new configuration system provides a rock-solid, type-safe, and developer-friendly way to manage your Jira to OpenProject migration configuration!** 🚀 
+**This new configuration system provides a rock-solid, type-safe, and developer-friendly way to manage your Jira to OpenProject migration configuration!** 🚀

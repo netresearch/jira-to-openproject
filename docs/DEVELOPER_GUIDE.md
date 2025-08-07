@@ -169,10 +169,10 @@ def _validate_jira_key(jira_key: str) -> None:
     """Validate Jira key format to prevent injection attacks."""
     if not jira_key or not isinstance(jira_key, str):
         raise ValueError("Jira key must be a non-empty string")
-    
+
     if len(jira_key) > 100:
         raise ValueError("Jira key too long (max 100 characters)")
-    
+
     if not re.match(r'^[A-Z0-9\-]+$', jira_key):
         raise ValueError(f"Invalid Jira key format: {jira_key}")
 ```
@@ -194,7 +194,7 @@ f"jira_key: '{jira_key}'"  # Vulnerable to injection
 ### Test Performance Targets
 
 - **Unit tests**: Complete in under 30 seconds
-- **Functional tests**: Complete in under 2-3 minutes  
+- **Functional tests**: Complete in under 2-3 minutes
 - **Full suite**: Complete in under 10 minutes
 
 ### Optimization Strategies
@@ -213,4 +213,4 @@ f"jira_key: '{jira_key}'"  # Vulnerable to injection
 5. **Run full test suite** to ensure integration
 6. **Update documentation** for any new patterns or requirements
 
-This guide replaces the previous compliance checklist and verification process documents with a streamlined, actionable developer reference. 
+This guide replaces the previous compliance checklist and verification process documents with a streamlined, actionable developer reference.

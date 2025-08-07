@@ -49,4 +49,4 @@ python -m config.cli create-envrc      # Create .envrc template for direnv
 - **Environment separation**: Use `.env.test` only for test-specific overrides
 - **No secrets in VCS**: All `.env*` files in `.gitignore`
 - **Validation first**: Always validate configuration before running migrations
-- **CLI tools**: Use provided CLI tools for configuration management 
+- **CLI tools**: Use provided CLI tools for configuration management

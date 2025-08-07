@@ -6,7 +6,7 @@ A robust, modular migration toolset for transferring project management data fro
 
 **Migration Components:**
 - **Customer Migration:** Tempo Customers → Top-level OpenProject projects
-- **Account Migration:** Tempo Accounts → Custom field values on projects  
+- **Account Migration:** Tempo Accounts → Custom field values on projects
 - **Project Migration:** Jira Projects → Sub-projects under customer hierarchy
 - **Work Package Migration:** Issues → Work packages with full metadata
 - **User Migration:** Jira users → OpenProject users with role mapping
@@ -76,7 +76,7 @@ The migration tool uses a **layered client architecture** for reliable remote op
 ```
 Local Migration Tool
     ↓ (SSH Connection)
-Remote OpenProject Server  
+Remote OpenProject Server
     ↓ (Docker Commands)
 OpenProject Container
     ↓ (Rails Console)
@@ -109,7 +109,7 @@ J2O_JIRA_URL=https://your-jira-server
 J2O_JIRA_USERNAME=your-username
 J2O_JIRA_API_TOKEN=your-api-token
 
-# OpenProject Configuration  
+# OpenProject Configuration
 J2O_OPENPROJECT_URL=https://your-openproject
 J2O_OPENPROJECT_API_KEY=your-api-key
 
@@ -133,7 +133,7 @@ migration:
   parallel_workers: 4
   enable_dry_run: false
   skip_validation: false
-  
+
 logging:
   level: INFO
   format: detailed
@@ -196,7 +196,7 @@ python src/main.py migrate --components all --verbose
 # Test organization
 tests/
 ├── unit/          # Fast, isolated component tests
-├── functional/    # Component interaction tests  
+├── functional/    # Component interaction tests
 ├── integration/   # External service tests
 ├── end_to_end/    # Complete workflow tests
 └── utils/         # Shared testing utilities

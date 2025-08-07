@@ -5,7 +5,7 @@ The Enhanced User Association Migrator has grown to 2003+ lines and violates the
 
 ## Current Issues
 - **Monolithic Class**: Single class handles I/O, networking, business logic, caching, and metrics
-- **Mixed Concerns**: Multiple responsibilities create tight coupling and maintenance burden  
+- **Mixed Concerns**: Multiple responsibilities create tight coupling and maintenance burden
 - **Configuration Scatter**: Constants spread throughout class (partially addressed)
 - **Missing Abstractions**: Direct dependencies on external services without interfaces
 
@@ -15,7 +15,7 @@ The Enhanced User Association Migrator has grown to 2003+ lines and violates the
 ```
 UserMappingPersistence
 ├── FileSystemMappingStore
-├── DatabaseMappingStore  
+├── DatabaseMappingStore
 └── InMemoryMappingStore
 
 StalenessDetector
@@ -43,7 +43,7 @@ MetricsReporter
 ```python
 class MigratorConfig:
     error: ErrorConfig
-    json: JsonConfig  
+    json: JsonConfig
     retry: RetryConfig
     staleness: StalenessConfig
     circuit_breaker: CircuitBreakerConfig
@@ -54,8 +54,8 @@ class MigratorConfig:
 @abc.abstractmethod
 class UserDataProvider:
     def get_user(self, username: str) -> UserData
-    
-@abc.abstractmethod  
+
+@abc.abstractmethod
 class MappingStore:
     def load_mappings(self) -> Dict[str, Any]
     def save_mappings(self, mappings: Dict[str, Any]) -> None
@@ -74,7 +74,7 @@ class MappingStore:
 
 ### Phase 3: Extract Persistence Layer (Future)
 - [ ] Abstract mapping storage interface
-- [ ] File system implementation  
+- [ ] File system implementation
 - [ ] Configuration-based store selection
 
 ### Phase 4: Extract Service Layer (Future)
@@ -98,4 +98,4 @@ class MappingStore:
 ✅ **Critical fixes applied** - Depth limits, configuration centralization, circuit breaker
 ⚠️ **Architectural debt remains** - Class decomposition needed for long-term maintainability
 
-The current implementation is **production-ready** but would benefit from architectural refactoring in a future iteration. 
+The current implementation is **production-ready** but would benefit from architectural refactoring in a future iteration.

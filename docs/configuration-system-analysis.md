@@ -89,14 +89,14 @@ class Settings(BaseSettings):
     jira_api_token: str = Field(..., description="Jira API token")
     jira_projects: Optional[List[str]] = Field(default=None, description="Projects to migrate")
     jira_batch_size: int = Field(default=100, ge=1, le=1000)
-    
+
     # OpenProject Configuration
     openproject_url: str = Field(..., description="OpenProject instance URL")
     openproject_api_token: str = Field(..., description="OpenProject API token")
     openproject_server: Optional[str] = Field(default=None, description="SSH server hostname")
     openproject_user: Optional[str] = Field(default=None, description="SSH username")
     openproject_container: Optional[str] = Field(default=None, description="Docker container name")
-    
+
     # Migration Configuration
     migration_batch_size: int = Field(default=100, ge=1, le=1000)
     migration_ssl_verify: bool = Field(default=True)
@@ -104,19 +104,19 @@ class Settings(BaseSettings):
     migration_data_dir: Path = Field(default=Path("./data"))
     migration_backup_dir: Path = Field(default=Path("./backups"))
     migration_results_dir: Path = Field(default=Path("./results"))
-    
+
     # Database Configuration
     database_host: str = Field(default="localhost")
     database_port: int = Field(default=5432, ge=1, le=65535)
     database_name: str = Field(default="migration_db")
     database_user: str = Field(default="postgres")
     database_password: str = Field(..., description="Database password")
-    
+
     # Application Configuration
     test_mode: bool = Field(default=False)
     mock_mode: bool = Field(default=False)
     use_mock_apis: bool = Field(default=False)
-    
+
     model_config = SettingsConfigDict(
         env_prefix="J2O_",              # J2O_JIRA_URL, J2O_OPENPROJECT_URL, etc.
         env_file=Path(".env"),          # dev only
@@ -124,28 +124,28 @@ class Settings(BaseSettings):
         extra="forbid",                 # catch typos
         validate_default=True,
     )
-    
+
     @field_validator('jira_url', 'openproject_url')
     @classmethod
     def validate_url(cls, v: str) -> str:
         if not v.startswith(('http://', 'https://')):
             raise ValueError('URL must start with http:// or https://')
         return v.rstrip('/')
-    
+
     @field_validator('jira_username')
     @classmethod
     def validate_email(cls, v: str) -> str:
         if '@' not in v:
             raise ValueError('Username should be an email address')
         return v
-    
+
     @field_validator('jira_api_token', 'openproject_api_token')
     @classmethod
     def validate_token(cls, v: str) -> str:
         if len(v) < 10:
             raise ValueError('API token must be at least 10 characters long')
         return v
-    
+
     def model_post_init(self, __context) -> None:
         """Post-initialization validation."""
         if self.test_mode and not (self.mock_mode or self.use_mock_apis):
@@ -167,15 +167,15 @@ def load_settings(
     env_file: Optional[Path] = None
 ) -> Settings:
     """Load settings with proper precedence order."""
-    
+
     # 1. Load YAML config if provided
     yaml_data = {}
     if config_file and config_file.exists():
         yaml_data = yaml.safe_load(config_file.read_text())
-    
+
     # 2. Create settings with YAML data and environment overrides
     settings = Settings.model_validate(yaml_data)
-    
+
     return settings
 
 # Global settings instance
@@ -243,7 +243,7 @@ class ConfigValidator:
     def validate_config(settings: Settings) -> List[str]:
         """Validate configuration and return list of errors."""
         errors = []
-        
+
         # Validate Jira connection
         try:
             response = requests.get(
@@ -256,7 +256,7 @@ class ConfigValidator:
                 errors.append(f"Jira authentication failed: {response.status_code}")
         except Exception as e:
             errors.append(f"Jira connection failed: {e}")
-        
+
         # Validate OpenProject connection
         try:
             response = requests.get(
@@ -269,7 +269,7 @@ class ConfigValidator:
                 errors.append(f"OpenProject authentication failed: {response.status_code}")
         except Exception as e:
             errors.append(f"OpenProject connection failed: {e}")
-        
+
         return errors
 
 class ConfigTester:
@@ -282,10 +282,10 @@ class ConfigTester:
             "database_connection": False,
             "file_permissions": False
         }
-        
+
         # Test connections (same as validator but returns boolean)
         # ... implementation ...
-        
+
         return results
 ```
 
@@ -309,7 +309,7 @@ class ConfigDebugger:
         print(f"Log Level: {settings.migration_log_level}")
         print(f"Test Mode: {settings.test_mode}")
         print(f"Mock Mode: {settings.mock_mode}")
-    
+
     @staticmethod
     def export_config(settings: Settings, format: str = "yaml") -> str:
         """Export configuration in specified format."""
@@ -342,7 +342,7 @@ class LocalSecretsProvider(SecretsProvider):
     def __init__(self, key_file: Path = Path(".secrets.key")):
         self.key_file = key_file
         self.cipher = self._load_or_create_key()
-    
+
     def _load_or_create_key(self) -> Fernet:
         if self.key_file.exists():
             key = self.key_file.read_bytes()
@@ -350,7 +350,7 @@ class LocalSecretsProvider(SecretsProvider):
             key = Fernet.generate_key()
             self.key_file.write_bytes(key)
         return Fernet(key)
-    
+
     def get_secret(self, key: str) -> str:
         # For local development, read from encrypted .env.secrets
         # Implementation details...
@@ -359,7 +359,7 @@ class LocalSecretsProvider(SecretsProvider):
 class AWSSecretsProvider(SecretsProvider):
     def __init__(self, region: str = "us-east-1"):
         self.client = boto3.client("secretsmanager", region_name=region)
-    
+
     def get_secret(self, key: str) -> str:
         response = self.client.get_secret_value(SecretId=key)
         return response["SecretString"]
@@ -367,7 +367,7 @@ class AWSSecretsProvider(SecretsProvider):
 class SecretsManager:
     def __init__(self, provider: SecretsProvider):
         self.provider = provider
-    
+
     def get_secret(self, key: str) -> str:
         return self.provider.get_secret(key)
 ```
@@ -400,7 +400,7 @@ def validate():
     """Validate configuration."""
     settings = load_settings()
     errors = ConfigValidator.validate_config(settings)
-    
+
     if errors:
         click.echo("Configuration validation failed:")
         for error in errors:
@@ -414,13 +414,13 @@ def test():
     """Test configuration connections."""
     settings = load_settings()
     results = ConfigTester.test_configuration(settings)
-    
+
     for test, passed in results.items():
         status = "✅" if passed else "❌"
         click.echo(f"{status} {test}")
 
 @config.command()
-@click.option('--format', 'output_format', default='yaml', 
+@click.option('--format', 'output_format', default='yaml',
               type=click.Choice(['yaml', 'json']))
 def export(output_format: str):
     """Export configuration."""
@@ -497,4 +497,4 @@ def export(output_format: str):
 ### **Step 5: Cleanup**
 - Remove old configuration files
 - Update documentation
-- Archive old configuration code 
+- Archive old configuration code

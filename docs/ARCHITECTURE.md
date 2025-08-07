@@ -11,7 +11,7 @@ The Jira to OpenProject migration tool uses a layered client architecture for re
 ```
 OpenProjectClient (Orchestration Layer)
     ├── SSHClient (Foundation Layer)
-    ├── DockerClient (Container Interaction Layer)  
+    ├── DockerClient (Container Interaction Layer)
     └── RailsConsoleClient (Console Interaction Layer)
 ```
 
@@ -48,7 +48,7 @@ Back to LOCAL SYSTEM
 ```python
 ssh_client = SSHClient(
     host="remote.local",
-    user="username", 
+    user="username",
     key_file="/path/to/key",
     retry_count=3
 )
@@ -150,7 +150,7 @@ Exception
 ├── SSHConnectionError, SSHCommandError, SSHFileTransferError
 ├── RailsConsoleError
 │   ├── TmuxSessionError
-│   ├── ConsoleNotReadyError  
+│   ├── ConsoleNotReadyError
 │   └── CommandExecutionError
 │       └── RubyError
 ├── OpenProjectError
@@ -178,7 +178,7 @@ Exception
 ### RailsConsoleClient Optimizations
 
 - **Console prompt detection**: Avoids unnecessary stabilization waits
-- **Adaptive polling**: Starts at 0.05s, scales to 0.5s based on output changes  
+- **Adaptive polling**: Starts at 0.05s, scales to 0.5s based on output changes
 - **Minimal wait times**: 0.1s between operations (vs previous 0.5-1.0s)
 - **Smart error handling**: Pattern detection for common Ruby errors
 
@@ -194,7 +194,7 @@ Exception
 
 1. **Client Initialization**: OpenProjectClient initializes all dependent clients
 2. **Script Generation**: Ruby scripts created locally based on migration requirements
-3. **File Transfer**: Scripts transferred to remote server via SSHClient  
+3. **File Transfer**: Scripts transferred to remote server via SSHClient
 4. **Container Operations**: Scripts moved into Docker container via DockerClient
 5. **Console Execution**: Scripts executed in Rails console via RailsConsoleClient
 6. **Result Processing**: Results extracted with marker-based detection and returned
@@ -220,4 +220,4 @@ All user inputs, especially Jira keys, are validated to prevent injection attack
 
 Dynamic content uses Ruby's `inspect` method for safe string formatting in generated scripts.
 
-This architecture provides reliable, maintainable migration processing with proper separation of concerns and robust error handling. 
+This architecture provides reliable, maintainable migration processing with proper separation of concerns and robust error handling.

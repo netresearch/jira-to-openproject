@@ -25,7 +25,7 @@ jira_key = "TEST'; User.destroy_all; puts 'pwned"
 
 ### 1. Input Validation Layer
 
-**Files:** 
+**Files:**
 - `src/utils/enhanced_user_association_migrator.py`
 - `src/utils/enhanced_timestamp_migrator.py`
 
@@ -67,7 +67,7 @@ f"{{jira_key: {escaped_jira_key}, wp_id: {wp_id}}}"
 
 **Multiple security layers:**
 1. **Input validation** at the entry point (when jira_key is first used)
-2. **Output escaping** during script generation  
+2. **Output escaping** during script generation
 3. **Error isolation** with begin/rescue blocks in generated Ruby
 4. **Parameterized queries** for database operations (`WorkPackage.find(id)`)
 
@@ -82,7 +82,7 @@ f"{{jira_key: {escaped_jira_key}, wp_id: {wp_id}}}"
 
 ### Test Files
 1. `tests/security/test_jira_key_validation.py` - Unit tests for validation
-2. `tests/security/test_script_generation_security.py` - Integration security tests  
+2. `tests/security/test_script_generation_security.py` - Integration security tests
 3. `tests/security/test_security_regression.py` - Regression and compatibility tests
 
 ### Running Security Tests
@@ -177,4 +177,4 @@ script_line = f"{{jira_key: \"{jira_key}\", wp_id: {wp_id}}}"
 
 **Last Updated:** 2024-12-19
 **Version:** 1.0
-**Status:** Active - All security measures implemented and tested 
+**Status:** Active - All security measures implemented and tested

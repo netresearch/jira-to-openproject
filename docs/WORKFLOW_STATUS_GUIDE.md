@@ -150,4 +150,4 @@ python scripts/validate_workflow_setup.py
 python scripts/test_workpackage_lifecycle.py
 ```
 
-This guide consolidates the previous separate workflow configuration and status migration documentation into a single, actionable reference. 
+This guide consolidates the previous separate workflow configuration and status migration documentation into a single, actionable reference.

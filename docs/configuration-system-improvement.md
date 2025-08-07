@@ -82,7 +82,7 @@ class JiraConfig(BaseModel):
     api_token: str = Field(..., description="Jira API token")
     projects: Optional[List[str]] = Field(default=None, description="Projects to migrate")
     batch_size: int = Field(default=100, ge=1, le=1000)
-    
+
     @validator('url')
     def validate_url(cls, v):
         if not v.startswith(('http://', 'https://')):
@@ -136,17 +136,17 @@ class ConfigValidator:
     @staticmethod
     def validate_config(config: AppConfig) -> List[str]:
         errors = []
-        
+
         # Validate Jira connection
         try:
-            response = requests.get(f"{config.jira.url}/rest/api/2/myself", 
+            response = requests.get(f"{config.jira.url}/rest/api/2/myself",
                                   auth=(config.jira.username, config.jira.api_token),
                                   verify=config.migration.ssl_verify)
             if response.status_code != 200:
                 errors.append(f"Jira authentication failed: {response.status_code}")
         except Exception as e:
             errors.append(f"Jira connection failed: {e}")
-        
+
         # Validate OpenProject connection
         try:
             response = requests.get(f"{config.openproject.url}/api/v3/projects",
@@ -156,7 +156,7 @@ class ConfigValidator:
                 errors.append(f"OpenProject authentication failed: {response.status_code}")
         except Exception as e:
             errors.append(f"OpenProject connection failed: {e}")
-        
+
         return errors
 ```
 
@@ -169,7 +169,7 @@ class SecretsManager:
     def __init__(self, key_file: Path = Path(".secrets.key")):
         self.key_file = key_file
         self.cipher = self._load_or_create_key()
-    
+
     def _load_or_create_key(self) -> Fernet:
         if self.key_file.exists():
             key = self.key_file.read_bytes()
@@ -177,10 +177,10 @@ class SecretsManager:
             key = Fernet.generate_key()
             self.key_file.write_bytes(key)
         return Fernet(key)
-    
+
     def encrypt(self, value: str) -> str:
         return self.cipher.encrypt(value.encode()).decode()
-    
+
     def decrypt(self, encrypted_value: str) -> str:
         return self.cipher.decrypt(encrypted_value.encode()).decode()
 ```
@@ -214,7 +214,7 @@ class ConfigTester:
             "database_connection": False,
             "file_permissions": False
         }
-        
+
         # Test Jira connection
         try:
             response = requests.get(f"{config.jira.url}/rest/api/2/myself",
@@ -224,7 +224,7 @@ class ConfigTester:
             results["jira_connection"] = response.status_code == 200
         except Exception:
             pass
-        
+
         # Test OpenProject connection
         try:
             response = requests.get(f"{config.openproject.url}/api/v3/projects",
@@ -234,7 +234,7 @@ class ConfigTester:
             results["openproject_connection"] = response.status_code == 200
         except Exception:
             pass
-        
+
         return results
 ```
 
@@ -279,4 +279,4 @@ class ConfigTester:
 5. **Debugging**: Clear visibility into active configuration
 6. **Testing**: Automated configuration validation
 7. **Documentation**: Comprehensive and up-to-date docs
-8. **Consistency**: Standardized naming and structure 
+8. **Consistency**: Standardized naming and structure
