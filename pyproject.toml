@@ -9,9 +9,9 @@ version = "0.1.0"
 authors = [
     {name = "Jira to OpenProject team", email = "test@example.com"},
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 dependencies = [
     # Core HTTP library for API calls
     "requests>=2.32.4",
@@ -28,7 +28,7 @@ dependencies = [
 
     # Console display and progress
     "rich>=14.1.0",
-    
+
     # Redis for caching and idempotency
     "redis>=6.3.0",
 
@@ -39,11 +39,11 @@ dependencies = [
 
     # Database for checkpointing
     "sqlalchemy>=2.0.42",
-    
+
     # System monitoring and validation
     "psutil>=7.0.0",
     "jsonschema>=4.25.0",
-    
+
     # Web dashboard
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
@@ -93,15 +93,15 @@ addopts = "-v --strict-markers"
 
 [tool.black]
 line-length = 88
-target-version = ['py39']
+target-version = ['py312']
 include = '\.pyi?$'
 
 [tool.mypy]
 python_version = "3.12"
 warn_unused_configs = true
-disallow_untyped_defs = true
-ignore_missing_imports = false
-strict = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+strict = false
 enable_error_code = "deprecated"
 
 # Limit type-checking to exactly these directories

@@ -184,7 +184,7 @@ node_modules/
 
 # Task files
 # tasks.json
-# tasks/ 
+# tasks/
 
 # Security and Cryptographic Keys - NEVER commit these!
 *.pem
@@ -202,7 +202,7 @@ rsa_public.pem
 id_rsa
 id_rsa.pub
 *.ssh
-auth_keys 
+auth_keys
 .envrc.local
 .env
 .cursor/mcp.json
