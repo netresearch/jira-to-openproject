@@ -60,7 +60,8 @@ class TestSSHClient(unittest.TestCase):
 
         # Also patch src.clients.ssh_client.Path to return our mock
         self.src_path_patcher = patch(
-            "src.clients.ssh_client.Path", self.mock_path_class
+            "src.clients.ssh_client.Path",
+            self.mock_path_class,
         )
         self.src_path_patcher.start()
 
@@ -191,7 +192,8 @@ class TestSSHClient(unittest.TestCase):
 
         # Configure mock to raise timeout
         self.mock_subprocess.run.side_effect = subprocess.TimeoutExpired(
-            cmd=["ssh"], timeout=10
+            cmd=["ssh"],
+            timeout=10,
         )
 
         # Call the method
@@ -241,7 +243,8 @@ class TestSSHClient(unittest.TestCase):
 
         # Call the method with check=False to avoid exception
         stdout, stderr, returncode = self.ssh_client.execute_command(
-            "invalid_command", check=False
+            "invalid_command",
+            check=False,
         )
 
         # Verify result
@@ -272,7 +275,8 @@ class TestSSHClient(unittest.TestCase):
 
         # Skip checking if the error is logged, just confirm the exception is raised
         self.mock_subprocess.run.side_effect = subprocess.TimeoutExpired(
-            cmd=["ssh"], timeout=60
+            cmd=["ssh"],
+            timeout=60,
         )
 
         # Simple test: Make sure TimeoutExpired is raised

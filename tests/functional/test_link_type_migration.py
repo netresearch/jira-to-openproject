@@ -304,7 +304,7 @@ class TestLinkTypeMigration(unittest.TestCase):
             },
         }
         mock_file.return_value.__enter__.return_value.read.return_value = json.dumps(
-            mock_mapping
+            mock_mapping,
         )
 
         # Create instance
@@ -521,7 +521,9 @@ class TestLinkTypeMigration(unittest.TestCase):
         # Patch the instance methods
         with (
             patch.object(
-                migration, "create_link_type_mapping", side_effect=mock_create_mapping
+                migration,
+                "create_link_type_mapping",
+                side_effect=mock_create_mapping,
             ),
             patch.object(
                 migration,

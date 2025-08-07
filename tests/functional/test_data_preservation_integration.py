@@ -2,15 +2,12 @@
 """Integration test for data preservation workflow."""
 
 import json
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.migrations.base_migration import BaseMigration
-from src.models import ComponentResult
 from src.utils.data_preservation_manager import (
     ConflictResolution,
     DataPreservationManager,
@@ -42,7 +39,11 @@ class TestDataPreservationIntegration:
             openproject_client=op_client,
         )
 
-    def test_complete_data_preservation_workflow(self, preservation_manager, mock_clients):
+    def test_complete_data_preservation_workflow(
+        self,
+        preservation_manager,
+        mock_clients,
+    ) -> None:
         """Test the complete data preservation workflow end-to-end."""
         jira_client, op_client = mock_clients
 
@@ -99,7 +100,7 @@ class TestDataPreservationIntegration:
             "id": 1,
             "firstname": "Jonathan",  # This is the only conflicted field
             "department": "Engineering",  # Non-conflicted new field from Jira
-            "status": "active",  # Common field 
+            "status": "active",  # Common field
         }
 
         resolved_data = preservation_manager.resolve_conflict(
@@ -109,11 +110,17 @@ class TestDataPreservationIntegration:
         )
 
         # 7. Verify resolution follows policy (OpenProject wins for conflicted fields)
-        assert resolved_data["firstname"] == "Johnny"  # OpenProject wins (manual change preserved)
+        assert (
+            resolved_data["firstname"] == "Johnny"
+        )  # OpenProject wins (manual change preserved)
         assert resolved_data["lastname"] == "Smith"  # OpenProject value preserved
-        assert resolved_data["email"] == "john.smith@example.com"  # OpenProject value preserved
-        assert resolved_data["department"] == "Engineering"  # Non-conflicted Jira field added
-        assert resolved_data["admin"] == True  # OpenProject-only field preserved
+        assert (
+            resolved_data["email"] == "john.smith@example.com"
+        )  # OpenProject value preserved
+        assert (
+            resolved_data["department"] == "Engineering"
+        )  # Non-conflicted Jira field added
+        assert resolved_data["admin"]  # OpenProject-only field preserved
         assert resolved_data["status"] == "active"  # Common field
 
         # 8. Create backup before applying changes
@@ -132,11 +139,13 @@ class TestDataPreservationIntegration:
 
         print("✅ Data preservation workflow completed successfully!")
         print(f"  - Detected 1 conflict in field: {conflict['conflicted_fields']}")
-        print(f"  - Applied resolution strategy: {conflict['resolution_strategy'].value}")
+        print(
+            f"  - Applied resolution strategy: {conflict['resolution_strategy'].value}",
+        )
         print(f"  - Created backup at: {backup_path}")
-        print(f"  - Preserved manual changes while merging Jira updates")
+        print("  - Preserved manual changes while merging Jira updates")
 
-    def test_no_conflict_scenario(self, preservation_manager, mock_clients):
+    def test_no_conflict_scenario(self, preservation_manager, mock_clients) -> None:
         """Test scenario where no conflicts exist."""
         jira_client, op_client = mock_clients
 
@@ -173,7 +182,7 @@ class TestDataPreservationIntegration:
         assert conflict is None
         print("✅ No conflict scenario handled correctly!")
 
-    def test_preservation_policy_configuration(self, preservation_manager):
+    def test_preservation_policy_configuration(self, preservation_manager) -> None:
         """Test preservation policy configuration and updates."""
         # Test default policies are loaded
         assert "users" in preservation_manager.preservation_policies
@@ -182,7 +191,9 @@ class TestDataPreservationIntegration:
 
         # Verify users policy (OpenProject wins)
         users_policy = preservation_manager.preservation_policies["users"]
-        assert users_policy["conflict_resolution"] == ConflictResolution.OPENPROJECT_WINS
+        assert (
+            users_policy["conflict_resolution"] == ConflictResolution.OPENPROJECT_WINS
+        )
         assert "password" in users_policy["protected_fields"]
         assert "firstname" in users_policy["merge_fields"]
 
@@ -191,8 +202,13 @@ class TestDataPreservationIntegration:
             "users",
             {
                 "conflict_resolution": "merge",
-                "protected_fields": ["password", "last_login", "admin_status", "created_on"],
-            }
+                "protected_fields": [
+                    "password",
+                    "last_login",
+                    "admin_status",
+                    "created_on",
+                ],
+            },
         )
 
         # Verify update applied
@@ -202,7 +218,7 @@ class TestDataPreservationIntegration:
 
         print("✅ Preservation policy configuration working correctly!")
 
-    def test_bulk_conflict_analysis(self, preservation_manager, mock_clients):
+    def test_bulk_conflict_analysis(self, preservation_manager, mock_clients) -> None:
         """Test analyzing conflicts for multiple entities."""
         jira_client, op_client = mock_clients
 
@@ -219,16 +235,29 @@ class TestDataPreservationIntegration:
 
         # Mock current OpenProject state (some users modified)
         op_client.find_record.side_effect = [
-            {"id": 1, "firstname": "John", "lastname": "Modified"},  # Conflict potential
-            {"id": 2, "firstname": "Jane", "lastname": "Smith"},     # Unchanged
-            {"id": 3, "firstname": "Bob", "lastname": "Johnson"},    # Unchanged (no manual modification)
+            {
+                "id": 1,
+                "firstname": "John",
+                "lastname": "Modified",
+            },  # Conflict potential
+            {"id": 2, "firstname": "Jane", "lastname": "Smith"},  # Unchanged
+            {
+                "id": 3,
+                "firstname": "Bob",
+                "lastname": "Johnson",
+            },  # Unchanged (no manual modification)
         ]
 
         # Jira changes affecting multiple users
         jira_changes = {
-            "1": {"lastname": "Updated", "department": "Engineering"},  # Conflict on lastname
+            "1": {
+                "lastname": "Updated",
+                "department": "Engineering",
+            },  # Conflict on lastname
             "2": {"department": "Marketing"},  # No conflict - only new field
-            "3": {"title": "Manager"},  # No conflict - only new field, no changes to existing fields
+            "3": {
+                "title": "Manager",
+            },  # No conflict - only new field, no changes to existing fields
         }
 
         # Analyze preservation status
@@ -247,4 +276,4 @@ class TestDataPreservationIntegration:
         print("✅ Bulk conflict analysis working correctly!")
         print(f"  - Analyzed {len(jira_changes)} entities")
         print(f"  - Detected {report['total_conflicts']} conflicts")
-        print(f"  - Conflict distribution: {report['conflicts_by_resolution']}") 
+        print(f"  - Conflict distribution: {report['conflicts_by_resolution']}")

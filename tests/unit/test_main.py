@@ -11,10 +11,8 @@ from src.main import validate_database_configuration
 
 @pytest.mark.unit
 @patch("src.config_loader.ConfigLoader")
-def test_validate_db_config_success(mock_config_loader_cls, caplog):
-    """
-    Test validate_database_configuration succeeds when ConfigLoader initializes successfully.
-    """
+def test_validate_db_config_success(mock_config_loader_cls, caplog) -> None:
+    """Test validate_database_configuration succeeds when ConfigLoader initializes successfully."""
     # Arrange
     mock_loader_instance = MagicMock()
     mock_config_loader_cls.return_value = mock_loader_instance
@@ -30,9 +28,11 @@ def test_validate_db_config_success(mock_config_loader_cls, caplog):
 
 @pytest.mark.unit
 @patch("src.config_loader.ConfigLoader")
-def test_validate_db_config_fails_on_runtime_error(mock_config_loader_cls, caplog):
-    """
-    Test validate_database_configuration exits if ConfigLoader raises RuntimeError.
+def test_validate_db_config_fails_on_runtime_error(
+    mock_config_loader_cls,
+    caplog,
+) -> None:
+    """Test validate_database_configuration exits if ConfigLoader raises RuntimeError.
     This simulates the case where no password is found at all.
     """
     # Arrange
@@ -53,9 +53,11 @@ def test_validate_db_config_fails_on_runtime_error(mock_config_loader_cls, caplo
 
 @pytest.mark.unit
 @patch("src.config_loader.ConfigLoader")
-def test_validate_db_config_fails_on_empty_password(mock_config_loader_cls, caplog):
-    """
-    Test validate_database_configuration exits if ConfigLoader raises RuntimeError for empty password.
+def test_validate_db_config_fails_on_empty_password(
+    mock_config_loader_cls,
+    caplog,
+) -> None:
+    """Test validate_database_configuration exits if ConfigLoader raises RuntimeError for empty password.
     This is now handled entirely within ConfigLoader during initialization.
     """
     # Arrange - ConfigLoader will raise RuntimeError for empty passwords during __init__
@@ -72,10 +74,11 @@ def test_validate_db_config_fails_on_empty_password(mock_config_loader_cls, capl
 
 @pytest.mark.unit
 @patch("src.config_loader.ConfigLoader")
-def test_validate_db_config_fails_on_unexpected_error(mock_config_loader_cls, caplog):
-    """
-    Test validate_database_configuration exits on an unexpected exception.
-    """
+def test_validate_db_config_fails_on_unexpected_error(
+    mock_config_loader_cls,
+    caplog,
+) -> None:
+    """Test validate_database_configuration exits on an unexpected exception."""
     # Arrange
     error_message = "A wild error appears!"
     mock_config_loader_cls.side_effect = Exception(error_message)
@@ -86,4 +89,4 @@ def test_validate_db_config_fails_on_unexpected_error(mock_config_loader_cls, ca
 
     assert excinfo.value.code == 1
     assert "Unexpected error validating database configuration" in caplog.text
-    assert error_message in caplog.text 
+    assert error_message in caplog.text

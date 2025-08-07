@@ -86,7 +86,11 @@ class TestIssueTypeMigration(unittest.TestCase):
         }
 
     def _mock_file_content(
-        self, path: Path, mode: str = "r", *args: Any, **kwargs: Any
+        self,
+        path: Path,
+        mode: str = "r",
+        *args: Any,
+        **kwargs: Any,
     ) -> MagicMock:
         """Mock file content for different files based on path."""
         mock = mock_open()
@@ -108,7 +112,7 @@ class TestIssueTypeMigration(unittest.TestCase):
                 {
                     "created": [{"id": 3, "name": "Epic", "color": "#9B59B6"}],
                     "errors": [],
-                }
+                },
             )
         else:
             file_mock.read.return_value = "{}"
@@ -247,7 +251,7 @@ class TestIssueTypeMigration(unittest.TestCase):
             [
                 {"id": 1, "name": "Bug", "color": "#FF0000"},
                 {"id": 2, "name": "Task", "color": "#00FF00"},
-            ]
+            ],
         )
         mock_subprocess_run.return_value.stderr = ""
 
@@ -264,11 +268,11 @@ class TestIssueTypeMigration(unittest.TestCase):
                                 "name": "Epic",
                                 "color": "#9B59B6",
                                 "jira_type_name": "Epic",
-                            }
+                            },
                         ],
                         "errors": [],
-                    }
-                )
+                    },
+                ),
             ),
         ):
 

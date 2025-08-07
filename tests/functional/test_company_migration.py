@@ -125,7 +125,7 @@ class TestCompanyMigration(unittest.TestCase):
 
         # Remove test data directory if empty
         if Path(self.test_data_dir).exists() and not list(
-            Path(self.test_data_dir).iterdir()
+            Path(self.test_data_dir).iterdir(),
         ):
             Path(self.test_data_dir).rmdir()
 
@@ -161,7 +161,7 @@ class TestCompanyMigration(unittest.TestCase):
 
         # Mock _load_from_json to return None during initialization
         with patch(
-            "src.migrations.company_migration.CompanyMigration._load_from_json"
+            "src.migrations.company_migration.CompanyMigration._load_from_json",
         ) as mock_load:
             mock_load.return_value = None
 

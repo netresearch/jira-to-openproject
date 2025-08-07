@@ -6,9 +6,9 @@ This verifies the proper organization of projects under their parent Tempo compa
 from pathlib import Path
 from typing import Any
 
-from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
+from src.display import configure_logging
 from src.migrations.company_migration import CompanyMigration
 from src.migrations.project_migration import ProjectMigration
 
@@ -66,7 +66,8 @@ def analyze_project_hierarchy() -> dict[str, Any]:
         if parent_link:
             parent_id = parent_link.split("/")[-1]
             parent_project = next(
-                (p for p in op_projects if str(p.get("id")) == parent_id), None
+                (p for p in op_projects if str(p.get("id")) == parent_id),
+                None,
             )
             parent_name = (
                 parent_project.get("name", "Unknown") if parent_project else "Unknown"
@@ -143,7 +144,7 @@ def run_hierarchy_test() -> Any:
     # Determine if test passed
     if analysis["missing_parent_relations"] == 0:
         logger.success(
-            "✅ Project hierarchy test passed! All expected parent-child relationships are in place."
+            "✅ Project hierarchy test passed! All expected parent-child relationships are in place.",
         )
     else:
         logger.error(
@@ -151,7 +152,7 @@ def run_hierarchy_test() -> Any:
             analysis["missing_parent_relations"],
         )
         logger.info(
-            "Review project_hierarchy_analysis.json for details on missing relationships."
+            "Review project_hierarchy_analysis.json for details on missing relationships.",
         )
 
     return analysis

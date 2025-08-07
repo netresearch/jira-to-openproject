@@ -43,7 +43,7 @@ class TestJiraClientWorkLog:
             client.jira = mock_jira_instance
             return client
 
-    def test_get_work_logs_for_issue_success(self, mock_jira_client):
+    def test_get_work_logs_for_issue_success(self, mock_jira_client) -> None:
         """Test successful work log retrieval for an issue."""
         # Create mock work log objects
         mock_work_log_1 = Mock()
@@ -82,25 +82,30 @@ class TestJiraClientWorkLog:
         # Verify API was called correctly
         mock_jira_client.jira.worklogs.assert_called_once_with("TEST-123")
 
-    def test_get_work_logs_for_issue_not_found(self, mock_jira_client):
+    def test_get_work_logs_for_issue_not_found(self, mock_jira_client) -> None:
         """Test work log retrieval for non-existent issue."""
         mock_jira_client.jira.worklogs.side_effect = Exception("Issue does not exist")
 
         with pytest.raises(JiraResourceNotFoundError, match="Issue TEST-404 not found"):
             mock_jira_client.get_work_logs_for_issue("TEST-404")
 
-    def test_get_work_logs_for_issue_api_error(self, mock_jira_client):
+    def test_get_work_logs_for_issue_api_error(self, mock_jira_client) -> None:
         """Test handling of API errors when retrieving work logs."""
         # Mock the response to raise an exception
-        with patch.object(
-            mock_jira_client.jira, "worklogs", side_effect=Exception("API Error")
+        with (
+            patch.object(
+                mock_jira_client.jira,
+                "worklogs",
+                side_effect=Exception("API Error"),
+            ),
+            pytest.raises(
+                JiraApiError,
+                match="Failed to get work logs for issue TEST-123",
+            ),
         ):
-            with pytest.raises(
-                JiraApiError, match="Failed to get work logs for issue TEST-123"
-            ):
-                mock_jira_client.get_work_logs_for_issue("TEST-123")
+            mock_jira_client.get_work_logs_for_issue("TEST-123")
 
-    def test_get_tempo_work_logs_success(self, mock_jira_client):
+    def test_get_tempo_work_logs_success(self, mock_jira_client) -> None:
         """Test successful Tempo work logs retrieval."""
         # Mock the session response
         mock_response = Mock()
@@ -131,11 +136,13 @@ class TestJiraClientWorkLog:
                 "externalHours": None,
                 "externalId": None,
                 "originTaskId": None,
-            }
+            },
         ]
 
         with patch.object(
-            mock_jira_client.jira._session, "get", return_value=mock_response
+            mock_jira_client.jira._session,
+            "get",
+            return_value=mock_response,
         ):
             result = mock_jira_client.get_tempo_work_logs(project_key="TEST")
 
@@ -151,20 +158,25 @@ class TestJiraClientWorkLog:
             assert work_log["approval_status"] == "APPROVED"
             assert len(work_log["work_attributes"]) == 2
 
-    def test_get_tempo_work_logs_api_error(self, mock_jira_client):
+    def test_get_tempo_work_logs_api_error(self, mock_jira_client) -> None:
         """Test handling of API errors when retrieving Tempo work logs."""
         mock_response = Mock()
         mock_response.status_code = 500
 
-        with patch.object(
-            mock_jira_client.jira._session, "get", return_value=mock_response
+        with (
+            patch.object(
+                mock_jira_client.jira._session,
+                "get",
+                return_value=mock_response,
+            ),
+            pytest.raises(
+                JiraApiError,
+                match="Failed to retrieve Tempo work logs",
+            ),
         ):
-            with pytest.raises(
-                JiraApiError, match="Failed to retrieve Tempo work logs"
-            ):
-                mock_jira_client.get_tempo_work_logs(project_key="TEST")
+            mock_jira_client.get_tempo_work_logs(project_key="TEST")
 
-    def test_get_tempo_work_attributes_success(self, mock_jira_client):
+    def test_get_tempo_work_attributes_success(self, mock_jira_client) -> None:
         """Test successful Tempo work attributes retrieval."""
         mock_response = Mock()
         mock_response.status_code = 200
@@ -185,7 +197,9 @@ class TestJiraClientWorkLog:
         ]
 
         with patch.object(
-            mock_jira_client.jira._session, "get", return_value=mock_response
+            mock_jira_client.jira._session,
+            "get",
+            return_value=mock_response,
         ):
             result = mock_jira_client.get_tempo_work_attributes()
 
@@ -195,7 +209,10 @@ class TestJiraClientWorkLog:
             assert result[1]["key"] == "_Category_"
             assert result[1]["values"] == ["Development", "Testing", "Documentation"]
 
-    def test_get_tempo_all_work_logs_for_project_pagination(self, mock_jira_client):
+    def test_get_tempo_all_work_logs_for_project_pagination(
+        self,
+        mock_jira_client,
+    ) -> None:
         """Test Tempo work logs retrieval with pagination."""
         # Mock first batch (1000 items)
         first_batch = []
@@ -208,7 +225,7 @@ class TestJiraClientWorkLog:
                     "author": {"name": "test.user", "displayName": "Test User"},
                     "timeSpentSeconds": 3600,
                     "billableSeconds": 3600,
-                }
+                },
             )
 
         # Mock second batch (500 items)
@@ -222,7 +239,7 @@ class TestJiraClientWorkLog:
                     "author": {"name": "test.user", "displayName": "Test User"},
                     "timeSpentSeconds": 1800,
                     "billableSeconds": 1800,
-                }
+                },
             )
 
         mock_responses = [
@@ -231,7 +248,9 @@ class TestJiraClientWorkLog:
         ]
 
         with patch.object(
-            mock_jira_client.jira._session, "get", side_effect=mock_responses
+            mock_jira_client.jira._session,
+            "get",
+            side_effect=mock_responses,
         ):
             result = mock_jira_client.get_tempo_all_work_logs_for_project("TEST")
 
@@ -240,7 +259,7 @@ class TestJiraClientWorkLog:
             assert result[1000]["tempo_worklog_id"] == 1001
             assert result[-1]["tempo_worklog_id"] == 1500
 
-    def test_get_tempo_work_log_by_id_success(self, mock_jira_client):
+    def test_get_tempo_work_log_by_id_success(self, mock_jira_client) -> None:
         """Test successful retrieval of specific Tempo work log by ID."""
         mock_response = Mock()
         mock_response.status_code = 200
@@ -264,7 +283,9 @@ class TestJiraClientWorkLog:
         }
 
         with patch.object(
-            mock_jira_client.jira._session, "get", return_value=mock_response
+            mock_jira_client.jira._session,
+            "get",
+            return_value=mock_response,
         ):
             result = mock_jira_client.get_tempo_work_log_by_id("12345")
 
@@ -273,20 +294,25 @@ class TestJiraClientWorkLog:
             assert result["tempo_worklog_id"] == 12345
             assert result["issue_key"] == "TEST-123"
 
-    def test_get_tempo_work_log_by_id_not_found(self, mock_jira_client):
+    def test_get_tempo_work_log_by_id_not_found(self, mock_jira_client) -> None:
         """Test handling when Tempo work log is not found."""
         mock_response = Mock()
         mock_response.status_code = 404
 
-        with patch.object(
-            mock_jira_client.jira._session, "get", return_value=mock_response
+        with (
+            patch.object(
+                mock_jira_client.jira._session,
+                "get",
+                return_value=mock_response,
+            ),
+            pytest.raises(
+                JiraResourceNotFoundError,
+                match="Tempo work log 12345 not found",
+            ),
         ):
-            with pytest.raises(
-                JiraResourceNotFoundError, match="Tempo work log 12345 not found"
-            ):
-                mock_jira_client.get_tempo_work_log_by_id("12345")
+            mock_jira_client.get_tempo_work_log_by_id("12345")
 
-    def test_get_tempo_user_work_logs_success(self, mock_jira_client):
+    def test_get_tempo_user_work_logs_success(self, mock_jira_client) -> None:
         """Test successful retrieval of Tempo work logs for a specific user."""
         mock_response = Mock()
         mock_response.status_code = 200
@@ -306,10 +332,14 @@ class TestJiraClientWorkLog:
         ]
 
         with patch.object(
-            mock_jira_client.jira._session, "get", return_value=mock_response
+            mock_jira_client.jira._session,
+            "get",
+            return_value=mock_response,
         ):
             result = mock_jira_client.get_tempo_user_work_logs(
-                user_key="john.doe", date_from="2023-01-01", date_to="2023-01-31"
+                user_key="john.doe",
+                date_from="2023-01-01",
+                date_to="2023-01-31",
             )
 
             assert len(result) == 2

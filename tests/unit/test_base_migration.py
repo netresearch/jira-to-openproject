@@ -17,7 +17,9 @@ class TestBaseMigration:
     """Test cases for BaseMigration class."""
 
     def test_init_without_dependencies(
-        self, monkeypatch: pytest.MonkeyPatch, monkeypatch_helpers
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        monkeypatch_helpers,
     ) -> None:
         """Test initialization without providing any client instances."""
         # Setup the mocks using monkeypatch helpers
@@ -53,7 +55,9 @@ class TestBaseMigration:
         assert migration.change_detector == mock_change_detector_instance
 
     def test_init_with_jira_client(
-        self, monkeypatch: pytest.MonkeyPatch, monkeypatch_helpers
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        monkeypatch_helpers,
     ) -> None:
         """Test initialization with JiraClient provided."""
         # Create a mock JiraClient
@@ -84,7 +88,9 @@ class TestBaseMigration:
         assert migration.change_detector == mock_change_detector_instance
 
     def test_init_with_op_client(
-        self, monkeypatch: pytest.MonkeyPatch, monkeypatch_helpers
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        monkeypatch_helpers,
     ) -> None:
         """Test initialization with OpenProjectClient provided."""
         # Create a mock OpenProjectClient
@@ -115,7 +121,9 @@ class TestBaseMigration:
         assert migration.change_detector == mock_change_detector_instance
 
     def test_init_with_change_detector(
-        self, monkeypatch: pytest.MonkeyPatch, monkeypatch_helpers
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        monkeypatch_helpers,
     ) -> None:
         """Test initialization with ChangeDetector provided."""
         # Create a mock ChangeDetector
@@ -146,14 +154,19 @@ class TestBaseMigration:
         assert migration.op_client == mock_op_instance
 
     def test_detect_changes(
-        self, monkeypatch: pytest.MonkeyPatch, monkeypatch_helpers
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        monkeypatch_helpers,
     ) -> None:
         """Test the detect_changes method delegates to ChangeDetector."""
         mock_change_detector = MagicMock(spec=ChangeDetector)
         mock_change_report = {"total_changes": 2, "changes_by_type": {"updated": 2}}
 
         monkeypatch_helpers.mock_method_return_value(
-            monkeypatch, mock_change_detector, "detect_changes", mock_change_report
+            monkeypatch,
+            mock_change_detector,
+            "detect_changes",
+            mock_change_report,
         )
 
         migration = BaseMigration(change_detector=mock_change_detector)
@@ -167,19 +180,25 @@ class TestBaseMigration:
 
         # Verify it delegates to the ChangeDetector
         mock_change_detector.detect_changes.assert_called_once_with(
-            entities, entity_type
+            entities,
+            entity_type,
         )
         assert result == mock_change_report
 
     def test_create_snapshot(
-        self, monkeypatch: pytest.MonkeyPatch, monkeypatch_helpers
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        monkeypatch_helpers,
     ) -> None:
         """Test the create_snapshot method delegates to ChangeDetector."""
         mock_change_detector = MagicMock(spec=ChangeDetector)
         mock_snapshot_path = "/path/to/snapshot.json"
 
         monkeypatch_helpers.mock_method_return_value(
-            monkeypatch, mock_change_detector, "create_snapshot", mock_snapshot_path
+            monkeypatch,
+            mock_change_detector,
+            "create_snapshot",
+            mock_snapshot_path,
         )
 
         migration = BaseMigration(change_detector=mock_change_detector)
@@ -193,7 +212,9 @@ class TestBaseMigration:
 
         # Verify it delegates to the ChangeDetector with the component name
         mock_change_detector.create_snapshot.assert_called_once_with(
-            entities, entity_type, "BaseMigration"
+            entities,
+            entity_type,
+            "BaseMigration",
         )
         assert result == mock_snapshot_path
 
@@ -208,14 +229,19 @@ class TestBaseMigration:
         assert "projects" in str(context.value)
 
     def test_should_skip_migration_no_changes(
-        self, monkeypatch: pytest.MonkeyPatch, monkeypatch_helpers
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        monkeypatch_helpers,
     ) -> None:
         """Test should_skip_migration when no changes are detected."""
         mock_change_detector = MagicMock(spec=ChangeDetector)
         mock_change_report = {"total_changes": 0, "changes_by_type": {}}
 
         monkeypatch_helpers.mock_method_return_value(
-            monkeypatch, mock_change_detector, "detect_changes", mock_change_report
+            monkeypatch,
+            mock_change_detector,
+            "detect_changes",
+            mock_change_report,
         )
 
         migration = BaseMigration(change_detector=mock_change_detector)
@@ -223,7 +249,9 @@ class TestBaseMigration:
         # Mock the _get_current_entities_for_type method using monkeypatch
         mock_get_entities = MagicMock(return_value=[{"id": "1"}])
         monkeypatch.setattr(
-            migration, "_get_current_entities_for_type", mock_get_entities
+            migration,
+            "_get_current_entities_for_type",
+            mock_get_entities,
         )
 
         # Call should_skip_migration
@@ -234,14 +262,19 @@ class TestBaseMigration:
         assert change_report == mock_change_report
 
     def test_should_skip_migration_with_changes(
-        self, monkeypatch: pytest.MonkeyPatch, monkeypatch_helpers
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        monkeypatch_helpers,
     ) -> None:
         """Test should_skip_migration when changes are detected."""
         mock_change_detector = MagicMock(spec=ChangeDetector)
         mock_change_report = {"total_changes": 2, "changes_by_type": {"updated": 2}}
 
         monkeypatch_helpers.mock_method_return_value(
-            monkeypatch, mock_change_detector, "detect_changes", mock_change_report
+            monkeypatch,
+            mock_change_detector,
+            "detect_changes",
+            mock_change_report,
         )
 
         migration = BaseMigration(change_detector=mock_change_detector)
@@ -249,7 +282,9 @@ class TestBaseMigration:
         # Mock the _get_current_entities_for_type method using monkeypatch
         mock_get_entities = MagicMock(return_value=[{"id": "1"}])
         monkeypatch.setattr(
-            migration, "_get_current_entities_for_type", mock_get_entities
+            migration,
+            "_get_current_entities_for_type",
+            mock_get_entities,
         )
 
         # Call should_skip_migration
@@ -260,7 +295,8 @@ class TestBaseMigration:
         assert change_report == mock_change_report
 
     def test_should_skip_migration_error_handling(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test should_skip_migration error handling."""
         migration = BaseMigration()
@@ -268,7 +304,9 @@ class TestBaseMigration:
         # Mock the _get_current_entities_for_type method to raise an exception using monkeypatch
         mock_get_entities = MagicMock(side_effect=Exception("Test error"))
         monkeypatch.setattr(
-            migration, "_get_current_entities_for_type", mock_get_entities
+            migration,
+            "_get_current_entities_for_type",
+            mock_get_entities,
         )
 
         # Call should_skip_migration
@@ -279,7 +317,8 @@ class TestBaseMigration:
         assert change_report is None
 
     def test_run_with_change_detection_no_entity_type(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test run_with_change_detection without entity type falls back to regular run."""
         migration = BaseMigration()
@@ -296,7 +335,8 @@ class TestBaseMigration:
         assert result.success is True
 
     def test_run_with_change_detection_no_changes(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test run_with_change_detection when no changes are detected."""
         migration = BaseMigration()
@@ -314,7 +354,9 @@ class TestBaseMigration:
         assert result.details["change_report"]["total_changes"] == 0
 
     def test_run_with_change_detection_with_changes(
-        self, monkeypatch: pytest.MonkeyPatch, monkeypatch_helpers
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        monkeypatch_helpers,
     ) -> None:
         """Test run_with_change_detection when changes are detected."""
         mock_change_detector = MagicMock(spec=ChangeDetector)
@@ -329,7 +371,9 @@ class TestBaseMigration:
         monkeypatch.setattr(migration, "should_skip_migration", mock_should_skip)
         monkeypatch.setattr(migration, "run", mock_run)
         monkeypatch.setattr(
-            migration, "_get_current_entities_for_type", mock_get_entities
+            migration,
+            "_get_current_entities_for_type",
+            mock_get_entities,
         )
 
         monkeypatch_helpers.mock_method_return_value(

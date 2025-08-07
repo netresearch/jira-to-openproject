@@ -2,8 +2,8 @@
 """Integration tests for recovery and resilience features."""
 
 import json
-from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
+
 import pytest
 
 from src.migrations.base_migration import BaseMigration
@@ -27,38 +27,46 @@ class TestRecoveryIntegration:
     def mock_migration(self, temp_dirs):
         """Create a mock migration with recovery capabilities."""
         migration = BaseMigration("test_recovery_migration")
-        migration.checkpoint_manager = CheckpointManager(checkpoint_dir=temp_dirs["checkpoints"])
-        
+        migration.checkpoint_manager = CheckpointManager(
+            checkpoint_dir=temp_dirs["checkpoints"],
+        )
+
         # Mock the run method to simulate processing
-        migration.run = Mock(return_value=ComponentResult(
-            success=True,
-            message="Test migration completed",
-            success_count=100,
-            failed_count=0,
-            total_count=100,
-        ))
-        
+        migration.run = Mock(
+            return_value=ComponentResult(
+                success=True,
+                message="Test migration completed",
+                success_count=100,
+                failed_count=0,
+                total_count=100,
+            ),
+        )
+
         return migration
 
     @pytest.fixture
     def failed_migration(self, temp_dirs):
         """Create a migration that will fail for testing recovery."""
         migration = BaseMigration("test_failed_migration")
-        migration.checkpoint_manager = CheckpointManager(checkpoint_dir=temp_dirs["checkpoints"])
-        
+        migration.checkpoint_manager = CheckpointManager(
+            checkpoint_dir=temp_dirs["checkpoints"],
+        )
+
         # Mock the run method to simulate failure
-        migration.run = Mock(return_value=ComponentResult(
-            success=False,
-            message="Migration failed",
-            success_count=50,
-            failed_count=50,
-            total_count=100,
-            errors=["Network connection timeout", "API rate limit exceeded"],
-        ))
-        
+        migration.run = Mock(
+            return_value=ComponentResult(
+                success=False,
+                message="Migration failed",
+                success_count=50,
+                failed_count=50,
+                total_count=100,
+                errors=["Network connection timeout", "API rate limit exceeded"],
+            ),
+        )
+
         return migration
 
-    def test_complete_recovery_workflow(self, mock_migration):
+    def test_complete_recovery_workflow(self, mock_migration) -> None:
         """Test the complete recovery workflow from start to finish."""
         entity_type = "test_entities"
         entity_count = 100
@@ -81,18 +89,27 @@ class TestRecoveryIntegration:
         assert migration_record_id is not None
 
         # 4. Verify checkpoints were created and completed
-        checkpoints = mock_migration.checkpoint_manager.get_checkpoints_for_migration(migration_record_id)
+        checkpoints = mock_migration.checkpoint_manager.get_checkpoints_for_migration(
+            migration_record_id,
+        )
         assert len(checkpoints) > 0
-        
+
         # At least one checkpoint should be completed
-        completed_checkpoints = [cp for cp in checkpoints if cp["status"] == CheckpointStatus.COMPLETED.value]
+        completed_checkpoints = [
+            cp for cp in checkpoints if cp["status"] == CheckpointStatus.COMPLETED.value
+        ]
         assert len(completed_checkpoints) > 0
 
         # 5. Verify cleanup was performed
-        progress = mock_migration.checkpoint_manager.get_progress_status(migration_record_id)
+        progress = mock_migration.checkpoint_manager.get_progress_status(
+            migration_record_id,
+        )
         assert progress is None  # Should be cleaned up after completion
 
-    def test_migration_failure_and_recovery_plan_creation(self, failed_migration):
+    def test_migration_failure_and_recovery_plan_creation(
+        self,
+        failed_migration,
+    ) -> None:
         """Test migration failure handling and recovery plan creation."""
         entity_type = "test_entities"
         entity_count = 100
@@ -114,24 +131,34 @@ class TestRecoveryIntegration:
         assert recovery_plan_id is not None
 
         # 4. Verify recovery plan file exists and contains correct data
-        plan_file = failed_migration.checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{recovery_plan_id}.json"
+        plan_file = (
+            failed_migration.checkpoint_manager.checkpoint_dir
+            / "recovery_plans"
+            / f"{recovery_plan_id}.json"
+        )
         assert plan_file.exists()
 
         with plan_file.open() as f:
             plan_data = json.load(f)
 
-        assert plan_data["failure_type"] in ["network_error", "unknown_error"]  # Based on error messages
+        assert plan_data["failure_type"] in [
+            "network_error",
+            "unknown_error",
+        ]  # Based on error messages
         assert len(plan_data["manual_steps"]) > 0
 
         # 5. Verify failed checkpoint exists
         migration_record_id = result.details["migration_record_id"]
-        checkpoints = failed_migration.checkpoint_manager.get_checkpoints_for_migration(migration_record_id)
-        failed_checkpoints = [cp for cp in checkpoints if cp["status"] == CheckpointStatus.FAILED.value]
+        checkpoints = failed_migration.checkpoint_manager.get_checkpoints_for_migration(
+            migration_record_id,
+        )
+        failed_checkpoints = [
+            cp for cp in checkpoints if cp["status"] == CheckpointStatus.FAILED.value
+        ]
         assert len(failed_checkpoints) > 0
 
-    def test_migration_resume_capability(self, mock_migration):
+    def test_migration_resume_capability(self, mock_migration) -> None:
         """Test resuming a migration from checkpoints."""
-        entity_type = "test_entities"
         migration_record_id = "test_migration_resume_123"
 
         # 1. Create a completed checkpoint to simulate previous migration progress
@@ -147,11 +174,15 @@ class TestRecoveryIntegration:
         mock_migration.checkpoint_manager.complete_checkpoint(checkpoint_id)
 
         # 2. Check if migration can be resumed
-        can_resume = mock_migration.checkpoint_manager.can_resume_migration(migration_record_id)
+        can_resume = mock_migration.checkpoint_manager.can_resume_migration(
+            migration_record_id,
+        )
         assert can_resume is True
 
         # 3. Get resume point
-        resume_point = mock_migration.checkpoint_manager.get_resume_point(migration_record_id)
+        resume_point = mock_migration.checkpoint_manager.get_resume_point(
+            migration_record_id,
+        )
         assert resume_point is not None
         assert resume_point["entities_processed"] == 75
         assert resume_point["progress_percentage"] == 75.0
@@ -161,14 +192,14 @@ class TestRecoveryIntegration:
         assert resumed_result.success is True
         assert resumed_result.details["resumed_from_checkpoint"] == checkpoint_id
 
-    def test_progress_tracking_during_migration(self, mock_migration):
+    def test_progress_tracking_during_migration(self, mock_migration) -> None:
         """Test real-time progress tracking during migration."""
         entity_type = "test_entities"
         entity_count = 50
 
         # Mock the _run_with_checkpoints method to simulate progress updates
         original_run_with_checkpoints = mock_migration._run_with_checkpoints
-        
+
         def mock_run_with_checkpoints(entity_type, entity_count, checkpoint_frequency):
             # Simulate progress during migration
             for i in range(0, entity_count, 10):
@@ -179,9 +210,13 @@ class TestRecoveryIntegration:
                         current_step_progress=(i / entity_count) * 100,
                         completed_steps=i // 10,
                     )
-            
-            return original_run_with_checkpoints(entity_type, entity_count, checkpoint_frequency)
-        
+
+            return original_run_with_checkpoints(
+                entity_type,
+                entity_count,
+                checkpoint_frequency,
+            )
+
         mock_migration._run_with_checkpoints = mock_run_with_checkpoints
 
         # Run migration with progress tracking
@@ -195,7 +230,7 @@ class TestRecoveryIntegration:
         assert result.success is True
         assert result.details["recovery_enabled"] is True
 
-    def test_checkpoint_creation_during_migration(self, mock_migration):
+    def test_checkpoint_creation_during_migration(self, mock_migration) -> None:
         """Test checkpoint creation at strategic points during migration."""
         entity_type = "test_entities"
         entity_count = 30
@@ -236,12 +271,14 @@ class TestRecoveryIntegration:
         mock_migration.complete_current_checkpoint(entities_processed=30)
 
         # Verify progress was tracked
-        all_checkpoints = mock_migration.checkpoint_manager.get_checkpoints_for_migration(
-            mock_migration._current_migration_record_id
+        all_checkpoints = (
+            mock_migration.checkpoint_manager.get_checkpoints_for_migration(
+                mock_migration._current_migration_record_id,
+            )
         )
         assert len(all_checkpoints) >= 3
 
-    def test_rollback_functionality(self, mock_migration):
+    def test_rollback_functionality(self, mock_migration) -> None:
         """Test rollback to specific checkpoint."""
         # Create a checkpoint
         checkpoint_id = mock_migration.checkpoint_manager.create_checkpoint(
@@ -255,11 +292,11 @@ class TestRecoveryIntegration:
 
         # Attempt rollback
         rollback_result = mock_migration.rollback_to_checkpoint(checkpoint_id)
-        
+
         # Should succeed (basic implementation)
         assert rollback_result is True
 
-    def test_error_classification_and_recovery_actions(self, mock_migration):
+    def test_error_classification_and_recovery_actions(self, mock_migration) -> None:
         """Test error classification and appropriate recovery action determination."""
         test_cases = [
             (["Network connection timeout"], "network_error"),
@@ -273,24 +310,24 @@ class TestRecoveryIntegration:
             classified_type = mock_migration._classify_failure_type(errors)
             assert classified_type == expected_type
 
-    def test_manual_recovery_steps_generation(self, mock_migration):
+    def test_manual_recovery_steps_generation(self, mock_migration) -> None:
         """Test generation of manual recovery steps based on errors."""
         network_errors = ["Connection timeout", "DNS resolution failed"]
         steps = mock_migration._generate_manual_recovery_steps(network_errors)
-        
+
         assert any("network connectivity" in step.lower() for step in steps)
         assert any("firewall" in step.lower() for step in steps)
 
         auth_errors = ["Token expired", "Invalid credentials"]
         steps = mock_migration._generate_manual_recovery_steps(auth_errors)
-        
+
         assert any("credentials" in step.lower() for step in steps)
         assert any("permissions" in step.lower() for step in steps)
 
-    def test_concurrent_checkpoint_operations(self, mock_migration):
+    def test_concurrent_checkpoint_operations(self, mock_migration) -> None:
         """Test that checkpoint operations are safe under concurrent access."""
         migration_record_id = "test_concurrent_123"
-        
+
         # Simulate concurrent checkpoint creation
         checkpoints = []
         for i in range(5):
@@ -312,15 +349,23 @@ class TestRecoveryIntegration:
             mock_migration.checkpoint_manager.complete_checkpoint(checkpoint_id)
 
         # Verify all were completed
-        all_checkpoints = mock_migration.checkpoint_manager.get_checkpoints_for_migration(migration_record_id)
-        completed_count = sum(1 for cp in all_checkpoints if cp["status"] == CheckpointStatus.COMPLETED.value)
+        all_checkpoints = (
+            mock_migration.checkpoint_manager.get_checkpoints_for_migration(
+                migration_record_id,
+            )
+        )
+        completed_count = sum(
+            1
+            for cp in all_checkpoints
+            if cp["status"] == CheckpointStatus.COMPLETED.value
+        )
         assert completed_count == 5
 
-    def test_recovery_with_data_preservation(self, mock_migration, temp_dirs):
+    def test_recovery_with_data_preservation(self, mock_migration, temp_dirs) -> None:
         """Test recovery workflow integrated with data preservation."""
         # This test would verify that recovery features work alongside data preservation
         # For now, we'll test that the recovery methods don't interfere with data preservation
-        
+
         entity_type = "test_entities_with_preservation"
         entity_count = 20
 
@@ -339,7 +384,7 @@ class TestRecoveryIntegration:
         migration_record_id = result.details["migration_record_id"]
         assert migration_record_id is not None
 
-    def test_migration_interruption_simulation(self, failed_migration):
+    def test_migration_interruption_simulation(self, failed_migration) -> None:
         """Test handling of simulated migration interruption."""
         entity_type = "test_interrupted_entities"
         entity_count = 100
@@ -353,20 +398,20 @@ class TestRecoveryIntegration:
 
         # Verify failure was handled properly
         assert result.success is False
-        
+
         # Verify recovery information is available
         assert "recovery_plan_id" in result.details
         assert "migration_record_id" in result.details
-        
+
         # Verify we can get progress information
         migration_record_id = result.details["migration_record_id"]
         progress_info = failed_migration.get_migration_progress(migration_record_id)
-        
+
         assert progress_info["migration_record_id"] == migration_record_id
         assert "checkpoints" in progress_info
         assert "can_resume" in progress_info
 
-    def test_estimate_migration_steps(self, mock_migration):
+    def test_estimate_migration_steps(self, mock_migration) -> None:
         """Test migration step estimation."""
         # Test with different entity counts
         steps_small = mock_migration._estimate_migration_steps("users", 5)
@@ -375,6 +420,6 @@ class TestRecoveryIntegration:
 
         # Should increase with entity count
         assert steps_small < steps_medium < steps_large
-        
+
         # Should have minimum base steps
-        assert steps_small >= 3  # pre-processing + processing + post-processing 
+        assert steps_small >= 3  # pre-processing + processing + post-processing

@@ -40,7 +40,7 @@ class TestOpenProjectClient(unittest.TestCase):
 
         # 2. DockerClient patcher
         self.docker_client_patcher = patch(
-            "src.clients.openproject_client.DockerClient"
+            "src.clients.openproject_client.DockerClient",
         )
         self.mock_docker_client_class = self.docker_client_patcher.start()
         self.mock_docker_client = MagicMock(spec=DockerClient)
@@ -52,7 +52,7 @@ class TestOpenProjectClient(unittest.TestCase):
 
         # 3. RailsConsoleClient patcher
         self.rails_client_patcher = patch(
-            "src.clients.openproject_client.RailsConsoleClient"
+            "src.clients.openproject_client.RailsConsoleClient",
         )
         self.mock_rails_client_class = self.rails_client_patcher.start()
         self.mock_rails_client = MagicMock(spec=RailsConsoleClient)
@@ -301,7 +301,8 @@ class TestOpenProjectClient(unittest.TestCase):
 
         # Verify docker_client.transfer_file_to_container was called with the correct paths
         self.mock_docker_client.transfer_file_to_container.assert_called_once_with(
-            local_path, container_path
+            local_path,
+            container_path,
         )
 
         # Reset the mock for the next test
@@ -312,12 +313,13 @@ class TestOpenProjectClient(unittest.TestCase):
 
         # Verify docker_client.copy_file_from_container was called with the correct paths
         self.mock_docker_client.copy_file_from_container.assert_called_once_with(
-            container_path, local_path
+            container_path,
+            local_path,
         )
 
         # Test failing transfer (to container)
         self.mock_docker_client.transfer_file_to_container.side_effect = Exception(
-            "Connection refused"
+            "Connection refused",
         )
 
         with pytest.raises(FileTransferError):
@@ -349,7 +351,7 @@ class TestOpenProjectClient(unittest.TestCase):
             # Test with a failed execution
             self.mock_rails_client.execute.reset_mock()
             self.mock_rails_client.execute.side_effect = Exception(
-                "Connection to Rails console failed"
+                "Connection to Rails console failed",
             )
 
             result = self.op_client.is_connected()

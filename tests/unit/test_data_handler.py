@@ -40,14 +40,18 @@ class TestDataHandler(unittest.TestCase):
 
         # Save the model
         success = data_handler.save(
-            test_result, self.test_filename, directory=self.temp_dir
+            test_result,
+            self.test_filename,
+            directory=self.temp_dir,
         )
         assert success
         assert self.test_filepath.exists()
 
         # Load the model
         loaded_result = data_handler.load(
-            ComponentResult, self.test_filename, directory=self.temp_dir
+            ComponentResult,
+            self.test_filename,
+            directory=self.temp_dir,
         )
 
         # Verify loaded model matches original
@@ -62,13 +66,16 @@ class TestDataHandler(unittest.TestCase):
 
         # Save the dictionary
         success = data_handler.save(
-            test_data, self.test_filename, directory=self.temp_dir
+            test_data,
+            self.test_filename,
+            directory=self.temp_dir,
         )
         assert success
 
         # Load as a dictionary
         loaded_data = data_handler.load_dict(
-            self.test_filename, directory=self.temp_dir
+            self.test_filename,
+            directory=self.temp_dir,
         )
 
         # Verify loaded data matches original
@@ -80,13 +87,16 @@ class TestDataHandler(unittest.TestCase):
 
         # Save the list
         success = data_handler.save(
-            test_data, self.test_filename, directory=self.temp_dir
+            test_data,
+            self.test_filename,
+            directory=self.temp_dir,
         )
         assert success
 
         # Load as a list
         loaded_data = data_handler.load_list(
-            self.test_filename, directory=self.temp_dir
+            self.test_filename,
+            directory=self.temp_dir,
         )
 
         # Verify loaded data matches original
@@ -97,7 +107,9 @@ class TestDataHandler(unittest.TestCase):
         # Try to load a nonexistent file - should raise FileNotFoundError
         with pytest.raises(FileNotFoundError, match="File not found"):
             data_handler.load(
-                ComponentResult, "nonexistent.json", directory=self.temp_dir
+                ComponentResult,
+                "nonexistent.json",
+                directory=self.temp_dir,
             )
 
     def test_handling_invalid_json(self) -> None:
@@ -109,5 +121,7 @@ class TestDataHandler(unittest.TestCase):
         # Try to load the invalid file - should raise MigrationError
         with pytest.raises(MigrationError, match="Failed to load data"):
             data_handler.load(
-                ComponentResult, self.test_filename, directory=self.temp_dir
+                ComponentResult,
+                self.test_filename,
+                directory=self.temp_dir,
             )

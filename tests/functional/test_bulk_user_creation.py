@@ -44,7 +44,8 @@ def jira_client() -> MagicMock:
 
 @pytest.fixture
 def user_migration(
-    jira_client: MagicMock, op_client: OpenProjectClient
+    jira_client: MagicMock,
+    op_client: OpenProjectClient,
 ) -> UserMigration:
     # Create a user migration instance with mocked clients
     return UserMigration(
@@ -54,7 +55,8 @@ def user_migration(
 
 
 def test_create_users_in_bulk(
-    op_client: OpenProjectClient, mock_rails_client: MagicMock
+    op_client: OpenProjectClient,
+    mock_rails_client: MagicMock,
 ) -> None:
     """Test creating multiple users in bulk."""
     # Mock the rails_client._send_command_to_tmux method (used by execute_query)
@@ -167,10 +169,14 @@ def test_user_migration_create_missing_users(
 
     # Mock extract methods to avoid file operations
     monkeypatch.setattr(
-        user_migration, "extract_jira_users", Mock(return_value=jira_users)
+        user_migration,
+        "extract_jira_users",
+        Mock(return_value=jira_users),
     )
     monkeypatch.setattr(
-        user_migration, "extract_openproject_users", Mock(return_value=[])
+        user_migration,
+        "extract_openproject_users",
+        Mock(return_value=[]),
     )
     monkeypatch.setattr(user_migration, "_save_to_json", Mock())
 
@@ -238,7 +244,9 @@ def test_user_migration_create_missing_users_no_unmatched(
 
     # Mock create_user_mapping to return matched users
     monkeypatch.setattr(
-        user_migration, "create_user_mapping", MagicMock(return_value=user_mapping)
+        user_migration,
+        "create_user_mapping",
+        MagicMock(return_value=user_mapping),
     )
 
     # Set user_mapping directly
@@ -386,12 +394,13 @@ def test_user_migration_create_missing_users_with_existing_email(
 
 
 def test_bulk_creation_error_handling(
-    monkeypatch: pytest.MonkeyPatch, op_client: OpenProjectClient
+    monkeypatch: pytest.MonkeyPatch,
+    op_client: OpenProjectClient,
 ) -> None:
     """Test handling of errors when creating users in bulk."""
     # Mock rails_client._send_command_to_tmux to fail
     mock_send_command_to_tmux = MagicMock(
-        side_effect=Exception("Failed to create users in bulk.")
+        side_effect=Exception("Failed to create users in bulk."),
     )
     monkeypatch.setattr(
         op_client.rails_client,
@@ -406,7 +415,7 @@ def test_bulk_creation_error_handling(
             "firstname": "User",
             "lastname": "One",
             "email": "user1@example.com",
-        }
+        },
     ]
 
     # Call method with error expected

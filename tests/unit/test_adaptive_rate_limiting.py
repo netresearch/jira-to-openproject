@@ -15,7 +15,7 @@ from src.utils.rate_limiter import (
 class TestAdaptiveRateLimiting(unittest.TestCase):
     """Test suite for adaptive rate limiting functionality."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         """Set up test fixtures."""
         self.config = RateLimitConfig(
             strategy=RateLimitStrategy.ADAPTIVE,
@@ -26,7 +26,7 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
         )
         self.rate_limiter = RateLimiter(self.config)
 
-    def test_basic_rate_limiting(self):
+    def test_basic_rate_limiting(self) -> None:
         """Test basic rate limiting functionality."""
         # Should not raise any exceptions
         self.rate_limiter.wait_if_needed("test_endpoint")
@@ -37,7 +37,7 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
         # Should still work
         self.rate_limiter.wait_if_needed("test_endpoint")
 
-    def test_429_error_handling(self):
+    def test_429_error_handling(self) -> None:
         """Test handling of 429 rate limit exceeded errors."""
         # Mock time.sleep to avoid actual delays in tests
         with patch("time.sleep") as mock_sleep:
@@ -48,11 +48,9 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
             mock_sleep.assert_called()
 
             # Current delay should be increased
-            self.assertGreater(
-                self.rate_limiter.state.current_delay, self.config.base_delay
-            )
+            assert self.rate_limiter.state.current_delay > self.config.base_delay
 
-    def test_adaptive_delay_adjustment(self):
+    def test_adaptive_delay_adjustment(self) -> None:
         """Test that delay adapts based on response times."""
         # Record fast responses
         for _ in range(5):
@@ -72,23 +70,23 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
 
         # With adaptive strategy, delays should adjust
         # This is a basic test - actual behavior depends on threshold
-        self.assertIsInstance(fast_delay, float)
-        self.assertIsInstance(slow_delay, float)
+        assert isinstance(fast_delay, float)
+        assert isinstance(slow_delay, float)
 
-    def test_circuit_breaker(self):
+    def test_circuit_breaker(self) -> None:
         """Test circuit breaker functionality."""
         # Record multiple server errors
-        for i in range(6):  # Exceed circuit breaker threshold
+        for _i in range(6):  # Exceed circuit breaker threshold
             self.rate_limiter.record_response(0.5, 500)
 
         # Circuit breaker should be open
-        self.assertTrue(self.rate_limiter.state.circuit_breaker_open)
+        assert self.rate_limiter.state.circuit_breaker_open
 
         # Reset should close circuit breaker
         self.rate_limiter.reset()
-        self.assertFalse(self.rate_limiter.state.circuit_breaker_open)
+        assert not self.rate_limiter.state.circuit_breaker_open
 
-    def test_rate_limit_header_parsing(self):
+    def test_rate_limit_header_parsing(self) -> None:
         """Test parsing of rate limit headers."""
         headers = {"X-RateLimit-Remaining": "10", "X-RateLimit-Limit": "100"}
 
@@ -96,33 +94,35 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
         self.rate_limiter.record_response(0.3, 200, headers)
 
         # Should not raise any exceptions
-        self.assertEqual(self.rate_limiter.state.consecutive_failures, 0)
+        assert self.rate_limiter.state.consecutive_failures == 0
 
-    def test_burst_strategy(self):
+    def test_burst_strategy(self) -> None:
         """Test burst rate limiting strategy."""
         config = RateLimitConfig(
-            strategy=RateLimitStrategy.BURST, burst_capacity=5, burst_recovery_rate=1.0
+            strategy=RateLimitStrategy.BURST,
+            burst_capacity=5,
+            burst_recovery_rate=1.0,
         )
         burst_limiter = RateLimiter(config)
 
         # Should allow burst requests
-        for i in range(5):
+        for _i in range(5):
             burst_limiter.wait_if_needed("test")
 
         # Should have consumed burst tokens
-        self.assertLess(burst_limiter.state.burst_tokens, 5)
+        assert burst_limiter.state.burst_tokens < 5
 
-    def test_factory_functions(self):
+    def test_factory_functions(self) -> None:
         """Test factory functions for different API types."""
         jira_limiter = create_jira_rate_limiter()
-        self.assertIsInstance(jira_limiter, RateLimiter)
-        self.assertEqual(jira_limiter.config.strategy, RateLimitStrategy.ADAPTIVE)
+        assert isinstance(jira_limiter, RateLimiter)
+        assert jira_limiter.config.strategy == RateLimitStrategy.ADAPTIVE
 
         op_limiter = create_openproject_rate_limiter()
-        self.assertIsInstance(op_limiter, RateLimiter)
-        self.assertEqual(op_limiter.config.strategy, RateLimitStrategy.BURST)
+        assert isinstance(op_limiter, RateLimiter)
+        assert op_limiter.config.strategy == RateLimitStrategy.BURST
 
-    def test_stats_collection(self):
+    def test_stats_collection(self) -> None:
         """Test statistics collection."""
         # Record some responses
         self.rate_limiter.record_response(0.3, 200)
@@ -141,12 +141,12 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
         ]
 
         for key in expected_keys:
-            self.assertIn(key, stats)
+            assert key in stats
 
         # Should have calculated average response time
-        self.assertGreater(stats["avg_response_time"], 0)
+        assert stats["avg_response_time"] > 0
 
-    def test_retry_after_header(self):
+    def test_retry_after_header(self) -> None:
         """Test handling of Retry-After header."""
         with patch("time.sleep") as mock_sleep:
             headers = {"Retry-After": "2"}
@@ -157,10 +157,12 @@ class TestAdaptiveRateLimiting(unittest.TestCase):
             # Should have slept for the retry-after duration
             mock_sleep.assert_called_with(2.0)
 
-    def test_exponential_backoff(self):
+    def test_exponential_backoff(self) -> None:
         """Test exponential backoff strategy."""
         config = RateLimitConfig(
-            strategy=RateLimitStrategy.EXPONENTIAL, base_delay=0.1, exponential_base=2.0
+            strategy=RateLimitStrategy.EXPONENTIAL,
+            base_delay=0.1,
+            exponential_base=2.0,
         )
         exp_limiter = RateLimiter(config)
 

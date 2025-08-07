@@ -4,6 +4,7 @@
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Never
 from unittest.mock import Mock
 
 import pytest
@@ -101,7 +102,7 @@ class TestSelectiveUpdateManager:
             metadata={"total_changes": 3},
         )
 
-    def test_initialization(self, temp_dir, mock_clients, mock_state_manager):
+    def test_initialization(self, temp_dir, mock_clients, mock_state_manager) -> None:
         """Test SelectiveUpdateManager initialization."""
         jira_client, op_client = mock_clients
 
@@ -127,7 +128,7 @@ class TestSelectiveUpdateManager:
         assert "projects" in manager._update_strategies
         assert "customfields" in manager._update_strategies
 
-    def test_default_strategies_initialization(self, manager):
+    def test_default_strategies_initialization(self, manager) -> None:
         """Test that default update strategies are properly initialized."""
         strategies = manager.get_registered_strategies()
 
@@ -156,7 +157,7 @@ class TestSelectiveUpdateManager:
         assert customfields_strategy["priority"] == 7
         assert customfields_strategy["depends_on"] == []
 
-    def test_register_update_strategy(self, manager):
+    def test_register_update_strategy(self, manager) -> None:
         """Test registering a custom update strategy."""
         custom_strategy = UpdateStrategy(
             entity_type="issues",
@@ -174,7 +175,7 @@ class TestSelectiveUpdateManager:
         assert "issues" in strategies
         assert strategies["issues"] == custom_strategy
 
-    def test_analyze_changes(self, manager, sample_change_report):
+    def test_analyze_changes(self, manager, sample_change_report) -> None:
         """Test analyzing changes to create an update plan."""
         update_plan = manager.analyze_changes(sample_change_report)
 
@@ -202,7 +203,7 @@ class TestSelectiveUpdateManager:
         assert create_user_op["priority"] == 8
         assert create_user_op["jira_data"]["displayName"] == "John Doe"
 
-    def test_analyze_changes_no_strategies(self, manager, sample_change_report):
+    def test_analyze_changes_no_strategies(self, manager, sample_change_report) -> None:
         """Test analyzing changes when no strategies are registered for some entity types."""
         # Remove all strategies except users
         manager._update_strategies = {"users": manager._update_strategies["users"]}
@@ -215,7 +216,7 @@ class TestSelectiveUpdateManager:
         operations = update_plan["operations"]
         assert all(op["entity_type"] == "users" for op in operations)
 
-    def test_resolve_dependency_order(self, manager):
+    def test_resolve_dependency_order(self, manager) -> None:
         """Test dependency order resolution."""
         # Add custom strategies with dependencies
         manager.register_update_strategy(
@@ -227,7 +228,7 @@ class TestSelectiveUpdateManager:
                 depends_on=["projects", "customfields"],
                 batch_size=10,
                 priority=5,
-            )
+            ),
         )
 
         manager.register_update_strategy(
@@ -239,7 +240,7 @@ class TestSelectiveUpdateManager:
                 depends_on=[],
                 batch_size=20,
                 priority=6,
-            )
+            ),
         )
 
         entity_types = ["issues", "projects", "users", "customfields", "statuses"]
@@ -255,7 +256,7 @@ class TestSelectiveUpdateManager:
         assert projects_idx < issues_idx  # projects before issues
         assert customfields_idx < issues_idx  # customfields before issues
 
-    def test_estimate_plan_duration(self, manager):
+    def test_estimate_plan_duration(self, manager) -> None:
         """Test plan duration estimation."""
         operations = [
             UpdateOperation(
@@ -299,7 +300,7 @@ class TestSelectiveUpdateManager:
         assert isinstance(duration, int)
         assert duration >= 4  # Should be at least base time
 
-    def test_execute_update_plan_dry_run(self, manager, sample_change_report):
+    def test_execute_update_plan_dry_run(self, manager, sample_change_report) -> None:
         """Test executing an update plan in dry-run mode."""
         update_plan = manager.analyze_changes(sample_change_report)
 
@@ -316,7 +317,7 @@ class TestSelectiveUpdateManager:
         assert result["total_operations"] == 3
         assert len(result["errors"]) == 0
 
-    def test_execute_update_plan_actual(self, manager, sample_change_report):
+    def test_execute_update_plan_actual(self, manager, sample_change_report) -> None:
         """Test executing an update plan with actual operations."""
         update_plan = manager.analyze_changes(sample_change_report)
 
@@ -328,12 +329,13 @@ class TestSelectiveUpdateManager:
         assert result["operations_failed"] == 0
         assert result["total_operations"] == 3
 
-    def test_execute_operation_batch_error_handling(self, manager):
+    def test_execute_operation_batch_error_handling(self, manager) -> None:
         """Test error handling during operation batch execution."""
 
         # Create a strategy with a failing handler
-        def failing_handler(data):
-            raise Exception("Test error")
+        def failing_handler(data) -> Never:
+            msg = "Test error"
+            raise Exception(msg)
 
         strategy = UpdateStrategy(
             entity_type="test",
@@ -359,7 +361,7 @@ class TestSelectiveUpdateManager:
                 openproject_data=None,
                 depends_on=[],
                 metadata={},
-            )
+            ),
         ]
 
         result = manager._execute_operations_for_type("test", operations, dry_run=False)
@@ -369,7 +371,7 @@ class TestSelectiveUpdateManager:
         assert result["completed"] == 0
         assert len(result["errors"]) > 0
 
-    def test_save_and_load_update_plan(self, manager, sample_change_report):
+    def test_save_and_load_update_plan(self, manager, sample_change_report) -> None:
         """Test saving and loading update plans."""
         update_plan = manager.analyze_changes(sample_change_report)
         plan_id = update_plan["plan_id"]
@@ -385,7 +387,7 @@ class TestSelectiveUpdateManager:
         assert loaded_plan["total_operations"] == update_plan["total_operations"]
         assert loaded_plan["entity_types"] == update_plan["entity_types"]
 
-    def test_save_and_load_update_result(self, manager, temp_dir):
+    def test_save_and_load_update_result(self, manager, temp_dir) -> None:
         """Test saving and loading update results."""
         result = UpdateResult(
             plan_id="test_plan",
@@ -412,17 +414,17 @@ class TestSelectiveUpdateManager:
         assert loaded_result["operations_completed"] == 5
         assert loaded_result["status"] == "completed"
 
-    def test_load_nonexistent_plan(self, manager):
+    def test_load_nonexistent_plan(self, manager) -> None:
         """Test loading a non-existent update plan."""
         result = manager.load_update_plan("nonexistent_plan")
         assert result is None
 
-    def test_load_nonexistent_result(self, manager):
+    def test_load_nonexistent_result(self, manager) -> None:
         """Test loading a non-existent update result."""
         result = manager.load_update_result("nonexistent_plan")
         assert result is None
 
-    def test_performance_metrics(self, manager):
+    def test_performance_metrics(self, manager) -> None:
         """Test performance metrics tracking."""
         initial_metrics = manager.get_performance_metrics()
         assert isinstance(initial_metrics, dict)
@@ -435,7 +437,7 @@ class TestSelectiveUpdateManager:
         assert reset_metrics["api_calls_made"] == 0
         assert reset_metrics["entities_processed"] == 0
 
-    def test_entity_mapping_registration(self, manager, mock_state_manager):
+    def test_entity_mapping_registration(self, manager, mock_state_manager) -> None:
         """Test entity mapping registration after successful operations."""
         operation = UpdateOperation(
             operation_id="op1",
@@ -463,27 +465,33 @@ class TestSelectiveUpdateManager:
         assert call_args["openproject_entity_id"] == "123"
         assert call_args["migration_component"] == "SelectiveUpdateManager"
 
-    def test_placeholder_handlers(self, manager):
+    def test_placeholder_handlers(self, manager) -> None:
         """Test that placeholder handlers work correctly."""
         # Set up mock migration instances
         mock_user_migration = Mock()
         mock_user_migration.process_single_user.return_value = {"openproject_id": "123"}
         mock_user_migration.update_user_in_openproject.return_value = True
-        
+
         mock_project_migration = Mock()
-        mock_project_migration.create_project.return_value = {"id": "proj123", "created": True}
-        mock_project_migration.update_project.return_value = {"id": "proj123", "updated": True}
-        
+        mock_project_migration.create_project.return_value = {
+            "id": "proj123",
+            "created": True,
+        }
+        mock_project_migration.update_project.return_value = {
+            "id": "proj123",
+            "updated": True,
+        }
+
         manager._migration_instances = {
             "users": mock_user_migration,
-            "projects": mock_project_migration
+            "projects": mock_project_migration,
         }
-        
+
         # Set up state manager to return proper mapping for updates
         manager.state_manager.get_entity_mapping.return_value = {
-            "openproject_entity_id": "123"
+            "openproject_entity_id": "123",
         }
-        
+
         user_data = {"displayName": "Test User", "email": "test@example.com"}
 
         # Test create handler
@@ -507,7 +515,7 @@ class TestSelectiveUpdateManager:
         manager._create_project = Mock(return_value={"id": "proj123", "created": True})
         manager._update_project = Mock(return_value={"id": "proj123", "updated": True})
         manager._delete_project = Mock(return_value=True)
-        
+
         assert manager._create_project(project_data) is not None
         assert manager._update_project(project_data, {}) is not None
         assert manager._delete_project(project_data) is True
@@ -517,7 +525,7 @@ class TestSelectiveUpdateManager:
         assert manager._update_custom_field(field_data, {}) is not None
         assert manager._delete_custom_field(field_data) is True
 
-    def test_empty_change_report(self, manager):
+    def test_empty_change_report(self, manager) -> None:
         """Test handling empty change reports."""
         empty_report = ChangeReport(
             entity_type="users",
@@ -539,7 +547,7 @@ class TestSelectiveUpdateManager:
         assert result["status"] == "completed"
         assert result["operations_completed"] == 0
 
-    def test_update_settings_propagation(self, manager, sample_change_report):
+    def test_update_settings_propagation(self, manager, sample_change_report) -> None:
         """Test that update settings are properly propagated."""
         custom_settings = {
             "batch_mode": True,

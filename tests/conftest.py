@@ -24,28 +24,32 @@ def pytest_configure(config: Config) -> None:
     config.addinivalue_line("markers", "unit: mark a test as a unit test")
     config.addinivalue_line("markers", "functional: mark a test as a functional test")
     config.addinivalue_line(
-        "markers", "integration: mark a test as an integration test"
+        "markers",
+        "integration: mark a test as an integration test",
     )
     config.addinivalue_line("markers", "end_to_end: mark a test as an end-to-end test")
     config.addinivalue_line("markers", "slow: mark a test as slow-running")
     config.addinivalue_line(
-        "markers", "requires_docker: test requires Docker to be available"
+        "markers",
+        "requires_docker: test requires Docker to be available",
     )
     config.addinivalue_line(
-        "markers", "requires_ssh: test requires SSH connection to be available"
+        "markers",
+        "requires_ssh: test requires SSH connection to be available",
     )
     config.addinivalue_line(
-        "markers", "requires_rails: test requires Rails console to be available"
+        "markers",
+        "requires_rails: test requires Rails console to be available",
     )
 
 
-def pytest_addoption(parser):
+def pytest_addoption(parser) -> None:
     """Add custom command line options."""
     parser.addoption(
         "--live-ssh",
         action="store_true",
         default=False,
-        help="Enable real SSH connections for integration tests (default: mock SSH for speed)"
+        help="Enable real SSH connections for integration tests (default: mock SSH for speed)",
     )
 
 
@@ -58,6 +62,7 @@ def _is_test_environment() -> bool:
 # Cache for environment file loading to avoid repeated disk I/O
 _env_cache = {}
 
+
 def _load_env_file_cached(file_path: str) -> dict:
     """Load environment file with caching to avoid repeated disk I/O."""
     if file_path not in _env_cache:
@@ -66,14 +71,23 @@ def _load_env_file_cached(file_path: str) -> dict:
             temp_env = {}
             load_dotenv(file_path, override=False)
             # Capture the loaded values, excluding sensitive keys
-            sensitive_keys = {'*_PASSWORD', '*_SECRET', '*_KEY', '*_TOKEN', 'SSH_PRIVATE_KEY'}
+            sensitive_keys = {
+                "*_PASSWORD",
+                "*_SECRET",
+                "*_KEY",
+                "*_TOKEN",
+                "SSH_PRIVATE_KEY",
+            }
             _env_cache[file_path] = {
-                k: v for k, v in os.environ.items() 
-                if k not in temp_env and not any(sensitive in k.upper() for sensitive in sensitive_keys)
+                k: v
+                for k, v in os.environ.items()
+                if k not in temp_env
+                and not any(sensitive in k.upper() for sensitive in sensitive_keys)
             }
         else:
             _env_cache[file_path] = {}
     return _env_cache[file_path]
+
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_environment() -> Generator[None, None, None]:
@@ -224,21 +238,21 @@ def mock_op_client() -> OpenProjectClient:
 @pytest.fixture
 def ssh_client(request) -> Generator[SSHClient, None, None]:
     """Create an SSH client instance.
-    
+
     By default, returns a mock SSH client to eliminate network overhead in unit tests.
     Use --live-ssh flag to enable real SSH connections for integration tests.
     """
     # Check if --live-ssh flag is set
     live_ssh = request.config.getoption("--live-ssh", default=False)
-    
+
     if not live_ssh:
         # Return mock SSH client for unit tests (fast execution)
         yield cast("SSHClient", MagicMock(spec=SSHClient))
         return
-    
+
     # Only create real client if the required environment variables are set
     if not os.environ.get("J2O_OPENPROJECT_SERVER") or not os.environ.get(
-        "J2O_OPENPROJECT_USER"
+        "J2O_OPENPROJECT_USER",
     ):
         pytest.skip("Required SSH environment variables not set for live SSH")
 
@@ -263,7 +277,10 @@ class MonkeypatchHelpers:
 
     @staticmethod
     def mock_method_return_value(
-        monkeypatch: pytest.MonkeyPatch, obj: object, method_name: str, return_value
+        monkeypatch: pytest.MonkeyPatch,
+        obj: object,
+        method_name: str,
+        return_value,
     ) -> None:
         """Set a method's return value using monkeypatch.
 
@@ -275,13 +292,17 @@ class MonkeypatchHelpers:
 
         Example:
             helpers.mock_method_return_value(monkeypatch, mock_client, "get_users", [{"id": 1}])
+
         """
         mock_method = MagicMock(return_value=return_value)
         monkeypatch.setattr(obj, method_name, mock_method)
 
     @staticmethod
     def mock_method_side_effect(
-        monkeypatch: pytest.MonkeyPatch, obj: object, method_name: str, side_effect
+        monkeypatch: pytest.MonkeyPatch,
+        obj: object,
+        method_name: str,
+        side_effect,
     ) -> None:
         """Set a method's side effect using monkeypatch.
 
@@ -293,13 +314,17 @@ class MonkeypatchHelpers:
 
         Example:
             helpers.mock_method_side_effect(monkeypatch, mock_client, "create_user", Exception("Failed"))
+
         """
         mock_method = MagicMock(side_effect=side_effect)
         monkeypatch.setattr(obj, method_name, mock_method)
 
     @staticmethod
     def mock_class_return_value(
-        monkeypatch: pytest.MonkeyPatch, module_path: str, class_name: str, return_value
+        monkeypatch: pytest.MonkeyPatch,
+        module_path: str,
+        class_name: str,
+        return_value,
     ) -> None:
         """Set a class constructor's return value using monkeypatch.
 
@@ -311,25 +336,29 @@ class MonkeypatchHelpers:
 
         Example:
             helpers.mock_class_return_value(monkeypatch, "src.clients.jira_client", "JiraClient", mock_jira_instance)
+
         """
         mock_class = MagicMock(return_value=return_value)
         monkeypatch.setattr(f"{module_path}.{class_name}", mock_class)
 
     @staticmethod
     def mock_path_exists(
-        monkeypatch: pytest.MonkeyPatch, return_value: bool = True
+        monkeypatch: pytest.MonkeyPatch,
+        return_value: bool = True,
     ) -> None:
         """Mock os.path.exists using monkeypatch.
 
         Args:
             monkeypatch: pytest monkeypatch fixture
             return_value: Value to return for path existence checks
+
         """
         monkeypatch.setattr("os.path.exists", MagicMock(return_value=return_value))
 
     @staticmethod
     def mock_path_open(
-        monkeypatch: pytest.MonkeyPatch, read_data: str = ""
+        monkeypatch: pytest.MonkeyPatch,
+        read_data: str = "",
     ) -> MagicMock:
         """Mock file opening using monkeypatch.
 
@@ -339,6 +368,7 @@ class MonkeypatchHelpers:
 
         Returns:
             MagicMock: The mock file object for additional configuration
+
         """
         from unittest.mock import mock_open
 
@@ -356,6 +386,7 @@ class MonkeypatchHelpers:
 
         Example:
             helpers.mock_config_get(monkeypatch, {"dry_run": True, "force": False})
+
         """
 
         def config_side_effect(key: str, default=None):
@@ -379,7 +410,9 @@ class MonkeypatchHelpers:
 
     @staticmethod
     def mock_json_operations(
-        monkeypatch: pytest.MonkeyPatch, load_data: dict = None, dump_data: dict = None
+        monkeypatch: pytest.MonkeyPatch,
+        load_data: dict | None = None,
+        dump_data: dict | None = None,
     ) -> None:
         """Mock JSON load and dump operations using monkeypatch.
 
@@ -387,6 +420,7 @@ class MonkeypatchHelpers:
             monkeypatch: pytest monkeypatch fixture
             load_data: Data to return when json.load is called
             dump_data: Expected data when json.dump is called (for verification)
+
         """
         if load_data is not None:
             monkeypatch.setattr("json.load", MagicMock(return_value=load_data))
@@ -400,6 +434,7 @@ def monkeypatch_helpers() -> MonkeypatchHelpers:
 
     Returns:
         MonkeypatchHelpers: Helper class instance with standardized monkeypatch patterns
+
     """
     return MonkeypatchHelpers()
 
@@ -410,6 +445,7 @@ def project_migration(mock_jira_client, mock_op_client):
 
     Returns:
         ProjectMigration: A ProjectMigration instance with mocked clients
+
     """
     from src.migrations.project_migration import ProjectMigration
 
@@ -422,6 +458,7 @@ def mock_jira_projects():
 
     Returns:
         list: List of mock Jira project dictionaries
+
     """
     return [
         {"key": "TEST1", "name": "Test Project 1", "description": "First test project"},

@@ -88,7 +88,11 @@ class TestTimeEntryTransformer:
             ],
         }
 
-    def test_transform_jira_work_log_success(self, transformer, sample_jira_work_log):
+    def test_transform_jira_work_log_success(
+        self,
+        transformer,
+        sample_jira_work_log,
+    ) -> None:
         """Test successful Jira work log transformation."""
         result = transformer.transform_jira_work_log(sample_jira_work_log, "TEST-123")
 
@@ -112,7 +116,7 @@ class TestTimeEntryTransformer:
         assert result["_meta"]["jira_issue_key"] == "TEST-123"
         assert result["_meta"]["jira_author"] == "john.doe"
 
-    def test_transform_jira_work_log_with_rich_text_comment(self, transformer):
+    def test_transform_jira_work_log_with_rich_text_comment(self, transformer) -> None:
         """Test Jira work log with rich text comment."""
         work_log = {
             "id": "12345",
@@ -131,7 +135,7 @@ class TestTimeEntryTransformer:
                             },
                             {"type": "text", "text": " feature"},
                         ],
-                    }
+                    },
                 ],
             },
             "started": "2023-12-01T10:30:00.000+0000",
@@ -142,7 +146,11 @@ class TestTimeEntryTransformer:
         # The text extraction adds spaces but cleans up doubles
         assert "Working on authentication feature" in result["comment"]
 
-    def test_transform_tempo_work_log_success(self, transformer, sample_tempo_work_log):
+    def test_transform_tempo_work_log_success(
+        self,
+        transformer,
+        sample_tempo_work_log,
+    ) -> None:
         """Test successful Tempo work log transformation."""
         result = transformer.transform_tempo_work_log(sample_tempo_work_log)
 
@@ -167,8 +175,10 @@ class TestTimeEntryTransformer:
         assert "tempo_attributes" in result["_meta"]
 
     def test_transform_jira_work_log_unmapped_user(
-        self, transformer, sample_jira_work_log
-    ):
+        self,
+        transformer,
+        sample_jira_work_log,
+    ) -> None:
         """Test Jira work log with unmapped user."""
         sample_jira_work_log["author"]["name"] = "unknown.user"
 
@@ -179,18 +189,25 @@ class TestTimeEntryTransformer:
         assert result["_meta"]["jira_author"] == "unknown.user"
 
     def test_transform_jira_work_log_unmapped_work_package(
-        self, transformer, sample_jira_work_log
-    ):
+        self,
+        transformer,
+        sample_jira_work_log,
+    ) -> None:
         """Test Jira work log with unmapped work package."""
         result = transformer.transform_jira_work_log(
-            sample_jira_work_log, "UNKNOWN-999"
+            sample_jira_work_log,
+            "UNKNOWN-999",
         )
 
         # Work package should not be in embedded resources
         assert "workPackage" not in result["_embedded"]
         assert result["_meta"]["jira_issue_key"] == "UNKNOWN-999"
 
-    def test_batch_transform_jira_work_logs(self, transformer, sample_jira_work_log):
+    def test_batch_transform_jira_work_logs(
+        self,
+        transformer,
+        sample_jira_work_log,
+    ) -> None:
         """Test batch transformation of Jira work logs."""
         work_logs = [
             {**sample_jira_work_log, "id": "1", "issue_key": "TEST-123"},
@@ -203,7 +220,11 @@ class TestTimeEntryTransformer:
         assert results[0]["_meta"]["jira_work_log_id"] == "1"
         assert results[1]["_meta"]["jira_work_log_id"] == "2"
 
-    def test_batch_transform_tempo_work_logs(self, transformer, sample_tempo_work_log):
+    def test_batch_transform_tempo_work_logs(
+        self,
+        transformer,
+        sample_tempo_work_log,
+    ) -> None:
         """Test batch transformation of Tempo work logs."""
         work_logs = [
             {**sample_tempo_work_log, "tempoWorklogId": 1},
@@ -216,7 +237,7 @@ class TestTimeEntryTransformer:
         assert results[0]["_meta"]["tempo_worklog_id"] == 1
         assert results[1]["_meta"]["tempo_worklog_id"] == 2
 
-    def test_parse_jira_date_formats(self, transformer):
+    def test_parse_jira_date_formats(self, transformer) -> None:
         """Test parsing various Jira date formats."""
         # Standard format
         assert (
@@ -238,7 +259,7 @@ class TestTimeEntryTransformer:
         result = transformer._parse_jira_date("invalid")
         assert len(result) == 10  # YYYY-MM-DD format
 
-    def test_detect_activity_from_comment(self, transformer):
+    def test_detect_activity_from_comment(self, transformer) -> None:
         """Test activity detection from work log comments."""
         # Test development keywords
         assert transformer._detect_activity("Working on coding the new feature") == 1
@@ -259,7 +280,7 @@ class TestTimeEntryTransformer:
             transformer._detect_activity("Some random work") == 1
         )  # default_activity_id
 
-    def test_detect_activity_from_tempo_attributes(self, transformer):
+    def test_detect_activity_from_tempo_attributes(self, transformer) -> None:
         """Test activity detection from Tempo work attributes."""
         tempo_log = {
             "description": "Some work",
@@ -274,7 +295,7 @@ class TestTimeEntryTransformer:
         activity_id = transformer._detect_activity_from_tempo(tempo_log)
         assert activity_id == 1  # Falls back to default_activity_id
 
-    def test_extract_text_from_adf(self, transformer):
+    def test_extract_text_from_adf(self, transformer) -> None:
         """Test extracting text from Atlassian Document Format."""
         adf_content = {
             "type": "doc",
@@ -290,7 +311,7 @@ class TestTimeEntryTransformer:
                         },
                         {"type": "text", "text": "!"},
                     ],
-                }
+                },
             ],
         }
 
@@ -298,7 +319,7 @@ class TestTimeEntryTransformer:
         # The method joins text parts with spaces and removes doubles
         assert result == "Hello world !"
 
-    def test_handle_tempo_specific_fields(self, transformer):
+    def test_handle_tempo_specific_fields(self, transformer) -> None:
         """Test handling of Tempo-specific fields."""
         tempo_log = {
             "billableSeconds": 3600,
@@ -317,7 +338,7 @@ class TestTimeEntryTransformer:
         assert time_entry["_meta"]["tempo_location"] == "Office"
         assert time_entry["_meta"]["tempo_attributes"]["client"] == "ACME Corp"
 
-    def test_map_custom_fields(self, transformer):
+    def test_map_custom_fields(self, transformer) -> None:
         """Test custom field mapping."""
         source_log = {
             "customField1": "value1",
@@ -337,7 +358,7 @@ class TestTimeEntryTransformer:
         assert time_entry["_meta"]["custom_fields"]["openproject_field2"] == "value2"
         assert "normalField" not in time_entry["_meta"]["custom_fields"]
 
-    def test_get_transformation_stats(self, transformer):
+    def test_get_transformation_stats(self, transformer) -> None:
         """Test transformation statistics generation."""
         transformed_entries = [
             {
@@ -367,7 +388,7 @@ class TestTimeEntryTransformer:
         assert stats["mapped_work_packages"] == 1
         assert stats["unmapped_work_packages"] == 2
 
-    def test_error_handling_in_transform_jira(self, transformer):
+    def test_error_handling_in_transform_jira(self, transformer) -> None:
         """Test handling of incomplete Jira work logs."""
         # The transformer is more robust than expected - it handles missing fields gracefully
         invalid_work_log = {"invalid": "data"}
@@ -379,7 +400,7 @@ class TestTimeEntryTransformer:
         assert result["hours"] == 0.0  # Default time
         assert result["_meta"]["jira_issue_key"] == "TEST-123"
 
-    def test_error_handling_in_transform_tempo(self, transformer):
+    def test_error_handling_in_transform_tempo(self, transformer) -> None:
         """Test handling of incomplete Tempo work logs."""
         # The transformer is more robust than expected - it handles missing fields gracefully
         invalid_tempo_log = {"invalid": "data"}
@@ -391,7 +412,11 @@ class TestTimeEntryTransformer:
         assert result["hours"] == 0.0  # Default time
         assert result["_meta"]["tempo_author"] == "unknown"
 
-    def test_batch_transform_with_failures(self, transformer, sample_jira_work_log):
+    def test_batch_transform_with_failures(
+        self,
+        transformer,
+        sample_jira_work_log,
+    ) -> None:
         """Test batch transformation handles failures gracefully."""
         work_logs = [
             {**sample_jira_work_log, "issue_key": "TEST-123"},  # Valid
@@ -404,7 +429,7 @@ class TestTimeEntryTransformer:
         # Should return 2 successful transformations, skip 1 failure
         assert len(results) == 2
 
-    def test_transformer_initialization_defaults(self):
+    def test_transformer_initialization_defaults(self) -> None:
         """Test transformer initialization with default values."""
         transformer = TimeEntryTransformer()
 
@@ -415,8 +440,10 @@ class TestTimeEntryTransformer:
         assert "development" in transformer.default_activity_mappings
 
     def test_work_log_without_issue_key_in_batch(
-        self, transformer, sample_jira_work_log
-    ):
+        self,
+        transformer,
+        sample_jira_work_log,
+    ) -> None:
         """Test batch processing skips work logs without issue key."""
         work_logs = [
             {**sample_jira_work_log},  # Missing issue_key

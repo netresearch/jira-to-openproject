@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, mock_open, patch
 
+import pytest
+
 from src.migrations.account_migration import AccountMigration
 
 
@@ -116,10 +118,10 @@ class TestAccountMigration(unittest.TestCase):
         # Mock _save_to_json to avoid actually writing to file
         with (
             patch(
-                "src.migrations.account_migration.BaseMigration._save_to_json"
+                "src.migrations.account_migration.BaseMigration._save_to_json",
             ) as mock_save,
             patch(
-                "src.migrations.account_migration.BaseMigration._load_from_json"
+                "src.migrations.account_migration.BaseMigration._load_from_json",
             ) as mock_load,
         ):
             # Return empty list for tempo_accounts.json, empty dict for others
@@ -214,7 +216,7 @@ class TestAccountMigration(unittest.TestCase):
         # Mock the JSON file loading for jira_project_mapping
         project_mapping_mock = mock_open(
             read_data=json.dumps(
-                {"PROJ1": {"openproject_id": "3"}, "PROJ2": {"openproject_id": None}}
+                {"PROJ1": {"openproject_id": "3"}, "PROJ2": {"openproject_id": None}},
             ),
         )
         # This patch will be used when loading jira_project_mapping.json
@@ -293,27 +295,27 @@ class TestAccountMigration(unittest.TestCase):
             result = migration.create_custom_field_via_rails()
 
             # Verify the result
-            self.assertEqual(result, 42)
+            assert result == 42
 
             # Capture the executed command
             executed_command = mock_op_client.execute_query.call_args[0][0]
 
             # Verify malicious code is safely escaped within %q{} literals, not executed as raw Ruby
             # The patterns should appear within %q{} but not as executable Ruby code
-            self.assertIn("%q{'; system('rm -rf /'); #}", executed_command)
-            self.assertIn("%q{test\"; puts 'HACKED'; \"}", executed_command)
+            assert "%q{'; system('rm -rf /'); #}" in executed_command
+            assert "%q{test\"; puts 'HACKED'; \"}" in executed_command
 
             # Verify that Ruby %q{} syntax is used for safe escaping
-            self.assertIn("%q{", executed_command)
-            self.assertIn("possible_values_array", executed_command)
+            assert "%q{" in executed_command
+            assert "possible_values_array" in executed_command
 
             # Verify that normal accounts are properly included
-            self.assertIn("Normal Account", executed_command)
+            assert "Normal Account" in executed_command
 
             # Verify proper escaping of special characters
             # The escaped version should be safe for Ruby execution
-            self.assertIn("\\}", executed_command)  # Escaped braces
-            self.assertIn("\\\\", executed_command)  # Escaped backslashes
+            assert "\\}" in executed_command  # Escaped braces
+            assert "\\\\" in executed_command  # Escaped backslashes
 
             # Verify dangerous patterns are not executed as raw Ruby code
             # They should only appear within safe %q{} string literals
@@ -350,13 +352,13 @@ class TestAccountMigration(unittest.TestCase):
             result = migration.create_custom_field_via_rails()
 
             # Verify the result
-            self.assertEqual(result, 42)
+            assert result == 42
 
             # Capture the executed command
             executed_command = mock_op_client.execute_query.call_args[0][0]
 
             # Verify empty array is created safely
-            self.assertIn("possible_values_array = []", executed_command)
+            assert "possible_values_array = []" in executed_command
 
     def test_associate_field_with_work_package_types_injection_prevention(self) -> None:
         """Test that associate_field_with_work_package_types validates field_id properly."""
@@ -375,8 +377,8 @@ class TestAccountMigration(unittest.TestCase):
 
         # Verify the command was executed with the validated ID
         executed_command = mock_op_client.execute_query.call_args[0][0]
-        self.assertIn("CustomField.find(42)", executed_command)
-        self.assertIn("%q{SUCCESS}", executed_command)
+        assert "CustomField.find(42)" in executed_command
+        assert "%q{SUCCESS}" in executed_command
 
     def test_associate_field_with_work_package_types_invalid_field_id(self) -> None:
         """Test that associate_field_with_work_package_types rejects invalid field_id values."""
@@ -388,30 +390,30 @@ class TestAccountMigration(unittest.TestCase):
         migration = AccountMigration(mock_jira_client, mock_op_client)
 
         # Test with malicious string field_id
-        with self.assertRaises(Exception) as context:
+        with pytest.raises(Exception) as context:
             migration.associate_field_with_work_package_types(
-                "'; system('rm -rf /'); #"
+                "'; system('rm -rf /'); #",
             )
 
-        self.assertIn("Invalid field_id provided", str(context.exception))
+        assert "Invalid field_id provided" in str(context.value)
 
         # Test with negative field_id
-        with self.assertRaises(Exception) as context:
+        with pytest.raises(Exception) as context:
             migration.associate_field_with_work_package_types(-1)
 
-        self.assertIn("must be positive integer", str(context.exception))
+        assert "must be positive integer" in str(context.value)
 
         # Test with zero field_id
-        with self.assertRaises(Exception) as context:
+        with pytest.raises(Exception) as context:
             migration.associate_field_with_work_package_types(0)
 
-        self.assertIn("must be positive integer", str(context.exception))
+        assert "must be positive integer" in str(context.value)
 
         # Test with None field_id
-        with self.assertRaises(Exception) as context:
+        with pytest.raises(Exception) as context:
             migration.associate_field_with_work_package_types(None)
 
-        self.assertIn("Invalid field_id provided", str(context.exception))
+        assert "Invalid field_id provided" in str(context.value)
 
     def test_associate_field_with_work_package_types_string_to_int_conversion(
         self,
@@ -432,7 +434,7 @@ class TestAccountMigration(unittest.TestCase):
 
         # Verify the command was executed with the converted integer
         executed_command = mock_op_client.execute_query.call_args[0][0]
-        self.assertIn("CustomField.find(42)", executed_command)
+        assert "CustomField.find(42)" in executed_command
 
     def test_ruby_escaping_comprehensive(self) -> None:
         """Test comprehensive Ruby escaping for various malicious inputs."""
@@ -465,7 +467,7 @@ class TestAccountMigration(unittest.TestCase):
             result = migration.create_custom_field_via_rails()
 
             # Verify the result
-            self.assertEqual(result, 42)
+            assert result == 42
 
             # Capture the executed command
             executed_command = mock_op_client.execute_query.call_args[0][0]
@@ -484,12 +486,9 @@ class TestAccountMigration(unittest.TestCase):
                 # They should be safely escaped within %q{} literals
                 if pattern in executed_command:
                     # If they appear, they should be within safe %q{} escaping
-                    self.assertTrue(
-                        f"%q{{{pattern}}}" in executed_command
-                        or "%q{" in executed_command
-                        and "}" in executed_command,
-                        f"Dangerous pattern '{pattern}' not properly escaped",
-                    )
+                    assert f"%q{{{pattern}}}" in executed_command or (
+                        "%q{" in executed_command and "}" in executed_command
+                    ), f"Dangerous pattern '{pattern}' not properly escaped"
 
 
 if __name__ == "__main__":

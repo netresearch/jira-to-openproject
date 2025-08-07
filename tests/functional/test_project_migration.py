@@ -204,7 +204,7 @@ class TestProjectMigration(unittest.TestCase):
 
         # Mock file reads
         mock_file.return_value.__enter__.return_value.read.return_value = json.dumps(
-            self.expected_mapping
+            self.expected_mapping,
         )
 
         # Create instance
@@ -226,10 +226,10 @@ class TestProjectMigration(unittest.TestCase):
         migration = ProjectMigration(MagicMock(), MagicMock())
         # Stub mappings
         migration.project_account_mapping = {
-            "ACMEWEB": [{"id": "42", "key": "ACC-42", "name": "Q1 Review"}]
+            "ACMEWEB": [{"id": "42", "key": "ACC-42", "name": "Q1 Review"}],
         }
         migration.account_mapping = {
-            "42": {"tempo_id": "42", "company_id": "7", "tempo_name": "Account42"}
+            "42": {"tempo_id": "42", "company_id": "7", "tempo_name": "Account42"},
         }
         migration.company_mapping = {
             "7": {
@@ -567,10 +567,11 @@ def project_migration_test_steps() -> Any:
 
 
 def test_bulk_migrate_projects_security_injection_prevention(
-    project_migration, mock_jira_projects, mock_op_client
-):
+    project_migration,
+    mock_jira_projects,
+    mock_op_client,
+) -> None:
     """Test that bulk_migrate_projects prevents Ruby code injection in create_script construction."""
-
     # Set up test data with malicious project identifiers and names
     malicious_projects = [
         {
@@ -654,9 +655,8 @@ def test_bulk_migrate_projects_security_injection_prevention(
         assert "p.save!" in script, "Should save projects"
 
 
-def test_bulk_migrate_projects_ruby_escape_function(project_migration):
+def test_bulk_migrate_projects_ruby_escape_function(project_migration) -> None:
     """Test the ruby_escape function within bulk_migrate_projects method."""
-
     # Create a test project with various special characters
     test_project = {
         "key": "TEST",
@@ -707,9 +707,8 @@ def test_bulk_migrate_projects_ruby_escape_function(project_migration):
     assert "\\rand" in executed_script, "Carriage returns should be escaped"
 
 
-def test_bulk_migrate_projects_empty_and_none_values(project_migration):
+def test_bulk_migrate_projects_empty_and_none_values(project_migration) -> None:
     """Test bulk_migrate_projects handles empty and None values correctly."""
-
     test_project = {
         "key": "TEST",
         "name": "",  # Empty name

@@ -14,7 +14,7 @@ from src.utils.state_manager import StateManager
 class MockBaseMigration(BaseMigration):
     """Test migration class for testing state management integration."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.test_entities = [
             {"id": "entity1", "name": "Test Entity 1"},
@@ -41,7 +41,7 @@ class MockBaseMigration(BaseMigration):
 class TestBaseMigrationStateIntegration:
     """Test StateManager integration with BaseMigration."""
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         """Set up test fixtures."""
         # Create temporary directories
         self.temp_dir = tempfile.mkdtemp()
@@ -57,13 +57,13 @@ class TestBaseMigrationStateIntegration:
         self.state_manager = StateManager(state_dir=self.state_dir)
         self.change_detector = ChangeDetector(snapshot_dir=self.data_dir)
 
-    def teardown_method(self):
+    def teardown_method(self) -> None:
         """Clean up test fixtures."""
         import shutil
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_state_manager_dependency_injection(self):
+    def test_state_manager_dependency_injection(self) -> None:
         """Test that StateManager is properly injected into BaseMigration."""
         migration = MockBaseMigration(
             jira_client=self.jira_client,
@@ -78,7 +78,7 @@ class TestBaseMigrationStateIntegration:
         assert hasattr(migration, "start_migration_record")
         assert hasattr(migration, "complete_migration_record")
 
-    def test_register_entity_mapping_wrapper(self):
+    def test_register_entity_mapping_wrapper(self) -> None:
         """Test the register_entity_mapping wrapper method."""
         migration = MockBaseMigration(
             jira_client=self.jira_client,
@@ -103,7 +103,7 @@ class TestBaseMigrationStateIntegration:
         assert retrieved["openproject_entity_id"] == "456"
         assert retrieved["mapped_by"] == "MockBaseMigration"
 
-    def test_migration_record_lifecycle(self):
+    def test_migration_record_lifecycle(self) -> None:
         """Test migration record start and complete lifecycle."""
         migration = MockBaseMigration(
             jira_client=self.jira_client,
@@ -114,14 +114,18 @@ class TestBaseMigrationStateIntegration:
 
         # Start migration record
         record_id = migration.start_migration_record(
-            entity_type="projects", operation_type="migrate", entity_count=5
+            entity_type="projects",
+            operation_type="migrate",
+            entity_count=5,
         )
 
         assert isinstance(record_id, str)
 
         # Complete migration record
         migration.complete_migration_record(
-            record_id=record_id, success_count=5, error_count=0
+            record_id=record_id,
+            success_count=5,
+            error_count=0,
         )
 
         # Verify record exists in state manager
@@ -130,7 +134,7 @@ class TestBaseMigrationStateIntegration:
         assert records[0]["record_id"] == record_id
         assert records[0]["success_count"] == 5
 
-    def test_run_with_state_management_with_changes(self):
+    def test_run_with_state_management_with_changes(self) -> None:
         """Test state management workflow when changes are detected."""
         migration = MockBaseMigration(
             jira_client=self.jira_client,
@@ -148,7 +152,9 @@ class TestBaseMigrationStateIntegration:
 
             # Run migration with state management
             result = migration.run_with_state_management(
-                entity_type="test_entities", operation_type="migrate", entity_count=2
+                entity_type="test_entities",
+                operation_type="migrate",
+                entity_count=2,
             )
 
             # Verify migration was executed
@@ -158,7 +164,7 @@ class TestBaseMigrationStateIntegration:
             assert "migration_record_id" in result.details
             assert result.details["state_management"] is True
 
-    def test_run_with_state_management_no_changes(self):
+    def test_run_with_state_management_no_changes(self) -> None:
         """Test state management workflow when no changes are detected."""
         migration = MockBaseMigration(
             jira_client=self.jira_client,
@@ -173,7 +179,9 @@ class TestBaseMigrationStateIntegration:
 
             # Run migration with state management
             result = migration.run_with_state_management(
-                entity_type="test_entities", operation_type="migrate", entity_count=0
+                entity_type="test_entities",
+                operation_type="migrate",
+                entity_count=0,
             )
 
             # Verify migration was NOT executed

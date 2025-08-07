@@ -1,7 +1,7 @@
 """Tests for BaseMigration API call caching functionality in run_with_data_preservation."""
 
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -17,7 +17,7 @@ from src.utils.state_manager import StateManager
 class CachingTestMigration(BaseMigration):
     """Test migration class for API caching functionality testing."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.run_called = False
         self.run_call_count = 0
@@ -118,7 +118,10 @@ def migration_with_caching(
 class TestAPICaching:
     """Test API call caching functionality in run_with_data_preservation."""
 
-    def test_cache_reduces_api_calls_successful_migration(self, migration_with_caching):
+    def test_cache_reduces_api_calls_successful_migration(
+        self,
+        migration_with_caching,
+    ) -> None:
         """Test that caching reduces API calls during successful migration."""
         result = migration_with_caching.run_with_data_preservation(
             entity_type="issues",
@@ -147,11 +150,14 @@ class TestAPICaching:
         # cache_invalidations tracks how many types have been invalidated (issues = 1)
         assert result.details["cache_stats"]["cache_invalidations"] == 1
 
-    def test_cache_hit_behavior_without_invalidation(self, migration_with_caching):
+    def test_cache_hit_behavior_without_invalidation(
+        self,
+        migration_with_caching,
+    ) -> None:
         """Test cache hit behavior when no invalidation occurs."""
         # Create a test migration that will return no changes
         migration_with_caching.detect_changes = Mock(
-            return_value={"total_changes": 0, "changes_by_type": {}}
+            return_value={"total_changes": 0, "changes_by_type": {}},
         )
 
         result = migration_with_caching.run_with_data_preservation(
@@ -170,7 +176,10 @@ class TestAPICaching:
         # No invalidation since migration was skipped
         assert migration_with_caching.get_entities_call_count == 1
 
-    def test_cache_invalidation_triggers_fresh_calls(self, migration_with_caching):
+    def test_cache_invalidation_triggers_fresh_calls(
+        self,
+        migration_with_caching,
+    ) -> None:
         """Test that cache invalidation triggers fresh API calls."""
         result = migration_with_caching.run_with_data_preservation(
             entity_type="issues",
@@ -192,11 +201,14 @@ class TestAPICaching:
         # Verify cache statistics show invalidation occurred
         assert result.details["cache_stats"]["cache_invalidations"] == 1
 
-    def test_cache_isolation_between_migration_runs(self, migration_with_caching):
+    def test_cache_isolation_between_migration_runs(
+        self,
+        migration_with_caching,
+    ) -> None:
         """Test that cache doesn't leak between migration runs."""
         # Mock should_skip_migration to return False
         migration_with_caching.should_skip_migration = Mock(
-            return_value=(False, {"total_changes": 1, "changes_by_type": "test"})
+            return_value=(False, {"total_changes": 1, "changes_by_type": "test"}),
         )
 
         # First migration run
@@ -207,7 +219,6 @@ class TestAPICaching:
         assert result1.success is True
 
         # Reset call counter to test second run
-        first_run_calls = migration_with_caching.get_entities_call_count
         migration_with_caching.get_entities_call_count = 0
 
         # Second migration run - cache should start fresh
@@ -221,11 +232,14 @@ class TestAPICaching:
         # (cache doesn't persist between runs)
         assert migration_with_caching.get_entities_call_count == 2
 
-    def test_cache_works_correctly_during_exceptions(self, migration_with_caching):
+    def test_cache_works_correctly_during_exceptions(
+        self,
+        migration_with_caching,
+    ) -> None:
         """Test that caching works correctly when exceptions occur."""
         # Mock run() to raise an exception
         migration_with_caching.run = Mock(
-            side_effect=Exception("Test migration failure")
+            side_effect=Exception("Test migration failure"),
         )
 
         # Migration should handle the exception
@@ -240,7 +254,7 @@ class TestAPICaching:
         # should_skip_migration: cache hit (no additional call)
         assert migration_with_caching.get_entities_call_count == 1
 
-    def test_cache_with_multiple_entity_types(self, migration_with_caching):
+    def test_cache_with_multiple_entity_types(self, migration_with_caching) -> None:
         """Test cache isolation works correctly with multiple entity types."""
         # Create a spy on _get_current_entities_for_type to track calls by entity type
         original_get_entities = migration_with_caching._get_current_entities_for_type
@@ -251,12 +265,12 @@ class TestAPICaching:
             return original_get_entities(entity_type)
 
         migration_with_caching._get_current_entities_for_type = Mock(
-            side_effect=track_calls
+            side_effect=track_calls,
         )
 
         # Mock should_skip_migration to return False
         migration_with_caching.should_skip_migration = Mock(
-            return_value=(False, {"total_changes": 1, "changes_by_type": "test"})
+            return_value=(False, {"total_changes": 1, "changes_by_type": "test"}),
         )
 
         # Run migration for 'issues'
@@ -272,13 +286,13 @@ class TestAPICaching:
             call("issues"),  # after invalidation for storing states
         ]
         migration_with_caching._get_current_entities_for_type.assert_has_calls(
-            expected_calls
+            expected_calls,
         )
 
         # All calls should be for 'issues' entity type
         assert all(entity_type == "issues" for entity_type in call_log)
 
-    def test_cache_statistics_in_result_details(self, migration_with_caching):
+    def test_cache_statistics_in_result_details(self, migration_with_caching) -> None:
         """Test that cache statistics are properly included in result details."""
         result = migration_with_caching.run_with_data_preservation(
             entity_type="issues",
@@ -309,12 +323,14 @@ class TestAPICaching:
         assert cache_stats["types_cached"] >= 0
         assert cache_stats["cache_invalidations"] >= 0
 
-    def test_cache_memory_management_and_cleanup(self, migration_with_caching):
+    def test_cache_memory_management_and_cleanup(self, migration_with_caching) -> None:
         """Test cache memory management and cleanup functionality."""
         # Mock large entity lists to trigger memory management
-        large_entity_list = [{"id": f"entity_{i}", "data": "x" * 100} for i in range(2000)]
+        large_entity_list = [
+            {"id": f"entity_{i}", "data": "x" * 100} for i in range(2000)
+        ]
         migration_with_caching._get_current_entities_for_type = Mock(
-            return_value=large_entity_list
+            return_value=large_entity_list,
         )
 
         result = migration_with_caching.run_with_data_preservation(
@@ -329,14 +345,13 @@ class TestAPICaching:
         assert "total_cache_size" in cache_stats
         assert cache_stats["total_cache_size"] >= 0
 
-    def test_cache_thread_safety_simulation(self, migration_with_caching):
+    def test_cache_thread_safety_simulation(self, migration_with_caching) -> None:
         """Test cache behavior under simulated concurrent access."""
         import threading
-        import time
 
         results = []
 
-        def run_migration():
+        def run_migration() -> None:
             try:
                 result = migration_with_caching.run_with_data_preservation(
                     entity_type="concurrent_entities",
@@ -348,7 +363,7 @@ class TestAPICaching:
 
         # Create multiple threads to simulate concurrent access
         threads = []
-        for i in range(3):
+        for _i in range(3):
             thread = threading.Thread(target=run_migration)
             threads.append(thread)
 
@@ -366,7 +381,7 @@ class TestAPICaching:
             assert not isinstance(result, Exception)
             assert result.success is True
 
-    def test_cache_global_statistics_tracking(self, migration_with_caching):
+    def test_cache_global_statistics_tracking(self, migration_with_caching) -> None:
         """Test global cache statistics tracking across multiple operations."""
         # Run multiple operations to accumulate global statistics
         for i in range(3):
@@ -378,9 +393,9 @@ class TestAPICaching:
 
         # Check that global statistics are being tracked
         # Note: Global stats are class-level, so they persist across runs
-        assert hasattr(migration_with_caching, '_global_cache_stats')
+        assert hasattr(migration_with_caching, "_global_cache_stats")
 
-    def test_cache_invalidation_edge_cases(self, migration_with_caching):
+    def test_cache_invalidation_edge_cases(self, migration_with_caching) -> None:
         """Test cache invalidation edge cases and error conditions."""
         # Test invalidating non-existent entity type
         result = migration_with_caching.run_with_data_preservation(
@@ -393,7 +408,7 @@ class TestAPICaching:
 
         # Test multiple invalidations of same type
         migration_with_caching.should_skip_migration = Mock(
-            return_value=(False, {"total_changes": 1, "changes_by_type": "test"})
+            return_value=(False, {"total_changes": 1, "changes_by_type": "test"}),
         )
 
         result = migration_with_caching.run_with_data_preservation(
@@ -402,19 +417,21 @@ class TestAPICaching:
         )
         assert result.success is True
 
-    def test_cache_with_api_failures_and_retries(self, migration_with_caching):
+    def test_cache_with_api_failures_and_retries(self, migration_with_caching) -> None:
         """Test cache behavior when API calls fail and need retries."""
         # Mock API failure followed by success
         call_count = 0
+
         def failing_api_call(entity_type):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise Exception("API temporarily unavailable")
+                msg = "API temporarily unavailable"
+                raise Exception(msg)
             return [{"id": 1, "key": "TEST-1"}, {"id": 2, "key": "TEST-2"}]
 
         migration_with_caching._get_current_entities_for_type = Mock(
-            side_effect=failing_api_call
+            side_effect=failing_api_call,
         )
 
         # The method should handle API failures gracefully
@@ -427,7 +444,10 @@ class TestAPICaching:
         # Check that cache statistics still work
         assert "cache_stats" in result.details
 
-    def test_cache_with_different_migration_methods(self, migration_with_caching):
+    def test_cache_with_different_migration_methods(
+        self,
+        migration_with_caching,
+    ) -> None:
         """Test that caching works consistently across different migration methods."""
         # Test with run_with_change_detection
         result1 = migration_with_caching.run_with_change_detection(entity_type="issues")
@@ -445,27 +465,27 @@ class TestAPICaching:
             assert "cache_hits" in cache_stats
             assert "cache_misses" in cache_stats
 
-    def test_cache_configuration_constants(self, migration_with_caching):
+    def test_cache_configuration_constants(self, migration_with_caching) -> None:
         """Test that cache configuration constants are properly defined."""
         # Verify cache configuration constants exist
-        assert hasattr(migration_with_caching, 'MAX_CACHE_SIZE_PER_TYPE')
-        assert hasattr(migration_with_caching, 'MAX_TOTAL_CACHE_SIZE')
-        assert hasattr(migration_with_caching, 'CACHE_CLEANUP_THRESHOLD')
+        assert hasattr(migration_with_caching, "MAX_CACHE_SIZE_PER_TYPE")
+        assert hasattr(migration_with_caching, "MAX_TOTAL_CACHE_SIZE")
+        assert hasattr(migration_with_caching, "CACHE_CLEANUP_THRESHOLD")
 
         # Verify reasonable values
         assert migration_with_caching.MAX_CACHE_SIZE_PER_TYPE > 0
         assert migration_with_caching.MAX_TOTAL_CACHE_SIZE > 0
         assert 0 < migration_with_caching.CACHE_CLEANUP_THRESHOLD < 1
 
-    def test_cache_cleanup_behavior(self, migration_with_caching):
+    def test_cache_cleanup_behavior(self, migration_with_caching) -> None:
         """Test cache cleanup behavior when memory limits are approached."""
         # Create scenario that might trigger cleanup
         # Fill cache with multiple entity types
-        entity_types = ['type_a', 'type_b', 'type_c', 'type_d', 'type_e']
+        entity_types = ["type_a", "type_b", "type_c", "type_d", "type_e"]
 
         for entity_type in entity_types:
             migration_with_caching._get_current_entities_for_type = Mock(
-                return_value=[{"id": i, "data": "x" * 50} for i in range(200)]
+                return_value=[{"id": i, "data": "x" * 50} for i in range(200)],
             )
 
             result = migration_with_caching.run_with_data_preservation(
@@ -479,14 +499,16 @@ class TestAPICaching:
         assert "memory_cleanups" in cache_stats
         # memory_cleanups might be 0 if cache didn't reach threshold
 
-    def test_cache_performance_under_load(self, migration_with_caching):
+    def test_cache_performance_under_load(self, migration_with_caching) -> None:
         """Test cache performance characteristics under load."""
         import time
 
         # Test with large entity set
-        large_entities = [{"id": i, "key": f"TEST-{i}", "data": f"data_{i}"} for i in range(1000)]
+        large_entities = [
+            {"id": i, "key": f"TEST-{i}", "data": f"data_{i}"} for i in range(1000)
+        ]
         migration_with_caching._get_current_entities_for_type = Mock(
-            return_value=large_entities
+            return_value=large_entities,
         )
 
         start_time = time.time()
@@ -497,7 +519,7 @@ class TestAPICaching:
             analyze_conflicts=True,
         )
 
-        first_call_time = time.time() - start_time
+        time.time() - start_time
 
         # Reset for second call
         migration_with_caching.get_entities_call_count = 0
@@ -509,7 +531,7 @@ class TestAPICaching:
             analyze_conflicts=True,
         )
 
-        second_call_time = time.time() - start_time
+        time.time() - start_time
 
         # Both should succeed
         assert result1.success is True
@@ -519,17 +541,22 @@ class TestAPICaching:
         assert "cache_stats" in result1.details
         assert "cache_stats" in result2.details
 
-    def test_cache_entity_data_integrity(self, migration_with_caching):
+    def test_cache_entity_data_integrity(self, migration_with_caching) -> None:
         """Test that cached entity data maintains integrity."""
         # Set up specific test data
         test_entities = [
             {"id": 1, "key": "TEST-1", "summary": "Test Issue 1", "status": "Open"},
             {"id": 2, "key": "TEST-2", "summary": "Test Issue 2", "status": "Closed"},
-            {"id": 3, "key": "TEST-3", "summary": "Test Issue 3", "status": "In Progress"},
+            {
+                "id": 3,
+                "key": "TEST-3",
+                "summary": "Test Issue 3",
+                "status": "In Progress",
+            },
         ]
 
         migration_with_caching._get_current_entities_for_type = Mock(
-            return_value=test_entities
+            return_value=test_entities,
         )
 
         result = migration_with_caching.run_with_data_preservation(
@@ -544,7 +571,7 @@ class TestAPICaching:
         cache_stats = result.details["cache_stats"]
         assert cache_stats["types_cached"] >= 1
 
-    def test_cache_with_empty_entity_lists(self, migration_with_caching):
+    def test_cache_with_empty_entity_lists(self, migration_with_caching) -> None:
         """Test cache behavior with empty entity lists."""
         # Mock empty entity list
         migration_with_caching._get_current_entities_for_type = Mock(return_value=[])
@@ -561,7 +588,7 @@ class TestAPICaching:
         cache_stats = result.details["cache_stats"]
         assert cache_stats["types_cached"] >= 0
 
-    def test_cache_statistics_accumulation(self, migration_with_caching):
+    def test_cache_statistics_accumulation(self, migration_with_caching) -> None:
         """Test that cache statistics properly accumulate across operations."""
         # Run first operation
         result1 = migration_with_caching.run_with_data_preservation(
@@ -582,9 +609,19 @@ class TestAPICaching:
         # Both should have cache statistics
         for result in [result1, result2]:
             cache_stats = result.details["cache_stats"]
-            assert all(stat in cache_stats for stat in [
-                "cache_hits", "cache_misses", "types_cached", "cache_invalidations"
-            ])
+            assert all(
+                stat in cache_stats
+                for stat in [
+                    "cache_hits",
+                    "cache_misses",
+                    "types_cached",
+                    "cache_invalidations",
+                ]
+            )
 
             # All statistics should be non-negative
-            assert all(cache_stats[stat] >= 0 for stat in cache_stats if isinstance(cache_stats[stat], int)) 
+            assert all(
+                cache_stats[stat] >= 0
+                for stat in cache_stats
+                if isinstance(cache_stats[stat], int)
+            )

@@ -5,15 +5,12 @@ ensuring all components work together correctly.
 """
 
 import json
-import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.migration import create_backup, run_migration
 from src.models.component_results import ComponentResult
 
@@ -22,67 +19,123 @@ def configure_comprehensive_mocks(mock_jira, mock_op):
     """Configure comprehensive mocks for all migration components."""
     # Jira user data
     jira_users = [
-        {"accountId": f"user{i}", "displayName": f"User {i}", "emailAddress": f"user{i}@example.com", "active": True}
+        {
+            "accountId": f"user{i}",
+            "displayName": f"User {i}",
+            "emailAddress": f"user{i}@example.com",
+            "active": True,
+        }
         for i in range(1, 431)  # 430 users
     ]
-    
+
     # OpenProject user data (only one exists)
-    op_users = [{"id": 1, "login": "admin", "firstname": "Admin", "lastname": "User", "mail": "admin@example.com"}]
-    
+    op_users = [
+        {
+            "id": 1,
+            "login": "admin",
+            "firstname": "Admin",
+            "lastname": "User",
+            "mail": "admin@example.com",
+        },
+    ]
+
     # Jira project data
     jira_projects = [
-        {"id": "10001", "key": "TEST", "name": "Test Project", "description": "A test project", "lead": {"accountId": "user1"}},
-        {"id": "10002", "key": "BAD';DROP TABLE projects;--", "name": "Evil Project", "description": "SQL injection test"},
-        {"id": "10003", "key": "TEST'; exit 1; echo 'injection", "name": "Command injection test"},
-        {"id": "10004", "key": "EVIL#{`rm -rf /`}", "name": "Code injection test"}
+        {
+            "id": "10001",
+            "key": "TEST",
+            "name": "Test Project",
+            "description": "A test project",
+            "lead": {"accountId": "user1"},
+        },
+        {
+            "id": "10002",
+            "key": "BAD';DROP TABLE projects;--",
+            "name": "Evil Project",
+            "description": "SQL injection test",
+        },
+        {
+            "id": "10003",
+            "key": "TEST'; exit 1; echo 'injection",
+            "name": "Command injection test",
+        },
+        {"id": "10004", "key": "EVIL#{`rm -rf /`}", "name": "Code injection test"},
     ]
-    
+
     # OpenProject project data
-    op_projects = [{"id": 1, "name": "Test Project", "description": "A test project", "identifier": "test-project"}]
-    
+    op_projects = [
+        {
+            "id": 1,
+            "name": "Test Project",
+            "description": "A test project",
+            "identifier": "test-project",
+        },
+    ]
+
     # Issue type data
     jira_issue_types = [
         {"id": "1", "name": "Bug", "description": "A bug"},
-        {"id": "2", "name": "Task", "description": "A task"}
+        {"id": "2", "name": "Task", "description": "A task"},
     ]
-    
+
     # Work package types for OpenProject
     work_package_types_data = [
         {"id": 1, "name": "Bug", "description": "A bug"},
         {"id": 2, "name": "Task", "description": "A task"},
-        {"id": 3, "name": "User Story", "description": "A user story"}
+        {"id": 3, "name": "User Story", "description": "A user story"},
     ]
-    
+
     # Status data
     jira_statuses = [
         {"id": "1", "name": "To Do", "statusCategory": {"key": "new"}},
         {"id": "2", "name": "In Progress", "statusCategory": {"key": "indeterminate"}},
-        {"id": "3", "name": "Done", "statusCategory": {"key": "done"}}
+        {"id": "3", "name": "Done", "statusCategory": {"key": "done"}},
     ]
-    
+
     op_statuses = [
         {"id": 1, "name": "New"},
         {"id": 2, "name": "In progress"},
-        {"id": 3, "name": "Closed"}
+        {"id": 3, "name": "Closed"},
     ]
-    
+
     # Custom field data
     jira_custom_fields = [
-        {"id": "customfield_10001", "name": "Story Points", "type": "number", "schema": {"type": "number", "custom": "com.pyxis.greenhopper.jira:gh-epic-link"}},
-        {"id": "customfield_10002", "name": "Priority", "type": "option", "schema": {"type": "option", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select"}}
+        {
+            "id": "customfield_10001",
+            "name": "Story Points",
+            "type": "number",
+            "schema": {
+                "type": "number",
+                "custom": "com.pyxis.greenhopper.jira:gh-epic-link",
+            },
+        },
+        {
+            "id": "customfield_10002",
+            "name": "Priority",
+            "type": "option",
+            "schema": {
+                "type": "option",
+                "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select",
+            },
+        },
     ]
-    
+
     op_custom_fields = [
         {"id": 1, "name": "Story Points", "field_format": "int"},
-        {"id": 2, "name": "Priority", "field_format": "list", "possible_values": ["High", "Medium", "Low"]}
+        {
+            "id": 2,
+            "name": "Priority",
+            "field_format": "list",
+            "possible_values": ["High", "Medium", "Low"],
+        },
     ]
-    
+
     # Company/account data
     jira_companies = [
         {"id": "1", "name": "Example Corp", "key": "EXAMPLE"},
-        {"id": "2", "name": "Test Inc", "key": "TEST"}
+        {"id": "2", "name": "Test Inc", "key": "TEST"},
     ]
-    
+
     # ==== Configure Jira Client ====
     mock_jira.get_users.return_value = jira_users
     mock_jira.get_projects.return_value = jira_projects
@@ -90,18 +143,18 @@ def configure_comprehensive_mocks(mock_jira, mock_op):
     mock_jira.get_statuses.return_value = jira_statuses
     mock_jira.get_custom_fields.return_value = jira_custom_fields
     mock_jira.get_companies.return_value = jira_companies
-    
+
     # Fix the get_issue_count method to return an integer
     mock_jira.get_issue_count.return_value = 0  # Return 0 issues for test projects
-    
+
     # Configure user creation result - return as JSON string in list as expected by migration code
     user_creation_result = {
         "created_count": 10,
         "created_users": [{"id": i, "login": f"user{i}"} for i in range(1, 11)],
-        "failed_users": []
+        "failed_users": [],
     }
     mock_jira.create_users_in_bulk.return_value = [json.dumps(user_creation_result)]
-    
+
     # ==== Configure OpenProject Client ====
     mock_op.get_users.return_value = op_users
     mock_op.get_projects.return_value = op_projects
@@ -109,47 +162,45 @@ def configure_comprehensive_mocks(mock_jira, mock_op):
     mock_op.get_statuses.return_value = op_statuses
     mock_op.get_custom_fields.return_value = op_custom_fields
     mock_op.get_companies.return_value = []
-    
+
     # Record creation methods
     mock_op.create_record.return_value = {"id": 1, "status": "created"}
     mock_op.create_users_in_bulk.return_value = [json.dumps(user_creation_result)]
     mock_op.create_company.return_value = {"id": 1, "name": "Test Company"}
     mock_op.create_status.return_value = {"id": 1, "name": "New Status"}
-    
+
     # Query execution methods - return proper dictionary format expected by migrations
     mock_op.execute_query.return_value = {
-        "status": "success", 
+        "status": "success",
         "output": "Command executed successfully",
-        "result": "success"
+        "result": "success",
     }
     mock_op.execute_json_query.return_value = work_package_types_data
     mock_op.execute_query_to_json_file.return_value = {"result": "success"}
     mock_op.execute.return_value = {"result": "success"}
     mock_op.execute_script_with_data.return_value = {"result": "success"}
-    
+
     # File transfer methods
     mock_op.transfer_file_to_container.return_value = True
     mock_op.transfer_file_from_container.return_value = Path("/tmp/test_file")
-    
+
     # Rails client access
     mock_rails_client = MagicMock()
     mock_rails_client.execute_query.return_value = {"result": "success"}
     mock_rails_client.transfer_file_to_container.return_value = True
     mock_rails_client.transfer_file_from_container.return_value = True
     mock_op.rails_client = mock_rails_client
-    
+
     return mock_jira, mock_op
 
 
 def setup_subprocess_mocks():
     """Set up subprocess mocking for Docker operations."""
+
     def mock_subprocess_run(args, **kwargs):
         """Mock subprocess.run for Docker exec commands."""
-        if isinstance(args, list):
-            cmd = " ".join(args)
-        else:
-            cmd = args
-            
+        cmd = " ".join(args) if isinstance(args, list) else args
+
         # Mock successful ls command for work package types file
         if "ls /tmp/op_work_package_types.json" in cmd:
             result = MagicMock()
@@ -157,7 +208,7 @@ def setup_subprocess_mocks():
             result.stdout = "/tmp/op_work_package_types.json\n"
             result.stderr = ""
             return result
-            
+
         # Mock successful cat command returning work package types JSON
         if "cat /tmp/op_work_package_types.json" in cmd:
             work_package_types = [
@@ -170,14 +221,14 @@ def setup_subprocess_mocks():
             result.stdout = json.dumps(work_package_types)
             result.stderr = ""
             return result
-            
+
         # Default successful result for other commands
         result = MagicMock()
         result.returncode = 0
         result.stdout = "success\n"
         result.stderr = ""
         return result
-        
+
     return mock_subprocess_run
 
 
@@ -347,7 +398,7 @@ class TestCompleteMigrationWorkflow:
 
     @pytest.mark.end_to_end
     @pytest.mark.slow
-    def test_complete_migration_success(self, temp_dir, test_env):
+    def test_complete_migration_success(self, temp_dir, test_env) -> None:
         """Test successful migration of all components.
 
         This test validates:
@@ -363,13 +414,19 @@ class TestCompleteMigrationWorkflow:
         mock_subprocess_run = setup_subprocess_mocks()
 
         # Mock file system operations to handle different file types
-        def mock_path_exists(self):
-            """Mock Path.exists to return False for custom field files to force migration"""
+        def mock_path_exists(self) -> bool:
+            """Mock Path.exists to return False for custom field files to force migration."""
             filename = str(self)
-            if any(cf_file in filename for cf_file in ['jira_custom_fields.json', 'op_custom_fields.json', 'custom_field_mapping.json', 'custom_field_analysis.json']):
-                return False
-            return True
-        
+            return not any(
+                cf_file in filename
+                for cf_file in [
+                    "jira_custom_fields.json",
+                    "op_custom_fields.json",
+                    "custom_field_mapping.json",
+                    "custom_field_analysis.json",
+                ]
+            )
+
         with (
             patch("src.migration.JiraClient") as mock_jira_class,
             patch("src.migration.OpenProjectClient") as mock_op_class,
@@ -395,48 +452,63 @@ class TestCompleteMigrationWorkflow:
             work_package_types_data = [
                 {"id": 1, "name": "User Story"},
                 {"id": 2, "name": "Bug"},
-                {"id": 3, "name": "Task"}
+                {"id": 3, "name": "Task"},
             ]
-            
+
             # Define file content mapping for different JSON files
             file_content_map = {
-                "jira_custom_fields.json": json.dumps([
-                    {"id": "customfield_10001", "name": "Story Points", "type": "number", "schema": {"type": "number"}},
-                    {"id": "customfield_10002", "name": "Priority", "type": "option", "schema": {"type": "option"}}
-                ]),
-                "op_custom_fields.json": json.dumps([
-                    {"id": 1, "name": "Story Points", "field_format": "int"},
-                    {"id": 2, "name": "Priority", "field_format": "list"}
-                ]),
+                "jira_custom_fields.json": json.dumps(
+                    [
+                        {
+                            "id": "customfield_10001",
+                            "name": "Story Points",
+                            "type": "number",
+                            "schema": {"type": "number"},
+                        },
+                        {
+                            "id": "customfield_10002",
+                            "name": "Priority",
+                            "type": "option",
+                            "schema": {"type": "option"},
+                        },
+                    ],
+                ),
+                "op_custom_fields.json": json.dumps(
+                    [
+                        {"id": 1, "name": "Story Points", "field_format": "int"},
+                        {"id": 2, "name": "Priority", "field_format": "list"},
+                    ],
+                ),
                 "custom_field_mapping.json": json.dumps({}),
-                "custom_field_analysis.json": json.dumps({
-                    "status": "complete",
-                    "total_jira_fields": 2,
-                    "matched_by_name": 2,
-                    "created_directly": 0,
-                    "needs_manual_creation_or_script": 0,
-                    "unmatched_details": {},
-                    "match_percentage": 100.0,
-                    "created_percentage": 0.0,
-                    "needs_creation_percentage": 0.0
-                }),
+                "custom_field_analysis.json": json.dumps(
+                    {
+                        "status": "complete",
+                        "total_jira_fields": 2,
+                        "matched_by_name": 2,
+                        "created_directly": 0,
+                        "needs_manual_creation_or_script": 0,
+                        "unmatched_details": {},
+                        "match_percentage": 100.0,
+                        "created_percentage": 0.0,
+                        "needs_creation_percentage": 0.0,
+                    },
+                ),
                 # Add other files as needed
             }
-            
-            def mock_file_handler(filename, mode='r', *args, **kwargs):
+
+            def mock_file_handler(filename, mode="r", *args, **kwargs):
                 """Mock file operations with specific content for different files."""
                 mock_file_handle = MagicMock()
-                
+
                 # Determine content based on filename
-                if hasattr(filename, 'name'):
-                    filename_str = str(filename.name)
-                else:
-                    filename_str = str(filename)
-                
+                filename_str = (
+                    str(filename.name) if hasattr(filename, "name") else str(filename)
+                )
+
                 # Check if it's one of our specific files
                 for file_key, content in file_content_map.items():
                     if filename_str.endswith(file_key):
-                        if 'w' in mode:
+                        if "w" in mode:
                             # For write mode, just return a writable handle
                             mock_file_handle.write.return_value = None
                             mock_file_handle.read.return_value = content
@@ -446,12 +518,14 @@ class TestCompleteMigrationWorkflow:
                         break
                 else:
                     # Default content for work package types
-                    mock_file_handle.read.return_value = json.dumps(work_package_types_data)
-                
+                    mock_file_handle.read.return_value = json.dumps(
+                        work_package_types_data,
+                    )
+
                 mock_file_handle.__enter__.return_value = mock_file_handle
                 mock_file_handle.__exit__.return_value = None
                 return mock_file_handle
-            
+
             mock_open.side_effect = mock_file_handler
 
             # Run migration with specific components
@@ -466,7 +540,7 @@ class TestCompleteMigrationWorkflow:
                 result = run_migration(
                     components=[
                         "users",
-                        "projects", 
+                        "projects",
                         "custom_fields",
                         "issue_types",
                         "work_packages",
@@ -495,7 +569,7 @@ class TestCompleteMigrationWorkflow:
                 # Note: Client method calls may not occur if migration uses cached data
                 # which is normal behavior for the migration system
                 # The important thing is that all components completed successfully
-                # 
+                #
                 # Optional: Verify that some client interactions occurred if no cached data
                 # (The specific calls depend on whether cached mapping files exist)
                 print(f"Jira get_users called: {mock_jira.get_users.called}")
@@ -503,7 +577,7 @@ class TestCompleteMigrationWorkflow:
 
     @pytest.mark.end_to_end
     @pytest.mark.slow
-    def test_migration_with_component_failure(self, temp_dir, test_env):
+    def test_migration_with_component_failure(self, temp_dir, test_env) -> None:
         """Test migration behavior when a component fails.
 
         This test validates:
@@ -519,13 +593,19 @@ class TestCompleteMigrationWorkflow:
         mock_subprocess_run = setup_subprocess_mocks()
 
         # Mock file system operations to handle different file types
-        def mock_path_exists(self):
-            """Mock Path.exists to return False for custom field files to force migration"""
+        def mock_path_exists(self) -> bool:
+            """Mock Path.exists to return False for custom field files to force migration."""
             filename = str(self)
-            if any(cf_file in filename for cf_file in ['jira_custom_fields.json', 'op_custom_fields.json', 'custom_field_mapping.json', 'custom_field_analysis.json']):
-                return False
-            return True
-        
+            return not any(
+                cf_file in filename
+                for cf_file in [
+                    "jira_custom_fields.json",
+                    "op_custom_fields.json",
+                    "custom_field_mapping.json",
+                    "custom_field_analysis.json",
+                ]
+            )
+
         with (
             patch("src.migration.JiraClient") as mock_jira_class,
             patch("src.migration.OpenProjectClient") as mock_op_class,
@@ -551,7 +631,7 @@ class TestCompleteMigrationWorkflow:
             work_package_types_data = [
                 {"id": 1, "name": "User Story"},
                 {"id": 2, "name": "Bug"},
-                {"id": 3, "name": "Task"}
+                {"id": 3, "name": "Task"},
             ]
             mock_file_handle = MagicMock()
             mock_file_handle.read.return_value = json.dumps(work_package_types_data)
@@ -563,7 +643,9 @@ class TestCompleteMigrationWorkflow:
             mock_op.get_projects.return_value = []
 
             # Simulate failure in projects component (critical)
-            mock_op.execute_query_to_json_file.side_effect = Exception("OpenProject API error")
+            mock_op.execute_query_to_json_file.side_effect = Exception(
+                "OpenProject API error",
+            )
 
             with patch(
                 "src.config.migration_config",
@@ -591,7 +673,7 @@ class TestCompleteMigrationWorkflow:
                 assert result.components["projects"].success is False
 
     @pytest.mark.end_to_end
-    def test_dry_run_migration(self, temp_dir, test_env):
+    def test_dry_run_migration(self, temp_dir, test_env) -> None:
         """Test dry run migration mode.
 
         This test validates:
@@ -606,13 +688,19 @@ class TestCompleteMigrationWorkflow:
         mock_subprocess_run = setup_subprocess_mocks()
 
         # Mock file system operations to handle different file types
-        def mock_path_exists(self):
-            """Mock Path.exists to return False for custom field files to force migration"""
+        def mock_path_exists(self) -> bool:
+            """Mock Path.exists to return False for custom field files to force migration."""
             filename = str(self)
-            if any(cf_file in filename for cf_file in ['jira_custom_fields.json', 'op_custom_fields.json', 'custom_field_mapping.json', 'custom_field_analysis.json']):
-                return False
-            return True
-        
+            return not any(
+                cf_file in filename
+                for cf_file in [
+                    "jira_custom_fields.json",
+                    "op_custom_fields.json",
+                    "custom_field_mapping.json",
+                    "custom_field_analysis.json",
+                ]
+            )
+
         with (
             patch("src.migration.JiraClient") as mock_jira_class,
             patch("src.migration.OpenProjectClient") as mock_op_class,
@@ -638,7 +726,7 @@ class TestCompleteMigrationWorkflow:
             work_package_types_data = [
                 {"id": 1, "name": "User Story"},
                 {"id": 2, "name": "Bug"},
-                {"id": 3, "name": "Task"}
+                {"id": 3, "name": "Task"},
             ]
             mock_file_handle = MagicMock()
             mock_file_handle.read.return_value = json.dumps(work_package_types_data)
@@ -664,14 +752,14 @@ class TestCompleteMigrationWorkflow:
                 assert len(result.components) == 2
 
                 # In dry run mode, operations should be simulated
-                for component_name, component_result in result.components.items():
+                for component_result in result.components.values():
                     assert component_result.success is True
 
                 # Verify no actual API calls were made (in dry run mode, calls should be mocked/simulated)
                 # This depends on implementation details of dry run mode
 
     @pytest.mark.end_to_end
-    def test_backup_and_restore_functionality(self, temp_dir, test_env):
+    def test_backup_and_restore_functionality(self, temp_dir, test_env) -> None:
         """Test backup creation and restoration functionality.
 
         This test validates:
@@ -717,7 +805,7 @@ class TestCompleteMigrationWorkflow:
             assert len(backup_files) >= len(test_files)
 
             # Validate the actual test files are backed up
-            for test_filename in test_files.keys():
+            for test_filename in test_files:
                 backup_file = backup_path / test_filename
                 assert backup_file.exists()
 
@@ -728,7 +816,7 @@ class TestCompleteMigrationWorkflow:
 
     @pytest.mark.end_to_end
     @pytest.mark.slow
-    def test_large_dataset_migration(self, temp_dir, test_env):
+    def test_large_dataset_migration(self, temp_dir, test_env) -> None:
         """Test migration with a larger dataset to validate performance and scalability.
 
         This test validates:
@@ -769,13 +857,19 @@ class TestCompleteMigrationWorkflow:
         mock_subprocess_run = setup_subprocess_mocks()
 
         # Mock file system operations to handle different file types
-        def mock_path_exists(self):
-            """Mock Path.exists to return False for custom field files to force migration"""
+        def mock_path_exists(self) -> bool:
+            """Mock Path.exists to return False for custom field files to force migration."""
             filename = str(self)
-            if any(cf_file in filename for cf_file in ['jira_custom_fields.json', 'op_custom_fields.json', 'custom_field_mapping.json', 'custom_field_analysis.json']):
-                return False
-            return True
-        
+            return not any(
+                cf_file in filename
+                for cf_file in [
+                    "jira_custom_fields.json",
+                    "op_custom_fields.json",
+                    "custom_field_mapping.json",
+                    "custom_field_analysis.json",
+                ]
+            )
+
         with (
             patch("src.migration.JiraClient") as mock_jira_class,
             patch("src.migration.OpenProjectClient") as mock_op_class,
@@ -796,7 +890,7 @@ class TestCompleteMigrationWorkflow:
 
             # Configure comprehensive mocks with large dataset
             mock_jira, mock_op = configure_comprehensive_mocks(mock_jira, mock_op)
-            
+
             # Override with large datasets
             mock_jira.get_users.return_value = large_user_dataset
             mock_jira.get_all_issues_for_project.return_value = large_issue_dataset
@@ -805,7 +899,7 @@ class TestCompleteMigrationWorkflow:
             work_package_types_data = [
                 {"id": 1, "name": "User Story"},
                 {"id": 2, "name": "Bug"},
-                {"id": 3, "name": "Task"}
+                {"id": 3, "name": "Task"},
             ]
             mock_file_handle = MagicMock()
             mock_file_handle.read.return_value = json.dumps(work_package_types_data)
@@ -839,14 +933,16 @@ class TestCompleteMigrationWorkflow:
             assert result.overall["status"] == "success"
 
             # Validate performance (should complete within reasonable time)
-            assert migration_time < 60  # Should complete within 1 minute for test dataset
+            assert (
+                migration_time < 60
+            )  # Should complete within 1 minute for test dataset
 
             # Validate all components succeeded
-            for component_name, component_result in result.components.items():
+            for component_result in result.components.values():
                 assert component_result.success is True
 
     @pytest.mark.end_to_end
-    def test_component_dependency_order(self, temp_dir, test_env):
+    def test_component_dependency_order(self, temp_dir, test_env) -> None:
         """Test that migration components run in the correct dependency order.
 
         This test validates:
@@ -875,13 +971,19 @@ class TestCompleteMigrationWorkflow:
         mock_subprocess_run = setup_subprocess_mocks()
 
         # Mock file system operations to handle different file types
-        def mock_path_exists(self):
-            """Mock Path.exists to return False for custom field files to force migration"""
+        def mock_path_exists(self) -> bool:
+            """Mock Path.exists to return False for custom field files to force migration."""
             filename = str(self)
-            if any(cf_file in filename for cf_file in ['jira_custom_fields.json', 'op_custom_fields.json', 'custom_field_mapping.json', 'custom_field_analysis.json']):
-                return False
-            return True
-        
+            return not any(
+                cf_file in filename
+                for cf_file in [
+                    "jira_custom_fields.json",
+                    "op_custom_fields.json",
+                    "custom_field_mapping.json",
+                    "custom_field_analysis.json",
+                ]
+            )
+
         with (
             patch("src.migration.JiraClient") as mock_jira_class,
             patch("src.migration.OpenProjectClient") as mock_op_class,
@@ -907,7 +1009,7 @@ class TestCompleteMigrationWorkflow:
             work_package_types_data = [
                 {"id": 1, "name": "User Story"},
                 {"id": 2, "name": "Bug"},
-                {"id": 3, "name": "Task"}
+                {"id": 3, "name": "Task"},
             ]
             mock_file_handle = MagicMock()
             mock_file_handle.read.return_value = json.dumps(work_package_types_data)
@@ -942,5 +1044,5 @@ class TestCompleteMigrationWorkflow:
             print(f"Call order observed: {call_order}")
 
             # All components should succeed regardless of call order
-            for component_name, component_result in result.components.items():
+            for component_result in result.components.values():
                 assert component_result.success is True

@@ -17,7 +17,7 @@ from src.utils.state_manager import StateManager
 class DataPreservationTestMigration(BaseMigration):
     """Test migration class for data preservation workflow testing."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.run_called = False
         self.mock_entities = [
@@ -87,7 +87,7 @@ def mock_data_preservation_manager():
                 "entity_type": "issues",
                 "conflict_type": "modification",
                 "resolution": "preserve_jira",
-            }
+            },
         ],
     }
     return manager
@@ -103,7 +103,7 @@ def migration_with_preservation(
     """Provide migration instance with all dependencies for data preservation."""
     jira_client, openproject_client = mock_clients
 
-    migration = DataPreservationTestMigration(
+    return DataPreservationTestMigration(
         jira_client=jira_client,
         op_client=openproject_client,
         change_detector=mock_change_detector,
@@ -111,15 +111,14 @@ def migration_with_preservation(
         data_preservation_manager=mock_data_preservation_manager,
     )
 
-    return migration
-
 
 class TestDataPreservationWorkflow:
     """Test the complete data preservation workflow."""
 
     def test_run_with_data_preservation_no_entity_type(
-        self, migration_with_preservation
-    ):
+        self,
+        migration_with_preservation,
+    ) -> None:
         """Test data preservation workflow without entity type falls back to standard run."""
         result = migration_with_preservation.run_with_data_preservation()
 
@@ -131,12 +130,13 @@ class TestDataPreservationWorkflow:
         )
 
     def test_run_with_data_preservation_successful_workflow(
-        self, migration_with_preservation
-    ):
+        self,
+        migration_with_preservation,
+    ) -> None:
         """Test complete successful data preservation workflow."""
         # Mock snapshot creation
         migration_with_preservation.create_snapshot = Mock(
-            return_value=Path("test-snapshot.json")
+            return_value=Path("test-snapshot.json"),
         )
 
         result = migration_with_preservation.run_with_data_preservation(
@@ -175,8 +175,9 @@ class TestDataPreservationWorkflow:
         assert "state_snapshot_id" in result.details
 
     def test_run_with_data_preservation_skip_migration_no_changes(
-        self, migration_with_preservation
-    ):
+        self,
+        migration_with_preservation,
+    ) -> None:
         """Test skipping migration when no changes are detected."""
         # Mock no changes detected
         migration_with_preservation.change_detector.detect_changes.return_value = (
@@ -192,7 +193,8 @@ class TestDataPreservationWorkflow:
         )
 
         result = migration_with_preservation.run_with_data_preservation(
-            entity_type="issues", analyze_conflicts=True
+            entity_type="issues",
+            analyze_conflicts=True,
         )
 
         # Verify migration was skipped
@@ -206,15 +208,17 @@ class TestDataPreservationWorkflow:
         migration_with_preservation.data_preservation_manager.analyze_preservation_status.assert_called_once()
 
     def test_run_with_data_preservation_conflict_analysis_disabled(
-        self, migration_with_preservation
-    ):
+        self,
+        migration_with_preservation,
+    ) -> None:
         """Test workflow with conflict analysis disabled."""
         migration_with_preservation.create_snapshot = Mock(
-            return_value=Path("test-snapshot.json")
+            return_value=Path("test-snapshot.json"),
         )
 
         result = migration_with_preservation.run_with_data_preservation(
-            entity_type="issues", analyze_conflicts=False
+            entity_type="issues",
+            analyze_conflicts=False,
         )
 
         assert result.success is True
@@ -227,8 +231,9 @@ class TestDataPreservationWorkflow:
         assert result.details["conflict_report"] is None
 
     def test_run_with_data_preservation_migration_failure(
-        self, migration_with_preservation
-    ):
+        self,
+        migration_with_preservation,
+    ) -> None:
         """Test workflow when migration fails."""
         # Mock failed migration
         migration_with_preservation.run = Mock(
@@ -239,11 +244,11 @@ class TestDataPreservationWorkflow:
                 success_count=0,
                 failed_count=1,
                 total_count=1,
-            )
+            ),
         )
 
         result = migration_with_preservation.run_with_data_preservation(
-            entity_type="issues"
+            entity_type="issues",
         )
 
         # Verify failure is properly handled

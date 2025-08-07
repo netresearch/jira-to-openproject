@@ -36,7 +36,7 @@ class TestWorkPackageMigration(unittest.TestCase):
                     ],
                 },
                 "attachment": [
-                    {"id": "10001", "filename": "test.txt", "content": "test content"}
+                    {"id": "10001", "filename": "test.txt", "content": "test content"},
                 ],
             },
             {
@@ -62,7 +62,7 @@ class TestWorkPackageMigration(unittest.TestCase):
                 "id": 1,
                 "subject": "Sample Bug",
                 "description": {
-                    "raw": "This is a sample bug\n\n*Imported from Jira issue: PROJ-1*"
+                    "raw": "This is a sample bug\n\n*Imported from Jira issue: PROJ-1*",
                 },
                 "_links": {
                     "type": {"href": "/api/v3/types/1", "title": "Bug"},
@@ -191,7 +191,7 @@ class TestWorkPackageMigration(unittest.TestCase):
         # Mock the issue type mapping and work package types
         mock_load_dict.return_value = {}
         mock_op_instance.get_work_package_types.return_value = [
-            {"id": 1, "name": "Task"}
+            {"id": 1, "name": "Task"},
         ]
 
         # Create instance

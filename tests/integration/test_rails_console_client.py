@@ -35,7 +35,10 @@ class TestRailsConsoleClient(unittest.TestCase):
 
         # Mock successful tmux session check
         self.mock_subprocess.run.return_value.returncode = 0
-        self.mock_subprocess.run.return_value.stdout = "Test tmux output\n--EXEC_START--test_unique_id\nCommand output\n--EXEC_END--test_unique_id"
+        self.mock_subprocess.run.return_value.stdout = (
+            "Test tmux output\n--EXEC_START--test_unique_id\n"
+            "Command output\n--EXEC_END--test_unique_id"
+        )
 
         # Make subprocess.SubprocessError available to the code
         self.mock_subprocess.SubprocessError = subprocess.SubprocessError
@@ -57,7 +60,7 @@ class TestRailsConsoleClient(unittest.TestCase):
 
         # File manager mock
         self.file_manager_patcher = patch(
-            "src.clients.rails_console_client.FileManager"
+            "src.clients.rails_console_client.FileManager",
         )
         self.mock_file_manager_class = self.file_manager_patcher.start()
         self.mock_file_manager = MagicMock()
@@ -66,16 +69,20 @@ class TestRailsConsoleClient(unittest.TestCase):
             "/path/to/debug/session"
         )
         self.mock_file_manager.join = MagicMock(
-            return_value=MagicMock(open=MagicMock())
+            return_value=MagicMock(open=MagicMock()),
         )
         self.mock_file_manager_class.return_value = self.mock_file_manager
 
         # Mock _send_command_to_tmux method
         self.send_command_patcher = patch.object(
-            RailsConsoleClient, "_send_command_to_tmux"
+            RailsConsoleClient,
+            "_send_command_to_tmux",
         )
         self.mock_send_command = self.send_command_patcher.start()
-        self.mock_send_command.return_value = "Console output\n--EXEC_START--test_unique_id\nCommand result\n--EXEC_END--test_unique_id\n"
+        self.mock_send_command.return_value = (
+            "Console output\n--EXEC_START--test_unique_id\n"
+            "Command result\n--EXEC_END--test_unique_id\n"
+        )
 
         # Initialize RailsConsoleClient after all mocks are set up
         self.rails_client = RailsConsoleClient(tmux_session_name="test_session")
@@ -139,11 +146,15 @@ irb(main):002:0>
 """
         # Mock generate_unique_id to return a fixed ID
         with patch.object(
-            self.rails_client.file_manager, "generate_unique_id", return_value=marker_id
+            self.rails_client.file_manager,
+            "generate_unique_id",
+            return_value=marker_id,
         ):
             # Mock _send_command_to_tmux to return sample output
             with patch.object(
-                self.rails_client, "_send_command_to_tmux", return_value=output
+                self.rails_client,
+                "_send_command_to_tmux",
+                return_value=output,
             ):
                 # Execute the test
                 result = self.rails_client.execute("load '/tmp/test_script.rb'")
@@ -167,11 +178,15 @@ irb(main):002:0>
 """
         # Mock generate_unique_id to return a fixed ID
         with patch.object(
-            self.rails_client.file_manager, "generate_unique_id", return_value=marker_id
+            self.rails_client.file_manager,
+            "generate_unique_id",
+            return_value=marker_id,
         ):
             # Mock _send_command_to_tmux to return sample output
             with patch.object(
-                self.rails_client, "_send_command_to_tmux", return_value=output
+                self.rails_client,
+                "_send_command_to_tmux",
+                return_value=output,
             ):
                 # Execute the test with expected exception
                 with pytest.raises(RubyError) as context:
@@ -188,20 +203,25 @@ Some unexpected output
 irb(main):002:0>
 """
         # Mock both _send_command_to_tmux and _get_console_state
-        with patch.object(
-            self.rails_client, "_send_command_to_tmux", return_value=output
+        with (
+            patch.object(
+                self.rails_client,
+                "_send_command_to_tmux",
+                return_value=output,
+            ),
+            patch.object(
+                self.rails_client,
+                "_get_console_state",
+            ) as mock_get_state,
         ):
-            with patch.object(
-                self.rails_client, "_get_console_state"
-            ) as mock_get_state:
-                # Configure mock to return that console is NOT ready
-                mock_get_state.return_value = {"ready": False, "state": "unknown"}
+            # Configure mock to return that console is NOT ready
+            mock_get_state.return_value = {"ready": False, "state": "unknown"}
 
-                # Now we should get an error about missing start marker
-                with pytest.raises(CommandExecutionError) as context:
-                    self.rails_client.execute("load '/tmp/test_script.rb'")
+            # Now we should get an error about missing start marker
+            with pytest.raises(CommandExecutionError) as context:
+                self.rails_client.execute("load '/tmp/test_script.rb'")
 
-                assert "Start marker" in str(context.value)
+            assert "Start marker" in str(context.value)
 
     def test_end_marker_not_found(self) -> None:
         """Test handling when end marker is not found in output."""
@@ -212,21 +232,27 @@ irb(main):001:0> load '/tmp/test_script.rb'
 Some output but no end marker
 irb(main):002:0>
 """
-        with patch.object(
-            self.rails_client.file_manager, "generate_unique_id", return_value=marker_id
+        with (
+            patch.object(
+                self.rails_client.file_manager,
+                "generate_unique_id",
+                return_value=marker_id,
+            ),
+            patch.object(
+                self.rails_client,
+                "_send_command_to_tmux",
+                return_value=output,
+            ),
+            patch.object(
+                self.rails_client,
+                "_get_console_state",
+                return_value={"ready": False, "state": "unknown"},
+            ),
         ):
-            with patch.object(
-                self.rails_client, "_send_command_to_tmux", return_value=output
-            ):
-                with patch.object(
-                    self.rails_client,
-                    "_get_console_state",
-                    return_value={"ready": False, "state": "unknown"},
-                ):
-                    with pytest.raises(CommandExecutionError) as context:
-                        self.rails_client.execute("load '/tmp/test_script.rb'")
+            with pytest.raises(CommandExecutionError) as context:
+                self.rails_client.execute("load '/tmp/test_script.rb'")
 
-                    assert "End marker" in str(context.value)
+            assert "End marker" in str(context.value)
 
     def test_ruby_error_pattern_detection(self) -> None:
         """Test detection of Ruby error patterns in output."""
@@ -239,16 +265,22 @@ SyntaxError: unexpected token at line 10
 => nil
 irb(main):002:0>
 """
-        with patch.object(
-            self.rails_client.file_manager, "generate_unique_id", return_value=marker_id
+        with (
+            patch.object(
+                self.rails_client.file_manager,
+                "generate_unique_id",
+                return_value=marker_id,
+            ),
+            patch.object(
+                self.rails_client,
+                "_send_command_to_tmux",
+                return_value=output,
+            ),
         ):
-            with patch.object(
-                self.rails_client, "_send_command_to_tmux", return_value=output
-            ):
-                with pytest.raises(RubyError) as context:
-                    self.rails_client.execute("load '/tmp/test_script.rb'")
+            with pytest.raises(RubyError) as context:
+                self.rails_client.execute("load '/tmp/test_script.rb'")
 
-                assert "SyntaxError:" in str(context.value)
+            assert "SyntaxError:" in str(context.value)
 
     def test_tmux_command_failure(self) -> None:
         """Test handling of tmux command failure."""

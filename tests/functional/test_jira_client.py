@@ -152,7 +152,7 @@ class TestJiraClient(unittest.TestCase):
         """Test failure in retrieving projects raises appropriate exception."""
         # Mock the projects method to raise an exception
         self.mock_jira.projects.side_effect = Exception(
-            "API Error: Cannot get projects"
+            "API Error: Cannot get projects",
         )
 
         # Call should raise JiraApiError
@@ -264,7 +264,7 @@ class TestJiraClient(unittest.TestCase):
         mock_response.status_code = 400
         mock_response.reason = "Bad Request"
         mock_response.json.return_value = {
-            "errorMessages": ["Invalid input", "Field is required"]
+            "errorMessages": ["Invalid input", "Field is required"],
         }
 
         # Test _handle_response method directly

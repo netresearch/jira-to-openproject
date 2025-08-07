@@ -44,7 +44,8 @@ class TestDockerClient(unittest.TestCase):
 
         # Initialize DockerClient after all mocks are set up
         self.docker_client = DockerClient(
-            container_name="test_container", ssh_client=self.mock_ssh_client
+            container_name="test_container",
+            ssh_client=self.mock_ssh_client,
         )
 
     def tearDown(self) -> None:
@@ -185,7 +186,7 @@ class TestDockerClient(unittest.TestCase):
 
         # Call the method with a complex command
         stdout, stderr, returncode = self.docker_client.execute_command(
-            "cd /tmp && echo 'hello' > test.txt"
+            "cd /tmp && echo 'hello' > test.txt",
         )
 
         # Verify result
@@ -263,7 +264,9 @@ class TestDockerClient(unittest.TestCase):
 
         # Configure mock to make the check_file_exists_in_container check fail
         with patch.object(
-            self.docker_client, "check_file_exists_in_container", return_value=False
+            self.docker_client,
+            "check_file_exists_in_container",
+            return_value=False,
         ):
             # Configure ssh_client.execute_command to succeed with docker cp
             self.mock_ssh_client.execute_command.return_value = ("", "", 0)
@@ -307,7 +310,9 @@ class TestDockerClient(unittest.TestCase):
 
         # Need to patch the method to return False when checking if file exists
         with patch.object(
-            self.docker_client, "check_file_exists_in_container", return_value=False
+            self.docker_client,
+            "check_file_exists_in_container",
+            return_value=False,
         ):
             # Call the method - should raise FileNotFoundError
             with pytest.raises(FileNotFoundError):
@@ -326,7 +331,7 @@ class TestDockerClient(unittest.TestCase):
 
         # Call the method
         result = self.docker_client.check_file_exists_in_container(
-            "/container/file.txt"
+            "/container/file.txt",
         )
 
         # Verify result

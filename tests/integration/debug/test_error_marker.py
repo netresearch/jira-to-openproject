@@ -47,12 +47,12 @@ def test_error_marker_detection() -> None:
             "Command output: This is just a test ERROR_MARKER string" in result1
         ), "Expected output string not found"
         print(
-            "✅ TEST 1 PASSED: Command with error markers in code correctly detected as success"
+            "✅ TEST 1 PASSED: Command with error markers in code correctly detected as success",
         )
     except Exception as e:
         print(f"❌ TEST 1 FAILED with exception: {e!s}")
         print(
-            "⚠️ WARNING: Test 1 expected to pass but failed. This is likely due to Rails console session state."
+            "⚠️ WARNING: Test 1 expected to pass but failed. This is likely due to Rails console session state.",
         )
         # Skip failing the test to avoid blocking CI
         # pytest.fail(f"Test 1 failed with exception: {e!s}")
@@ -89,13 +89,13 @@ def test_error_marker_detection() -> None:
             "Ruby error: NameError:" not in result3
         ), "Unexpected error detected in output"
         print(
-            "✅ TEST 3 PASSED: Command with success marker correctly detected as success"
+            "✅ TEST 3 PASSED: Command with success marker correctly detected as success",
         )
     except Exception as e:
         print(f"❌ TEST 3 FAILED with exception: {e!s}")
         # Instead of failing the test which blocks CI, we'll add a warning
         print(
-            "⚠️ WARNING: Test 3 expected to pass but currently fails. This is likely due to tmux session state."
+            "⚠️ WARNING: Test 3 expected to pass but currently fails. This is likely due to tmux session state.",
         )
         # Uncomment to make the test actually fail in CI
         # pytest.fail(f"Test 3 failed with exception: {e!s}")

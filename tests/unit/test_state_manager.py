@@ -28,7 +28,7 @@ def state_manager(temp_state_dir):
 class TestStateManagerBasics:
     """Test basic StateManager functionality."""
 
-    def test_initialization(self, temp_state_dir):
+    def test_initialization(self, temp_state_dir) -> None:
         """Test StateManager initialization."""
         state_manager = StateManager(state_dir=temp_state_dir)
 
@@ -43,7 +43,7 @@ class TestStateManagerBasics:
         assert isinstance(state_manager._current_mappings, dict)
         assert isinstance(state_manager._current_records, list)
 
-    def test_register_entity_mapping(self, state_manager):
+    def test_register_entity_mapping(self, state_manager) -> None:
         """Test registering entity mappings."""
         mapping_id = state_manager.register_entity_mapping(
             jira_entity_type="project",
@@ -70,7 +70,7 @@ class TestStateManagerBasics:
         assert mapping["metadata"] == {"test": "data"}
         assert "mapped_at" in mapping
 
-    def test_get_entity_mapping(self, state_manager):
+    def test_get_entity_mapping(self, state_manager) -> None:
         """Test retrieving entity mappings."""
         # Register a mapping first
         state_manager.register_entity_mapping(
@@ -88,12 +88,12 @@ class TestStateManagerBasics:
         assert retrieved["jira_entity_id"] == "ISSUE-123"
         assert retrieved["openproject_entity_id"] == "789"
 
-    def test_get_entity_mapping_not_found(self, state_manager):
+    def test_get_entity_mapping_not_found(self, state_manager) -> None:
         """Test retrieving non-existent entity mapping."""
         result = state_manager.get_entity_mapping("project", "NONEXISTENT")
         assert result is None
 
-    def test_start_migration_record(self, state_manager):
+    def test_start_migration_record(self, state_manager) -> None:
         """Test starting a migration record."""
         record_id = state_manager.start_migration_record(
             migration_component="TestMigration",
@@ -115,7 +115,7 @@ class TestStateManagerBasics:
         assert record["status"] == "started"
         assert record["user"] == "test_user"
 
-    def test_complete_migration_record(self, state_manager):
+    def test_complete_migration_record(self, state_manager) -> None:
         """Test completing a migration record."""
         # Start a record
         record_id = state_manager.start_migration_record(
@@ -127,7 +127,9 @@ class TestStateManagerBasics:
 
         # Complete the record
         state_manager.complete_migration_record(
-            record_id=record_id, success_count=8, error_count=2
+            record_id=record_id,
+            success_count=8,
+            error_count=2,
         )
 
         # Verify record is updated
@@ -136,7 +138,7 @@ class TestStateManagerBasics:
         assert record["success_count"] == 8
         assert record["error_count"] == 2
 
-    def test_create_state_snapshot(self, state_manager, temp_state_dir):
+    def test_create_state_snapshot(self, state_manager, temp_state_dir) -> None:
         """Test creating a state snapshot."""
         # Add some data first
         state_manager.register_entity_mapping(
@@ -149,7 +151,8 @@ class TestStateManagerBasics:
 
         # Create snapshot
         snapshot_id = state_manager.create_state_snapshot(
-            description="Test snapshot", user="test_user"
+            description="Test snapshot",
+            user="test_user",
         )
 
         # Verify snapshot ID is returned
@@ -160,7 +163,7 @@ class TestStateManagerBasics:
         snapshot_file = temp_state_dir / "snapshots" / f"{snapshot_id}.json"
         assert snapshot_file.exists()
 
-    def test_save_and_load_state(self, temp_state_dir):
+    def test_save_and_load_state(self, temp_state_dir) -> None:
         """Test saving and loading current state."""
         # Create state manager and add some data
         state_manager = StateManager(state_dir=temp_state_dir)
@@ -187,7 +190,7 @@ class TestStateManagerBasics:
         # Verify data is loaded
         assert len(new_state_manager._current_mappings) == 1
 
-    def test_get_mapping_statistics(self, state_manager):
+    def test_get_mapping_statistics(self, state_manager) -> None:
         """Test getting mapping statistics."""
         # Add various mappings
         state_manager.register_entity_mapping(
@@ -215,7 +218,7 @@ class TestStateManagerBasics:
         assert stats["mappings_by_component"]["ProjectMigration"] == 1
         assert stats["mappings_by_component"]["WorkPackageMigration"] == 1
 
-    def test_cleanup_old_state(self, state_manager, temp_state_dir):
+    def test_cleanup_old_state(self, state_manager, temp_state_dir) -> None:
         """Test cleaning up old state files."""
         import time
 
@@ -245,12 +248,14 @@ class TestStateManagerBasics:
         assert not old_file.exists()
         assert new_file.exists()  # Should still exist
 
-    def test_error_handling(self, state_manager):
+    def test_error_handling(self, state_manager) -> None:
         """Test error handling in StateManager."""
         # Test completing non-existent migration record
         with patch.object(state_manager.logger, "warning") as mock_warning:
             state_manager.complete_migration_record(
-                record_id="nonexistent", success_count=5, error_count=0
+                record_id="nonexistent",
+                success_count=5,
+                error_count=0,
             )
             mock_warning.assert_called_once()
 

@@ -98,7 +98,7 @@ class TestJiraClientIntegration(unittest.TestCase):
                 jira_client.get_issue_count(invalid_project)
 
             print(
-                f"✅ Correctly raised exception for nonexistent project {invalid_project}"
+                f"✅ Correctly raised exception for nonexistent project {invalid_project}",
             )
 
             # Test resource not found handling - use a deliberately invalid issue key
@@ -107,7 +107,7 @@ class TestJiraClientIntegration(unittest.TestCase):
                 jira_client.get_issue_details(invalid_issue)
 
             print(
-                f"✅ Correctly raised exception for nonexistent issue {invalid_issue}"
+                f"✅ Correctly raised exception for nonexistent issue {invalid_issue}",
             )
 
         except JiraAuthenticationError:

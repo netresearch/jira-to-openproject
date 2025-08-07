@@ -7,13 +7,13 @@ from src.utils.markdown_converter import MarkdownConverter
 class TestMarkdownConverter:
     """Test cases for MarkdownConverter class."""
 
-    def test_init_without_mappings(self):
+    def test_init_without_mappings(self) -> None:
         """Test initialization without providing mappings."""
         converter = MarkdownConverter()
         assert converter.user_mapping == {}
         assert converter.work_package_mapping == {}
 
-    def test_init_with_mappings(self):
+    def test_init_with_mappings(self) -> None:
         """Test initialization with user and work package mappings."""
         user_mapping = {"jdoe": 123, "asmith": 456}
         wp_mapping = {"PROJ-1": 1, "PROJ-2": 2}
@@ -22,7 +22,7 @@ class TestMarkdownConverter:
         assert converter.user_mapping == user_mapping
         assert converter.work_package_mapping == wp_mapping
 
-    def test_convert_empty_text(self):
+    def test_convert_empty_text(self) -> None:
         """Test conversion of empty or None text."""
         converter = MarkdownConverter()
 
@@ -30,7 +30,7 @@ class TestMarkdownConverter:
         assert converter.convert(None) == ""
         assert converter.convert("   ") == ""
 
-    def test_convert_basic_formatting(self):
+    def test_convert_basic_formatting(self) -> None:
         """Test basic text formatting conversion."""
         converter = MarkdownConverter()
 
@@ -49,7 +49,7 @@ class TestMarkdownConverter:
         # Monospace/inline code
         assert converter.convert("{{code text}}") == "`code text`"
 
-    def test_convert_headings(self):
+    def test_convert_headings(self) -> None:
         """Test heading conversion."""
         converter = MarkdownConverter()
 
@@ -60,7 +60,7 @@ class TestMarkdownConverter:
         assert converter.convert("h5. Heading 5") == "##### Heading 5"
         assert converter.convert("h6. Heading 6") == "###### Heading 6"
 
-    def test_convert_lists(self):
+    def test_convert_lists(self) -> None:
         """Test list conversion."""
         converter = MarkdownConverter()
 
@@ -90,7 +90,7 @@ class TestMarkdownConverter:
 
         assert converter.convert(jira_ordered) == expected_ordered
 
-    def test_convert_block_quotes(self):
+    def test_convert_block_quotes(self) -> None:
         """Test block quote conversion."""
         converter = MarkdownConverter()
 
@@ -99,7 +99,7 @@ class TestMarkdownConverter:
 
         assert converter.convert(jira_quote) == expected_quote
 
-    def test_convert_code_blocks(self):
+    def test_convert_code_blocks(self) -> None:
         """Test code block conversion."""
         converter = MarkdownConverter()
 
@@ -138,7 +138,7 @@ Plain text content
 
         assert converter.convert(jira_noformat) == expected_noformat
 
-    def test_convert_links(self):
+    def test_convert_links(self) -> None:
         """Test link conversion."""
         converter = MarkdownConverter()
 
@@ -157,7 +157,7 @@ Plain text content
         # Title only (internal link)
         assert converter.convert("[Internal Page]") == "[Internal Page](Internal Page)"
 
-    def test_convert_issue_references_with_mapping(self):
+    def test_convert_issue_references_with_mapping(self) -> None:
         """Test issue reference conversion with work package mapping."""
         wp_mapping = {"PROJ-123": 456, "TEST-789": 999}
         converter = MarkdownConverter(work_package_mapping=wp_mapping)
@@ -167,7 +167,7 @@ Plain text content
 
         assert converter.convert(text) == expected
 
-    def test_convert_issue_references_without_mapping(self):
+    def test_convert_issue_references_without_mapping(self) -> None:
         """Test issue reference conversion without work package mapping."""
         converter = MarkdownConverter()
 
@@ -176,7 +176,7 @@ Plain text content
 
         assert converter.convert(text) == expected
 
-    def test_convert_user_mentions_with_mapping(self):
+    def test_convert_user_mentions_with_mapping(self) -> None:
         """Test user mention conversion with user mapping."""
         user_mapping = {"john.doe": 123, "jane.smith": 456}
         converter = MarkdownConverter(user_mapping=user_mapping)
@@ -186,7 +186,7 @@ Plain text content
 
         assert converter.convert(text) == expected
 
-    def test_convert_user_mentions_without_mapping(self):
+    def test_convert_user_mentions_without_mapping(self) -> None:
         """Test user mention conversion without user mapping."""
         converter = MarkdownConverter()
         text = "Hey [~john.doe], please review this"
@@ -195,14 +195,14 @@ Plain text content
         expected = "Hey [~john.doe], please review this"
         assert result == expected
 
-    def test_convert_horizontal_rules(self):
+    def test_convert_horizontal_rules(self) -> None:
         """Test horizontal rule conversion."""
         converter = MarkdownConverter()
 
         assert converter.convert("----") == "---"
         assert converter.convert("----------") == "---"
 
-    def test_convert_tables(self):
+    def test_convert_tables(self) -> None:
         """Test table conversion."""
         converter = MarkdownConverter()
 
@@ -217,7 +217,7 @@ Plain text content
 
         assert converter.convert(jira_table) == expected_table
 
-    def test_convert_panels_and_macros(self):
+    def test_convert_panels_and_macros(self) -> None:
         """Test panel and macro conversion."""
         converter = MarkdownConverter()
 
@@ -265,7 +265,7 @@ This is a helpful tip."""
 
         assert converter.convert(jira_tip) == expected_tip
 
-    def test_convert_complex_document(self):
+    def test_convert_complex_document(self) -> None:
         """Test conversion of a complex document with multiple elements."""
         user_mapping = {"developer": 123}
         wp_mapping = {"PROJ-456": 789}
@@ -341,7 +341,7 @@ For questions, see #789 or contact @123."""
 
         assert converter.convert(jira_complex) == expected_complex
 
-    def test_convert_with_context(self):
+    def test_convert_with_context(self) -> None:
         """Test conversion with additional context."""
         converter = MarkdownConverter()
 
@@ -356,7 +356,7 @@ For questions, see #789 or contact @123."""
         result = converter.convert_with_context(text, context)
         assert result == expected
 
-    def test_cleanup_whitespace(self):
+    def test_cleanup_whitespace(self) -> None:
         """Test whitespace cleanup functionality."""
         converter = MarkdownConverter()
 
@@ -380,7 +380,7 @@ Line 4"""
 
         assert converter.convert(text_with_excess) == expected_cleaned
 
-    def test_nested_formatting(self):
+    def test_nested_formatting(self) -> None:
         """Test handling of nested formatting elements."""
         converter = MarkdownConverter()
 
@@ -394,7 +394,7 @@ Line 4"""
         expected = "**bold `code` text**"
         assert converter.convert(text) == expected
 
-    def test_convert_expand_macro(self):
+    def test_convert_expand_macro(self) -> None:
         """Test conversion of Jira expand/collapsible sections."""
         converter = MarkdownConverter()
 
@@ -410,7 +410,7 @@ Line 4"""
         assert "<summary>Show/Hide Details</summary>" in result
         assert "Hidden content here" in result
 
-    def test_convert_tabs_macro(self):
+    def test_convert_tabs_macro(self) -> None:
         """Test conversion of Jira tabs."""
         converter = MarkdownConverter()
 
@@ -430,7 +430,7 @@ Line 4"""
         assert "**📑 Only Tab**" in result
         assert "Single content" in result
 
-    def test_convert_color_macro(self):
+    def test_convert_color_macro(self) -> None:
         """Test conversion of Jira color formatting."""
         converter = MarkdownConverter()
 
@@ -457,7 +457,7 @@ Line 4"""
         result = converter.convert(jira_custom)
         assert result == "(#FF5733) Custom color"
 
-    def test_advanced_macros_combined(self):
+    def test_advanced_macros_combined(self) -> None:
         """Test multiple advanced macros together."""
         converter = MarkdownConverter()
 
@@ -491,7 +491,7 @@ Content for option B with _italic_ text.
         assert "**bold**" in result
         assert "*italic*" in result
 
-    def test_edge_cases(self):
+    def test_edge_cases(self) -> None:
         """Test edge cases and malformed markup."""
         converter = MarkdownConverter()
 
@@ -501,7 +501,8 @@ Content for option B with _italic_ text.
         # Empty table cells
         jira_table = "|Header||Empty|"
         result = converter.convert(jira_table)
-        assert "Header" in result and "Empty" in result
+        assert "Header" in result
+        assert "Empty" in result
 
         # Malformed headings
         assert converter.convert("h7. Invalid heading") == "h7. Invalid heading"
@@ -509,9 +510,11 @@ Content for option B with _italic_ text.
         # Mixed line endings
         text_mixed = "Line 1\r\nLine 2\nLine 3\r"
         result = converter.convert(text_mixed)
-        assert "Line 1" in result and "Line 2" in result and "Line 3" in result
+        assert "Line 1" in result
+        assert "Line 2" in result
+        assert "Line 3" in result
 
-    def test_convert_images(self):
+    def test_convert_images(self) -> None:
         """Test image conversion from Jira to markdown format."""
         converter = MarkdownConverter()
 
@@ -533,7 +536,7 @@ Content for option B with _italic_ text.
         expected = "See ![](before.png) and ![After image](after.png)"
         assert result == expected
 
-    def test_convert_attachments(self):
+    def test_convert_attachments(self) -> None:
         """Test attachment conversion from Jira to markdown format."""
         converter = MarkdownConverter()
 

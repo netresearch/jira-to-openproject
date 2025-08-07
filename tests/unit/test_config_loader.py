@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """Tests for the configuration loader."""
 
-import logging
 import os
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import patch
 
 import pytest
-import yaml
 
 from src.config_loader import ConfigLoader
 
@@ -78,14 +74,25 @@ def temp_dir(tmp_path):
 @patch("src.config_loader.ConfigLoader._apply_environment_overrides")
 @patch("src.config_loader.ConfigLoader._load_database_config")
 @patch("src.config_loader.ConfigLoader._load_yaml_config")
-def test_config_loader_loads_from_config_file(mock_load_yaml, mock_load_db, mock_apply_env, test_env, config_helper, temp_dir):
+def test_config_loader_loads_from_config_file(
+    mock_load_yaml,
+    mock_load_db,
+    mock_apply_env,
+    test_env,
+    config_helper,
+    temp_dir,
+) -> None:
     """Test that ConfigLoader can load configuration from a YAML file."""
     # Arrange
     test_config = config_helper.create_test_config(test_env)
     mock_load_yaml.return_value = test_config
 
     # Mock environment to provide the config file path
-    with patch.dict(os.environ, {"CONFIG_FILE": str(temp_dir / "config.yaml")}, clear=True):
+    with patch.dict(
+        os.environ,
+        {"CONFIG_FILE": str(temp_dir / "config.yaml")},
+        clear=True,
+    ):
         # Act
         config_loader = ConfigLoader()
 
@@ -98,19 +105,24 @@ def test_config_loader_loads_from_config_file(mock_load_yaml, mock_load_db, mock
 @patch("src.config_loader.ConfigLoader._apply_environment_overrides")
 @patch("src.config_loader.ConfigLoader._load_database_config")
 @patch("src.config_loader.ConfigLoader._load_yaml_config")
-def test_config_loader_loads_from_environment(mock_load_yaml, mock_load_db, mock_apply_env, test_env):
+def test_config_loader_loads_from_environment(
+    mock_load_yaml,
+    mock_load_db,
+    mock_apply_env,
+    test_env,
+) -> None:
     """Test that ConfigLoader can load configuration from environment variables."""
     # Arrange
     mock_load_yaml.return_value = {}
-    
+
     # Act
     with patch.dict(os.environ, test_env, clear=True):
         config_loader = ConfigLoader()
         # Manually set the config after applying env overrides
-        config_loader.config["jira"]["server"] = test_env["JIRA_SERVER"]
+        config_loader.config["jira"]["server"] = test_env["J2O_JIRA_SERVER"]
 
     # Assert - the environment overrides should set these values
-    assert config_loader.config["jira"]["server"] == test_env["JIRA_SERVER"]
+    assert config_loader.config["jira"]["server"] == test_env["J2O_JIRA_SERVER"]
     mock_load_db.assert_called_once()
 
 
@@ -118,12 +130,16 @@ def test_config_loader_loads_from_environment(mock_load_yaml, mock_load_db, mock
 @patch("src.config_loader.ConfigLoader._apply_environment_overrides")
 @patch("src.config_loader.ConfigLoader._load_database_config")
 @patch("src.config_loader.ConfigLoader._load_yaml_config")
-def test_config_loader_raises_error_for_missing_required_config(mock_load_yaml, mock_load_db, mock_apply_env):
+def test_config_loader_raises_error_for_missing_required_config(
+    mock_load_yaml,
+    mock_load_db,
+    mock_apply_env,
+) -> None:
     """Test that ConfigLoader raises an error when required configuration is missing."""
     # Arrange
     mock_load_yaml.return_value = {}
     mock_load_db.side_effect = RuntimeError("Missing required database configuration")
-    
+
     # Act & Assert
     with patch.dict(os.environ, {}, clear=True), pytest.raises(RuntimeError) as excinfo:
         ConfigLoader()
@@ -135,11 +151,19 @@ def test_config_loader_raises_error_for_missing_required_config(mock_load_yaml, 
 @patch("src.config_loader.ConfigLoader._apply_environment_overrides")
 @patch("src.config_loader.ConfigLoader._load_database_config")
 @patch("src.config_loader.ConfigLoader._load_yaml_config")
-def test_config_loader_file_overrides_environment(mock_load_yaml, mock_load_db, mock_apply_env, test_env, config_helper, temp_dir):
+def test_config_loader_file_overrides_environment(
+    mock_load_yaml,
+    mock_load_db,
+    mock_apply_env,
+    test_env,
+    config_helper,
+    temp_dir,
+) -> None:
     """Test that file configuration overrides environment variables."""
     # Arrange
     file_config = config_helper.create_test_config(
-        test_env, **{"jira.server": "https://file-jira.example.com"}
+        test_env,
+        **{"jira.server": "https://file-jira.example.com"},
     )
     mock_load_yaml.return_value = file_config
 
@@ -157,9 +181,16 @@ def test_config_loader_file_overrides_environment(mock_load_yaml, mock_load_db, 
 class TestDatabaseConfiguration:
     """Test database configuration loading functionality."""
 
-    @pytest.mark.parametrize("env_password", ["test_password", "complex!@#password123", ""])
+    @pytest.mark.parametrize(
+        "env_password",
+        ["test_password", "complex!@#password123", ""],
+    )
     @patch("src.config_loader.Path")
-    def test_load_database_config_env_var_priority(self, mock_path, env_password):
+    def test_load_database_config_env_var_priority(
+        self,
+        mock_path,
+        env_password,
+    ) -> None:
         """Test _load_database_config prioritizes environment variable over Docker secrets."""
         # Arrange
         mock_path_instance = mock_path.return_value
@@ -170,25 +201,41 @@ class TestDatabaseConfiguration:
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
             with patch("src.config_loader.ConfigLoader._apply_environment_overrides"):
                 mock_yaml.return_value = {}
-                
-                with patch.dict(os.environ, {"POSTGRES_PASSWORD": env_password}, clear=True):
+
+                with patch.dict(
+                    os.environ,
+                    {"POSTGRES_PASSWORD": env_password},
+                    clear=True,
+                ):
                     if env_password:  # Non-empty password
                         config_loader = ConfigLoader()
                         expected_password = env_password
-                        assert config_loader.config["database"]["postgres_password"] == expected_password
+                        assert (
+                            config_loader.config["database"]["postgres_password"]
+                            == expected_password
+                        )
                     else:  # Empty password should fall back to Docker secret
                         config_loader = ConfigLoader()
                         expected_password = "docker_secret_password"
-                        assert config_loader.config["database"]["postgres_password"] == expected_password
+                        assert (
+                            config_loader.config["database"]["postgres_password"]
+                            == expected_password
+                        )
 
     @patch("src.config_loader.Path")
     @patch("src.config_loader.load_dotenv")
-    def test_load_database_config_docker_secret_fallback(self, mock_load_dotenv, mock_path):
+    def test_load_database_config_docker_secret_fallback(
+        self,
+        mock_load_dotenv,
+        mock_path,
+    ) -> None:
         """Test _load_database_config falls back to Docker secret when env var is missing."""
         # Arrange
         mock_path_instance = mock_path.return_value
         mock_path_instance.exists.return_value = True
-        mock_path_instance.read_text.return_value = "docker_secret_password\n"  # With whitespace
+        mock_path_instance.read_text.return_value = (
+            "docker_secret_password\n"  # With whitespace
+        )
 
         # Mock all the other initialization methods
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
@@ -199,12 +246,21 @@ class TestDatabaseConfiguration:
                     config_loader = ConfigLoader()
 
         # Assert
-        assert config_loader.config["database"]["postgres_password"] == "docker_secret_password"
-        assert config_loader.config["database"]["postgres_db"] == "jira_migration"  # Default value
+        assert (
+            config_loader.config["database"]["postgres_password"]
+            == "docker_secret_password"
+        )
+        assert (
+            config_loader.config["database"]["postgres_db"] == "jira_migration"
+        )  # Default value
 
     @patch("src.config_loader.Path")
     @patch("src.config_loader.load_dotenv")
-    def test_load_database_config_no_password_sources(self, mock_load_dotenv, mock_path):
+    def test_load_database_config_no_password_sources(
+        self,
+        mock_load_dotenv,
+        mock_path,
+    ) -> None:
         """Test _load_database_config raises RuntimeError when no password sources exist."""
         # Arrange
         mock_path_instance = mock_path.return_value
@@ -220,16 +276,22 @@ class TestDatabaseConfiguration:
                     with pytest.raises(RuntimeError) as excinfo:
                         ConfigLoader()
 
-                    assert "POSTGRES_PASSWORD is required but not found" in str(excinfo.value)
+                    assert "POSTGRES_PASSWORD is required but not found" in str(
+                        excinfo.value,
+                    )
 
     @patch("src.config_loader.Path")
     @patch("src.config_loader.load_dotenv")
-    def test_load_database_config_docker_secret_read_error(self, mock_load_dotenv, mock_path):
+    def test_load_database_config_docker_secret_read_error(
+        self,
+        mock_load_dotenv,
+        mock_path,
+    ) -> None:
         """Test _load_database_config handles Docker secret file read errors."""
         # Arrange
         mock_path_instance = mock_path.return_value
         mock_path_instance.exists.return_value = True
-        mock_path_instance.read_text.side_effect = IOError("Permission denied")
+        mock_path_instance.read_text.side_effect = OSError("Permission denied")
 
         # Mock all the other initialization methods
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
@@ -241,11 +303,17 @@ class TestDatabaseConfiguration:
                     with pytest.raises(RuntimeError) as excinfo:
                         ConfigLoader()
 
-                    assert "POSTGRES_PASSWORD is required but not found" in str(excinfo.value)
+                    assert "POSTGRES_PASSWORD is required but not found" in str(
+                        excinfo.value,
+                    )
 
     @patch("src.config_loader.Path")
     @patch("src.config_loader.load_dotenv")
-    def test_load_database_config_docker_secret_empty_file(self, mock_load_dotenv, mock_path):
+    def test_load_database_config_docker_secret_empty_file(
+        self,
+        mock_load_dotenv,
+        mock_path,
+    ) -> None:
         """Test _load_database_config handles empty Docker secret file."""
         # Arrange
         mock_path_instance = mock_path.return_value
@@ -262,17 +330,23 @@ class TestDatabaseConfiguration:
                     with pytest.raises(RuntimeError) as excinfo:
                         ConfigLoader()
 
-                    assert "POSTGRES_PASSWORD is required but not found" in str(excinfo.value)
+                    assert "POSTGRES_PASSWORD is required but not found" in str(
+                        excinfo.value,
+                    )
 
-    def test_load_database_config_returns_complete_config(self):
+    def test_load_database_config_returns_complete_config(self) -> None:
         """Test _load_database_config returns complete database configuration."""
         # Arrange
         # Mock all the other initialization methods
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
             with patch("src.config_loader.ConfigLoader._apply_environment_overrides"):
                 mock_yaml.return_value = {}
-                
-                with patch.dict(os.environ, {"POSTGRES_PASSWORD": "test_password"}, clear=True):
+
+                with patch.dict(
+                    os.environ,
+                    {"POSTGRES_PASSWORD": "test_password"},
+                    clear=True,
+                ):
                     config_loader = ConfigLoader()
 
                 # Assert - check that complete config is set
@@ -281,12 +355,22 @@ class TestDatabaseConfiguration:
                 assert db_config["postgres_db"] == "jira_migration"  # Default value
                 assert db_config["postgres_user"] == "postgres"  # Default value
 
-    @pytest.mark.parametrize("env_overrides,expected", [
-        ({"POSTGRES_DB": "custom_db"}, {"postgres_db": "custom_db"}),
-        ({"POSTGRES_USER": "custom_user"}, {"postgres_user": "custom_user"}),
-        ({"POSTGRES_DB": "test_db", "POSTGRES_USER": "test_user"}, {"postgres_db": "test_db", "postgres_user": "test_user"}),
-    ])
-    def test_load_database_config_environment_overrides(self, env_overrides, expected):
+    @pytest.mark.parametrize(
+        ("env_overrides", "expected"),
+        [
+            ({"POSTGRES_DB": "custom_db"}, {"postgres_db": "custom_db"}),
+            ({"POSTGRES_USER": "custom_user"}, {"postgres_user": "custom_user"}),
+            (
+                {"POSTGRES_DB": "test_db", "POSTGRES_USER": "test_user"},
+                {"postgres_db": "test_db", "postgres_user": "test_user"},
+            ),
+        ],
+    )
+    def test_load_database_config_environment_overrides(
+        self,
+        env_overrides,
+        expected,
+    ) -> None:
         """Test _load_database_config respects environment variable overrides."""
         # Arrange
         base_env = {"POSTGRES_PASSWORD": "test_password"}
@@ -296,7 +380,7 @@ class TestDatabaseConfiguration:
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
             with patch("src.config_loader.ConfigLoader._apply_environment_overrides"):
                 mock_yaml.return_value = {}
-                
+
                 with patch.dict(os.environ, test_env, clear=True):
                     config_loader = ConfigLoader()
 
@@ -305,15 +389,19 @@ class TestDatabaseConfiguration:
                 for key, value in expected.items():
                     assert db_config[key] == value
 
-    def test_get_postgres_password_success(self):
+    def test_get_postgres_password_success(self) -> None:
         """Test get_postgres_password returns password from database config."""
         # Arrange
         # Mock all the other initialization methods
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
             with patch("src.config_loader.ConfigLoader._apply_environment_overrides"):
                 mock_yaml.return_value = {}
-                
-                with patch.dict(os.environ, {"POSTGRES_PASSWORD": "test_password"}, clear=True):
+
+                with patch.dict(
+                    os.environ,
+                    {"POSTGRES_PASSWORD": "test_password"},
+                    clear=True,
+                ):
                     config_loader = ConfigLoader()
 
                 # Act
@@ -322,7 +410,7 @@ class TestDatabaseConfiguration:
                 # Assert
                 assert password == "test_password"
 
-    def test_get_postgres_password_missing_config(self):
+    def test_get_postgres_password_missing_config(self) -> None:
         """Test get_postgres_password raises RuntimeError when database config is missing."""
         # Arrange
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
@@ -340,7 +428,7 @@ class TestDatabaseConfiguration:
 
         assert "PostgreSQL password not configured" in str(excinfo.value)
 
-    def test_get_postgres_password_missing_password_key(self):
+    def test_get_postgres_password_missing_password_key(self) -> None:
         """Test get_postgres_password raises RuntimeError when password key is missing."""
         # Arrange
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
@@ -357,15 +445,19 @@ class TestDatabaseConfiguration:
 
         assert "PostgreSQL password not configured" in str(excinfo.value)
 
-    def test_get_database_config_success(self):
+    def test_get_database_config_success(self) -> None:
         """Test get_database_config returns complete database configuration."""
         # Arrange
         # Mock all the other initialization methods
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
             with patch("src.config_loader.ConfigLoader._apply_environment_overrides"):
                 mock_yaml.return_value = {}
-                
-                with patch.dict(os.environ, {"POSTGRES_PASSWORD": "test_password"}, clear=True):
+
+                with patch.dict(
+                    os.environ,
+                    {"POSTGRES_PASSWORD": "test_password"},
+                    clear=True,
+                ):
                     config_loader = ConfigLoader()
 
                 # Act
@@ -377,7 +469,7 @@ class TestDatabaseConfiguration:
                     assert key in result
                 assert result["postgres_password"] == "test_password"
 
-    def test_get_database_config_missing(self):
+    def test_get_database_config_missing(self) -> None:
         """Test get_database_config returns empty dict when database config is missing."""
         # Arrange
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
@@ -391,28 +483,32 @@ class TestDatabaseConfiguration:
 
         # Act
         result = config_loader.get_database_config()
-        
+
         # Assert - method returns empty dict, doesn't raise error
         assert result == {}
 
-    def test_configloader_init_calls_load_database_config(self, test_env):
+    def test_configloader_init_calls_load_database_config(self, test_env) -> None:
         """Test ConfigLoader.__init__ calls _load_database_config."""
         # Arrange & Act
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
             with patch("src.config_loader.ConfigLoader._apply_environment_overrides"):
-                with patch("src.config_loader.ConfigLoader._load_database_config") as mock_load_db:
+                with patch(
+                    "src.config_loader.ConfigLoader._load_database_config",
+                ) as mock_load_db:
                     mock_yaml.return_value = {}
-                    config_loader = ConfigLoader()
+                    ConfigLoader()
 
         # Assert
         mock_load_db.assert_called_once()
 
-    def test_configloader_init_propagates_database_config_error(self, test_env):
+    def test_configloader_init_propagates_database_config_error(self, test_env) -> None:
         """Test ConfigLoader.__init__ propagates _load_database_config errors."""
         # Arrange
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
             with patch("src.config_loader.ConfigLoader._apply_environment_overrides"):
-                with patch("src.config_loader.ConfigLoader._load_database_config") as mock_load_db:
+                with patch(
+                    "src.config_loader.ConfigLoader._load_database_config",
+                ) as mock_load_db:
                     mock_yaml.return_value = {}
                     mock_load_db.side_effect = RuntimeError("Database config error")
 

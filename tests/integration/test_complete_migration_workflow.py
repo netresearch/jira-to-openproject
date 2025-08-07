@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Integration tests for the complete migration workflow using the Integration Testing Framework."""
 
-import pytest
 import asyncio
-from unittest.mock import patch, AsyncMock, MagicMock
+
+import pytest
+
 from src.utils.integration_testing_framework import (
-    IntegrationTestingFramework, TestSuite, TestData, TestConfig, TestEnvironment, TestScope
+    IntegrationTestingFramework,
+    TestConfig,
+    TestData,
+    TestEnvironment,
+    TestScope,
+    TestSuite,
 )
 
 
@@ -20,12 +26,12 @@ class TestMigrationIntegration:
             scope=TestScope.INTEGRATION,
             timeout_seconds=30,
             max_retries=3,
-            parallel_workers=2
+            parallel_workers=2,
         )
         return IntegrationTestingFramework(config)
 
     @pytest.mark.asyncio
-    async def test_jira_connection_integration(self, framework):
+    async def test_jira_connection_integration(self, framework) -> None:
         """Test Jira connection integration."""
         async with framework.test_context():
             # Test Jira connection with mock data
@@ -34,7 +40,7 @@ class TestMigrationIntegration:
             assert "connection_time" in result
 
     @pytest.mark.asyncio
-    async def test_openproject_connection_integration(self, framework):
+    async def test_openproject_connection_integration(self, framework) -> None:
         """Test OpenProject connection integration."""
         async with framework.test_context():
             # Test OpenProject connection with mock data
@@ -43,7 +49,7 @@ class TestMigrationIntegration:
             assert "connection_time" in result
 
     @pytest.mark.asyncio
-    async def test_data_validation_integration(self, framework):
+    async def test_data_validation_integration(self, framework) -> None:
         """Test data validation integration."""
         async with framework.test_context():
             # Test data validation with mock data
@@ -52,7 +58,7 @@ class TestMigrationIntegration:
             assert result["validated_items"] > 0
 
     @pytest.mark.asyncio
-    async def test_migration_workflow_integration(self, framework):
+    async def test_migration_workflow_integration(self, framework) -> None:
         """Test complete migration workflow integration."""
         async with framework.test_context():
             # Test migration workflow with mock data
@@ -61,7 +67,7 @@ class TestMigrationIntegration:
             assert result["migrated_items"] > 0
 
     @pytest.mark.asyncio
-    async def test_performance_monitoring_integration(self, framework):
+    async def test_performance_monitoring_integration(self, framework) -> None:
         """Test performance monitoring integration."""
         async with framework.test_context():
             # Test performance monitoring with mock data
@@ -70,7 +76,7 @@ class TestMigrationIntegration:
             assert "performance_metrics" in result
 
     @pytest.mark.asyncio
-    async def test_error_recovery_integration(self, framework):
+    async def test_error_recovery_integration(self, framework) -> None:
         """Test error recovery integration."""
         async with framework.test_context():
             # Test error recovery with mock data
@@ -79,7 +85,7 @@ class TestMigrationIntegration:
             assert result["retry_count"] >= 0
 
     @pytest.mark.asyncio
-    async def test_security_integration(self, framework):
+    async def test_security_integration(self, framework) -> None:
         """Test security features integration."""
         async with framework.test_context():
             # Test security validation with mock data
@@ -87,7 +93,7 @@ class TestMigrationIntegration:
             assert result is True
 
     @pytest.mark.asyncio
-    async def test_configuration_management_integration(self, framework):
+    async def test_configuration_management_integration(self, framework) -> None:
         """Test configuration management integration."""
         async with framework.test_context():
             # Test configuration management with mock data
@@ -96,7 +102,7 @@ class TestMigrationIntegration:
             assert "config_loaded" in result
 
     @pytest.mark.asyncio
-    async def test_complete_integration_suite(self, framework):
+    async def test_complete_integration_suite(self, framework) -> None:
         """Test running a complete integration test suite."""
         # Create a comprehensive test suite
         suite = TestSuite(
@@ -109,7 +115,7 @@ class TestMigrationIntegration:
                 jira_users=5,
                 op_projects=2,
                 op_work_packages=10,
-                op_users=5
+                op_users=5,
             ),
             tests=[
                 "test_jira_connection",
@@ -119,8 +125,8 @@ class TestMigrationIntegration:
                 "test_performance_monitoring",
                 "test_error_recovery",
                 "test_security_validation",
-                "test_configuration_management"
-            ]
+                "test_configuration_management",
+            ],
         )
 
         # Mock all test functions
@@ -157,7 +163,7 @@ class TestMigrationIntegration:
                 "test_performance_monitoring": test_performance_monitoring,
                 "test_error_recovery": test_error_recovery,
                 "test_security_validation": test_security_validation,
-                "test_configuration_management": test_configuration_management
+                "test_configuration_management": test_configuration_management,
             }
             return test_functions.get(test_name)
 
@@ -188,12 +194,12 @@ class TestIntegrationTestOrchestration:
             scope=TestScope.INTEGRATION,
             timeout_seconds=30,
             max_retries=3,
-            parallel_workers=2
+            parallel_workers=2,
         )
         return IntegrationTestingFramework(config)
 
     @pytest.mark.asyncio
-    async def test_multiple_test_suites(self, framework):
+    async def test_multiple_test_suites(self, framework) -> None:
         """Test running multiple test suites."""
         # Create multiple test suites
         suite1 = TestSuite(
@@ -201,7 +207,7 @@ class TestIntegrationTestOrchestration:
             description="First test suite",
             config=framework.config,
             test_data=TestData(jira_projects=1, jira_issues_per_project=5),
-            tests=["test_jira_connection", "test_openproject_connection"]
+            tests=["test_jira_connection", "test_openproject_connection"],
         )
 
         suite2 = TestSuite(
@@ -209,7 +215,7 @@ class TestIntegrationTestOrchestration:
             description="Second test suite",
             config=framework.config,
             test_data=TestData(jira_projects=1, jira_issues_per_project=5),
-            tests=["test_data_validation", "test_migration_workflow"]
+            tests=["test_data_validation", "test_migration_workflow"],
         )
 
         # Mock test functions
@@ -230,7 +236,7 @@ class TestIntegrationTestOrchestration:
                 "test_jira_connection": test_jira_connection,
                 "test_openproject_connection": test_openproject_connection,
                 "test_data_validation": test_data_validation,
-                "test_migration_workflow": test_migration_workflow
+                "test_migration_workflow": test_migration_workflow,
             }
             return test_functions.get(test_name)
 
@@ -247,7 +253,7 @@ class TestIntegrationTestOrchestration:
         assert len(results2["tests"]) == 2
 
     @pytest.mark.asyncio
-    async def test_basic_test_suite_creation(self, framework):
+    async def test_basic_test_suite_creation(self, framework) -> None:
         """Test basic test suite creation and execution."""
         # Create a simple test suite
         suite = TestSuite(
@@ -255,7 +261,7 @@ class TestIntegrationTestOrchestration:
             description="Basic integration test suite",
             config=framework.config,
             test_data=TestData(jira_projects=1, jira_issues_per_project=5),
-            tests=["test_jira_connection"]
+            tests=["test_jira_connection"],
         )
 
         # Mock test function
@@ -285,10 +291,7 @@ async def _test_jira_connection(framework):
     return {
         "success": True,
         "connection_time": 0.1,
-        "server_info": {
-            "version": "8.20.0",
-            "server_time": "2024-01-01T00:00:00Z"
-        }
+        "server_info": {"version": "8.20.0", "server_time": "2024-01-01T00:00:00Z"},
     }
 
 
@@ -299,10 +302,7 @@ async def _test_openproject_connection(framework):
     return {
         "success": True,
         "connection_time": 0.1,
-        "server_info": {
-            "version": "12.5.0",
-            "server_time": "2024-01-01T00:00:00Z"
-        }
+        "server_info": {"version": "12.5.0", "server_time": "2024-01-01T00:00:00Z"},
     }
 
 
@@ -314,7 +314,7 @@ async def _test_data_validation(framework):
         "success": True,
         "validated_items": 100,
         "validation_errors": 0,
-        "validation_warnings": 5
+        "validation_warnings": 5,
     }
 
 
@@ -327,7 +327,7 @@ async def _test_migration_workflow(framework):
         "migrated_items": 100,
         "errors": 0,
         "warnings": 5,
-        "migration_time": 0.2
+        "migration_time": 0.2,
     }
 
 
@@ -341,8 +341,8 @@ async def _test_performance_monitoring(framework):
             "cpu_usage": 45.2,
             "memory_usage": 67.8,
             "disk_io": 12.3,
-            "network_io": 8.9
-        }
+            "network_io": 8.9,
+        },
     }
 
 
@@ -354,11 +354,11 @@ async def _test_error_recovery(framework):
         "recovered": True,
         "retry_count": 1,
         "error_type": "connection_timeout",
-        "recovery_time": 0.1
+        "recovery_time": 0.1,
     }
 
 
-async def _test_security_validation(framework):
+async def _test_security_validation(framework) -> bool:
     """Test security validation with mock data."""
     # Simulate security validation
     await asyncio.sleep(0.05)  # Simulate validation time
@@ -373,5 +373,5 @@ async def _test_configuration_management(framework):
         "success": True,
         "config_loaded": True,
         "config_version": "1.0.0",
-        "environment": "test"
-    } 
+        "environment": "test",
+    }

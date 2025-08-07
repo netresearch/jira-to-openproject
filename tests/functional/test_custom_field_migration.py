@@ -46,7 +46,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                     "existing_count": 0,
                     "error_count": 0,
                 },
-            }
+            },
         )
         self.mock_rails_client.transfer_file_to_container = Mock(return_value=True)
 
@@ -63,7 +63,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                     "existing_count": 0,
                     "error_count": 0,
                 },
-            }
+            },
         )
         self.mock_op_client.transfer_file_to_container = Mock()
 
@@ -324,7 +324,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "openproject_name": "Test Text Field",
                 "openproject_type": "text",
                 "matched_by": "create",
-            }
+            },
         ]
 
         # Mock the file transfer and execute methods directly
@@ -378,7 +378,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "openproject_name": "Test Text Field",
                 "openproject_type": "text",
                 "matched_by": "create",
-            }
+            },
         ]
 
         # Ensure file transfer succeeds but execution fails
@@ -408,12 +408,12 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "openproject_name": "Test Field",
                 "openproject_type": "text",
                 "matched_by": "create",
-            }
+            },
         ]
 
         # Mock the transfer_file_to_container to simulate failure
         self.mock_op_client.transfer_file_to_container.side_effect = Exception(
-            "Failed to transfer file"
+            "Failed to transfer file",
         )
 
         # Call the method directly with fields to migrate
@@ -438,7 +438,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                 "openproject_name": "Test Field",
                 "openproject_type": "text",
                 "matched_by": "create",
-            }
+            },
         ]
 
         # Replace json.dump to capture the data being written
@@ -453,7 +453,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                     "id": 1,
                     "jira_id": "customfield_10001",
                     "status": "created",
-                }
+                },
             ],
             "existing": [],
             "errors": [],
@@ -476,13 +476,14 @@ class TestCustomFieldMigration(unittest.TestCase):
             with (
                 patch("pathlib.Path.exists", return_value=True),
                 patch(
-                    "pathlib.Path.open", mock_open(read_data=json.dumps(result_data))
+                    "pathlib.Path.open",
+                    mock_open(read_data=json.dumps(result_data)),
                 ),
             ):
 
                 # Call migrate_custom_fields_via_json directly
                 result = self.migration.migrate_custom_fields_via_json(
-                    fields_to_migrate
+                    fields_to_migrate,
                 )
 
                 # Verify the migration succeeded

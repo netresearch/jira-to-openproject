@@ -4,8 +4,6 @@ import argparse
 import unittest
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.main import main
 
 
@@ -15,11 +13,13 @@ class TestMainEntryPoint:
     @patch("src.main.run_migration")
     @patch("os.environ.get")
     def test_migrate_command(
-        self, mock_env_get: MagicMock, mock_run_migration: MagicMock
+        self,
+        mock_env_get: MagicMock,
+        mock_run_migration: MagicMock,
     ) -> None:
         """Test the main migration command."""
-        from src.models.migration_results import MigrationResult
         from src.models.component_results import ComponentResult
+        from src.models.migration_results import MigrationResult
 
         # Mock environment variables to simulate correct setup
         def mock_get(key: str, default: str | None = None) -> str | None:
@@ -44,12 +44,12 @@ class TestMainEntryPoint:
                 "users": ComponentResult(
                     success=True,
                     message="Users migrated successfully",
-                    details={"migrated": 5, "errors": 0}
+                    details={"migrated": 5, "errors": 0},
                 ),
                 "projects": ComponentResult(
                     success=True,
                     message="Projects migrated successfully",
-                    details={"migrated": 3, "errors": 0}
+                    details={"migrated": 3, "errors": 0},
                 ),
             },
         )
@@ -65,7 +65,9 @@ class TestMainEntryPoint:
     @patch("src.main.argparse.ArgumentParser.parse_args")
     @patch("src.main.argparse.ArgumentParser.print_help")
     def test_no_command(
-        self, mock_print_help: MagicMock, mock_parse_args: MagicMock
+        self,
+        mock_print_help: MagicMock,
+        mock_parse_args: MagicMock,
     ) -> None:
         """Test behavior when no command is provided."""
         # Set up mock args with no command

@@ -2,18 +2,15 @@
 """Unit tests for CheckpointManager recovery and resilience features."""
 
 import json
+from datetime import UTC, datetime
+from unittest.mock import patch
+
 import pytest
-from datetime import datetime, UTC
-from pathlib import Path
-from unittest.mock import Mock, patch
 
 from src.utils.checkpoint_manager import (
     CheckpointManager,
     CheckpointStatus,
     RecoveryAction,
-    ProgressCheckpoint,
-    RecoveryPlan,
-    ProgressTracker,
 )
 
 
@@ -39,7 +36,7 @@ class TestCheckpointManager:
             "metadata": {"batch_number": 5},
         }
 
-    def test_checkpoint_manager_initialization(self, tmp_path):
+    def test_checkpoint_manager_initialization(self, tmp_path) -> None:
         """Test CheckpointManager initialization creates proper directory structure."""
         checkpoint_dir = tmp_path / "test_checkpoints"
         manager = CheckpointManager(checkpoint_dir=checkpoint_dir)
@@ -55,7 +52,11 @@ class TestCheckpointManager:
         assert manager._active_checkpoints == {}
         assert manager._progress_trackers == {}
 
-    def test_create_checkpoint(self, checkpoint_manager, sample_checkpoint_data):
+    def test_create_checkpoint(
+        self,
+        checkpoint_manager,
+        sample_checkpoint_data,
+    ) -> None:
         """Test creating a new checkpoint."""
         checkpoint_id = checkpoint_manager.create_checkpoint(**sample_checkpoint_data)
 
@@ -76,10 +77,12 @@ class TestCheckpointManager:
         assert checkpoint["status"] == CheckpointStatus.PENDING.value
 
         # Verify checkpoint file was created
-        checkpoint_file = checkpoint_manager.checkpoint_dir / "active" / f"{checkpoint_id}.json"
+        checkpoint_file = (
+            checkpoint_manager.checkpoint_dir / "active" / f"{checkpoint_id}.json"
+        )
         assert checkpoint_file.exists()
 
-    def test_start_checkpoint(self, checkpoint_manager, sample_checkpoint_data):
+    def test_start_checkpoint(self, checkpoint_manager, sample_checkpoint_data) -> None:
         """Test starting a checkpoint."""
         checkpoint_id = checkpoint_manager.create_checkpoint(**sample_checkpoint_data)
         checkpoint_manager.start_checkpoint(checkpoint_id)
@@ -88,21 +91,29 @@ class TestCheckpointManager:
         checkpoint = checkpoint_manager._active_checkpoints[checkpoint_id]
         assert checkpoint["status"] == CheckpointStatus.IN_PROGRESS.value
 
-    def test_complete_checkpoint(self, checkpoint_manager, sample_checkpoint_data):
+    def test_complete_checkpoint(
+        self,
+        checkpoint_manager,
+        sample_checkpoint_data,
+    ) -> None:
         """Test completing a checkpoint."""
         checkpoint_id = checkpoint_manager.create_checkpoint(**sample_checkpoint_data)
         checkpoint_manager.start_checkpoint(checkpoint_id)
 
         # Complete with updated entity count
         checkpoint_manager.complete_checkpoint(
-            checkpoint_id, entities_processed=75, metadata={"completion_note": "batch completed"}
+            checkpoint_id,
+            entities_processed=75,
+            metadata={"completion_note": "batch completed"},
         )
 
         # Verify checkpoint was moved to completed
         assert checkpoint_id not in checkpoint_manager._active_checkpoints
 
         # Verify completed file exists
-        completed_file = checkpoint_manager.checkpoint_dir / "completed" / f"{checkpoint_id}.json"
+        completed_file = (
+            checkpoint_manager.checkpoint_dir / "completed" / f"{checkpoint_id}.json"
+        )
         assert completed_file.exists()
 
         # Verify completion data
@@ -114,21 +125,25 @@ class TestCheckpointManager:
         assert completed_data["completed_at"] is not None
         assert completed_data["metadata"]["completion_note"] == "batch completed"
 
-    def test_fail_checkpoint(self, checkpoint_manager, sample_checkpoint_data):
+    def test_fail_checkpoint(self, checkpoint_manager, sample_checkpoint_data) -> None:
         """Test failing a checkpoint."""
         checkpoint_id = checkpoint_manager.create_checkpoint(**sample_checkpoint_data)
         checkpoint_manager.start_checkpoint(checkpoint_id)
 
         error_message = "Network timeout during user processing"
         checkpoint_manager.fail_checkpoint(
-            checkpoint_id, error_message, metadata={"retry_count": 3}
+            checkpoint_id,
+            error_message,
+            metadata={"retry_count": 3},
         )
 
         # Verify checkpoint was moved to failed
         assert checkpoint_id not in checkpoint_manager._active_checkpoints
 
         # Verify failed file exists
-        failed_file = checkpoint_manager.checkpoint_dir / "failed" / f"{checkpoint_id}.json"
+        failed_file = (
+            checkpoint_manager.checkpoint_dir / "failed" / f"{checkpoint_id}.json"
+        )
         assert failed_file.exists()
 
         # Verify failure data
@@ -139,7 +154,7 @@ class TestCheckpointManager:
         assert failed_data["metadata"]["error_message"] == error_message
         assert failed_data["metadata"]["retry_count"] == 3
 
-    def test_get_resume_point(self, checkpoint_manager, sample_checkpoint_data):
+    def test_get_resume_point(self, checkpoint_manager, sample_checkpoint_data) -> None:
         """Test finding resume point for migration."""
         migration_id = "test_migration_456"
 
@@ -173,7 +188,7 @@ class TestCheckpointManager:
         assert resume_point["step_name"] == "step2"
         assert resume_point["entities_processed"] == 50
 
-    def test_can_resume_migration(self, checkpoint_manager):
+    def test_can_resume_migration(self, checkpoint_manager) -> None:
         """Test checking if migration can be resumed."""
         migration_id = "test_migration_789"
 
@@ -194,7 +209,7 @@ class TestCheckpointManager:
         # Now can resume
         assert checkpoint_manager.can_resume_migration(migration_id)
 
-    def test_get_checkpoints_for_migration(self, checkpoint_manager):
+    def test_get_checkpoints_for_migration(self, checkpoint_manager) -> None:
         """Test retrieving all checkpoints for a migration."""
         migration_id = "test_migration_abc"
 
@@ -229,7 +244,11 @@ class TestCheckpointManager:
         assert checkpoints[1]["step_name"] == "step2"
         assert checkpoints[1]["status"] == CheckpointStatus.FAILED.value
 
-    def test_create_recovery_plan(self, checkpoint_manager, sample_checkpoint_data):
+    def test_create_recovery_plan(
+        self,
+        checkpoint_manager,
+        sample_checkpoint_data,
+    ) -> None:
         """Test creating a recovery plan for failed checkpoint."""
         # Create and fail a checkpoint
         checkpoint_id = checkpoint_manager.create_checkpoint(**sample_checkpoint_data)
@@ -246,7 +265,9 @@ class TestCheckpointManager:
 
         # Verify recovery plan was created
         assert plan_id is not None
-        plan_file = checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{plan_id}.json"
+        plan_file = (
+            checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{plan_id}.json"
+        )
         assert plan_file.exists()
 
         # Verify plan content
@@ -254,42 +275,67 @@ class TestCheckpointManager:
             plan_data = json.load(f)
         assert plan_data["failure_type"] == "network_error"
         assert plan_data["error_message"] == "Network connection lost"
-        assert plan_data["recommended_action"] == RecoveryAction.RETRY_FROM_CHECKPOINT.value
+        assert (
+            plan_data["recommended_action"]
+            == RecoveryAction.RETRY_FROM_CHECKPOINT.value
+        )
         assert plan_data["checkpoint_id"] == checkpoint_id
         assert "Check network connectivity" in plan_data["manual_steps"]
 
-    def test_determine_recovery_action(self, checkpoint_manager):
+    def test_determine_recovery_action(self, checkpoint_manager) -> None:
         """Test recovery action determination based on failure types."""
         # Network errors -> retry
-        action = checkpoint_manager._determine_recovery_action("network_error", "Connection timeout")
+        action = checkpoint_manager._determine_recovery_action(
+            "network_error",
+            "Connection timeout",
+        )
         assert action == RecoveryAction.RETRY_FROM_CHECKPOINT
 
         # Validation errors -> manual intervention or skip
-        action = checkpoint_manager._determine_recovery_action("validation_error", "Required field missing")
+        action = checkpoint_manager._determine_recovery_action(
+            "validation_error",
+            "Required field missing",
+        )
         assert action == RecoveryAction.MANUAL_INTERVENTION
 
-        action = checkpoint_manager._determine_recovery_action("validation_error", "Invalid date format")
+        action = checkpoint_manager._determine_recovery_action(
+            "validation_error",
+            "Invalid date format",
+        )
         assert action == RecoveryAction.SKIP_AND_CONTINUE
 
         # Auth errors -> manual intervention
-        action = checkpoint_manager._determine_recovery_action("auth_error", "Token expired")
+        action = checkpoint_manager._determine_recovery_action(
+            "auth_error",
+            "Token expired",
+        )
         assert action == RecoveryAction.MANUAL_INTERVENTION
 
         # System errors -> abort
-        action = checkpoint_manager._determine_recovery_action("system_error", "Database corruption")
+        action = checkpoint_manager._determine_recovery_action(
+            "system_error",
+            "Database corruption",
+        )
         assert action == RecoveryAction.ABORT_MIGRATION
 
         # Unknown errors -> retry
-        action = checkpoint_manager._determine_recovery_action("unknown_error", "Something went wrong")
+        action = checkpoint_manager._determine_recovery_action(
+            "unknown_error",
+            "Something went wrong",
+        )
         assert action == RecoveryAction.RETRY_FROM_CHECKPOINT
 
-    def test_progress_tracking(self, checkpoint_manager):
+    def test_progress_tracking(self, checkpoint_manager) -> None:
         """Test progress tracking functionality."""
         migration_id = "test_migration_progress"
         total_steps = 5
 
         # Start progress tracking
-        checkpoint_manager.start_progress_tracking(migration_id, total_steps, "Initializing")
+        checkpoint_manager.start_progress_tracking(
+            migration_id,
+            total_steps,
+            "Initializing",
+        )
 
         # Verify progress tracker was created
         tracker = checkpoint_manager.get_progress_status(migration_id)
@@ -303,7 +349,10 @@ class TestCheckpointManager:
 
         # Update progress
         checkpoint_manager.update_progress(
-            migration_id, current_step="Processing users", current_step_progress=50.0, completed_steps=2
+            migration_id,
+            current_step="Processing users",
+            current_step_progress=50.0,
+            completed_steps=2,
         )
 
         # Verify updated progress
@@ -313,7 +362,11 @@ class TestCheckpointManager:
         assert tracker["completed_steps"] == 2
         assert tracker["overall_progress"] > 0  # Should be calculated
 
-    def test_cleanup_completed_migration(self, checkpoint_manager, sample_checkpoint_data):
+    def test_cleanup_completed_migration(
+        self,
+        checkpoint_manager,
+        sample_checkpoint_data,
+    ) -> None:
         """Test cleanup of completed migration data."""
         migration_id = "test_migration_cleanup"
 
@@ -341,10 +394,12 @@ class TestCheckpointManager:
         assert checkpoint_id not in checkpoint_manager._active_checkpoints
 
         # Checkpoint should be moved to completed
-        completed_file = checkpoint_manager.checkpoint_dir / "completed" / f"{checkpoint_id}.json"
+        completed_file = (
+            checkpoint_manager.checkpoint_dir / "completed" / f"{checkpoint_id}.json"
+        )
         assert completed_file.exists()
 
-    def test_throughput_calculation(self, checkpoint_manager):
+    def test_throughput_calculation(self, checkpoint_manager) -> None:
         """Test throughput and ETA calculation."""
         migration_id = "test_migration_throughput"
 
@@ -352,7 +407,15 @@ class TestCheckpointManager:
         with patch("src.utils.checkpoint_manager.datetime") as mock_datetime:
             # Set start time
             start_time = datetime(2024, 1, 1, 10, 0, 0, tzinfo=UTC)
-            current_time = datetime(2024, 1, 1, 10, 10, 0, tzinfo=UTC)  # 10 minutes later
+            current_time = datetime(
+                2024,
+                1,
+                1,
+                10,
+                10,
+                0,
+                tzinfo=UTC,
+            )  # 10 minutes later
 
             mock_datetime.now.return_value = current_time
             mock_datetime.fromisoformat.return_value = start_time
@@ -361,7 +424,11 @@ class TestCheckpointManager:
             checkpoint_manager.start_progress_tracking(migration_id, 10)
 
             # Update with some progress
-            checkpoint_manager.update_progress(migration_id, completed_steps=3, current_step_progress=50.0)
+            checkpoint_manager.update_progress(
+                migration_id,
+                completed_steps=3,
+                current_step_progress=50.0,
+            )
 
             # Verify throughput calculation
             tracker = checkpoint_manager.get_progress_status(migration_id)
@@ -369,7 +436,7 @@ class TestCheckpointManager:
             assert tracker["throughput_per_minute"] == pytest.approx(0.35, rel=1e-2)
             assert "minutes" in tracker["estimated_time_remaining"]
 
-    def test_error_handling_invalid_checkpoint(self, checkpoint_manager):
+    def test_error_handling_invalid_checkpoint(self, checkpoint_manager) -> None:
         """Test error handling for invalid checkpoint operations."""
         # Try to start non-existent checkpoint
         checkpoint_manager.start_checkpoint("invalid_checkpoint_id")
@@ -383,23 +450,39 @@ class TestCheckpointManager:
         checkpoint_manager.fail_checkpoint("invalid_checkpoint_id", "Test error")
         # Should not raise exception, just log error
 
-    def test_checkpoint_persistence(self, checkpoint_manager, sample_checkpoint_data):
+    def test_checkpoint_persistence(
+        self,
+        checkpoint_manager,
+        sample_checkpoint_data,
+    ) -> None:
         """Test that checkpoints are properly persisted to disk."""
         checkpoint_id = checkpoint_manager.create_checkpoint(**sample_checkpoint_data)
 
         # Verify file was created with correct content
-        checkpoint_file = checkpoint_manager.checkpoint_dir / "active" / f"{checkpoint_id}.json"
+        checkpoint_file = (
+            checkpoint_manager.checkpoint_dir / "active" / f"{checkpoint_id}.json"
+        )
         assert checkpoint_file.exists()
 
         with checkpoint_file.open() as f:
             saved_data = json.load(f)
 
         assert saved_data["checkpoint_id"] == checkpoint_id
-        assert saved_data["migration_record_id"] == sample_checkpoint_data["migration_record_id"]
+        assert (
+            saved_data["migration_record_id"]
+            == sample_checkpoint_data["migration_record_id"]
+        )
         assert saved_data["step_name"] == sample_checkpoint_data["step_name"]
-        assert saved_data["entities_processed"] == sample_checkpoint_data["entities_processed"]
+        assert (
+            saved_data["entities_processed"]
+            == sample_checkpoint_data["entities_processed"]
+        )
 
-    def test_recovery_plan_execution_mock(self, checkpoint_manager, sample_checkpoint_data):
+    def test_recovery_plan_execution_mock(
+        self,
+        checkpoint_manager,
+        sample_checkpoint_data,
+    ) -> None:
         """Test recovery plan execution (mocked)."""
         # Create and fail a checkpoint
         checkpoint_id = checkpoint_manager.create_checkpoint(**sample_checkpoint_data)
@@ -418,7 +501,11 @@ class TestCheckpointManager:
         # Should succeed (mocked implementation)
         assert result is True
 
-    def test_manual_intervention_recovery(self, checkpoint_manager, sample_checkpoint_data):
+    def test_manual_intervention_recovery(
+        self,
+        checkpoint_manager,
+        sample_checkpoint_data,
+    ) -> None:
         """Test recovery plan for manual intervention scenarios."""
         checkpoint_id = checkpoint_manager.create_checkpoint(**sample_checkpoint_data)
         checkpoint_manager.fail_checkpoint(checkpoint_id, "Data validation failed")
@@ -430,9 +517,13 @@ class TestCheckpointManager:
         )
 
         # Load and verify plan
-        plan_file = checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{plan_id}.json"
+        plan_file = (
+            checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{plan_id}.json"
+        )
         with plan_file.open() as f:
             plan_data = json.load(f)
 
-        assert plan_data["recommended_action"] == RecoveryAction.MANUAL_INTERVENTION.value
-        assert len(plan_data["manual_steps"]) > 0 
+        assert (
+            plan_data["recommended_action"] == RecoveryAction.MANUAL_INTERVENTION.value
+        )
+        assert len(plan_data["manual_steps"]) > 0

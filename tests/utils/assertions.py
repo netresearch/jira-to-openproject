@@ -5,7 +5,8 @@ from typing import Any
 
 
 def assert_projects_equivalent(
-    op_project: dict[str, Any], jira_project: dict[str, Any]
+    op_project: dict[str, Any],
+    jira_project: dict[str, Any],
 ) -> None:
     """Assert that an OpenProject project correctly represents a Jira project.
 
@@ -123,7 +124,7 @@ def assert_lists_equal_unordered(list1: list[Any], list2: list[Any]) -> None:
 
     """
     assert len(list1) == len(
-        list2
+        list2,
     ), f"Lists have different lengths: {len(list1)} vs {len(list2)}"
 
     # Convert to sets if elements are hashable, otherwise use a different approach

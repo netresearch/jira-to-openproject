@@ -2,30 +2,26 @@
 """Tests for the batch processor system."""
 
 import time
-from unittest.mock import patch
 
 import pytest
 
 from src.utils.batch_processor import (
     BatchConfig,
-    BatchResult,
     ThreadSafeBatchProcessor,
-    StreamingJSONProcessor,
-    create_default_batch_processor,
 )
 
 
 class TestBatchProcessor:
     """Test suite for BatchProcessor class."""
 
-    def test_init_default_config(self):
+    def test_init_default_config(self) -> None:
         """Test initialization with default configuration."""
         processor = ThreadSafeBatchProcessor()
         assert processor.batch_size == 100
         assert processor.max_workers == 4
         assert processor._executor is None
 
-    def test_context_manager(self):
+    def test_context_manager(self) -> None:
         """Test context manager functionality."""
         processor = ThreadSafeBatchProcessor()
 
@@ -36,14 +32,14 @@ class TestBatchProcessor:
 
         assert processor._executor is None
 
-    def test_process_items_empty_list(self):
+    def test_process_items_empty_list(self) -> None:
         """Test processing empty list."""
         processor = ThreadSafeBatchProcessor()
 
         result = processor.process_sequential([], lambda x: x)
         assert result["data"] == []
 
-    def test_process_items_sequential(self):
+    def test_process_items_sequential(self) -> None:
         """Test sequential processing strategy."""
         processor = ThreadSafeBatchProcessor()
         items = list(range(10))
@@ -56,7 +52,7 @@ class TestBatchProcessor:
         assert len(result["data"]) == 10
         assert all(item.startswith("processed_") for item in result["data"])
 
-    def test_process_items_parallel(self):
+    def test_process_items_parallel(self) -> None:
         """Test parallel processing strategy."""
         processor = ThreadSafeBatchProcessor()
         items = list(range(20))
@@ -99,11 +95,11 @@ class TestBatchProcessor:
     #     # TODO: Implement retry logic tests with actual API
     #     pass
 
-    def test_simple_timeout(self):
+    def test_simple_timeout(self) -> None:
         """Test basic timeout behavior."""
         import concurrent.futures
 
-        def slow_function():
+        def slow_function() -> str:
             time.sleep(2)
             return "completed"
 
@@ -112,17 +108,19 @@ class TestBatchProcessor:
 
             try:
                 future.result(timeout=1)
-                assert False, "Should have timed out"
+                msg = "Should have timed out"
+                raise AssertionError(msg)
             except concurrent.futures.TimeoutError:
                 pass  # Expected
             except Exception as e:
-                assert False, f"Unexpected exception: {e}"
+                msg = f"Unexpected exception: {e}"
+                raise AssertionError(msg)
 
-    def test_direct_timeout_test(self):
+    def test_direct_timeout_test(self) -> None:
         """Test timeout behavior directly."""
         import concurrent.futures
 
-        def slow_function():
+        def slow_function() -> str:
             time.sleep(2)
             return "done"
 
@@ -185,7 +183,7 @@ class TestBatchProcessor:
 class TestBatchConfig:
     """Test suite for BatchConfig class."""
 
-    def test_default_config(self):
+    def test_default_config(self) -> None:
         """Test default configuration values."""
         config = BatchConfig()
         assert config.batch_size == 100
@@ -195,17 +193,20 @@ class TestBatchConfig:
         assert config.enable_rate_limiting is True
         assert config.chunk_size == 8192
 
-    def test_custom_config(self):
+    def test_custom_config(self) -> None:
         """Test custom configuration values."""
         config = BatchConfig(
-            batch_size=50, max_workers=8, retry_attempts=2, enable_progress_tracking=False
+            batch_size=50,
+            max_workers=8,
+            retry_attempts=2,
+            enable_progress_tracking=False,
         )
         assert config.batch_size == 50
         assert config.max_workers == 8
         assert config.retry_attempts == 2
         assert config.enable_progress_tracking is False
 
-    def test_config_validation(self):
+    def test_config_validation(self) -> None:
         """Test configuration validation."""
         # Test valid config
         config = BatchConfig(batch_size=50, max_workers=8, retry_attempts=2)

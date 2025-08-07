@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
 """Tests for the Advanced Configuration Management System."""
-import asyncio
 import json
-import pytest
 import tempfile
-import yaml
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+import yaml
 
 from src.utils.advanced_config_manager import (
-    ConfigurationManager, EnvironmentType, ConfigVersion, ConfigTemplate,
-    ConfigOverride, ConfigValidationResult, ConfigBackup,
-    generate_config_from_template, validate_configuration,
-    create_config_manager
+    ConfigBackup,
+    ConfigOverride,
+    ConfigTemplate,
+    ConfigurationManager,
+    ConfigValidationResult,
+    ConfigVersion,
+    EnvironmentType,
+    generate_config_from_template,
+    validate_configuration,
 )
 
 
 class TestEnvironmentType:
-    def test_environment_type_values(self):
+    def test_environment_type_values(self) -> None:
         assert EnvironmentType.DEVELOPMENT.value == "development"
         assert EnvironmentType.STAGING.value == "staging"
         assert EnvironmentType.PRODUCTION.value == "production"
@@ -26,20 +30,20 @@ class TestEnvironmentType:
 
 
 class TestConfigVersion:
-    def test_config_version_creation(self):
+    def test_config_version_creation(self) -> None:
         version = ConfigVersion(major=2, minor=0, patch=1)
         assert version.major == 2
         assert version.minor == 0
         assert version.patch == 1
         assert str(version) == "2.0.1"
 
-    def test_config_version_from_string(self):
+    def test_config_version_from_string(self) -> None:
         version = ConfigVersion.from_string("1.2.3")
         assert version.major == 1
         assert version.minor == 2
         assert version.patch == 3
 
-    def test_config_version_comparison(self):
+    def test_config_version_comparison(self) -> None:
         v1 = ConfigVersion(1, 0, 0)
         v2 = ConfigVersion(2, 0, 0)
         assert v1 < v2
@@ -47,13 +51,13 @@ class TestConfigVersion:
 
 
 class TestConfigTemplate:
-    def test_config_template_creation(self):
+    def test_config_template_creation(self) -> None:
         template = ConfigTemplate(
             name="test_template",
             description="Test template",
             template_path=Path("/tmp/test.j2"),
             variables=["var1", "var2"],
-            dependencies=["base_config"]
+            dependencies=["base_config"],
         )
         assert template.name == "test_template"
         assert template.description == "Test template"
@@ -61,24 +65,24 @@ class TestConfigTemplate:
 
 
 class TestConfigOverride:
-    def test_config_override_creation(self):
+    def test_config_override_creation(self) -> None:
         override = ConfigOverride(
             path="jira.url",
             value="https://new-jira.local/",
             environment=EnvironmentType.DEVELOPMENT,
-            description="Override Jira URL for development"
+            description="Override Jira URL for development",
         )
         assert override.path == "jira.url"
         assert override.value == "https://new-jira.local/"
 
 
 class TestConfigValidationResult:
-    def test_config_validation_result_creation(self):
+    def test_config_validation_result_creation(self) -> None:
         result = ConfigValidationResult(
             is_valid=True,
             errors=[],
             warnings=["Warning 1"],
-            schema_version="2.0"
+            schema_version="2.0",
         )
         assert result.is_valid is True
         assert len(result.errors) == 0
@@ -86,13 +90,13 @@ class TestConfigValidationResult:
 
 
 class TestConfigBackup:
-    def test_config_backup_creation(self):
+    def test_config_backup_creation(self) -> None:
         backup = ConfigBackup(
             backup_id="backup_123",
             original_path=Path("/tmp/config.yaml"),
             backup_path=Path("/tmp/backup/config.yaml"),
             timestamp=datetime.now(UTC),
-            description="Test backup"
+            description="Test backup",
         )
         assert backup.backup_id == "backup_123"
         assert backup.original_path == Path("/tmp/config.yaml")
@@ -110,23 +114,23 @@ class TestConfigurationManager:
             config_dir=temp_dir,
             templates_dir=temp_dir / "templates",
             schemas_dir=temp_dir / "schemas",
-            backups_dir=temp_dir / "backups"
+            backups_dir=temp_dir / "backups",
         )
 
-    def test_config_manager_initialization(self, config_manager, temp_dir):
+    def test_config_manager_initialization(self, config_manager, temp_dir) -> None:
         assert config_manager.config_dir == temp_dir
         assert config_manager.templates_dir == temp_dir / "templates"
         assert config_manager.schemas_dir == temp_dir / "schemas"
         assert config_manager.backups_dir == temp_dir / "backups"
 
-    def test_create_directories(self, config_manager):
+    def test_create_directories(self, config_manager) -> None:
         config_manager.create_directories()
         assert config_manager.config_dir.exists()
         assert config_manager.templates_dir.exists()
         assert config_manager.schemas_dir.exists()
         assert config_manager.backups_dir.exists()
 
-    def test_generate_config_from_template(self, config_manager, temp_dir):
+    def test_generate_config_from_template(self, config_manager, temp_dir) -> None:
         # Create a simple template
         template_content = """
         jira:
@@ -141,12 +145,12 @@ class TestConfigurationManager:
             description="Test template",
             template_path=template_path,
             variables=["jira_url", "jira_username"],
-            dependencies=[]
+            dependencies=[],
         )
 
         variables = {
             "jira_url": "https://test-jira.local/",
-            "jira_username": "testuser"
+            "jira_username": "testuser",
         }
 
         result = config_manager.generate_config_from_template(template, variables)
@@ -154,32 +158,28 @@ class TestConfigurationManager:
         assert "jira" in result.config
         assert result.config["jira"]["url"] == "https://test-jira.local/"
 
-    def test_apply_config_overrides(self, config_manager):
-        base_config = {
-            "jira": {
-                "url": "https://jira.local/",
-                "username": "user"
-            }
-        }
+    def test_apply_config_overrides(self, config_manager) -> None:
+        base_config = {"jira": {"url": "https://jira.local/", "username": "user"}}
 
         overrides = [
             ConfigOverride(
                 path="jira.url",
                 value="https://new-jira.local/",
-                environment=EnvironmentType.DEVELOPMENT
-            )
+                environment=EnvironmentType.DEVELOPMENT,
+            ),
         ]
 
         # Create a temporary config file
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(base_config, f)
             config_path = Path(f.name)
-        
+
         result = config_manager.apply_overrides(config_path, overrides)
         assert result.config["jira"]["url"] == "https://new-jira.local/"
 
-    def test_validate_config(self, config_manager, temp_dir):
+    def test_validate_config(self, config_manager, temp_dir) -> None:
         # Create a simple schema
         schema = {
             "type": "object",
@@ -188,43 +188,35 @@ class TestConfigurationManager:
                     "type": "object",
                     "properties": {
                         "url": {"type": "string"},
-                        "username": {"type": "string"}
+                        "username": {"type": "string"},
                     },
-                    "required": ["url", "username"]
-                }
+                    "required": ["url", "username"],
+                },
             },
-            "required": ["jira"]
+            "required": ["jira"],
         }
 
         schema_path = temp_dir / "test_schema.json"
         schema_path.write_text(json.dumps(schema))
 
-        config = {
-            "jira": {
-                "url": "https://jira.local/",
-                "username": "user"
-            }
-        }
+        config = {"jira": {"url": "https://jira.local/", "username": "user"}}
 
         result = config_manager.validate_config(config, schema_path)
         assert result.is_valid is True
 
-    def test_backup_config(self, config_manager, temp_dir):
+    def test_backup_config(self, config_manager, temp_dir) -> None:
         config_path = temp_dir / "config.yaml"
         config_content = {"test": "data"}
         config_path.write_text(yaml.dump(config_content))
 
-        backup = config_manager.create_backup(
-            config_path,
-            description="Test backup"
-        )
+        backup = config_manager.create_backup(config_path, description="Test backup")
 
         assert backup.backup_id is not None
         assert backup.original_path == config_path
         assert backup.backup_path.exists()
         assert backup.description == "Test backup"
 
-    def test_restore_config(self, config_manager, temp_dir):
+    def test_restore_config(self, config_manager, temp_dir) -> None:
         # Create original config
         original_config = {"original": "data"}
         config_path = temp_dir / "config.yaml"
@@ -246,7 +238,7 @@ class TestConfigurationManager:
             restored_config = yaml.safe_load(f)
         assert restored_config == original_config
 
-    def test_encrypt_decrypt_config(self, config_manager):
+    def test_encrypt_decrypt_config(self, config_manager) -> None:
         config_data = {"sensitive": "data"}
         encryption_key = config_manager.generate_encryption_key()
 
@@ -256,7 +248,7 @@ class TestConfigurationManager:
         decrypted = config_manager.decrypt_config(encrypted, encryption_key)
         assert decrypted == config_data
 
-    def test_list_templates(self, config_manager, temp_dir):
+    def test_list_templates(self, config_manager, temp_dir) -> None:
         # Create some templates
         template1 = temp_dir / "template1.yaml.j2"
         template1.write_text("template1")
@@ -269,7 +261,7 @@ class TestConfigurationManager:
         assert "template1" in template_names
         assert "template2" in template_names
 
-    def test_list_backups(self, config_manager, temp_dir):
+    def test_list_backups(self, config_manager, temp_dir) -> None:
         # Create some backups
         backup1 = temp_dir / "backup1.yaml"
         backup1.write_text("backup1")
@@ -279,7 +271,7 @@ class TestConfigurationManager:
         backups = config_manager.list_backups()
         assert len(backups) == 2
 
-    def test_export_config(self, config_manager, temp_dir):
+    def test_export_config(self, config_manager, temp_dir) -> None:
         config = {"test": "data"}
         export_path = temp_dir / "exported_config.yaml"
 
@@ -291,7 +283,7 @@ class TestConfigurationManager:
             exported = yaml.safe_load(f)
         assert exported == config
 
-    def test_import_config(self, config_manager, temp_dir):
+    def test_import_config(self, config_manager, temp_dir) -> None:
         config_data = {"imported": "data"}
         import_path = temp_dir / "import_config.yaml"
         import_path.write_text(yaml.dump(config_data))
@@ -301,7 +293,7 @@ class TestConfigurationManager:
 
 
 class TestConvenienceFunctions:
-    def test_generate_config_from_template_function(self, temp_dir):
+    def test_generate_config_from_template_function(self, temp_dir) -> None:
         template_content = """
         jira:
           url: "{{ jira_url }}"
@@ -314,7 +306,7 @@ class TestConvenienceFunctions:
             description="Test",
             template_path=template_path,
             variables=["jira_url"],
-            dependencies=[]
+            dependencies=[],
         )
 
         variables = {"jira_url": "https://test.local/"}
@@ -326,11 +318,11 @@ class TestConvenienceFunctions:
     #     # TODO: Implement standalone apply_config_overrides function
     #     pass
 
-    def test_validate_config_function(self, temp_dir):
+    def test_validate_config_function(self, temp_dir) -> None:
         config = {"test": "value"}
         config_path = temp_dir / "config.yaml"
         config_path.write_text(yaml.dump(config))
-        
+
         result = validate_configuration(config_path)
         assert result.is_valid is True
 
@@ -351,4 +343,4 @@ class TestConvenienceFunctions:
 
 
 if __name__ == "__main__":
-    pytest.main([__file__]) 
+    pytest.main([__file__])

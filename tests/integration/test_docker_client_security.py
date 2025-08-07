@@ -30,7 +30,8 @@ class TestDockerClientHardening(unittest.TestCase):
         # Mock container existence check to pass during initialization
         self.mock_ssh_client.execute_command.return_value = ("test_container\n", "", 0)
         self.docker_client = DockerClient(
-            container_name="test_container", ssh_client=self.mock_ssh_client
+            container_name="test_container",
+            ssh_client=self.mock_ssh_client,
         )
         # Reset mock after initialization
         self.mock_ssh_client.execute_command.reset_mock()
@@ -47,14 +48,14 @@ class TestDockerClientHardening(unittest.TestCase):
 
         # Act
         stdout, stderr, returncode = self.docker_client.run_container(
-            image="test-image:latest"
+            image="test-image:latest",
         )
 
         # Assert
         assert stdout == "container_id"
         assert stderr == ""
         assert returncode == 0
-        
+
         self.mock_ssh_client.execute_command.assert_called_once()
         cmd_str = self.mock_ssh_client.execute_command.call_args[0][0]
         assert "docker run" in cmd_str
@@ -66,10 +67,7 @@ class TestDockerClientHardening(unittest.TestCase):
         self.mock_ssh_client.execute_command.return_value = ("container_id", "", 0)
 
         # Act
-        self.docker_client.run_container(
-            image="test-image:latest",
-            user="1000:1000"
-        )
+        self.docker_client.run_container(image="test-image:latest", user="1000:1000")
 
         # Assert
         self.mock_ssh_client.execute_command.assert_called_once()
@@ -85,7 +83,7 @@ class TestDockerClientHardening(unittest.TestCase):
         self.docker_client.run_container(
             image="test-image:latest",
             cpu_limit="0.5",
-            memory_limit="512M"
+            memory_limit="512M",
         )
 
         # Assert
@@ -137,7 +135,7 @@ class TestDockerClientHardening(unittest.TestCase):
         # Act
         self.docker_client.run_container(
             image="test-image:latest",
-            command="python app.py"
+            command="python app.py",
         )
 
         # Assert
@@ -151,10 +149,7 @@ class TestDockerClientHardening(unittest.TestCase):
         self.mock_ssh_client.execute_command.return_value = ("output", "", 0)
 
         # Act
-        self.docker_client.run_container(
-            image="test-image:latest",
-            detach=False
-        )
+        self.docker_client.run_container(image="test-image:latest", detach=False)
 
         # Assert
         self.mock_ssh_client.execute_command.assert_called_once()
@@ -164,11 +159,15 @@ class TestDockerClientHardening(unittest.TestCase):
     def test_run_container_execution_failure(self) -> None:
         """Test run_container handles execution failures correctly."""
         # Arrange
-        self.mock_ssh_client.execute_command.return_value = ("", "Error: no such image", 1)
+        self.mock_ssh_client.execute_command.return_value = (
+            "",
+            "Error: no such image",
+            1,
+        )
 
         # Act
         stdout, stderr, returncode = self.docker_client.run_container(
-            image="nonexistent-image:latest"
+            image="nonexistent-image:latest",
         )
 
         # Assert
@@ -182,46 +181,50 @@ class TestDockerClientHardening(unittest.TestCase):
         self.mock_ssh_client.execute_command.return_value = ("container_id", "", 0)
         container_name = "my test container"
         env_value = "value with spaces; and chars"
-        
+
         # Act
         self.docker_client.run_container(
             image="test-image:latest",
             name=container_name,
-            environment={"MY_VAR": env_value}
+            environment={"MY_VAR": env_value},
         )
-        
+
         # Assert
         self.mock_ssh_client.execute_command.assert_called_once()
         cmd_str = self.mock_ssh_client.execute_command.call_args[0][0]
-        
+
         # Check that arguments are properly quoted
         import shlex
+
         assert f"--name {shlex.quote(container_name)}" in cmd_str
         assert f"-e {shlex.quote('MY_VAR')}={shlex.quote(env_value)}" in cmd_str
 
     def test_get_container_info_success(self) -> None:
         """Test successful parsing of docker inspect output."""
         # Arrange
-        inspect_output = json.dumps([{
-            "Config": {
-                "User": "1000:1000",
-                "Image": "my-image:v1"
-            },
-            "HostConfig": {
-                "Memory": 1073741824,  # 1GB
-                "CpuQuota": 50000,
-                "CpuPeriod": 100000,
-                "SecurityOpt": ["no-new-privileges"],
-                "ReadonlyRootfs": True
-            }
-        }])
+        inspect_output = json.dumps(
+            [
+                {
+                    "Config": {"User": "1000:1000", "Image": "my-image:v1"},
+                    "HostConfig": {
+                        "Memory": 1073741824,  # 1GB
+                        "CpuQuota": 50000,
+                        "CpuPeriod": 100000,
+                        "SecurityOpt": ["no-new-privileges"],
+                        "ReadonlyRootfs": True,
+                    },
+                },
+            ],
+        )
         self.mock_ssh_client.execute_command.return_value = (inspect_output, "", 0)
 
         # Act
         info = self.docker_client.get_container_info()
 
         # Assert
-        self.mock_ssh_client.execute_command.assert_called_once_with("docker inspect test_container")
+        self.mock_ssh_client.execute_command.assert_called_once_with(
+            "docker inspect test_container",
+        )
         assert info["user"] == "1000:1000"
         assert info["image"] == "my-image:v1"
         assert info["memory"] == "1073741824"
@@ -233,15 +236,19 @@ class TestDockerClientHardening(unittest.TestCase):
     def test_get_container_info_missing_data_returns_defaults(self) -> None:
         """Test that missing keys in inspect output result in default values."""
         # Arrange
-        inspect_output = json.dumps([{
-            "Config": {
-                "Image": "my-image:v1"
-                # User is missing
-            },
-            "HostConfig": {
-                # All resource limits are missing
-            }
-        }])
+        inspect_output = json.dumps(
+            [
+                {
+                    "Config": {
+                        "Image": "my-image:v1",
+                        # User is missing
+                    },
+                    "HostConfig": {
+                        # All resource limits are missing
+                    },
+                },
+            ],
+        )
         self.mock_ssh_client.execute_command.return_value = (inspect_output, "", 0)
 
         # Act
@@ -257,7 +264,11 @@ class TestDockerClientHardening(unittest.TestCase):
     def test_get_container_info_inspect_fails(self) -> None:
         """Test that a failed docker inspect command raises a ValueError."""
         # Arrange
-        self.mock_ssh_client.execute_command.return_value = ("", "Error: no such container", 1)
+        self.mock_ssh_client.execute_command.return_value = (
+            "",
+            "Error: no such container",
+            1,
+        )
 
         # Act & Assert
         with pytest.raises(ValueError, match="Failed to inspect container"):
@@ -298,7 +309,8 @@ class TestDockerClientSecurityValidation(unittest.TestCase):
         # Mock container existence check to pass during initialization
         self.mock_ssh_client.execute_command.return_value = ("test_container\n", "", 0)
         self.docker_client = DockerClient(
-            container_name="test_container", ssh_client=self.mock_ssh_client
+            container_name="test_container",
+            ssh_client=self.mock_ssh_client,
         )
         # Reset mock after initialization
         self.mock_ssh_client.execute_command.reset_mock()
@@ -311,10 +323,9 @@ class TestDockerClientSecurityValidation(unittest.TestCase):
     def test_container_runs_as_non_root_user(self) -> None:
         """Test that container info shows non-root user execution."""
         # Arrange
-        inspect_output = json.dumps([{
-            "Config": {"User": "1000:1000"},
-            "HostConfig": {}
-        }])
+        inspect_output = json.dumps(
+            [{"Config": {"User": "1000:1000"}, "HostConfig": {}}],
+        )
         self.mock_ssh_client.execute_command.return_value = (inspect_output, "", 0)
 
         # Act
@@ -328,14 +339,18 @@ class TestDockerClientSecurityValidation(unittest.TestCase):
     def test_container_has_resource_limits(self) -> None:
         """Test that container info shows resource limits are enforced."""
         # Arrange
-        inspect_output = json.dumps([{
-            "Config": {},
-            "HostConfig": {
-                "Memory": 536870912,  # 512MB
-                "CpuQuota": 50000,    # 0.5 CPU
-                "CpuPeriod": 100000
-            }
-        }])
+        inspect_output = json.dumps(
+            [
+                {
+                    "Config": {},
+                    "HostConfig": {
+                        "Memory": 536870912,  # 512MB
+                        "CpuQuota": 50000,  # 0.5 CPU
+                        "CpuPeriod": 100000,
+                    },
+                },
+            ],
+        )
         self.mock_ssh_client.execute_command.return_value = (inspect_output, "", 0)
 
         # Act
@@ -349,13 +364,17 @@ class TestDockerClientSecurityValidation(unittest.TestCase):
     def test_container_has_security_options(self) -> None:
         """Test that container has proper security options configured."""
         # Arrange
-        inspect_output = json.dumps([{
-            "Config": {},
-            "HostConfig": {
-                "SecurityOpt": ["no-new-privileges"],
-                "ReadonlyRootfs": True
-            }
-        }])
+        inspect_output = json.dumps(
+            [
+                {
+                    "Config": {},
+                    "HostConfig": {
+                        "SecurityOpt": ["no-new-privileges"],
+                        "ReadonlyRootfs": True,
+                    },
+                },
+            ],
+        )
         self.mock_ssh_client.execute_command.return_value = (inspect_output, "", 0)
 
         # Act
@@ -367,4 +386,4 @@ class TestDockerClientSecurityValidation(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main() 
+    unittest.main()
