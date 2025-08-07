@@ -15,4 +15,4 @@ database:
 # Staging testing settings
 test_mode: false
 test_mock_mode: false
-use_mock_apis: false 
+use_mock_apis: false

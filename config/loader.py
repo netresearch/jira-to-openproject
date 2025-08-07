@@ -7,7 +7,7 @@ using the Pydantic settings model while preserving all current functionality.
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import yaml
 
@@ -38,7 +38,7 @@ class ConfigLoader:
     Preserves all current functionality while adding type safety and validation.
     """
 
-    def __init__(self, config_file_path: Optional[Path] = None) -> None:
+    def __init__(self, config_file_path: Path | None = None) -> None:
         """Initialize the configuration loader.
 
         Args:
@@ -49,7 +49,7 @@ class ConfigLoader:
         self._load_test_environment_configuration()
 
         # Load YAML configuration if provided
-        self.yaml_config: Dict[str, Any] = {}
+        self.yaml_config: dict[str, Any] = {}
         if config_file_path and config_file_path.exists():
             self.yaml_config = self._load_yaml_config(config_file_path)
 
@@ -72,14 +72,15 @@ class ConfigLoader:
 
         if test_mode:
             logger.debug("Running in test environment")
-            
+
             # Load .env.test if it exists
             if Path(".env.test").exists():
                 from dotenv import load_dotenv
+
                 load_dotenv(".env.test", override=True)
                 logger.debug("Loaded test environment from .env.test")
 
-    def _load_yaml_config(self, config_file_path: Path) -> Dict[str, Any]:
+    def _load_yaml_config(self, config_file_path: Path) -> dict[str, Any]:
         """Load configuration from YAML file.
 
         Args:
@@ -91,7 +92,7 @@ class ConfigLoader:
         """
         try:
             with config_file_path.open("r") as config_file:
-                config: Dict[str, Any] = yaml.safe_load(config_file)
+                config: dict[str, Any] = yaml.safe_load(config_file)
                 return config or {}
         except FileNotFoundError:
             logger.exception("Config file not found: %s", config_file_path)
@@ -105,12 +106,21 @@ class ConfigLoader:
         # Override Jira projects from YAML
         if "jira" in self.yaml_config and "projects" in self.yaml_config["jira"]:
             self.settings.jira_projects = self.yaml_config["jira"]["projects"]
-            logger.debug("Applied Jira projects from YAML: %s", self.settings.jira_projects)
+            logger.debug(
+                "Applied Jira projects from YAML: %s", self.settings.jira_projects
+            )
 
         # Override component order from YAML
-        if "migration" in self.yaml_config and "component_order" in self.yaml_config["migration"]:
-            self.settings.component_order = self.yaml_config["migration"]["component_order"]
-            logger.debug("Applied component order from YAML: %s", self.settings.component_order)
+        if (
+            "migration" in self.yaml_config
+            and "component_order" in self.yaml_config["migration"]
+        ):
+            self.settings.component_order = self.yaml_config["migration"][
+                "component_order"
+            ]
+            logger.debug(
+                "Applied component order from YAML: %s", self.settings.component_order
+            )
 
         # Override other YAML settings as needed
         # (Add more overrides here as needed)
@@ -134,13 +144,19 @@ class ConfigLoader:
             if secret_path.exists():
                 try:
                     postgres_password = secret_path.read_text().strip()
-                    logger.debug("Successfully loaded PostgreSQL password from Docker secret")
-                except (IOError, OSError, PermissionError) as e:
-                    logger.warning("Failed to read Docker secret: %s", e.__class__.__name__)
+                    logger.debug(
+                        "Successfully loaded PostgreSQL password from Docker secret"
+                    )
+                except (OSError, PermissionError) as e:
+                    logger.warning(
+                        "Failed to read Docker secret: %s", e.__class__.__name__
+                    )
             else:
                 logger.debug("Docker secret file not found: %s", secret_path)
         else:
-            logger.debug("Successfully loaded PostgreSQL password from environment variable")
+            logger.debug(
+                "Successfully loaded PostgreSQL password from environment variable"
+            )
 
         # Update settings with database configuration
         if postgres_password:
@@ -154,7 +170,7 @@ class ConfigLoader:
 
         logger.debug("Database configuration loaded successfully")
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         """Get the complete configuration dictionary.
 
         Returns:
@@ -166,10 +182,10 @@ class ConfigLoader:
             "openproject": self.settings.get_openproject_config(),
             "migration": self.settings.get_migration_config(),
             "database": self.settings.get_database_config(),
-            "test_mode": self.settings.is_test_mode()
+            "test_mode": self.settings.is_test_mode(),
         }
 
-    def get_jira_config(self) -> Dict[str, Any]:
+    def get_jira_config(self) -> dict[str, Any]:
         """Get Jira-specific configuration.
 
         Returns:
@@ -178,7 +194,7 @@ class ConfigLoader:
         """
         return self.settings.get_jira_config()
 
-    def get_openproject_config(self) -> Dict[str, Any]:
+    def get_openproject_config(self) -> dict[str, Any]:
         """Get OpenProject-specific configuration.
 
         Returns:
@@ -187,7 +203,7 @@ class ConfigLoader:
         """
         return self.settings.get_openproject_config()
 
-    def get_migration_config(self) -> Dict[str, Any]:
+    def get_migration_config(self) -> dict[str, Any]:
         """Get migration-specific configuration.
 
         Returns:
@@ -196,7 +212,7 @@ class ConfigLoader:
         """
         return self.settings.get_migration_config()
 
-    def get_database_config(self) -> Dict[str, str]:
+    def get_database_config(self) -> dict[str, str]:
         """Get database-specific configuration.
 
         Returns:
@@ -246,10 +262,10 @@ class ConfigLoader:
 
 
 # Global configuration instance
-_config_loader: Optional[ConfigLoader] = None
+_config_loader: ConfigLoader | None = None
 
 
-def get_config_loader(config_file_path: Optional[Path] = None) -> ConfigLoader:
+def get_config_loader(config_file_path: Path | None = None) -> ConfigLoader:
     """Get the global configuration loader instance.
 
     Args:
@@ -265,7 +281,7 @@ def get_config_loader(config_file_path: Optional[Path] = None) -> ConfigLoader:
     return _config_loader
 
 
-def load_settings(config_file_path: Optional[Path] = None) -> Settings:
+def load_settings(config_file_path: Path | None = None) -> Settings:
     """Load settings with proper precedence order.
 
     Args:
@@ -279,4 +295,4 @@ def load_settings(config_file_path: Optional[Path] = None) -> Settings:
         return loader.settings
     except Exception as e:
         logger.error("Failed to load configuration: %s", e)
-        raise ValueError(f"Configuration validation failed: {e}") from e 
+        raise ValueError(f"Configuration validation failed: {e}") from e

@@ -9,12 +9,11 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 import requests
 import yaml
 
-from .loader import load_settings, get_config_loader
+from .loader import load_settings
 from .schemas.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -24,21 +23,21 @@ def setup_logging(level: str = "INFO") -> None:
     """Setup logging configuration."""
     logging.basicConfig(
         level=getattr(logging, level.upper()),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
 
 def validate_configuration(settings: Settings) -> list[str]:
     """Validate configuration and return list of errors.
-    
+
     Args:
         settings: Settings object to validate
-        
+
     Returns:
         List of validation error messages (empty if valid)
     """
     errors = []
-    
+
     try:
         # Validate that required directories exist or can be created
         for path_name, path in [
@@ -53,7 +52,7 @@ def validate_configuration(settings: Settings) -> list[str]:
                 error_msg = f"Cannot create {path_name} directory {path}: {e}"
                 errors.append(error_msg)
                 logger.error(error_msg)
-        
+
         # Validate that mapping file directory exists
         try:
             settings.mapping_file.parent.mkdir(parents=True, exist_ok=True)
@@ -62,7 +61,7 @@ def validate_configuration(settings: Settings) -> list[str]:
             error_msg = f"Cannot create mapping file directory: {e}"
             errors.append(error_msg)
             logger.error(error_msg)
-        
+
         # Validate that attachment path directory exists
         try:
             settings.attachment_path.mkdir(parents=True, exist_ok=True)
@@ -71,21 +70,21 @@ def validate_configuration(settings: Settings) -> list[str]:
             error_msg = f"Cannot create attachment directory: {e}"
             errors.append(error_msg)
             logger.error(error_msg)
-        
+
     except Exception as e:
         error_msg = f"Validation failed: {e}"
         errors.append(error_msg)
         logger.error(error_msg)
-    
+
     return errors
 
 
 def test_jira_connection(settings: Settings) -> bool:
     """Test connection to Jira.
-    
+
     Args:
         settings: Settings object with Jira configuration
-        
+
     Returns:
         True if connection successful, False otherwise
     """
@@ -95,17 +94,19 @@ def test_jira_connection(settings: Settings) -> bool:
             f"{settings.jira_url}/rest/api/2/myself",
             auth=(settings.jira_username, settings.jira_api_token),
             timeout=10,
-            verify=settings.ssl_verify
+            verify=settings.ssl_verify,
         )
-        
+
         if response.status_code == 200:
             user_info = response.json()
-            logger.info(f"✓ Jira connection successful - User: {user_info.get('displayName', 'Unknown')}")
+            logger.info(
+                f"✓ Jira connection successful - User: {user_info.get('displayName', 'Unknown')}"
+            )
             return True
         else:
             logger.error(f"✗ Jira connection failed - Status: {response.status_code}")
             return False
-            
+
     except requests.exceptions.RequestException as e:
         logger.error(f"✗ Jira connection failed - {e}")
         return False
@@ -113,10 +114,10 @@ def test_jira_connection(settings: Settings) -> bool:
 
 def test_openproject_connection(settings: Settings) -> bool:
     """Test connection to OpenProject.
-    
+
     Args:
         settings: Settings object with OpenProject configuration
-        
+
     Returns:
         True if connection successful, False otherwise
     """
@@ -127,17 +128,21 @@ def test_openproject_connection(settings: Settings) -> bool:
             f"{settings.openproject_url}/api/v3/users/me",
             headers=headers,
             timeout=10,
-            verify=settings.ssl_verify
+            verify=settings.ssl_verify,
         )
-        
+
         if response.status_code == 200:
             user_info = response.json()
-            logger.info(f"✓ OpenProject connection successful - User: {user_info.get('name', 'Unknown')}")
+            logger.info(
+                f"✓ OpenProject connection successful - User: {user_info.get('name', 'Unknown')}"
+            )
             return True
         else:
-            logger.error(f"✗ OpenProject connection failed - Status: {response.status_code}")
+            logger.error(
+                f"✗ OpenProject connection failed - Status: {response.status_code}"
+            )
             return False
-            
+
     except requests.exceptions.RequestException as e:
         logger.error(f"✗ OpenProject connection failed - {e}")
         return False
@@ -145,7 +150,7 @@ def test_openproject_connection(settings: Settings) -> bool:
 
 def print_settings_summary(settings: Settings, show_secrets: bool = False) -> None:
     """Print a summary of the current settings.
-    
+
     Args:
         settings: Settings object to display
         show_secrets: Whether to show secret values
@@ -155,7 +160,9 @@ def print_settings_summary(settings: Settings, show_secrets: bool = False) -> No
     print(f"Jira Username: {settings.jira_username}")
     print(f"Jira API Token: {'***' if not show_secrets else settings.jira_api_token}")
     print(f"OpenProject URL: {settings.openproject_url}")
-    print(f"OpenProject API Token: {'***' if not show_secrets else settings.openproject_api_token}")
+    print(
+        f"OpenProject API Token: {'***' if not show_secrets else settings.openproject_api_token}"
+    )
     print(f"Migration Batch Size: {settings.batch_size}")
     print(f"SSL Verify: {settings.ssl_verify}")
     print(f"Log Level: {settings.log_level}")
@@ -168,9 +175,11 @@ def print_settings_summary(settings: Settings, show_secrets: bool = False) -> No
     print(f"Component Order: {settings.component_order}")
 
 
-def export_config(settings: Settings, output_file: Optional[Path] = None, format: str = "json") -> None:
+def export_config(
+    settings: Settings, output_file: Path | None = None, format: str = "json"
+) -> None:
     """Export configuration to file.
-    
+
     Args:
         settings: Settings object to export
         output_file: Output file path (if None, prints to stdout)
@@ -181,9 +190,9 @@ def export_config(settings: Settings, output_file: Optional[Path] = None, format
         "openproject": settings.get_openproject_config(),
         "migration": settings.get_migration_config(),
         "database": settings.get_database_config(),
-        "test_mode": settings.is_test_mode()
+        "test_mode": settings.is_test_mode(),
     }
-    
+
     # Remove secrets from export
     if "jira" in config_data:
         config_data["jira"]["api_token"] = "***"
@@ -192,14 +201,14 @@ def export_config(settings: Settings, output_file: Optional[Path] = None, format
         config_data["openproject"]["api_key"] = "***"
     if "database" in config_data:
         config_data["database"]["postgres_password"] = "***"
-    
+
     if format.lower() == "json":
         output = json.dumps(config_data, indent=2)
     elif format.lower() == "yaml":
         output = yaml.dump(config_data, default_flow_style=False, indent=2)
     else:
         raise ValueError(f"Unsupported format: {format}")
-    
+
     if output_file:
         output_file.write_text(output)
         logger.info(f"Configuration exported to {output_file}")
@@ -207,9 +216,11 @@ def export_config(settings: Settings, output_file: Optional[Path] = None, format
         print(output)
 
 
-def create_envrc_template(settings: Settings, output_file: Path = Path(".envrc")) -> None:
+def create_envrc_template(
+    settings: Settings, output_file: Path = Path(".envrc")
+) -> None:
     """Create a .envrc template for direnv.
-    
+
     Args:
         settings: Settings object to use as template
         output_file: Output file path
@@ -252,7 +263,7 @@ export POSTGRES_PASSWORD="your_postgres_password_here"
 export POSTGRES_DB="{settings.postgres_db}"
 export POSTGRES_USER="{settings.postgres_user}"
 """
-    
+
     output_file.write_text(template)
     logger.info(f"direnv template created at {output_file}")
     logger.info("Run 'direnv allow' to enable this configuration")
@@ -272,58 +283,56 @@ Examples:
   python -m config.cli export --format json        # Export configuration as JSON
   python -m config.cli export --format yaml        # Export configuration as YAML
   python -m config.cli create-envrc                # Create .envrc template for direnv
-        """
+        """,
     )
-    
+
     parser.add_argument(
         "command",
         choices=["validate", "test-connections", "show", "export", "create-envrc"],
-        help="Command to execute"
+        help="Command to execute",
     )
-    
+
     parser.add_argument(
         "--config-file",
         type=Path,
         default=Path("config/config.yaml"),
-        help="Configuration file path (default: config/config.yaml)"
+        help="Configuration file path (default: config/config.yaml)",
     )
-    
+
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
-        help="Logging level (default: INFO)"
+        help="Logging level (default: INFO)",
     )
-    
+
     parser.add_argument(
         "--secrets",
         action="store_true",
-        help="Show secrets in output (use with caution)"
+        help="Show secrets in output (use with caution)",
     )
-    
+
     parser.add_argument(
         "--format",
         choices=["json", "yaml"],
         default="json",
-        help="Export format (default: json)"
+        help="Export format (default: json)",
     )
-    
+
     parser.add_argument(
-        "--output",
-        type=Path,
-        help="Output file path (default: stdout)"
+        "--output", type=Path, help="Output file path (default: stdout)"
     )
-    
+
     args = parser.parse_args()
-    
+
     # Setup logging
     setup_logging(args.log_level)
-    
+
     try:
         # Load settings
         settings = load_settings(args.config_file)
         logger.info("Configuration loaded successfully")
-        
+
         if args.command == "validate":
             errors = validate_configuration(settings)
             if errors:
@@ -333,32 +342,32 @@ Examples:
                 sys.exit(1)
             else:
                 logger.info("✓ Configuration validation passed")
-        
+
         elif args.command == "test-connections":
             logger.info("Testing service connections...")
-            
+
             jira_ok = test_jira_connection(settings)
             openproject_ok = test_openproject_connection(settings)
-            
+
             if jira_ok and openproject_ok:
                 logger.info("✓ All service connections successful")
             else:
                 logger.error("✗ Some service connections failed")
                 sys.exit(1)
-        
+
         elif args.command == "show":
             print_settings_summary(settings, show_secrets=args.secrets)
-        
+
         elif args.command == "export":
             export_config(settings, args.output, args.format)
-        
+
         elif args.command == "create-envrc":
             create_envrc_template(settings, args.output or Path(".envrc"))
-        
+
     except Exception as e:
         logger.error(f"Command failed: {e}")
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    main() 
+    main()
