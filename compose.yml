@@ -7,9 +7,9 @@
 # [ ] Are volumes properly scoped?
 # [ ] Is .env file properly ignored by git?
 
-secrets:
-  postgres_password:
-    external: true
+# secrets:
+#   postgres_password:
+#     external: true
 
 services:
   app:
@@ -112,11 +112,11 @@ services:
       # POSTGRES_PASSWORD_FILE has lower precedence than POSTGRES_PASSWORD
       # This allows: env var (dev) -> Docker secret (production) fallback pattern
       # When POSTGRES_PASSWORD is set, it takes precedence over POSTGRES_PASSWORD_FILE
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       PGUSER: ${POSTGRES_USER:-postgres}
-    secrets:
-      - postgres_password
+    # secrets:
+    #   - postgres_password
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -128,6 +128,38 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
+
+  # Test service with dedicated profile
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jira_migration}
+      - PYTHONPATH=/app
+      - PYTEST_ADDOPTS=-v --tb=short
+    depends_on:
+      - redis
+      - postgres
+      - mock-jira
+      - mock-openproject
+    profiles:
+      - test
+    command: ["tail", "-f", "/dev/null"]  # Keep container running
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
 volumes:
   redis_data:

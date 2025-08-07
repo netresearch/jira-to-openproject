@@ -140,27 +140,36 @@ exec: ## Execute command in dev container (use CMD="command here")
 install: ## Install/update Python dependencies in container
 	docker compose exec app pip install --user -r requirements.txt
 
+install-test: ## Install/update Python dependencies in test container
+	docker compose --profile test up -d test
+
 # =============================================================================
 # Testing and Quality
 # =============================================================================
 
-test: ## Run tests in container (parallel execution)
-	docker compose exec app python -m pytest -n auto
+test: ## Run tests in dedicated test container (parallel execution)
+	docker compose --profile test up -d test
+	docker compose exec test python -m pytest -n auto
 
 test-verbose: ## Run tests with verbose output (parallel execution)
-	docker compose exec app python -m pytest -v -n auto
+	docker compose --profile test up -d test
+	docker compose exec test python -m pytest -v -n auto
 
 test-coverage: ## Run tests with coverage report (parallel execution)
-	docker compose exec app python -m pytest -n auto --cov=src --cov-report=html --cov-report=term
+	docker compose --profile test up -d test
+	docker compose exec test python -m pytest -n auto --cov=src --cov-report=html --cov-report=term
 
 test-slow: ## Run slow tests only (integration/end-to-end)
-	docker compose exec app python -m pytest -m "slow or integration or end_to_end" -n auto
+	docker compose --profile test up -d test
+	docker compose exec test python -m pytest -m "slow or integration or end_to_end" -n auto
 
 test-fast: ## Run fast tests only (unit tests)
-	docker compose exec app python -m pytest -m "not slow and not integration and not end_to_end" -n auto
+	docker compose --profile test up -d test
+	docker compose exec test python -m pytest -m "not slow and not integration and not end_to_end" -n auto
 
 test-live-ssh: ## Run tests with live SSH connections
-	docker compose exec app python -m pytest --live-ssh -n auto
+	docker compose --profile test up -d test
+	docker compose exec test python -m pytest --live-ssh -n auto
 
 lint: ## Run linting (flake8, mypy)
 	docker compose exec app flake8 src tests
@@ -223,6 +232,7 @@ local-format: ## Format code locally
 
 clean: ## Clean up containers, volumes, and cache
 	docker compose down -v --remove-orphans
+	docker compose --profile test down -v --remove-orphans
 	docker system prune -f
 	docker volume prune -f
 
