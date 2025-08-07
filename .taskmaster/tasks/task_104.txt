@@ -41,4 +41,4 @@
 2. Penetration testing: Conduct security penetration tests
 3. Compliance validation: Verify compliance with relevant standards
 4. Encryption tests: Validate encryption/decryption functionality
-5. Security monitoring tests: Verify security alerts and incident response 
+5. Security monitoring tests: Verify security alerts and incident response

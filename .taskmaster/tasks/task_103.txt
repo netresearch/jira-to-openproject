@@ -38,4 +38,4 @@
 2. Retry mechanism tests: Validate exponential backoff and retry limits
 3. Dead letter queue tests: Verify failed operations are properly queued
 4. Graceful degradation tests: Test system behavior under partial failures
-5. Chaos engineering tests: Verify system resilience under controlled failures 
+5. Chaos engineering tests: Verify system resilience under controlled failures

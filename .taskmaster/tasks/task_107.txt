@@ -41,4 +41,4 @@
 2. Containerization tests: Validate container builds and deployments
 3. CI/CD pipeline tests: Ensure deployment pipelines work end-to-end
 4. Scaling tests: Verify auto-scaling and load balancing functionality
-5. Disaster recovery tests: Validate backup and recovery procedures 
+5. Disaster recovery tests: Validate backup and recovery procedures

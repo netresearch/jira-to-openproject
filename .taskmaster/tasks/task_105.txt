@@ -41,4 +41,4 @@
 2. User acceptance tests: Have users follow documentation and provide feedback
 3. Documentation completeness tests: Ensure all features are documented
 4. Documentation usability tests: Verify documentation is easy to navigate and understand
-5. Documentation automation tests: Verify automated documentation generation works correctly 
+5. Documentation automation tests: Verify automated documentation generation works correctly

@@ -41,4 +41,4 @@
 2. Data quality tests: Test with various data quality scenarios
 3. Integrity verification tests: Validate referential integrity checks
 4. Reporting tests: Verify validation reports are accurate and useful
-5. Remediation tests: Test data correction and cleansing functionality 
+5. Remediation tests: Test data correction and cleansing functionality
