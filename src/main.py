@@ -16,22 +16,24 @@ from src.migration import restore_backup, run_migration, setup_tmux_session
 
 def validate_database_configuration() -> None:
     """Validate database configuration is properly set.
-    
+
     Raises:
         SystemExit: If database configuration is invalid
+
     """
     try:
         from src.config_loader import ConfigLoader
+
         # ConfigLoader initialization will raise RuntimeError if POSTGRES_PASSWORD is missing
         # or empty, so we don't need additional validation here
-        config_loader = ConfigLoader()
+        ConfigLoader()
         logger.debug("Database configuration validated successfully")
-        
+
     except RuntimeError as e:
         logger.error("Database configuration failed: %s", e)
         logger.error(
             "Please ensure POSTGRES_PASSWORD is set in your .env file "
-            "or as a Docker secret at /run/secrets/postgres_password"
+            "or as a Docker secret at /run/secrets/postgres_password",
         )
         sys.exit(1)
     except Exception as e:
@@ -43,7 +45,7 @@ def main() -> None:
     """Parse arguments and execute the appropriate command."""
     # Validate database configuration early to fail fast
     validate_database_configuration()
-    
+
     # Create the top-level parser
     parser = argparse.ArgumentParser(
         description="Jira to OpenProject migration tool",
@@ -123,25 +125,27 @@ def main() -> None:
 
         # Run the migration with new options
         import asyncio
-        result = asyncio.run(run_migration(
-            components=args.components,
-            stop_on_error=getattr(args, "stop_on_error", False),
-            no_confirm=getattr(args, "no_confirm", False),
-        ))
+
+        result = asyncio.run(
+            run_migration(
+                components=args.components,
+                stop_on_error=getattr(args, "stop_on_error", False),
+                no_confirm=getattr(args, "no_confirm", False),
+            ),
+        )
 
         # Exit with appropriate code
-        if hasattr(result, 'overall'):
+        if hasattr(result, "overall"):
             # MigrationResult object
             if result.overall.get("status") == "success":
                 sys.exit(0)
             else:
                 sys.exit(1)
+        # Plain dict (from tests)
+        elif result.get("status") == "success":
+            sys.exit(0)
         else:
-            # Plain dict (from tests)
-            if result.get("status") == "success":
-                sys.exit(0)
-            else:
-                sys.exit(1)
+            sys.exit(1)
 
     else:
         # No command specified, show help

@@ -1,5 +1,7 @@
-from src.display import configure_logging
 #!/usr/bin/env python3
+
+from src.display import configure_logging
+
 """Selective update system for idempotent migration operations.
 
 This module provides functionality to selectively update only changed entities,
@@ -8,20 +10,16 @@ dependencies during selective updates.
 """
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+
+# Import migration classes for handler delegation - using TYPE_CHECKING to avoid circular imports
 from typing import Any, TypedDict
-from collections.abc import Callable
 
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.migrations.custom_field_migration import CustomFieldMigration
-from src.migrations.project_migration import ProjectMigration
-
-# Import migration classes for handler delegation
-from src.migrations.user_migration import UserMigration
-from src.migrations.work_package_migration import WorkPackageMigration
 from src.utils.change_detector import ChangeReport
 from src.utils.state_manager import StateManager
 
@@ -107,6 +105,7 @@ class SelectiveUpdateManager:
             op_client: OpenProject client for performing updates
             state_manager: State manager for tracking entity mappings
             update_dir: Directory to store update plans and results
+
         """
         self.logger = configure_logging("INFO", None)
         self.jira_client = jira_client or JiraClient()
@@ -123,24 +122,8 @@ class SelectiveUpdateManager:
         (self.update_dir / "results").mkdir(exist_ok=True)
         (self.update_dir / "cache").mkdir(exist_ok=True)
 
-        # Initialize migration instances for delegation
-        self._migration_instances = {}
-        try:
-            self._migration_instances["users"] = UserMigration(
-                jira_client=self.jira_client, op_client=self.op_client
-            )
-            self._migration_instances["projects"] = ProjectMigration(
-                jira_client=self.jira_client, op_client=self.op_client
-            )
-            self._migration_instances["issues"] = WorkPackageMigration(
-                jira_client=self.jira_client, op_client=self.op_client
-            )
-            self._migration_instances["customfields"] = CustomFieldMigration(
-                jira_client=self.jira_client, op_client=self.op_client
-            )
-        except Exception as e:
-            self.logger.warning("Failed to initialize some migration instances: %s", e)
-            self._migration_instances = {}
+        # Initialize migration instances for delegation - will be created lazily
+        self._migration_instances: dict[str, Any] = {}
 
         # Initialize update strategies registry
         self._update_strategies: dict[str, UpdateStrategy] = {}
@@ -153,6 +136,49 @@ class SelectiveUpdateManager:
             "cache_hits": 0,
             "batch_operations": 0,
         }
+
+    def _get_migration_instance(self, entity_type: str) -> Any:
+        """Get or create a migration instance for the given entity type."""
+        if entity_type not in self._migration_instances:
+            try:
+                if entity_type == "users":
+                    from src.migrations.user_migration import UserMigration
+
+                    self._migration_instances[entity_type] = UserMigration(
+                        jira_client=self.jira_client,
+                        op_client=self.op_client,
+                    )
+                elif entity_type == "projects":
+                    from src.migrations.project_migration import ProjectMigration
+
+                    self._migration_instances[entity_type] = ProjectMigration(
+                        jira_client=self.jira_client,
+                        op_client=self.op_client,
+                    )
+                elif entity_type == "issues":
+                    from src.migrations.work_package_migration import (
+                        WorkPackageMigration,
+                    )
+
+                    self._migration_instances[entity_type] = WorkPackageMigration(
+                        jira_client=self.jira_client,
+                        op_client=self.op_client,
+                    )
+                elif entity_type == "customfields":
+                    from src.migrations.custom_field_migration import (
+                        CustomFieldMigration,
+                    )
+
+                    self._migration_instances[entity_type] = CustomFieldMigration(
+                        jira_client=self.jira_client,
+                        op_client=self.op_client,
+                    )
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to create migration instance for %s: %s", entity_type, e
+                )
+                return None
+        return self._migration_instances.get(entity_type)
 
     def _initialize_default_strategies(self) -> None:
         """Initialize default update strategies for common entity types."""
@@ -227,13 +253,16 @@ class SelectiveUpdateManager:
 
         Args:
             strategy: Update strategy configuration
+
         """
         entity_type = strategy["entity_type"]
         self._update_strategies[entity_type] = strategy
         self.logger.debug("Registered update strategy for %s", entity_type)
 
     def analyze_changes(
-        self, change_report: ChangeReport, update_settings: dict[str, Any] | None = None
+        self,
+        change_report: ChangeReport,
+        update_settings: dict[str, Any] | None = None,
     ) -> UpdatePlan:
         """Analyze a change report and create an update plan.
 
@@ -243,6 +272,7 @@ class SelectiveUpdateManager:
 
         Returns:
             UpdatePlan with operations to perform
+
         """
         self.logger.info("Analyzing changes to create selective update plan")
 
@@ -259,7 +289,8 @@ class SelectiveUpdateManager:
             # Check if we have a strategy for this entity type
             if entity_type not in self._update_strategies:
                 self.logger.warning(
-                    "No update strategy for entity type: %s", entity_type
+                    "No update strategy for entity type: %s",
+                    entity_type,
                 )
                 continue
 
@@ -312,7 +343,9 @@ class SelectiveUpdateManager:
         return update_plan
 
     def execute_update_plan(
-        self, update_plan: UpdatePlan, dry_run: bool = False
+        self,
+        update_plan: UpdatePlan,
+        dry_run: bool = False,
     ) -> UpdateResult:
         """Execute an update plan.
 
@@ -322,6 +355,7 @@ class SelectiveUpdateManager:
 
         Returns:
             UpdateResult with execution results
+
         """
         plan_id = update_plan["plan_id"]
         self.logger.info("Executing update plan %s (dry_run=%s)", plan_id, dry_run)
@@ -352,7 +386,7 @@ class SelectiveUpdateManager:
 
             # Group operations by dependency order
             operations_by_type = self._group_operations_by_type(
-                update_plan["operations"]
+                update_plan["operations"],
             )
 
             # Execute operations in dependency order
@@ -362,12 +396,16 @@ class SelectiveUpdateManager:
 
                 operations = operations_by_type[entity_type]
                 self.logger.info(
-                    "Processing %d operations for %s", len(operations), entity_type
+                    "Processing %d operations for %s",
+                    len(operations),
+                    entity_type,
                 )
 
                 # Execute operations for this entity type
                 type_result = self._execute_operations_for_type(
-                    entity_type, operations, dry_run
+                    entity_type,
+                    operations,
+                    dry_run,
                 )
 
                 # Update overall result
@@ -416,6 +454,7 @@ class SelectiveUpdateManager:
 
         Returns:
             Ordered list of entity types respecting dependencies
+
         """
         # Build dependency graph
         dependencies = {}
@@ -454,6 +493,7 @@ class SelectiveUpdateManager:
 
         Returns:
             Estimated duration in seconds
+
         """
         # Base time estimates per operation type (seconds)
         operation_times = {"created": 2.0, "updated": 1.5, "deleted": 1.0}
@@ -469,7 +509,8 @@ class SelectiveUpdateManager:
         return int(total_time + overhead)
 
     def _group_operations_by_type(
-        self, operations: list[UpdateOperation]
+        self,
+        operations: list[UpdateOperation],
     ) -> dict[str, list[UpdateOperation]]:
         """Group operations by entity type.
 
@@ -478,6 +519,7 @@ class SelectiveUpdateManager:
 
         Returns:
             Dictionary mapping entity types to operations
+
         """
         groups = {}
         for op in operations:
@@ -488,7 +530,10 @@ class SelectiveUpdateManager:
         return groups
 
     def _execute_operations_for_type(
-        self, entity_type: str, operations: list[UpdateOperation], dry_run: bool
+        self,
+        entity_type: str,
+        operations: list[UpdateOperation],
+        dry_run: bool,
     ) -> dict[str, Any]:
         """Execute all operations for a specific entity type.
 
@@ -499,6 +544,7 @@ class SelectiveUpdateManager:
 
         Returns:
             Dictionary with execution results
+
         """
         result = {
             "completed": 0,
@@ -530,7 +576,10 @@ class SelectiveUpdateManager:
         return result
 
     def _execute_operation_batch(
-        self, entity_type: str, operations: list[UpdateOperation], dry_run: bool
+        self,
+        entity_type: str,
+        operations: list[UpdateOperation],
+        dry_run: bool,
     ) -> dict[str, Any]:
         """Execute a batch of operations for an entity type.
 
@@ -541,6 +590,7 @@ class SelectiveUpdateManager:
 
         Returns:
             Dictionary with batch execution results
+
         """
         result = {
             "completed": 0,
@@ -573,7 +623,7 @@ class SelectiveUpdateManager:
                 else:
                     result["failed"] += 1
                     result["errors"].append(
-                        f"Failed to {operation['change_type']} {entity_type} {operation['entity_id']}"
+                        f"Failed to {operation['change_type']} {entity_type} {operation['entity_id']}",
                     )
 
             except Exception as e:
@@ -587,7 +637,9 @@ class SelectiveUpdateManager:
         return result
 
     def _execute_single_operation(
-        self, operation: UpdateOperation, strategy: UpdateStrategy
+        self,
+        operation: UpdateOperation,
+        strategy: UpdateStrategy,
     ) -> bool:
         """Execute a single update operation.
 
@@ -597,6 +649,7 @@ class SelectiveUpdateManager:
 
         Returns:
             True if operation succeeded, False otherwise
+
         """
         change_type = operation["change_type"]
         entity_data = operation["jira_data"]
@@ -612,22 +665,21 @@ class SelectiveUpdateManager:
                     self._register_entity_mapping_from_operation(operation, result)
                 return result is not None
 
-            elif change_type == "updated" and strategy["update_handler"]:
+            if change_type == "updated" and strategy["update_handler"]:
                 old_data = operation["openproject_data"]
                 result = strategy["update_handler"](entity_data, old_data)
                 return result is not None
 
-            elif change_type == "deleted" and strategy["delete_handler"]:
+            if change_type == "deleted" and strategy["delete_handler"]:
                 old_data = operation["openproject_data"]
                 return strategy["delete_handler"](old_data)
 
-            else:
-                self.logger.warning(
-                    "No handler for %s operation on %s",
-                    change_type,
-                    operation["entity_type"],
-                )
-                return False
+            self.logger.warning(
+                "No handler for %s operation on %s",
+                change_type,
+                operation["entity_type"],
+            )
+            return False
 
         except Exception as e:
             self.logger.exception(
@@ -640,13 +692,16 @@ class SelectiveUpdateManager:
             return False
 
     def _register_entity_mapping_from_operation(
-        self, operation: UpdateOperation, op_result: dict[str, Any]
+        self,
+        operation: UpdateOperation,
+        op_result: dict[str, Any],
     ) -> None:
         """Register entity mapping after successful creation.
 
         Args:
             operation: The completed operation
             op_result: Result from the create operation
+
         """
         try:
             entity_type = operation["entity_type"]
@@ -673,6 +728,7 @@ class SelectiveUpdateManager:
 
         Args:
             plan: Update plan to save
+
         """
         try:
             plan_file = self.update_dir / "plans" / f"{plan['plan_id']}.json"
@@ -686,6 +742,7 @@ class SelectiveUpdateManager:
 
         Args:
             result: Update result to save
+
         """
         try:
             result_file = self.update_dir / "results" / f"{result['plan_id']}.json"
@@ -699,7 +756,7 @@ class SelectiveUpdateManager:
         """Create a user in OpenProject."""
         self.logger.debug("Creating user: %s", user_data.get("displayName", "unknown"))
 
-        user_migration = self._migration_instances.get("users")
+        user_migration = self._get_migration_instance("users")
         if not user_migration:
             self.logger.error("UserMigration instance not available")
             return None
@@ -711,16 +768,18 @@ class SelectiveUpdateManager:
                 return {"id": result["openproject_id"], "created": True}
             return None
         except Exception as e:
-            self.logger.error("Failed to create user: %s", e)
+            self.logger.exception("Failed to create user: %s", e)
             return None
 
     def _update_user(
-        self, new_data: dict[str, Any], old_data: dict[str, Any]
+        self,
+        new_data: dict[str, Any],
+        old_data: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Update a user in OpenProject."""
         self.logger.debug("Updating user: %s", new_data.get("displayName", "unknown"))
 
-        user_migration = self._migration_instances.get("users")
+        user_migration = self._get_migration_instance("users")
         if not user_migration:
             self.logger.error("UserMigration instance not available")
             return None
@@ -733,7 +792,8 @@ class SelectiveUpdateManager:
                 jira_user_id = new_data.get("accountId") or new_data.get("key")
                 if jira_user_id:
                     mapping = self.state_manager.get_entity_mapping(
-                        "users", jira_user_id
+                        "users",
+                        jira_user_id,
                     )
                     op_user_id = (
                         mapping.get("openproject_entity_id") if mapping else None
@@ -750,7 +810,7 @@ class SelectiveUpdateManager:
 
             return None
         except Exception as e:
-            self.logger.error("Failed to update user: %s", e)
+            self.logger.exception("Failed to update user: %s", e)
             return None
 
     def _delete_user(self, user_data: dict[str, Any]) -> bool:
@@ -760,7 +820,7 @@ class SelectiveUpdateManager:
         # Note: User deletion in OpenProject might not be desired
         # as it could break references. Consider deactivation instead.
         self.logger.warning(
-            "User deletion not implemented - users should be deactivated, not deleted"
+            "User deletion not implemented - users should be deactivated, not deleted",
         )
         return True
 
@@ -768,7 +828,7 @@ class SelectiveUpdateManager:
         """Create a project in OpenProject."""
         self.logger.debug("Creating project: %s", project_data.get("name", "unknown"))
 
-        project_migration = self._migration_instances.get("projects")
+        project_migration = self._get_migration_instance("projects")
         if not project_migration:
             self.logger.error("ProjectMigration instance not available")
             return None
@@ -780,16 +840,18 @@ class SelectiveUpdateManager:
                 return {"id": result["openproject_id"], "created": True}
             return None
         except Exception as e:
-            self.logger.error("Failed to create project: %s", e)
+            self.logger.exception("Failed to create project: %s", e)
             return None
 
     def _update_project(
-        self, new_data: dict[str, Any], old_data: dict[str, Any]
+        self,
+        new_data: dict[str, Any],
+        old_data: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Update a project in OpenProject."""
         self.logger.debug("Updating project: %s", new_data.get("name", "unknown"))
 
-        project_migration = self._migration_instances.get("projects")
+        project_migration = self._get_migration_instance("projects")
         if not project_migration:
             self.logger.error("ProjectMigration instance not available")
             return None
@@ -802,7 +864,8 @@ class SelectiveUpdateManager:
                 jira_project_id = new_data.get("id") or new_data.get("key")
                 if jira_project_id:
                     mapping = self.state_manager.get_entity_mapping(
-                        "projects", jira_project_id
+                        "projects",
+                        jira_project_id,
                     )
                     op_project_id = (
                         mapping.get("openproject_entity_id") if mapping else None
@@ -811,7 +874,8 @@ class SelectiveUpdateManager:
             if op_project_id:
                 # Update existing project
                 result = project_migration.update_project_in_openproject(
-                    new_data, op_project_id
+                    new_data,
+                    op_project_id,
                 )
                 if result:
                     return {"id": op_project_id, "updated": True}
@@ -821,7 +885,7 @@ class SelectiveUpdateManager:
 
             return None
         except Exception as e:
-            self.logger.error("Failed to update project: %s", e)
+            self.logger.exception("Failed to update project: %s", e)
             return None
 
     def _delete_project(self, project_data: dict[str, Any]) -> bool:
@@ -831,19 +895,22 @@ class SelectiveUpdateManager:
         # Note: Project deletion is usually not desired as it removes all associated data
         # Consider archiving/deactivating instead
         self.logger.warning(
-            "Project deletion not implemented - projects should be archived, not deleted"
+            "Project deletion not implemented - projects should be archived, not deleted",
         )
         return True
 
     def _create_custom_field(self, field_data: dict[str, Any]) -> dict[str, Any] | None:
         """Create a custom field in OpenProject."""
         self.logger.debug(
-            "Creating custom field: %s", field_data.get("name", "unknown")
+            "Creating custom field: %s",
+            field_data.get("name", "unknown"),
         )
         return {"id": "placeholder", "created": True}
 
     def _update_custom_field(
-        self, new_data: dict[str, Any], old_data: dict[str, Any]
+        self,
+        new_data: dict[str, Any],
+        old_data: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Update a custom field in OpenProject."""
         self.logger.debug("Updating custom field: %s", new_data.get("name", "unknown"))
@@ -852,7 +919,8 @@ class SelectiveUpdateManager:
     def _delete_custom_field(self, field_data: dict[str, Any]) -> bool:
         """Delete a custom field in OpenProject."""
         self.logger.debug(
-            "Deleting custom field: %s", field_data.get("name", "unknown")
+            "Deleting custom field: %s",
+            field_data.get("name", "unknown"),
         )
         return True
 
@@ -862,7 +930,9 @@ class SelectiveUpdateManager:
         return {"id": "placeholder", "created": True}
 
     def _update_issue_type(
-        self, new_data: dict[str, Any], old_data: dict[str, Any]
+        self,
+        new_data: dict[str, Any],
+        old_data: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Update an issue type in OpenProject."""
         self.logger.debug("Updating issue type: %s", new_data.get("name", "unknown"))
@@ -879,7 +949,9 @@ class SelectiveUpdateManager:
         return {"id": "placeholder", "created": True}
 
     def _update_status(
-        self, new_data: dict[str, Any], old_data: dict[str, Any]
+        self,
+        new_data: dict[str, Any],
+        old_data: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Update a status in OpenProject."""
         self.logger.debug("Updating status: %s", new_data.get("name", "unknown"))
@@ -896,7 +968,9 @@ class SelectiveUpdateManager:
         return {"id": "placeholder", "created": True}
 
     def _update_issue(
-        self, new_data: dict[str, Any], old_data: dict[str, Any]
+        self,
+        new_data: dict[str, Any],
+        old_data: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Update an issue/work package in OpenProject."""
         self.logger.debug("Updating issue: %s", new_data.get("key", "unknown"))
@@ -912,6 +986,7 @@ class SelectiveUpdateManager:
 
         Returns:
             Dictionary mapping entity types to their strategies
+
         """
         return self._update_strategies.copy()
 
@@ -923,6 +998,7 @@ class SelectiveUpdateManager:
 
         Returns:
             Loaded update plan or None if not found
+
         """
         try:
             plan_file = self.update_dir / "plans" / f"{plan_id}.json"
@@ -943,6 +1019,7 @@ class SelectiveUpdateManager:
 
         Returns:
             Loaded update result or None if not found
+
         """
         try:
             result_file = self.update_dir / "results" / f"{plan_id}.json"
@@ -960,6 +1037,7 @@ class SelectiveUpdateManager:
 
         Returns:
             Dictionary with performance metrics
+
         """
         return self._performance_metrics.copy()
 

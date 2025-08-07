@@ -1,5 +1,7 @@
-from src.display import configure_logging
 #!/usr/bin/env python3
+
+from src.display import configure_logging
+
 """Data preservation system for protecting manually modified OpenProject data.
 
 This module provides functionality to detect conflicts between Jira changes and
@@ -112,6 +114,7 @@ class DataPreservationManager:
             preservation_dir: Directory to store preservation data
             jira_client: Jira client for data comparison
             openproject_client: OpenProject client for data comparison
+
         """
         self.logger = configure_logging("INFO", None)
         self.preservation_dir = (
@@ -208,7 +211,7 @@ class DataPreservationManager:
                         if isinstance(policy.get("merge_strategy"), str):
                             try:
                                 converted_policy["merge_strategy"] = MergeStrategy(
-                                    policy["merge_strategy"]
+                                    policy["merge_strategy"],
                                 )
                             except ValueError:
                                 self.logger.warning(
@@ -267,6 +270,7 @@ class DataPreservationManager:
 
         Returns:
             SHA256 checksum of normalized entity data
+
         """
         # Create normalized data excluding volatile fields
         normalized_data = entity_data.copy()
@@ -289,7 +293,9 @@ class DataPreservationManager:
 
         # Sort for consistent ordering
         normalized_json = json.dumps(
-            normalized_data, sort_keys=True, separators=(",", ":")
+            normalized_data,
+            sort_keys=True,
+            separators=(",", ":"),
         )
         return hashlib.sha256(normalized_json.encode("utf-8")).hexdigest()
 
@@ -307,6 +313,7 @@ class DataPreservationManager:
             entity_type: Type of entity (users, projects, work_packages, etc.)
             entity_data: Current state of the entity
             source: Source of the data ("migration" or "manual")
+
         """
         timestamp = datetime.now(tz=UTC).isoformat()
         checksum = self._calculate_entity_checksum(entity_data)
@@ -345,7 +352,10 @@ class DataPreservationManager:
             )
 
     def detect_openproject_changes(
-        self, entity_id: str, entity_type: str, current_data: dict[str, Any]
+        self,
+        entity_id: str,
+        entity_type: str,
+        current_data: dict[str, Any],
     ) -> EntityChangeType:
         """Detect if an entity has been manually modified in OpenProject.
 
@@ -356,6 +366,7 @@ class DataPreservationManager:
 
         Returns:
             Type of change detected
+
         """
         entity_dir = self.preservation_dir / "original_states" / entity_type
         snapshot_file = entity_dir / f"{entity_id}.json"
@@ -373,12 +384,14 @@ class DataPreservationManager:
 
             if current_checksum == stored_snapshot["checksum"]:
                 return EntityChangeType.UNCHANGED
-            else:
-                return EntityChangeType.MODIFIED
+            return EntityChangeType.MODIFIED
 
         except Exception as e:
             self.logger.warning(
-                "Failed to check changes for %s %s: %s", entity_type, entity_id, e
+                "Failed to check changes for %s %s: %s",
+                entity_type,
+                entity_id,
+                e,
             )
             # Assume unchanged if we can't determine
             return EntityChangeType.UNCHANGED
@@ -400,10 +413,13 @@ class DataPreservationManager:
 
         Returns:
             ConflictInfo if conflict detected, None otherwise
+
         """
         # Check if entity was manually modified
         op_change_type = self.detect_openproject_changes(
-            entity_id, entity_type, current_openproject_data
+            entity_id,
+            entity_type,
+            current_openproject_data,
         )
 
         if op_change_type == EntityChangeType.UNCHANGED:
@@ -425,7 +441,8 @@ class DataPreservationManager:
                 # Calculate what changed in OpenProject
                 original_data = stored_snapshot["data"]
                 openproject_changes = self._calculate_field_changes(
-                    original_data, current_openproject_data
+                    original_data,
+                    current_openproject_data,
                 )
             except Exception as e:
                 self.logger.warning("Failed to load original state: %s", e)
@@ -433,7 +450,7 @@ class DataPreservationManager:
 
         # Find conflicted fields (changed in both systems)
         conflicted_fields = []
-        for field in jira_changes.keys():
+        for field in jira_changes:
             if field in openproject_changes:
                 conflicted_fields.append(field)
 
@@ -458,7 +475,9 @@ class DataPreservationManager:
         )
 
     def _calculate_field_changes(
-        self, original_data: dict[str, Any], current_data: dict[str, Any]
+        self,
+        original_data: dict[str, Any],
+        current_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Calculate field-level changes between two entity states.
 
@@ -468,6 +487,7 @@ class DataPreservationManager:
 
         Returns:
             Dictionary of changed fields with their new values
+
         """
         changes = {}
 
@@ -493,6 +513,7 @@ class DataPreservationManager:
 
         Returns:
             Resolved entity data
+
         """
         policy = self.preservation_policies.get(conflict["entity_type"])
         if not policy:
@@ -507,28 +528,40 @@ class DataPreservationManager:
 
         if resolution == ConflictResolution.JIRA_WINS:
             return self._apply_jira_wins_resolution(
-                conflict, jira_data, openproject_data, policy
+                conflict,
+                jira_data,
+                openproject_data,
+                policy,
             )
-        elif resolution == ConflictResolution.OPENPROJECT_WINS:
+        if resolution == ConflictResolution.OPENPROJECT_WINS:
             return self._apply_openproject_wins_resolution(
-                conflict, jira_data, openproject_data, policy
+                conflict,
+                jira_data,
+                openproject_data,
+                policy,
             )
-        elif resolution == ConflictResolution.MERGE:
+        if resolution == ConflictResolution.MERGE:
             return self._apply_merge_resolution(
-                conflict, jira_data, openproject_data, policy
+                conflict,
+                jira_data,
+                openproject_data,
+                policy,
             )
-        elif resolution == ConflictResolution.SKIP:
+        if resolution == ConflictResolution.SKIP:
             # Don't update at all
             return openproject_data
-        else:  # PROMPT_USER
-            # For now, default to OpenProject wins (would need UI for user prompts)
-            self.logger.warning(
-                "User prompt not implemented, defaulting to OpenProject wins for %s",
-                conflict["entity_id"],
-            )
-            return self._apply_openproject_wins_resolution(
-                conflict, jira_data, openproject_data, policy
-            )
+        # PROMPT_USER
+        # For now, default to OpenProject wins (would need UI for user prompts)
+        self.logger.warning(
+            "User prompt not implemented, defaulting to OpenProject wins for %s",
+            conflict["entity_id"],
+        )
+        return self._apply_openproject_wins_resolution(
+            conflict,
+            jira_data,
+            openproject_data,
+            policy,
+        )
 
     def _apply_jira_wins_resolution(
         self,
@@ -547,6 +580,7 @@ class DataPreservationManager:
 
         Returns:
             Resolved entity data
+
         """
         resolved_data = openproject_data.copy()
 
@@ -574,6 +608,7 @@ class DataPreservationManager:
 
         Returns:
             Resolved entity data
+
         """
         resolved_data = openproject_data.copy()
 
@@ -604,6 +639,7 @@ class DataPreservationManager:
 
         Returns:
             Merged entity data
+
         """
         resolved_data = openproject_data.copy()
 
@@ -612,7 +648,7 @@ class DataPreservationManager:
             if field in policy["protected_fields"]:
                 # Keep OpenProject value for protected fields
                 continue
-            elif field in policy["merge_fields"]:
+            if field in policy["merge_fields"]:
                 # Apply merge strategy
                 resolved_data[field] = self._merge_field_values(
                     field,
@@ -651,6 +687,7 @@ class DataPreservationManager:
 
         Returns:
             Merged value
+
         """
         if jira_value is None:
             return openproject_value
@@ -661,45 +698,55 @@ class DataPreservationManager:
             # Try to determine which value is more recent
             try:
                 # Look for timestamp fields in the data
-                jira_timestamp = self._extract_timestamp_from_value(jira_value, field_name)
-                op_timestamp = self._extract_timestamp_from_value(openproject_value, field_name)
-                
+                jira_timestamp = self._extract_timestamp_from_value(
+                    jira_value,
+                    field_name,
+                )
+                op_timestamp = self._extract_timestamp_from_value(
+                    openproject_value,
+                    field_name,
+                )
+
                 if jira_timestamp and op_timestamp:
                     # Compare timestamps - keep the latest
                     if jira_timestamp > op_timestamp:
                         return jira_value
-                    else:
-                        return openproject_value
-                        
+                    return openproject_value
+
                 # If we can't extract timestamps, default to OpenProject value
                 # (preserving manual changes)
                 return openproject_value
-                
+
             except Exception as e:
                 self.logger.debug(
-                    "Failed to compare timestamps for field %s: %s", field_name, e
+                    "Failed to compare timestamps for field %s: %s",
+                    field_name,
+                    e,
                 )
                 # Fallback to OpenProject value if timestamp comparison fails
                 return openproject_value
-                
+
         elif merge_strategy == MergeStrategy.LONGEST_VALUE:
             jira_len = len(str(jira_value))
             op_len = len(str(openproject_value))
             return jira_value if jira_len > op_len else openproject_value
-            
+
         elif merge_strategy == MergeStrategy.CONCATENATE:
             if isinstance(jira_value, str) and isinstance(openproject_value, str):
                 # Create a merged string with clear attribution
                 return f"{openproject_value}\n\n[Merged from Jira]: {jira_value}"
-            else:
-                # For non-string values, preserve OpenProject value
-                return openproject_value
-                
+            # For non-string values, preserve OpenProject value
+            return openproject_value
+
         else:  # CUSTOM
             # Implement custom merge logic per field type
             return self._custom_merge_logic(field_name, jira_value, openproject_value)
 
-    def _extract_timestamp_from_value(self, value: Any, field_name: str) -> datetime | None:
+    def _extract_timestamp_from_value(
+        self,
+        value: Any,
+        field_name: str,
+    ) -> datetime | None:
         """Extract timestamp from a field value for comparison.
 
         Args:
@@ -708,6 +755,7 @@ class DataPreservationManager:
 
         Returns:
             datetime object if timestamp found, None otherwise
+
         """
         try:
             # If the value itself is a timestamp string
@@ -715,36 +763,48 @@ class DataPreservationManager:
                 # Try common timestamp formats
                 timestamp_formats = [
                     "%Y-%m-%dT%H:%M:%S.%fZ",  # ISO with microseconds
-                    "%Y-%m-%dT%H:%M:%SZ",     # ISO without microseconds
-                    "%Y-%m-%dT%H:%M:%S%z",    # ISO with timezone
-                    "%Y-%m-%d %H:%M:%S",      # Standard datetime
-                    "%Y-%m-%d",               # Date only
+                    "%Y-%m-%dT%H:%M:%SZ",  # ISO without microseconds
+                    "%Y-%m-%dT%H:%M:%S%z",  # ISO with timezone
+                    "%Y-%m-%d %H:%M:%S",  # Standard datetime
+                    "%Y-%m-%d",  # Date only
                 ]
-                
+
                 for fmt in timestamp_formats:
                     try:
                         return datetime.strptime(value, fmt)
                     except ValueError:
                         continue
-                        
+
             # If the value is a dict, look for timestamp fields
             elif isinstance(value, dict):
                 timestamp_fields = [
-                    "updated_at", "updated_on", "modified", "changed",
-                    "created_at", "created_on", "timestamp", "last_modified"
+                    "updated_at",
+                    "updated_on",
+                    "modified",
+                    "changed",
+                    "created_at",
+                    "created_on",
+                    "timestamp",
+                    "last_modified",
                 ]
-                
+
                 for ts_field in timestamp_fields:
                     if ts_field in value:
-                        return self._extract_timestamp_from_value(value[ts_field], ts_field)
-                        
+                        return self._extract_timestamp_from_value(
+                            value[ts_field],
+                            ts_field,
+                        )
+
             return None
-            
+
         except Exception:
             return None
 
     def _custom_merge_logic(
-        self, field_name: str, jira_value: Any, openproject_value: Any
+        self,
+        field_name: str,
+        jira_value: Any,
+        openproject_value: Any,
     ) -> Any:
         """Apply custom merge logic for specific fields.
 
@@ -755,6 +815,7 @@ class DataPreservationManager:
 
         Returns:
             Merged value using custom logic
+
         """
         # Custom merge logic for specific fields
         if field_name in ["description", "notes", "comments"]:
@@ -766,7 +827,10 @@ class DataPreservationManager:
         return openproject_value
 
     def create_backup(
-        self, entity_id: str, entity_type: str, entity_data: dict[str, Any]
+        self,
+        entity_id: str,
+        entity_type: str,
+        entity_data: dict[str, Any],
     ) -> Path:
         """Create a backup of entity data before updating.
 
@@ -777,6 +841,7 @@ class DataPreservationManager:
 
         Returns:
             Path to the backup file
+
         """
         timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
         backup_dir = self.preservation_dir / "backups" / entity_type
@@ -796,17 +861,25 @@ class DataPreservationManager:
                 json.dump(backup_data, f, indent=2)
 
             self.logger.debug(
-                "Created backup for %s %s: %s", entity_type, entity_id, backup_file
+                "Created backup for %s %s: %s",
+                entity_type,
+                entity_id,
+                backup_file,
             )
             return backup_file
         except Exception as e:
             self.logger.warning(
-                "Failed to create backup for %s %s: %s", entity_type, entity_id, e
+                "Failed to create backup for %s %s: %s",
+                entity_type,
+                entity_id,
+                e,
             )
             raise
 
     def analyze_preservation_status(
-        self, jira_changes: dict[str, dict[str, Any]], entity_type: str
+        self,
+        jira_changes: dict[str, dict[str, Any]],
+        entity_type: str,
     ) -> ConflictReport:
         """Analyze potential conflicts for a set of entities.
 
@@ -816,6 +889,7 @@ class DataPreservationManager:
 
         Returns:
             Report of all conflicts detected
+
         """
         conflicts = []
         conflicts_by_resolution = {}
@@ -832,7 +906,7 @@ class DataPreservationManager:
 
         # Extract entity IDs for batch processing
         entity_ids = list(jira_changes.keys())
-        
+
         if not entity_ids:
             return ConflictReport(
                 total_conflicts=0,
@@ -844,29 +918,39 @@ class DataPreservationManager:
 
         # Get and log batch configuration
         from src import config
+
         batch_size = config.migration_config.get("batch_size", 100)
         estimated_batches = (len(entity_ids) + batch_size - 1) // batch_size
-        
+
         self.logger.info(
-            "Starting batch analysis for %d %s entities (batch_size=%d, ~%d batches)", 
-            len(entity_ids), entity_type, batch_size, estimated_batches
+            "Starting batch analysis for %d %s entities (batch_size=%d, ~%d batches)",
+            len(entity_ids),
+            entity_type,
+            batch_size,
+            estimated_batches,
         )
 
         try:
             # Phase 1: Batch fetch all OpenProject entities
             self.logger.debug("Phase 1: Starting batch fetch from OpenProject...")
             start_time = datetime.now(tz=UTC)
-            
+
             openproject_entities = self._batch_get_openproject_entities(
-                entity_ids, entity_type
+                entity_ids,
+                entity_type,
             )
-            
+
             fetch_duration = (datetime.now(tz=UTC) - start_time).total_seconds()
-            success_rate = len(openproject_entities) / len(entity_ids) * 100 if entity_ids else 0
-            
+            success_rate = (
+                len(openproject_entities) / len(entity_ids) * 100 if entity_ids else 0
+            )
+
             self.logger.info(
                 "Phase 1 complete: Batch fetch returned %d/%d entities (%.1f%% success) in %.2fs",
-                len(openproject_entities), len(entity_ids), success_rate, fetch_duration
+                len(openproject_entities),
+                len(entity_ids),
+                success_rate,
+                fetch_duration,
             )
 
             # Phase 2: Process conflict detection with batched data
@@ -874,7 +958,7 @@ class DataPreservationManager:
             analysis_start_time = datetime.now(tz=UTC)
             processed_count = 0
             missing_count = 0
-            
+
             for entity_id, changes in jira_changes.items():
                 try:
                     # Get OpenProject data from batch results
@@ -883,7 +967,10 @@ class DataPreservationManager:
                     if current_op_data:
                         # Preserve all existing side-effects and data transforms
                         conflict = self.detect_conflicts(
-                            changes, entity_id, entity_type, current_op_data
+                            changes,
+                            entity_id,
+                            entity_type,
+                            current_op_data,
                         )
                         if conflict:
                             conflicts.append(conflict)
@@ -895,41 +982,54 @@ class DataPreservationManager:
                     else:
                         missing_count += 1
                         self.logger.debug(
-                            "No OpenProject data found for %s %s in batch results", 
-                            entity_type, entity_id
+                            "No OpenProject data found for %s %s in batch results",
+                            entity_type,
+                            entity_id,
                         )
 
                 except Exception as e:
                     self.logger.warning("Failed to analyze entity %s: %s", entity_id, e)
-            
-            analysis_duration = (datetime.now(tz=UTC) - analysis_start_time).total_seconds()
+
+            analysis_duration = (
+                datetime.now(tz=UTC) - analysis_start_time
+            ).total_seconds()
             self.logger.debug(
                 "Phase 2 complete: Analyzed %d entities, %d missing, %d conflicts found in %.2fs",
-                processed_count, missing_count, len(conflicts), analysis_duration
+                processed_count,
+                missing_count,
+                len(conflicts),
+                analysis_duration,
             )
 
         except Exception as e:
             self.logger.warning(
                 "Batch analysis failed for %s, falling back to individual processing: %s",
-                entity_type, e
+                entity_type,
+                e,
             )
-            
+
             # Fallback to individual processing if batch fails
             # This preserves backward compatibility and ensures identical behavior
-            self.logger.debug("Fallback: Using individual API calls to maintain compatibility")
+            self.logger.debug(
+                "Fallback: Using individual API calls to maintain compatibility",
+            )
             fallback_start_time = datetime.now(tz=UTC)
-            
+
             for entity_id, changes in jira_changes.items():
                 try:
                     # Use original individual API call method - preserves all existing behavior
                     current_op_data = self._get_openproject_entity_data(
-                        entity_id, entity_type
+                        entity_id,
+                        entity_type,
                     )
 
                     if current_op_data:
                         # Identical conflict detection logic as before
                         conflict = self.detect_conflicts(
-                            changes, entity_id, entity_type, current_op_data
+                            changes,
+                            entity_id,
+                            entity_type,
+                            current_op_data,
                         )
                         if conflict:
                             conflicts.append(conflict)
@@ -940,28 +1040,39 @@ class DataPreservationManager:
 
                 except Exception as e:
                     self.logger.warning("Failed to analyze entity %s: %s", entity_id, e)
-            
-            fallback_duration = (datetime.now(tz=UTC) - fallback_start_time).total_seconds()
+
+            fallback_duration = (
+                datetime.now(tz=UTC) - fallback_start_time
+            ).total_seconds()
             self.logger.info(
                 "Fallback complete: Processed %d entities individually in %.2fs",
-                len(entity_ids), fallback_duration
+                len(entity_ids),
+                fallback_duration,
             )
 
         # Generate statistics
         conflicts_by_type = {}
         for conflict in conflicts:
             entity_type_key = conflict["entity_type"]
-            conflicts_by_type[entity_type_key] = conflicts_by_type.get(entity_type_key, 0) + 1
+            conflicts_by_type[entity_type_key] = (
+                conflicts_by_type.get(entity_type_key, 0) + 1
+            )
 
         # Calculate API call efficiency
         total_duration = (datetime.now(tz=UTC) - start_time).total_seconds()
-        entities_per_second = len(entity_ids) / total_duration if total_duration > 0 else 0
-        
+        entities_per_second = (
+            len(entity_ids) / total_duration if total_duration > 0 else 0
+        )
+
         self.logger.info(
             "Analysis complete for %s: %d conflicts found out of %d entities "
             "(%.2fs total, %.1f entities/sec, batch_size=%d)",
-            entity_type, len(conflicts), len(entity_ids), 
-            total_duration, entities_per_second, batch_size
+            entity_type,
+            len(conflicts),
+            len(entity_ids),
+            total_duration,
+            entities_per_second,
+            batch_size,
         )
 
         return ConflictReport(
@@ -973,7 +1084,9 @@ class DataPreservationManager:
         )
 
     def _batch_get_openproject_entities(
-        self, entity_ids: list[str], entity_type: str
+        self,
+        entity_ids: list[str],
+        entity_type: str,
     ) -> dict[str, dict[str, Any]]:
         """Get multiple entity data from OpenProject using batch processing.
 
@@ -983,6 +1096,7 @@ class DataPreservationManager:
 
         Returns:
             Dictionary mapping entity_id to entity data (missing entities omitted)
+
         """
         if not entity_ids or not self.openproject_client:
             return {}
@@ -990,186 +1104,252 @@ class DataPreservationManager:
         try:
             # Get batch size from configuration
             from src import config
+
             batch_size = config.migration_config.get("batch_size", 100)
-            
+
             results = {}
-            
+
             # Handle different entity types with their specific batch methods
             if entity_type == "users":
                 # Separate numeric IDs from emails
                 numeric_ids = []
                 email_ids = []
-                
+
                 for entity_id in entity_ids:
                     try:
                         int(entity_id)
                         numeric_ids.append(int(entity_id))
                     except (ValueError, TypeError):
                         email_ids.append(entity_id)
-                
+
                 # Batch fetch by ID
                 if numeric_ids:
                     try:
                         batch_results = self.openproject_client.batch_find_records(
-                            "User", numeric_ids, batch_size
+                            "User",
+                            numeric_ids,
+                            batch_size,
                         )
                         # Map back to string IDs for consistency
                         for user_id, user_data in batch_results.items():
                             results[str(user_id)] = user_data
                     except Exception as e:
                         self.logger.warning("Failed to batch fetch users by ID: %s", e)
-                
+
                 # Batch fetch by email
                 if email_ids:
                     try:
-                        batch_results = self.openproject_client.batch_get_users_by_emails(
-                            email_ids, batch_size
+                        batch_results = (
+                            self.openproject_client.batch_get_users_by_emails(
+                                email_ids,
+                                batch_size,
+                            )
                         )
                         results.update(batch_results)
                     except Exception as e:
-                        self.logger.warning("Failed to batch fetch users by email: %s", e)
+                        self.logger.warning(
+                            "Failed to batch fetch users by email: %s",
+                            e,
+                        )
 
             elif entity_type == "projects":
                 # Separate numeric IDs from identifiers
                 numeric_ids = []
                 identifier_ids = []
-                
+
                 for entity_id in entity_ids:
                     try:
                         int(entity_id)
                         numeric_ids.append(int(entity_id))
                     except (ValueError, TypeError):
                         identifier_ids.append(entity_id)
-                
+
                 # Batch fetch by ID
                 if numeric_ids:
                     try:
                         batch_results = self.openproject_client.batch_find_records(
-                            "Project", numeric_ids, batch_size
+                            "Project",
+                            numeric_ids,
+                            batch_size,
                         )
                         # Map back to string IDs for consistency
                         for project_id, project_data in batch_results.items():
                             results[str(project_id)] = project_data
                     except Exception as e:
-                        self.logger.warning("Failed to batch fetch projects by ID: %s", e)
-                
+                        self.logger.warning(
+                            "Failed to batch fetch projects by ID: %s",
+                            e,
+                        )
+
                 # Batch fetch by identifier
                 if identifier_ids:
                     try:
-                        batch_results = self.openproject_client.batch_get_projects_by_identifiers(
-                            identifier_ids, batch_size
+                        batch_results = (
+                            self.openproject_client.batch_get_projects_by_identifiers(
+                                identifier_ids,
+                                batch_size,
+                            )
                         )
                         results.update(batch_results)
                     except Exception as e:
-                        self.logger.warning("Failed to batch fetch projects by identifier: %s", e)
+                        self.logger.warning(
+                            "Failed to batch fetch projects by identifier: %s",
+                            e,
+                        )
 
             elif entity_type == "custom_fields":
                 # Separate numeric IDs from names
                 numeric_ids = []
                 name_ids = []
-                
+
                 for entity_id in entity_ids:
                     try:
                         int(entity_id)
                         numeric_ids.append(int(entity_id))
                     except (ValueError, TypeError):
                         name_ids.append(entity_id)
-                
+
                 # Batch fetch by ID
                 if numeric_ids:
                     try:
                         batch_results = self.openproject_client.batch_find_records(
-                            "CustomField", numeric_ids, batch_size
+                            "CustomField",
+                            numeric_ids,
+                            batch_size,
                         )
                         # Map back to string IDs for consistency
                         for field_id, field_data in batch_results.items():
                             results[str(field_id)] = field_data
                     except Exception as e:
-                        self.logger.warning("Failed to batch fetch custom fields by ID: %s", e)
-                
+                        self.logger.warning(
+                            "Failed to batch fetch custom fields by ID: %s",
+                            e,
+                        )
+
                 # Batch fetch by name
                 if name_ids:
                     try:
-                        batch_results = self.openproject_client.batch_get_custom_fields_by_names(
-                            name_ids, batch_size
+                        batch_results = (
+                            self.openproject_client.batch_get_custom_fields_by_names(
+                                name_ids,
+                                batch_size,
+                            )
                         )
                         results.update(batch_results)
                     except Exception as e:
-                        self.logger.warning("Failed to batch fetch custom fields by name: %s", e)
+                        self.logger.warning(
+                            "Failed to batch fetch custom fields by name: %s",
+                            e,
+                        )
 
-            elif entity_type in ["work_packages", "statuses", "status_types", 
-                                 "issue_types", "work_package_types", "link_types", "relation_types"]:
+            elif entity_type in [
+                "work_packages",
+                "statuses",
+                "status_types",
+                "issue_types",
+                "work_package_types",
+                "link_types",
+                "relation_types",
+            ]:
                 # These entity types only support ID-based lookup
                 # Convert to appropriate model name
                 model_mapping = {
                     "work_packages": "WorkPackage",
-                    "statuses": "Status", 
+                    "statuses": "Status",
                     "status_types": "Status",
                     "issue_types": "Type",
                     "work_package_types": "Type",
                     "link_types": "Relation",
-                    "relation_types": "Relation"
+                    "relation_types": "Relation",
                 }
-                
+
                 model_name = model_mapping[entity_type]
                 numeric_ids = []
-                
+
                 for entity_id in entity_ids:
                     try:
                         numeric_ids.append(int(entity_id))
                     except (ValueError, TypeError):
-                        self.logger.debug("Skipping non-numeric ID '%s' for %s", entity_id, entity_type)
-                
+                        self.logger.debug(
+                            "Skipping non-numeric ID '%s' for %s",
+                            entity_id,
+                            entity_type,
+                        )
+
                 if numeric_ids:
                     try:
                         batch_results = self.openproject_client.batch_find_records(
-                            model_name, numeric_ids, batch_size
+                            model_name,
+                            numeric_ids,
+                            batch_size,
                         )
                         # Map back to string IDs for consistency
                         for entity_id, entity_data in batch_results.items():
                             results[str(entity_id)] = entity_data
                     except Exception as e:
-                        self.logger.warning("Failed to batch fetch %s: %s", entity_type, e)
+                        self.logger.warning(
+                            "Failed to batch fetch %s: %s",
+                            entity_type,
+                            e,
+                        )
 
             else:
                 # Unknown entity type - try generic lookup
-                self.logger.warning("Unknown entity type '%s', attempting generic batch lookup", entity_type)
-                model_name = entity_type.rstrip('s').capitalize()
+                self.logger.warning(
+                    "Unknown entity type '%s', attempting generic batch lookup",
+                    entity_type,
+                )
+                model_name = entity_type.rstrip("s").capitalize()
                 numeric_ids = []
-                
+
                 for entity_id in entity_ids:
                     try:
                         numeric_ids.append(int(entity_id))
                     except (ValueError, TypeError):
-                        self.logger.debug("Skipping non-numeric ID '%s' for %s", entity_id, entity_type)
-                
+                        self.logger.debug(
+                            "Skipping non-numeric ID '%s' for %s",
+                            entity_id,
+                            entity_type,
+                        )
+
                 if numeric_ids:
                     try:
                         batch_results = self.openproject_client.batch_find_records(
-                            model_name, numeric_ids, batch_size
+                            model_name,
+                            numeric_ids,
+                            batch_size,
                         )
                         # Map back to string IDs for consistency
                         for entity_id, entity_data in batch_results.items():
                             results[str(entity_id)] = entity_data
                     except Exception as e:
-                        self.logger.warning("Failed to batch fetch %s: %s", entity_type, e)
+                        self.logger.warning(
+                            "Failed to batch fetch %s: %s",
+                            entity_type,
+                            e,
+                        )
 
             self.logger.debug(
                 "Batched fetch for %s %s entities returned %d results",
-                len(entity_ids), entity_type, len(results)
+                len(entity_ids),
+                entity_type,
+                len(results),
             )
-            
+
             return results
 
         except Exception as e:
             self.logger.warning(
                 "Failed to batch get OpenProject entity data for %s: %s",
-                entity_type, e
+                entity_type,
+                e,
             )
             return {}
 
     def _get_openproject_entity_data(
-        self, entity_id: str, entity_type: str
+        self,
+        entity_id: str,
+        entity_type: str,
     ) -> dict[str, Any] | None:
         """Get current entity data from OpenProject.
 
@@ -1179,6 +1359,7 @@ class DataPreservationManager:
 
         Returns:
             Entity data or None if not found
+
         """
         if not self.openproject_client:
             return None
@@ -1199,29 +1380,42 @@ class DataPreservationManager:
             elif entity_type == "projects":
                 # For projects, try ID first, then identifier
                 try:
-                    return self.openproject_client.find_record("Project", int(entity_id))
+                    return self.openproject_client.find_record(
+                        "Project",
+                        int(entity_id),
+                    )
                 except (ValueError, Exception):
                     # If ID is not numeric or record not found, try as identifier
                     try:
-                        return self.openproject_client.get_project_by_identifier(entity_id)
+                        return self.openproject_client.get_project_by_identifier(
+                            entity_id,
+                        )
                     except Exception:
                         return None
 
             elif entity_type == "work_packages":
                 # For work packages, use ID-based lookup
                 try:
-                    return self.openproject_client.find_record("WorkPackage", int(entity_id))
+                    return self.openproject_client.find_record(
+                        "WorkPackage",
+                        int(entity_id),
+                    )
                 except (ValueError, Exception):
                     return None
 
             elif entity_type == "custom_fields":
                 # For custom fields, try ID first, then name
                 try:
-                    return self.openproject_client.find_record("CustomField", int(entity_id))
+                    return self.openproject_client.find_record(
+                        "CustomField",
+                        int(entity_id),
+                    )
                 except (ValueError, Exception):
                     # If ID is not numeric or record not found, try as name
                     try:
-                        return self.openproject_client.get_custom_field_by_name(entity_id)
+                        return self.openproject_client.get_custom_field_by_name(
+                            entity_id,
+                        )
                     except Exception:
                         return None
 
@@ -1242,19 +1436,26 @@ class DataPreservationManager:
             elif entity_type in ["link_types", "relation_types"]:
                 # For relation types, use ID-based lookup
                 try:
-                    return self.openproject_client.find_record("Relation", int(entity_id))
+                    return self.openproject_client.find_record(
+                        "Relation",
+                        int(entity_id),
+                    )
                 except (ValueError, Exception):
                     return None
 
             else:
                 # For unknown entity types, try generic lookup
                 self.logger.warning(
-                    "Unknown entity type '%s', attempting generic lookup", entity_type
+                    "Unknown entity type '%s', attempting generic lookup",
+                    entity_type,
                 )
                 try:
                     # Try to capitalize entity type and remove trailing 's' for model name
-                    model_name = entity_type.rstrip('s').capitalize()
-                    return self.openproject_client.find_record(model_name, int(entity_id))
+                    model_name = entity_type.rstrip("s").capitalize()
+                    return self.openproject_client.find_record(
+                        model_name,
+                        int(entity_id),
+                    )
                 except (ValueError, Exception):
                     return None
 
@@ -1263,22 +1464,26 @@ class DataPreservationManager:
                 "Failed to get OpenProject entity data for %s %s: %s",
                 entity_type,
                 entity_id,
-                e
+                e,
             )
             return None
 
     def update_preservation_policy(
-        self, entity_type: str, policy_updates: dict[str, Any]
+        self,
+        entity_type: str,
+        policy_updates: dict[str, Any],
     ) -> None:
         """Update preservation policy for an entity type.
 
         Args:
             entity_type: Type of entity
             policy_updates: Dictionary of policy fields to update
+
         """
         if entity_type not in self.preservation_policies:
             self.logger.warning(
-                "Unknown entity type for policy update: %s", entity_type
+                "Unknown entity type for policy update: %s",
+                entity_type,
             )
             return
 

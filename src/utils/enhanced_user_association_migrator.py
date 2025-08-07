@@ -10,101 +10,105 @@ This module provides advanced user association migration capabilities that:
 """
 
 import json
+import logging
 import re
-import requests
 import subprocess
 import time
-import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, TypedDict, Optional
-from urllib.parse import quote
 from threading import Lock, Semaphore
+from typing import Any, Literal, TypedDict
+
+import requests
 
 from src import config
-from src.clients.jira_client import JiraClient, JiraApiError
+from src.clients.jira_client import JiraApiError, JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.utils.validators import validate_jira_key
 from src.utils.metrics_collector import MetricsCollector
-
+from src.utils.validators import validate_jira_key
 
 # =============================================================================
 # CONFIGURATION CONSTANTS - CENTRALIZED FOR MAINTAINABILITY
 # =============================================================================
 
+
 # Error message handling configuration
 class ErrorConfig:
     MAX_LENGTH = 100
     TRUNCATE_LENGTH = 97
-    
-# JSON serialization configuration  
+
+
+# JSON serialization configuration
 class JsonConfig:
     MAX_RECURSION_DEPTH = 10
-    
+
+
 # Retry and rate limiting configuration
 class RetryConfig:
     DEFAULT_MAX_RETRIES = 2
-    ABSOLUTE_MAX_RETRIES = 5  
+    ABSOLUTE_MAX_RETRIES = 5
     DEFAULT_BASE_DELAY = 0.5
     DEFAULT_MAX_DELAY = 8.0
     DEFAULT_REQUEST_TIMEOUT = 30.0
     MAX_CONCURRENT_REFRESHES = 5
+
 
 # Staleness detection configuration
 class StalenessConfig:
     DEFAULT_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
     DEFAULT_FALLBACK_STRATEGY = "skip"
 
+
 # Pre-compiled regex patterns for error message sanitization (ReDoS protection)
-JWT_PATTERN = re.compile(r'[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}')
-BASE64_PATTERN = re.compile(r'(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9+/]{30,}={0,2}')
-URL_PATTERN = re.compile(r'https?://[^\s]+')
+JWT_PATTERN = re.compile(r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}")
+BASE64_PATTERN = re.compile(r"(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9+/]{30,}={0,2}")
+URL_PATTERN = re.compile(r"https?://[^\s]+")
 
 
 class ThreadSafeConcurrentTracker:
     """Thread-safe tracker for concurrent operations to replace unsafe semaphore._value access."""
-    
-    def __init__(self, max_concurrent: int):
+
+    def __init__(self, max_concurrent: int) -> None:
         self.max_concurrent = max_concurrent
         self._active_count = 0
         self._lock = Lock()
         self._semaphore = Semaphore(max_concurrent)
-    
-    def acquire(self):
+
+    def acquire(self) -> None:
         """Acquire a slot and increment active count."""
         self._semaphore.acquire()
         with self._lock:
             self._active_count += 1
-    
-    def release(self):
+
+    def release(self) -> None:
         """Release a slot and decrement active count."""
         with self._lock:
             self._active_count -= 1
         self._semaphore.release()
-    
+
     def get_active_count(self) -> int:
         """Get current number of active operations."""
         with self._lock:
             return self._active_count
-    
+
     def __enter__(self):
         self.acquire()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
 
 
 class CircuitBreaker:
     """Simple circuit breaker pattern for external service calls."""
-    
-    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 60):
-        """
-        Initialize circuit breaker.
-        
+
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 60) -> None:
+        """Initialize circuit breaker.
+
         Args:
             failure_threshold: Number of failures before opening circuit
             recovery_timeout: Seconds to wait before attempting recovery
+
         """
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
@@ -112,68 +116,75 @@ class CircuitBreaker:
         self.last_failure_time = 0
         self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
         self._lock = Lock()
-    
+
     def call(self, func, *args, **kwargs):
-        """
-        Execute function with circuit breaker protection.
-        
+        """Execute function with circuit breaker protection.
+
         Args:
             func: Function to execute
             *args, **kwargs: Arguments to pass to function
-            
+
         Returns:
             Function result
-            
+
         Raises:
             Exception: If circuit is open or function fails
+
         """
         with self._lock:
             now = time.time()
-            
+
             # Check if circuit should recover
-            if (self.state == "OPEN" and 
-                now - self.last_failure_time > self.recovery_timeout):
+            if (
+                self.state == "OPEN"
+                and now - self.last_failure_time > self.recovery_timeout
+            ):
                 self.state = "HALF_OPEN"
-            
+
             # Reject if circuit is open
             if self.state == "OPEN":
-                raise Exception(f"Circuit breaker OPEN - too many failures ({self.failure_count})")
-        
+                msg = f"Circuit breaker OPEN - too many failures ({self.failure_count})"
+                raise Exception(
+                    msg,
+                )
+
         try:
             result = func(*args, **kwargs)
-            
+
             # Success - reset failure count and close circuit
             with self._lock:
                 self.failure_count = 0
                 self.state = "CLOSED"
-            
+
             return result
-            
-        except Exception as e:
+
+        except Exception:
             with self._lock:
                 self.failure_count += 1
                 self.last_failure_time = time.time()
-                
+
                 # Open circuit if threshold exceeded
                 if self.failure_count >= self.failure_threshold:
                     self.state = "OPEN"
-            
+
             raise
 
 
 # Custom exceptions for staleness detection
 class StaleMappingError(Exception):
     """Exception raised when a user mapping is stale and needs refresh.
-    
+
     This exception is used to trigger refresh mechanisms when a mapping
     is detected as stale based on the configured TTL threshold.
     """
-    def __init__(self, username: str, reason: str = "Mapping is stale"):
+
+    def __init__(self, username: str, reason: str = "Mapping is stale") -> None:
         """Initialize the stale mapping error.
-        
+
         Args:
             username: Jira username that has a stale mapping
             reason: Specific reason why the mapping is considered stale
+
         """
         self.username = username
         self.reason = reason
@@ -186,7 +197,7 @@ FallbackStrategy = Literal["skip", "assign_admin", "create_placeholder"]
 
 class UserAssociationMapping(TypedDict):
     """Represents a mapping between Jira and OpenProject user associations with staleness tracking."""
-    
+
     jira_username: str
     jira_user_id: str | None
     jira_display_name: str | None
@@ -202,7 +213,7 @@ class UserAssociationMapping(TypedDict):
 
 class AssociationResult(TypedDict):
     """Result of user association migration."""
-    
+
     original_association: dict[str, Any]
     mapped_association: dict[str, Any] | None
     status: str  # 'success', 'fallback_used', 'failed'
@@ -212,7 +223,7 @@ class AssociationResult(TypedDict):
 
 class EnhancedUserAssociationMigrator:
     """Enhanced user association migrator with comprehensive edge case handling.
-    
+
     This class provides advanced capabilities for migrating user associations
     from Jira to OpenProject with robust handling of:
     - Deleted or inactive users
@@ -222,19 +233,27 @@ class EnhancedUserAssociationMigrator:
     - Assignee relationships with proper fallbacks
     - Staleness detection and automatic refresh
     """
-    
+
     # Configuration constants (now centralized in config classes above)
     DEFAULT_REFRESH_INTERVAL_SECONDS = StalenessConfig.DEFAULT_REFRESH_INTERVAL_SECONDS
     DEFAULT_MAX_RETRIES = RetryConfig.DEFAULT_MAX_RETRIES
     DEFAULT_FALLBACK_STRATEGY = StalenessConfig.DEFAULT_FALLBACK_STRATEGY
 
     # Rate limiting and retry configuration (YOLO FIXED: increased from 3 to 5)
-    ABSOLUTE_MAX_RETRIES = RetryConfig.ABSOLUTE_MAX_RETRIES       # Hard limit to prevent resource exhaustion
-    DEFAULT_BASE_DELAY = RetryConfig.DEFAULT_BASE_DELAY          # Default delay between retries (seconds)
-    DEFAULT_MAX_DELAY = RetryConfig.DEFAULT_MAX_DELAY            # Maximum delay cap (seconds) 
-    DEFAULT_REQUEST_TIMEOUT = RetryConfig.DEFAULT_REQUEST_TIMEOUT # Default request timeout (seconds)
-    MAX_CONCURRENT_REFRESHES = RetryConfig.MAX_CONCURRENT_REFRESHES   # Prevent retry storms, increased for better performance
-    
+    ABSOLUTE_MAX_RETRIES = (
+        RetryConfig.ABSOLUTE_MAX_RETRIES
+    )  # Hard limit to prevent resource exhaustion
+    DEFAULT_BASE_DELAY = (
+        RetryConfig.DEFAULT_BASE_DELAY
+    )  # Default delay between retries (seconds)
+    DEFAULT_MAX_DELAY = RetryConfig.DEFAULT_MAX_DELAY  # Maximum delay cap (seconds)
+    DEFAULT_REQUEST_TIMEOUT = (
+        RetryConfig.DEFAULT_REQUEST_TIMEOUT
+    )  # Default request timeout (seconds)
+    MAX_CONCURRENT_REFRESHES = (
+        RetryConfig.MAX_CONCURRENT_REFRESHES
+    )  # Prevent retry storms, increased for better performance
+
     def __init__(
         self,
         jira_client: JiraClient,
@@ -256,138 +275,192 @@ class EnhancedUserAssociationMigrator:
                 - base_delay: Base delay between retries in seconds (default: 0.5)
                 - max_delay: Maximum delay cap in seconds (default: 2.0)
                 - request_timeout: API request timeout in seconds (default: 10.0)
+
         """
         # Set up logging first
         self.logger = logging.getLogger(__name__)
-        
+
         self.jira_client = jira_client
         self.op_client = op_client
-        
+
         # Set up metrics collection (optional for backward compatibility)
         self.metrics_collector = metrics_collector
-        
+
         # Load user mapping
         self.user_mapping = user_mapping or self._load_user_mapping()
-        
+
         # Enhanced user association mappings with metadata
         self.enhanced_user_mappings: dict[str, UserAssociationMapping] = {}
         self._load_enhanced_mappings()
-        
+
         # Fallback users for different scenarios
         self.fallback_users = self._identify_fallback_users()
-        
+
         # Cache for Rails console operations
         self._rails_operations_cache: list[dict[str, Any]] = []
-        
+
         # Load and validate staleness configuration
         self._load_staleness_config()
-        
+
         # Initialize rate limiting
-        self._refresh_tracker = ThreadSafeConcurrentTracker(self.MAX_CONCURRENT_REFRESHES)
-        
+        self._refresh_tracker = ThreadSafeConcurrentTracker(
+            self.MAX_CONCURRENT_REFRESHES,
+        )
+
         # Configurable retry settings
         self.retry_config = {
-            'max_retries': kwargs.get('max_retries', self.DEFAULT_MAX_RETRIES),
-            'base_delay': kwargs.get('base_delay', self.DEFAULT_BASE_DELAY),
-            'max_delay': kwargs.get('max_delay', self.DEFAULT_MAX_DELAY),
-            'request_timeout': kwargs.get('request_timeout', self.DEFAULT_REQUEST_TIMEOUT)
+            "max_retries": kwargs.get("max_retries", self.DEFAULT_MAX_RETRIES),
+            "base_delay": kwargs.get("base_delay", self.DEFAULT_BASE_DELAY),
+            "max_delay": kwargs.get("max_delay", self.DEFAULT_MAX_DELAY),
+            "request_timeout": kwargs.get(
+                "request_timeout",
+                self.DEFAULT_REQUEST_TIMEOUT,
+            ),
         }
-        
+
         # Validate retry configuration
         self._validate_retry_config()
 
-    def _safe_metrics_increment(self, counter_name: str, tags: dict[str, str] | None = None) -> None:
+    def _safe_metrics_increment(
+        self,
+        counter_name: str,
+        tags: dict[str, str] | None = None,
+    ) -> None:
         """Safely increment metrics counter without breaking core functionality.
-        
+
         YOLO FIX: Defensive metrics collection that never fails core operations.
-        
+
         Args:
             counter_name: Name of the counter to increment
             tags: Optional tags to include with the metric
+
         """
         try:
-            if hasattr(self, 'metrics_collector') and self.metrics_collector:
+            if hasattr(self, "metrics_collector") and self.metrics_collector:
                 self.metrics_collector.increment_counter(counter_name, tags=tags or {})
         except Exception as e:
             # Never let metrics failures break core functionality
             self.logger.debug("Metrics collection failed for %s: %s", counter_name, e)
 
-    def _make_json_serializable(self, obj: Any, max_depth: int = JsonConfig.MAX_RECURSION_DEPTH, current_depth: int = 0) -> Any:
+    def _make_json_serializable(
+        self,
+        obj: Any,
+        max_depth: int = JsonConfig.MAX_RECURSION_DEPTH,
+        current_depth: int = 0,
+    ) -> Any:
         """YOLO FIX: Convert objects to JSON-serializable format, handling Mock objects.
-        
+
         Args:
             obj: Object to serialize
             max_depth: Maximum recursion depth to prevent stack overflow
             current_depth: Current recursion depth
-            
+
         Returns:
             JSON-serializable representation of the object
+
         """
         # Prevent infinite recursion/stack overflow
         if current_depth >= max_depth:
             return f"<MAX_DEPTH_REACHED: {type(obj).__name__}>"
-            
-        if hasattr(obj, '_mock_name'):  # Mock object detection
+
+        if hasattr(obj, "_mock_name"):  # Mock object detection
             return f"<Mock: {getattr(obj, '_mock_name', 'unknown')}>"
-        elif hasattr(obj, '__dict__') and hasattr(obj, '__module__') and 'mock' in str(type(obj)):
+        if (
+            hasattr(obj, "__dict__")
+            and hasattr(obj, "__module__")
+            and "mock" in str(type(obj))
+        ):
             return f"<Mock: {type(obj).__name__}>"
-        elif isinstance(obj, dict):
-            return {k: self._make_json_serializable(v, max_depth, current_depth + 1) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [self._make_json_serializable(item, max_depth, current_depth + 1) for item in obj]
-        elif isinstance(obj, (str, int, float, bool)) or obj is None:
+        if isinstance(obj, dict):
+            return {
+                k: self._make_json_serializable(v, max_depth, current_depth + 1)
+                for k, v in obj.items()
+            }
+        if isinstance(obj, (list, tuple)):
+            return [
+                self._make_json_serializable(item, max_depth, current_depth + 1)
+                for item in obj
+            ]
+        if isinstance(obj, (str, int, float, bool)) or obj is None:
             return obj
-        elif hasattr(obj, 'isoformat'):  # datetime objects
+        if hasattr(obj, "isoformat"):  # datetime objects
             return obj.isoformat()
-        else:
-            # Convert other objects to string representation
-            return str(obj)
+        # Convert other objects to string representation
+        return str(obj)
 
     def _sanitize_error_message(self, error_msg: str) -> str:
         """Sanitize error message to prevent sensitive data exposure.
-        
+
         YOLO FIX: Extracted duplicated sanitization logic to helper method.
         CRITICAL FIX: Apply sanitization BEFORE truncation to prevent sensitive data exposure.
-        
+
         Args:
             error_msg: Raw error message to sanitize
-            
+
         Returns:
             Sanitized error message with sensitive data redacted
+
         """
         # CRITICAL FIX: Apply security patterns FIRST, then truncate
         # This ensures sensitive tokens are redacted even if they get truncated
-        error_msg = JWT_PATTERN.sub('[REDACTED]', error_msg)
-        error_msg = BASE64_PATTERN.sub('[REDACTED]', error_msg)
-        error_msg = URL_PATTERN.sub('[URL]', error_msg)
-        
+        error_msg = JWT_PATTERN.sub("[REDACTED]", error_msg)
+        error_msg = BASE64_PATTERN.sub("[REDACTED]", error_msg)
+        error_msg = URL_PATTERN.sub("[URL]", error_msg)
+
         # Then truncate the already-sanitized string
         if len(error_msg) > ErrorConfig.MAX_LENGTH:
-            error_msg = error_msg[:ErrorConfig.TRUNCATE_LENGTH] + "..."
-        
+            error_msg = error_msg[: ErrorConfig.TRUNCATE_LENGTH] + "..."
+
         return error_msg
 
     def _validate_retry_config(self) -> None:
         """Validate retry configuration parameters to prevent resource exhaustion."""
         config = self.retry_config
-        
-        if not isinstance(config['max_retries'], int) or config['max_retries'] < 0:
-            raise ValueError(f"max_retries must be a non-negative integer, got: {config['max_retries']}")
-            
-        if config['max_retries'] > self.ABSOLUTE_MAX_RETRIES:
-            raise ValueError(f"max_retries cannot exceed {self.ABSOLUTE_MAX_RETRIES}, got: {config['max_retries']}")
-            
-        if not isinstance(config['base_delay'], (int, float)) or config['base_delay'] <= 0:
-            raise ValueError(f"base_delay must be a positive number, got: {config['base_delay']}")
-            
-        if not isinstance(config['max_delay'], (int, float)) or config['max_delay'] <= 0:
-            raise ValueError(f"max_delay must be a positive number, got: {config['max_delay']}")
-            
-        if config['base_delay'] > config['max_delay']:
-            raise ValueError(f"base_delay ({config['base_delay']}) cannot exceed max_delay ({config['max_delay']})")
-            
-        if not isinstance(config['request_timeout'], (int, float)) or config['request_timeout'] <= 0:
-            raise ValueError(f"request_timeout must be a positive number, got: {config['request_timeout']}")
+
+        if not isinstance(config["max_retries"], int) or config["max_retries"] < 0:
+            msg = f"max_retries must be a non-negative integer, got: {config['max_retries']}"
+            raise ValueError(
+                msg,
+            )
+
+        if config["max_retries"] > self.ABSOLUTE_MAX_RETRIES:
+            msg = f"max_retries cannot exceed {self.ABSOLUTE_MAX_RETRIES}, got: {config['max_retries']}"
+            raise ValueError(
+                msg,
+            )
+
+        if (
+            not isinstance(config["base_delay"], (int, float))
+            or config["base_delay"] <= 0
+        ):
+            msg = f"base_delay must be a positive number, got: {config['base_delay']}"
+            raise ValueError(
+                msg,
+            )
+
+        if (
+            not isinstance(config["max_delay"], (int, float))
+            or config["max_delay"] <= 0
+        ):
+            msg = f"max_delay must be a positive number, got: {config['max_delay']}"
+            raise ValueError(
+                msg,
+            )
+
+        if config["base_delay"] > config["max_delay"]:
+            msg = f"base_delay ({config['base_delay']}) cannot exceed max_delay ({config['max_delay']})"
+            raise ValueError(
+                msg,
+            )
+
+        if (
+            not isinstance(config["request_timeout"], (int, float))
+            or config["request_timeout"] <= 0
+        ):
+            msg = f"request_timeout must be a positive number, got: {config['request_timeout']}"
+            raise ValueError(
+                msg,
+            )
 
     def _load_user_mapping(self) -> dict[str, Any]:
         """Load user mapping from file or config - YOLO FIX: resilient path handling."""
@@ -398,26 +471,30 @@ class EnhancedUserAssociationMigrator:
                 user_mapping_file = Path(base_path) / "user_mapping.json"
             else:
                 user_mapping_file = base_path / "user_mapping.json"
-            
+
             if user_mapping_file.exists():
                 with user_mapping_file.open() as f:
                     return json.load(f)
             return {}
-        except (IOError, json.JSONDecodeError, ValueError, TypeError) as e:
-            self.logger.warning("Failed to load user mapping due to file/JSON error: %s", e)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
+            self.logger.warning(
+                "Failed to load user mapping due to file/JSON error: %s",
+                e,
+            )
             return {}
         except OSError as e:
-            self.logger.error("File system error loading user mapping: %s", e)
+            self.logger.exception("File system error loading user mapping: %s", e)
             return {}
 
     def _validate_jira_key(self, jira_key: str) -> None:
         """Validate JIRA key format using the centralized validator.
-        
+
         Args:
             jira_key: The JIRA key to validate
-            
+
         Raises:
             ValueError: If jira_key format is invalid or contains potentially dangerous characters
+
         """
         validate_jira_key(jira_key)
 
@@ -435,132 +512,192 @@ class EnhancedUserAssociationMigrator:
                     data = json.load(f)
                     self.enhanced_user_mappings = {}
                     current_time = self._get_current_timestamp()
-                    
+
                     for k, v in data.items():
                         # Handle backwards compatibility for existing cache files
                         if "lastRefreshed" not in v:
                             v["lastRefreshed"] = current_time
                             self.logger.debug(
-                                "Added lastRefreshed timestamp to existing cache entry for %s", k
+                                "Added lastRefreshed timestamp to existing cache entry for %s",
+                                k,
                             )
-                        
-                        self.enhanced_user_mappings[k] = UserAssociationMapping(**v)
-                        
+
+                        # Ensure all required keys are present
+                        mapping_data = {
+                            "jira_username": k,
+                            "jira_user_id": v.get("jira_user_id"),
+                            "jira_display_name": v.get("jira_display_name"),
+                            "jira_email": v.get("jira_email"),
+                            "openproject_user_id": v.get("openproject_user_id"),
+                            "openproject_username": v.get("openproject_username"),
+                            "openproject_email": v.get("openproject_email"),
+                            "mapping_status": v.get("mapping_status", "mapped"),
+                            "fallback_user_id": v.get("fallback_user_id"),
+                            "metadata": v.get("metadata", {}),
+                            "lastRefreshed": v.get("lastRefreshed"),
+                        }
+                        self.enhanced_user_mappings[k] = UserAssociationMapping(
+                            **mapping_data
+                        )
+
                     self.logger.info(
                         "Loaded %d enhanced user mappings with staleness tracking",
-                        len(self.enhanced_user_mappings)
+                        len(self.enhanced_user_mappings),
                     )
             else:
                 # Create enhanced mappings from basic user mapping
                 self._create_enhanced_mappings()
-        except (IOError, json.JSONDecodeError, ValueError, KeyError) as e:
-            self.logger.warning("Failed to load enhanced user mappings due to file/data error: %s", e)
+        except (OSError, json.JSONDecodeError, ValueError, KeyError) as e:
+            self.logger.warning(
+                "Failed to load enhanced user mappings due to file/data error: %s",
+                e,
+            )
             self._create_enhanced_mappings()
         except OSError as e:
-            self.logger.error("File system error loading enhanced user mappings: %s", e)
+            self.logger.exception(
+                "File system error loading enhanced user mappings: %s",
+                e,
+            )
             self._create_enhanced_mappings()
 
     def _create_enhanced_mappings(self) -> None:
         """Create enhanced user mappings from basic user mapping."""
         self.logger.info("Creating enhanced user mappings from basic mapping")
-        
+
         for jira_username, op_user_id in self.user_mapping.items():
             # Get additional user info from Jira if possible
             jira_user_info = self._get_jira_user_info(jira_username)
-            op_user_info = self._get_openproject_user_info(op_user_id) if op_user_id else None
-            
+            op_user_info = (
+                self._get_openproject_user_info(op_user_id) if op_user_id else None
+            )
+
             mapping = UserAssociationMapping(
                 jira_username=jira_username,
-                jira_user_id=jira_user_info.get("accountId") if jira_user_info else None,
-                jira_display_name=jira_user_info.get("displayName") if jira_user_info else None,
-                jira_email=jira_user_info.get("emailAddress") if jira_user_info else None,
+                jira_user_id=(
+                    jira_user_info.get("accountId") if jira_user_info else None
+                ),
+                jira_display_name=(
+                    jira_user_info.get("displayName") if jira_user_info else None
+                ),
+                jira_email=(
+                    jira_user_info.get("emailAddress") if jira_user_info else None
+                ),
                 openproject_user_id=op_user_id,
-                openproject_username=op_user_info.get("login") if op_user_info else None,
+                openproject_username=(
+                    op_user_info.get("login") if op_user_info else None
+                ),
                 openproject_email=op_user_info.get("mail") if op_user_info else None,
                 mapping_status="mapped" if op_user_id else "unmapped",
                 fallback_user_id=None,
                 metadata={
                     "created_at": self._get_current_timestamp(),
-                    "jira_active": jira_user_info.get("active", True) if jira_user_info else None,
-                    "openproject_active": op_user_info.get("status") == 1 if op_user_info else None,
+                    "jira_active": (
+                        jira_user_info.get("active", True) if jira_user_info else None
+                    ),
+                    "openproject_active": (
+                        op_user_info.get("status") == 1 if op_user_info else None
+                    ),
                 },
-                lastRefreshed=self._get_current_timestamp()
+                lastRefreshed=self._get_current_timestamp(),
             )
-            
+
             self.enhanced_user_mappings[jira_username] = mapping
 
     def _get_current_timestamp(self) -> str:
         """Get current timestamp in ISO format.
-        
+
         Returns:
             Current timestamp as ISO string
+
         """
         return datetime.now(tz=UTC).isoformat()
 
     def _get_jira_user_info(self, username: str) -> dict[str, Any] | None:
         """Fetch user information from Jira API.
-        
+
         Args:
             username: Jira username to fetch
-            
+
         Returns:
             User information dict or None if not found
+
         """
         try:
-            # Get user from Jira with URL-encoded username to prevent injection
-            safe_username = quote(username)
-            response = self.jira_client.get(f"user/search?username={safe_username}")
-            
-            if response.status_code == 200:
-                users = response.json()
-                if users:
-                    return users[0]
-            
+            # Get user from Jira using the proper method
+            user_info = self.jira_client.get_user_info(username)
+            if user_info:
+                return user_info
+
             return None
-            
+
         except (requests.RequestException, ValueError, KeyError) as e:
-            self.logger.error("Failed to fetch Jira user info for %s due to API/data error: %s", username, e)
+            self.logger.exception(
+                "Failed to fetch Jira user info for %s due to API/data error: %s",
+                username,
+                e,
+            )
             return None
         except requests.ConnectionError as e:
-            self.logger.error("Connection error fetching Jira user info for %s: %s", username, e)
+            self.logger.exception(
+                "Connection error fetching Jira user info for %s: %s",
+                username,
+                e,
+            )
             return None
 
     def _get_openproject_user_info(self, user_id: int) -> dict[str, Any] | None:
         """Get detailed user information from OpenProject."""
         try:
-            return self.op_client.get_user(user_id)
+            return self.op_client.find_record("User", user_id)
         except (requests.RequestException, ValueError, KeyError, AttributeError) as e:
-            self.logger.debug("Failed to get OpenProject user info for %s due to API/data error: %s", user_id, e)
+            self.logger.debug(
+                "Failed to get OpenProject user info for %s due to API/data error: %s",
+                user_id,
+                e,
+            )
             return None
         except requests.ConnectionError as e:
-            self.logger.debug("Connection error getting OpenProject user info for %s: %s", user_id, e)
+            self.logger.debug(
+                "Connection error getting OpenProject user info for %s: %s",
+                user_id,
+                e,
+            )
             return None
 
     def _identify_fallback_users(self) -> dict[str, int]:
         """Identify fallback users for different scenarios."""
         fallback_users = {}
-        
+
         try:
-            # Get admin user as default fallback
-            admin_users = self.op_client.get_users(filters={"admin": True})
-            if admin_users:
-                fallback_users["admin"] = admin_users[0]["id"]
-            
-            # Get system user if available
-            system_users = self.op_client.get_users(filters={"login": "system"})
-            if system_users:
-                fallback_users["system"] = system_users[0]["id"]
-            
-            # Get migration user if created
-            migration_users = self.op_client.get_users(filters={"login": "migration_user"})
-            if migration_users:
-                fallback_users["migration"] = migration_users[0]["id"]
-            
+            # Get all users and filter for fallback candidates
+            all_users: list[dict[str, Any]] = self.op_client.get_users()
+
+            # Find admin user
+            for user in all_users:
+                if user.get("admin"):
+                    fallback_users["admin"] = user["id"]
+                    break
+
+            # Find system user
+            for user in all_users:
+                if user.get("login") == "system":
+                    fallback_users["system"] = user["id"]
+                    break
+
+            # Find migration user
+            for user in all_users:
+                if user.get("login") == "migration_user":
+                    fallback_users["migration"] = user["id"]
+                    break
+
         except (requests.RequestException, ValueError, KeyError, AttributeError) as e:
-            self.logger.warning("Failed to identify fallback users due to API/data error: %s", e)
+            self.logger.warning(
+                "Failed to identify fallback users due to API/data error: %s",
+                e,
+            )
         except requests.ConnectionError as e:
             self.logger.warning("Connection error identifying fallback users: %s", e)
-        
+
         return fallback_users
 
     def migrate_user_associations(
@@ -578,6 +715,7 @@ class EnhancedUserAssociationMigrator:
 
         Returns:
             AssociationResult with migration results and metadata
+
         """
         result = AssociationResult(
             original_association={},
@@ -587,7 +725,7 @@ class EnhancedUserAssociationMigrator:
             metadata={
                 "migration_timestamp": self._get_current_timestamp(),
                 "preserve_creator_via_rails": preserve_creator_via_rails,
-            }
+            },
         )
 
         # Extract user associations from Jira issue
@@ -595,7 +733,10 @@ class EnhancedUserAssociationMigrator:
         result["original_association"] = associations
 
         # Migrate assignee
-        assignee_result = self._migrate_assignee(associations.get("assignee"), work_package_data)
+        assignee_result = self._migrate_assignee(
+            associations.get("assignee"),
+            work_package_data,
+        )
         if assignee_result["warnings"]:
             result["warnings"].extend(assignee_result["warnings"])
 
@@ -604,13 +745,16 @@ class EnhancedUserAssociationMigrator:
             associations.get("reporter"),
             associations.get("creator"),
             work_package_data,
-            preserve_creator_via_rails
+            preserve_creator_via_rails,
         )
         if author_result["warnings"]:
             result["warnings"].extend(author_result["warnings"])
 
         # Migrate watchers with enhanced validation
-        watcher_result = self._migrate_watchers(associations.get("watchers", []), work_package_data)
+        watcher_result = self._migrate_watchers(
+            associations.get("watchers", []),
+            work_package_data,
+        )
         if watcher_result["warnings"]:
             result["warnings"].extend(watcher_result["warnings"])
 
@@ -623,7 +767,11 @@ class EnhancedUserAssociationMigrator:
 
         # Update status based on warnings
         if result["warnings"]:
-            result["status"] = "fallback_used" if any("fallback" in w for w in result["warnings"]) else "success"
+            result["status"] = (
+                "fallback_used"
+                if any("fallback" in w for w in result["warnings"])
+                else "success"
+            )
 
         return result
 
@@ -636,7 +784,11 @@ class EnhancedUserAssociationMigrator:
             associations["assignee"] = {
                 "username": getattr(jira_issue.fields.assignee, "name", None),
                 "account_id": getattr(jira_issue.fields.assignee, "accountId", None),
-                "display_name": getattr(jira_issue.fields.assignee, "displayName", None),
+                "display_name": getattr(
+                    jira_issue.fields.assignee,
+                    "displayName",
+                    None,
+                ),
                 "email": getattr(jira_issue.fields.assignee, "emailAddress", None),
                 "active": getattr(jira_issue.fields.assignee, "active", True),
             }
@@ -646,7 +798,11 @@ class EnhancedUserAssociationMigrator:
             associations["reporter"] = {
                 "username": getattr(jira_issue.fields.reporter, "name", None),
                 "account_id": getattr(jira_issue.fields.reporter, "accountId", None),
-                "display_name": getattr(jira_issue.fields.reporter, "displayName", None),
+                "display_name": getattr(
+                    jira_issue.fields.reporter,
+                    "displayName",
+                    None,
+                ),
                 "email": getattr(jira_issue.fields.reporter, "emailAddress", None),
                 "active": getattr(jira_issue.fields.reporter, "active", True),
             }
@@ -670,69 +826,113 @@ class EnhancedUserAssociationMigrator:
                     watchers_data = self.jira_client.get_issue_watchers(jira_issue.key)
                     if watchers_data:
                         for watcher in watchers_data:
-                            watchers.append({
-                                "username": watcher.get("name"),
-                                "account_id": watcher.get("accountId"),
-                                "display_name": watcher.get("displayName"),
-                                "email": watcher.get("emailAddress"),
-                                "active": watcher.get("active", True),
-                            })
-                except (requests.RequestException, ValueError, KeyError, AttributeError) as e:
-                    self.logger.warning("Failed to fetch watchers for %s due to API/data error: %s", jira_issue.key, e)
+                            watchers.append(
+                                {
+                                    "username": watcher.get("name"),
+                                    "account_id": watcher.get("accountId"),
+                                    "display_name": watcher.get("displayName"),
+                                    "email": watcher.get("emailAddress"),
+                                    "active": watcher.get("active", True),
+                                },
+                            )
+                except (
+                    requests.RequestException,
+                    ValueError,
+                    KeyError,
+                    AttributeError,
+                ) as e:
+                    self.logger.warning(
+                        "Failed to fetch watchers for %s due to API/data error: %s",
+                        jira_issue.key,
+                        e,
+                    )
                 except (OSError, ConnectionError) as e:
-                    self.logger.error("Network error fetching watchers for %s: %s", jira_issue.key, e)
+                    self.logger.exception(
+                        "Network error fetching watchers for %s: %s",
+                        jira_issue.key,
+                        e,
+                    )
 
         associations["watchers"] = watchers
         return associations
 
     def _migrate_assignee(
-        self, assignee_data: dict[str, Any] | None, work_package_data: dict[str, Any]
+        self,
+        assignee_data: dict[str, Any] | None,
+        work_package_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Migrate assignee with enhanced handling and staleness detection."""
-        result = {"warnings": []}
+        result: dict[str, Any] = {"warnings": []}
 
         if not assignee_data or not assignee_data.get("username"):
             return result
 
         username = assignee_data["username"]
-        
+
         try:
             # Use staleness detection with automatic refresh
             mapping = self.get_mapping_with_staleness_check(username, auto_refresh=True)
-            
+
             if mapping and mapping["openproject_user_id"]:
                 # Verify user is still active
-                if mapping["mapping_status"] == "mapped" and mapping["metadata"].get("openproject_active", True):
+                if mapping["mapping_status"] == "mapped" and mapping["metadata"].get(
+                    "openproject_active",
+                    True,
+                ):
                     work_package_data["assigned_to_id"] = mapping["openproject_user_id"]
-                    self.logger.debug("Successfully mapped assignee %s to OpenProject user %d", username, mapping["openproject_user_id"])
+                    self.logger.debug(
+                        "Successfully mapped assignee %s to OpenProject user %d",
+                        username,
+                        mapping["openproject_user_id"],
+                    )
                 else:
                     # Use fallback for inactive user
                     fallback_id = self._get_fallback_user("assignee")
                     if fallback_id:
                         work_package_data["assigned_to_id"] = fallback_id
-                        result["warnings"].append(f"Assignee {username} inactive, using fallback user {fallback_id}")
+                        result["warnings"].append(
+                            f"Assignee {username} inactive, using fallback user {fallback_id}",
+                        )
                     else:
-                        result["warnings"].append(f"Assignee {username} inactive and no fallback available")
+                        result["warnings"].append(
+                            f"Assignee {username} inactive and no fallback available",
+                        )
             else:
                 # Handle unmapped user
                 fallback_id = self._get_fallback_user("assignee")
                 if fallback_id:
                     work_package_data["assigned_to_id"] = fallback_id
-                    result["warnings"].append(f"Assignee {username} unmapped, using fallback user {fallback_id}")
+                    result["warnings"].append(
+                        f"Assignee {username} unmapped, using fallback user {fallback_id}",
+                    )
                 else:
-                    result["warnings"].append(f"Assignee {username} unmapped and no fallback available")
-                    
+                    result["warnings"].append(
+                        f"Assignee {username} unmapped and no fallback available",
+                    )
+
         except StaleMappingError as e:
-            self.logger.warning("Stale mapping detected for assignee %s: %s", username, e)
+            self.logger.warning(
+                "Stale mapping detected for assignee %s: %s",
+                username,
+                e,
+            )
             # Apply fallback strategy
             fallback_id = self._get_fallback_user("assignee")
             if fallback_id:
                 work_package_data["assigned_to_id"] = fallback_id
-                result["warnings"].append(f"Assignee {username} mapping stale, using fallback user {fallback_id}")
+                result["warnings"].append(
+                    f"Assignee {username} mapping stale, using fallback user {fallback_id}",
+                )
             else:
-                result["warnings"].append(f"Assignee {username} mapping stale and no fallback available")
+                result["warnings"].append(
+                    f"Assignee {username} mapping stale and no fallback available",
+                )
         except Exception as e:
-            self.logger.exception("Unexpected error processing assignee %s: %s", username, e)
+            self.logger.exception(
+                "Unexpected error processing assignee %s: %s",
+                username,
+                e,
+            )
             result["warnings"].append(f"Error processing assignee {username}: {e}")
 
         return result
@@ -745,7 +945,7 @@ class EnhancedUserAssociationMigrator:
         preserve_via_rails: bool,
     ) -> dict[str, Any]:
         """Migrate author with enhanced preservation using Rails console when needed and staleness detection."""
-        result = {"warnings": []}
+        result: dict[str, Any] = {"warnings": []}
 
         # Prefer reporter over creator
         author_data = reporter_data or creator_data
@@ -754,15 +954,17 @@ class EnhancedUserAssociationMigrator:
             fallback_id = self._get_fallback_user("author")
             if fallback_id:
                 work_package_data["author_id"] = fallback_id
-                result["warnings"].append("No author data available, using fallback user")
+                result["warnings"].append(
+                    "No author data available, using fallback user",
+                )
             return result
 
         username = author_data["username"]
-        
+
         try:
             # Use staleness detection with automatic refresh
             mapping = self.get_mapping_with_staleness_check(username, auto_refresh=True)
-            
+
             if mapping and mapping["openproject_user_id"]:
                 # Check if we need Rails console for immutable field preservation
                 if preserve_via_rails and mapping["mapping_status"] == "mapped":
@@ -770,43 +972,65 @@ class EnhancedUserAssociationMigrator:
                     self._queue_rails_author_operation(
                         work_package_data.get("jira_key", ""),
                         mapping["openproject_user_id"],
-                        author_data
+                        author_data,
                     )
                     # Set temporary author for creation
                     work_package_data["author_id"] = mapping["openproject_user_id"]
-                    self.logger.debug("Successfully mapped author %s to OpenProject user %d with Rails preservation", username, mapping["openproject_user_id"])
+                    self.logger.debug(
+                        "Successfully mapped author %s to OpenProject user %d with Rails preservation",
+                        username,
+                        mapping["openproject_user_id"],
+                    )
                 else:
                     work_package_data["author_id"] = mapping["openproject_user_id"]
-                    self.logger.debug("Successfully mapped author %s to OpenProject user %d", username, mapping["openproject_user_id"])
+                    self.logger.debug(
+                        "Successfully mapped author %s to OpenProject user %d",
+                        username,
+                        mapping["openproject_user_id"],
+                    )
             else:
                 # Handle unmapped author
                 fallback_id = self._get_fallback_user("author")
                 if fallback_id:
                     work_package_data["author_id"] = fallback_id
-                    result["warnings"].append(f"Author {username} unmapped, using fallback user {fallback_id}")
+                    result["warnings"].append(
+                        f"Author {username} unmapped, using fallback user {fallback_id}",
+                    )
                 else:
-                    result["warnings"].append(f"Author {username} unmapped and no fallback available")
-                    
+                    result["warnings"].append(
+                        f"Author {username} unmapped and no fallback available",
+                    )
+
         except StaleMappingError as e:
             self.logger.warning("Stale mapping detected for author %s: %s", username, e)
             # Apply fallback strategy
             fallback_id = self._get_fallback_user("author")
             if fallback_id:
                 work_package_data["author_id"] = fallback_id
-                result["warnings"].append(f"Author {username} mapping stale, using fallback user {fallback_id}")
+                result["warnings"].append(
+                    f"Author {username} mapping stale, using fallback user {fallback_id}",
+                )
             else:
-                result["warnings"].append(f"Author {username} mapping stale and no fallback available")
+                result["warnings"].append(
+                    f"Author {username} mapping stale and no fallback available",
+                )
         except Exception as e:
-            self.logger.exception("Unexpected error processing author %s: %s", username, e)
+            self.logger.exception(
+                "Unexpected error processing author %s: %s",
+                username,
+                e,
+            )
             result["warnings"].append(f"Error processing author {username}: {e}")
 
         return result
 
     def _migrate_watchers(
-        self, watchers_data: list[dict[str, Any]], work_package_data: dict[str, Any]
+        self,
+        watchers_data: list[dict[str, Any]],
+        work_package_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Migrate watchers with enhanced validation, handling, and staleness detection."""
-        result = {"warnings": []}
+        result: dict[str, Any] = {"warnings": []}
         valid_watcher_ids = []
 
         for watcher in watchers_data:
@@ -816,23 +1040,42 @@ class EnhancedUserAssociationMigrator:
 
             try:
                 # Use staleness detection with automatic refresh
-                mapping = self.get_mapping_with_staleness_check(username, auto_refresh=True)
-                
+                mapping = self.get_mapping_with_staleness_check(
+                    username,
+                    auto_refresh=True,
+                )
+
                 if mapping and mapping["openproject_user_id"]:
                     # Verify user exists and is active
-                    if mapping["mapping_status"] == "mapped" and mapping["metadata"].get("openproject_active", True):
+                    if mapping["mapping_status"] == "mapped" and mapping[
+                        "metadata"
+                    ].get("openproject_active", True):
                         valid_watcher_ids.append(mapping["openproject_user_id"])
-                        self.logger.debug("Successfully mapped watcher %s to OpenProject user %d", username, mapping["openproject_user_id"])
+                        self.logger.debug(
+                            "Successfully mapped watcher %s to OpenProject user %d",
+                            username,
+                            mapping["openproject_user_id"],
+                        )
                     else:
-                        result["warnings"].append(f"Watcher {username} inactive, skipping")
+                        result["warnings"].append(
+                            f"Watcher {username} inactive, skipping",
+                        )
                 else:
                     result["warnings"].append(f"Watcher {username} unmapped, skipping")
-                    
+
             except StaleMappingError as e:
-                self.logger.warning("Stale mapping detected for watcher %s: %s", username, e)
+                self.logger.warning(
+                    "Stale mapping detected for watcher %s: %s",
+                    username,
+                    e,
+                )
                 result["warnings"].append(f"Watcher {username} mapping stale, skipping")
             except Exception as e:
-                self.logger.exception("Unexpected error processing watcher %s: %s", username, e)
+                self.logger.exception(
+                    "Unexpected error processing watcher %s: %s",
+                    username,
+                    e,
+                )
                 result["warnings"].append(f"Error processing watcher {username}: {e}")
 
         if valid_watcher_ids:
@@ -845,78 +1088,94 @@ class EnhancedUserAssociationMigrator:
         """Get appropriate fallback user for a specific role."""
         # Priority order for fallback users
         fallback_priority = ["migration", "admin", "system"]
-        
+
         for fallback_type in fallback_priority:
             if fallback_type in self.fallback_users:
                 return self.fallback_users[fallback_type]
-        
+
         return None
 
-    def is_mapping_stale(self, username: str, current_time: datetime | None = None) -> bool:
+    def is_mapping_stale(
+        self,
+        username: str,
+        current_time: datetime | None = None,
+    ) -> bool:
         """Check if a user mapping is stale and needs refresh.
-        
+
         Args:
             username: Jira username to check
             current_time: Optional current timestamp for batch operations (caching)
-            
+
         Returns:
             True if mapping is stale, False otherwise
+
         """
         mapping = self.enhanced_user_mappings.get(username)
         if not mapping:
             return True  # Non-existent mappings are considered stale
-        
+
         last_refreshed = mapping.get("lastRefreshed")
         if not last_refreshed:
             return True  # Mappings without refresh timestamp are stale
-        
+
         refresh_interval = self.refresh_interval_seconds
-        
+
         try:
-            last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
+            last_refresh_time = datetime.fromisoformat(
+                last_refreshed,
+            )
             if current_time is None:
                 current_time = datetime.now(tz=UTC)
             age_seconds = (current_time - last_refresh_time).total_seconds()
-            
+
             # Fixed: Use >= for consistent threshold behavior
             return age_seconds >= refresh_interval
-            
+
         except ValueError as e:
-            self.logger.warning("Invalid lastRefreshed timestamp for %s: %s", username, e)
+            self.logger.warning(
+                "Invalid lastRefreshed timestamp for %s: %s",
+                username,
+                e,
+            )
             return True  # Invalid timestamps are considered stale
 
-    def check_and_handle_staleness(self, username: str, raise_on_stale: bool = True) -> UserAssociationMapping | None:
+    def check_and_handle_staleness(
+        self,
+        username: str,
+        raise_on_stale: bool = True,
+    ) -> UserAssociationMapping | None:
         """Check if a user mapping is stale and handle accordingly.
-        
+
         Args:
             username: Jira username to check
             raise_on_stale: Whether to raise an exception if mapping is stale
-            
+
         Returns:
             Mapping if fresh, None if stale/missing
-            
+
         Raises:
             StaleMappingError: If mapping is stale and raise_on_stale is True
+
         """
         current_time = datetime.now(tz=UTC)
-        
+
         # Check if mapping exists
         mapping = self.enhanced_user_mappings.get(username)
         if not mapping:
             stale_reason = "Mapping does not exist"
             # MONITORING: Cache miss logging
             self.logger.debug("Cache miss for %s: %s", username, stale_reason)
-            
+
             # MONITORING: Staleness detection metrics (YOLO FIX: defensive metrics)
             self._safe_metrics_increment(
-                'staleness_detected_total',
-                tags={'reason': 'missing', 'username': username}
+                "staleness_detected_total",
+                tags={"reason": "missing", "username": username},
             )
-            
+
             if raise_on_stale:
                 raise StaleMappingError(username, stale_reason)
             return None
-        
+
         # Check if mapping is stale
         if self.is_mapping_stale(username, current_time):
             # Determine staleness reason
@@ -926,116 +1185,150 @@ class EnhancedUserAssociationMigrator:
                 reason_tag = "no_timestamp"
             else:
                 try:
-                    last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
+                    last_refresh_time = datetime.fromisoformat(
+                        last_refreshed,
+                    )
                     age_seconds = (current_time - last_refresh_time).total_seconds()
                     stale_reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
                     reason_tag = "expired"
                 except ValueError:
                     stale_reason = "Invalid lastRefreshed timestamp"
                     reason_tag = "invalid_timestamp"
-            
+
             # MONITORING: Staleness detection logging
             self.logger.debug("Staleness detected for %s: %s", username, stale_reason)
-            
+
             # MONITORING: Staleness detection metrics (YOLO FIX: defensive metrics)
             self._safe_metrics_increment(
-                'staleness_detected_total',
-                tags={'reason': reason_tag, 'username': username}
+                "staleness_detected_total",
+                tags={"reason": reason_tag, "username": username},
             )
-            
+
             if raise_on_stale:
                 raise StaleMappingError(username, stale_reason)
             return None
-        
+
         # Mapping is fresh
         # MONITORING: Cache hit logging
         self.logger.debug("Cache hit for %s: mapping is fresh", username)
         return mapping
 
-    def get_mapping_with_staleness_check(self, username: str, auto_refresh: bool = False) -> UserAssociationMapping | None:
+    def get_mapping_with_staleness_check(
+        self,
+        username: str,
+        auto_refresh: bool = False,
+    ) -> UserAssociationMapping | None:
         """Get user mapping with automatic staleness detection and optional refresh.
-        
+
         Args:
             username: Jira username to look up
             auto_refresh: Whether to attempt automatic refresh on staleness detection
-            
+
         Returns:
             User mapping if available and fresh, None if unavailable or stale
+
         """
         try:
             # Check staleness without raising exception initially
             mapping = self.check_and_handle_staleness(username, raise_on_stale=False)
-            
+
             if mapping is not None:
                 # Mapping is fresh, return it
                 return mapping
-            
+
             # Mapping is stale or missing
             if auto_refresh:
                 # MONITORING: Refresh attempt logging
-                self.logger.debug("Attempting automatic refresh for stale mapping: %s", username)
-                
+                self.logger.debug(
+                    "Attempting automatic refresh for stale mapping: %s",
+                    username,
+                )
+
                 # Attempt refresh
                 refreshed_mapping = self.refresh_user_mapping(username)
-                
+
                 if refreshed_mapping:
                     # MONITORING: Refresh success logging and metrics
                     self.logger.debug("Successfully refreshed mapping for %s", username)
-                    
+
                     # MONITORING: Refresh success metrics (YOLO FIX: defensive metrics)
                     self._safe_metrics_increment(
-                        'staleness_refreshed_total',
-                        tags={'success': 'true', 'username': username, 'trigger': 'auto_refresh'}
+                        "staleness_refreshed_total",
+                        tags={
+                            "success": "true",
+                            "username": username,
+                            "trigger": "auto_refresh",
+                        },
                     )
-                    
+
                     return refreshed_mapping
-                else:
-                    # MONITORING: Refresh failure logging and metrics
-                    self.logger.debug("Failed to refresh mapping for %s", username)
-                    
-                    # MONITORING: Refresh failure metrics (YOLO FIX: defensive metrics)
-                    self._safe_metrics_increment(
-                        'staleness_refreshed_total',
-                        tags={'success': 'false', 'username': username, 'trigger': 'auto_refresh'}
-                    )
-                    
-                    return None
-            else:
-                # No auto-refresh, just log and return None
-                self.logger.debug("Stale mapping detected for %s, auto_refresh disabled", username)
+                # MONITORING: Refresh failure logging and metrics
+                self.logger.debug("Failed to refresh mapping for %s", username)
+
+                # MONITORING: Refresh failure metrics (YOLO FIX: defensive metrics)
+                self._safe_metrics_increment(
+                    "staleness_refreshed_total",
+                    tags={
+                        "success": "false",
+                        "username": username,
+                        "trigger": "auto_refresh",
+                    },
+                )
+
                 return None
-                
+            # No auto-refresh, just log and return None
+            self.logger.debug(
+                "Stale mapping detected for %s, auto_refresh disabled",
+                username,
+            )
+            return None
+
         except StaleMappingError as e:
             # This shouldn't happen with raise_on_stale=False, but handle it anyway
             self.logger.warning("Unexpected StaleMappingError: %s", e)
             return None
         except Exception as e:
-            self.logger.exception("Unexpected error in staleness check for %s: %s", username, e)
+            self.logger.exception(
+                "Unexpected error in staleness check for %s: %s",
+                username,
+                e,
+            )
             return None
 
-    def detect_stale_mappings(self, usernames: list[str] | None = None) -> dict[str, str]:
+    def detect_stale_mappings(
+        self,
+        usernames: list[str] | None = None,
+    ) -> dict[str, str]:
         """Detect stale mappings in bulk for batch operations.
-        
+
         Args:
             usernames: Optional list of usernames to check. If None, checks all mappings.
-            
+
         Returns:
             Dictionary mapping username to staleness reason for stale mappings
+
         """
         current_time = datetime.now(tz=UTC)
         stale_mappings = {}
-        
+
         # Determine which usernames to check
-        check_usernames = usernames if usernames is not None else list(self.enhanced_user_mappings.keys())
-        
+        check_usernames = (
+            usernames
+            if usernames is not None
+            else list(self.enhanced_user_mappings.keys())
+        )
+
         # MONITORING: Bulk staleness detection logging
-        self.logger.debug("Starting bulk staleness detection for %d users", len(check_usernames))
-        
+        self.logger.debug(
+            "Starting bulk staleness detection for %d users",
+            len(check_usernames),
+        )
+
         for username in check_usernames:
             try:
                 if self.is_mapping_stale(username, current_time):
                     mapping = self.enhanced_user_mappings.get(username)
-                    
+
                     if not mapping:
                         stale_reason = "Mapping does not exist"
                         reason_tag = "missing"
@@ -1046,171 +1339,262 @@ class EnhancedUserAssociationMigrator:
                             reason_tag = "no_timestamp"
                         else:
                             try:
-                                last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
-                                age_seconds = (current_time - last_refresh_time).total_seconds()
+                                last_refresh_time = datetime.fromisoformat(
+                                    last_refreshed,
+                                )
+                                age_seconds = (
+                                    current_time - last_refresh_time
+                                ).total_seconds()
                                 stale_reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
                                 reason_tag = "expired"
                             except ValueError:
                                 stale_reason = "Invalid lastRefreshed timestamp"
                                 reason_tag = "invalid_timestamp"
-                    
+
                     stale_mappings[username] = stale_reason
-                    
+
                     # MONITORING: Individual staleness detection metrics (YOLO FIX: defensive metrics)
                     self._safe_metrics_increment(
-                        'staleness_detected_total',
-                        tags={'reason': reason_tag, 'username': username, 'detection_mode': 'bulk'}
+                        "staleness_detected_total",
+                        tags={
+                            "reason": reason_tag,
+                            "username": username,
+                            "detection_mode": "bulk",
+                        },
                     )
-                    
+
             except Exception as e:
                 self.logger.warning("Error checking staleness for %s: %s", username, e)
                 stale_mappings[username] = f"Error during check: {e}"
-        
+
         # MONITORING: Bulk detection results logging
         if stale_mappings:
-            self.logger.debug("Bulk staleness detection found %d stale mappings out of %d checked", 
-                            len(stale_mappings), len(check_usernames))
-            self.logger.info("Detected %d stale mappings: %s", len(stale_mappings), list(stale_mappings.keys()))
+            self.logger.debug(
+                "Bulk staleness detection found %d stale mappings out of %d checked",
+                len(stale_mappings),
+                len(check_usernames),
+            )
+            self.logger.info(
+                "Detected %d stale mappings: %s",
+                len(stale_mappings),
+                list(stale_mappings.keys()),
+            )
         else:
-            self.logger.debug("Bulk staleness detection found no stale mappings in %d checked users", len(check_usernames))
-            self.logger.debug("No stale mappings detected in %d checked users", len(check_usernames))
-        
+            self.logger.debug(
+                "Bulk staleness detection found no stale mappings in %d checked users",
+                len(check_usernames),
+            )
+            self.logger.debug(
+                "No stale mappings detected in %d checked users",
+                len(check_usernames),
+            )
+
         return stale_mappings
 
-    def batch_refresh_stale_mappings(self, usernames: list[str] | None = None, max_retries: int | None = None) -> dict[str, Any]:
+    def batch_refresh_stale_mappings(
+        self,
+        usernames: list[str] | None = None,
+        max_retries: int | None = None,
+    ) -> dict[str, Any]:
         """Refresh multiple stale mappings in batch with retry logic.
-        
+
         Args:
             usernames: Optional list of usernames to refresh. If None, refreshes all stale mappings.
             max_retries: Maximum retry attempts per mapping. If None, uses class default.
-            
+
         Returns:
             Dictionary with batch refresh results including success/failure counts
+
         """
-        current_time = datetime.now(tz=UTC)  # Single timestamp for entire batch operation
+        datetime.now(
+            tz=UTC,
+        )  # Single timestamp for entire batch operation
         max_retries = max_retries or self.DEFAULT_MAX_RETRIES
-        
+
         # Detect stale mappings if no usernames provided
         if usernames is None:
             stale_mappings = self.detect_stale_mappings()
             usernames = list(stale_mappings.keys())
         else:
             stale_mappings = self.detect_stale_mappings(usernames)
-        
+
         results = {
             "refresh_attempted": len(usernames),
             "refresh_successful": 0,
             "refresh_failed": 0,
             "errors": [],
             "results": {},
-            "total_stale": len(stale_mappings)  # Track total number of stale mappings detected
+            "total_stale": len(
+                stale_mappings,
+            ),  # Track total number of stale mappings detected
         }
-        
+
         # MONITORING: Batch operation logging
-        self.logger.info("Starting batch refresh for %d mappings (%d total stale detected)", len(usernames), len(stale_mappings))
-        self.logger.debug("Batch refresh operation details: %d users, max_retries=%d", len(usernames), max_retries)
-        
+        self.logger.info(
+            "Starting batch refresh for %d mappings (%d total stale detected)",
+            len(usernames),
+            len(stale_mappings),
+        )
+        self.logger.debug(
+            "Batch refresh operation details: %d users, max_retries=%d",
+            len(usernames),
+            max_retries,
+        )
+
         for username in usernames:
             stale_reason = stale_mappings.get(username, "Manual refresh requested")
-            
+
             # MONITORING: Individual refresh attempt logging
-            self.logger.debug("Starting batch refresh for user %s (reason: %s)", username, stale_reason)
-            
+            self.logger.debug(
+                "Starting batch refresh for user %s (reason: %s)",
+                username,
+                stale_reason,
+            )
+
             try:
                 # Retry logic for individual mapping refresh
                 last_error = None
                 success = False
-                
+
                 for attempt in range(max_retries + 1):
                     try:
                         # MONITORING: Retry attempt logging
                         if attempt > 0:
-                            self.logger.debug("Batch refresh retry attempt %d/%d for %s", attempt + 1, max_retries + 1, username)
-                        
+                            self.logger.debug(
+                                "Batch refresh retry attempt %d/%d for %s",
+                                attempt + 1,
+                                max_retries + 1,
+                                username,
+                            )
+
                         refreshed_mapping = self.refresh_user_mapping(username)
-                        
+
                         # YOLO FIX: Check if mapping indicates success or failure
-                        if refreshed_mapping and refreshed_mapping.get("metadata", {}).get("refresh_success", False):
+                        if refreshed_mapping and refreshed_mapping.get(
+                            "metadata",
+                            {},
+                        ).get("refresh_success", False):
                             results["refresh_successful"] += 1
                             results["results"][username] = {
                                 "status": "success",
                                 "attempts": attempt + 1,
                                 "stale_reason": stale_reason,
-                                "refreshed_at": refreshed_mapping["lastRefreshed"]
+                                "refreshed_at": refreshed_mapping["lastRefreshed"],
                             }
-                            
+
                             # MONITORING: Batch refresh success logging and metrics
-                            self.logger.debug("Batch refresh successful for %s after %d attempts", username, attempt + 1)
-                            
+                            self.logger.debug(
+                                "Batch refresh successful for %s after %d attempts",
+                                username,
+                                attempt + 1,
+                            )
+
                             # MONITORING: Batch refresh success metrics
-                            if hasattr(self, 'metrics_collector') and self.metrics_collector:
+                            if (
+                                hasattr(self, "metrics_collector")
+                                and self.metrics_collector
+                            ):
                                 self.metrics_collector.increment_counter(
-                                    'staleness_refreshed_total',
-                                    tags={'success': 'true', 'username': username, 'trigger': 'batch_refresh', 'attempts': str(attempt + 1)}
+                                    "staleness_refreshed_total",
+                                    tags={
+                                        "success": "true",
+                                        "username": username,
+                                        "trigger": "batch_refresh",
+                                        "attempts": str(attempt + 1),
+                                    },
                                 )
-                            
+
                             success = True
                             break
+                        # Handle error mapping or None result
+                        if refreshed_mapping and not refreshed_mapping.get(
+                            "metadata",
+                            {},
+                        ).get("refresh_success", False):
+                            last_error = refreshed_mapping.get("metadata", {}).get(
+                                "refresh_error",
+                                "Unknown error",
+                            )
                         else:
-                            # Handle error mapping or None result
-                            if refreshed_mapping and not refreshed_mapping.get("metadata", {}).get("refresh_success", False):
-                                last_error = refreshed_mapping.get("metadata", {}).get("refresh_error", "Unknown error")
-                            else:
-                                last_error = "Refresh returned None"
-                            
+                            last_error = "Refresh returned None"
+
                     except Exception as refresh_error:
                         last_error = str(refresh_error)
                         self.logger.warning(
-                            "Refresh attempt %d/%d failed for %s: %s", 
-                            attempt + 1, max_retries + 1, username, refresh_error
+                            "Refresh attempt %d/%d failed for %s: %s",
+                            attempt + 1,
+                            max_retries + 1,
+                            username,
+                            refresh_error,
                         )
-                
+
                 if not success:
                     results["refresh_failed"] += 1
                     results["results"][username] = {
                         "status": "failed",
                         "attempts": max_retries + 1,
                         "stale_reason": stale_reason,
-                        "error": last_error
+                        "error": last_error,
                     }
-                    
+
                     # MONITORING: Batch refresh failure logging and metrics
-                    self.logger.debug("Batch refresh failed for %s after %d attempts: %s", username, max_retries + 1, last_error)
-                    
+                    self.logger.debug(
+                        "Batch refresh failed for %s after %d attempts: %s",
+                        username,
+                        max_retries + 1,
+                        last_error,
+                    )
+
                     # MONITORING: Batch refresh failure metrics
-                    if hasattr(self, 'metrics_collector') and self.metrics_collector:
+                    if hasattr(self, "metrics_collector") and self.metrics_collector:
                         self.metrics_collector.increment_counter(
-                            'staleness_refreshed_total',
-                            tags={'success': 'false', 'username': username, 'trigger': 'batch_refresh', 'attempts': str(max_retries + 1)}
+                            "staleness_refreshed_total",
+                            tags={
+                                "success": "false",
+                                "username": username,
+                                "trigger": "batch_refresh",
+                                "attempts": str(max_retries + 1),
+                            },
                         )
-                    
+
                     results["errors"].append(f"{username}: {last_error}")
-                    
+
             except Exception as e:
                 # Outer exception handling for unexpected errors
                 results["refresh_failed"] += 1
                 error_msg = f"Unexpected error during batch refresh for {username}: {e}"
                 results["errors"].append(error_msg)
                 results["results"][username] = {
-                    "status": "failed", 
+                    "status": "failed",
                     "attempts": 0,
                     "stale_reason": stale_reason,
-                    "error": str(e)
+                    "error": str(e),
                 }
-                
+
                 # MONITORING: Unexpected batch refresh error logging
-                self.logger.exception("Unexpected error during batch refresh for %s: %s", username, e)
-        
+                self.logger.exception(
+                    "Unexpected error during batch refresh for %s: %s",
+                    username,
+                    e,
+                )
+
         # MONITORING: Batch operation summary logging
-        self.logger.info("Batch refresh completed: %d successful, %d failed out of %d attempted", 
-                        results["refresh_successful"], results["refresh_failed"], results["refresh_attempted"])
-        
+        self.logger.info(
+            "Batch refresh completed: %d successful, %d failed out of %d attempted",
+            results["refresh_successful"],
+            results["refresh_failed"],
+            results["refresh_attempted"],
+        )
+
         return results
 
-    def _get_jira_user_with_retry(self, username: str, max_retries: Optional[int] = None) -> dict[str, Any] | None:
-        """
-        Get Jira user data with configurable retry logic and exponential backoff.
-        
+    def _get_jira_user_with_retry(
+        self,
+        username: str,
+        max_retries: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Get Jira user data with configurable retry logic and exponential backoff.
+
         YOLO-FIXED Features:
         - Thread-safe rate limiting to prevent API storms (FIXED: uses ThreadSafeConcurrentTracker)
         - Configurable retry parameters with validation
@@ -1218,100 +1602,124 @@ class EnhancedUserAssociationMigrator:
         - Request timeout protection (FIXED: applied to API calls)
         - Comprehensive error context logging with pre-compiled regex (FIXED: ReDoS protection)
         - Non-blocking semaphore usage (FIXED: releases during sleep)
-        
+
         Args:
             username: The username to look up in Jira
             max_retries: Override default max_retries for this call
-            
+
         Returns:
             Jira user data dict on success, None if user not found
-            
+
         Raises:
             ValueError: If username is invalid or max_retries exceeds limits
             Exception: Last encountered error if all retry attempts fail
+
         """
         if not username or not isinstance(username, str):
-            raise ValueError(f"username must be a non-empty string, got: {type(username).__name__}")
-            
+            msg = f"username must be a non-empty string, got: {type(username).__name__}"
+            raise ValueError(
+                msg,
+            )
+
         # Use provided max_retries or default from config
-        retry_limit = max_retries if max_retries is not None else self.retry_config['max_retries']
-        
+        retry_limit = (
+            max_retries if max_retries is not None else self.retry_config["max_retries"]
+        )
+
         # Validate retry limit
         if not isinstance(retry_limit, int) or retry_limit < 0:
-            raise ValueError(f"max_retries must be a non-negative integer, got: {retry_limit}")
+            msg = f"max_retries must be a non-negative integer, got: {retry_limit}"
+            raise ValueError(
+                msg,
+            )
         if retry_limit > self.ABSOLUTE_MAX_RETRIES:
-            raise ValueError(f"max_retries cannot exceed {self.ABSOLUTE_MAX_RETRIES}, got: {retry_limit}")
-        
-        self.logger.debug(f"Starting Jira user lookup for '{username}' with max_retries={retry_limit}")
-        
+            msg = f"max_retries cannot exceed {self.ABSOLUTE_MAX_RETRIES}, got: {retry_limit}"
+            raise ValueError(
+                msg,
+            )
+
+        self.logger.debug(
+            f"Starting Jira user lookup for '{username}' with max_retries={retry_limit}",
+        )
+
         last_error = None
-        request_timeout = self.retry_config['request_timeout']
-        
+        request_timeout = self.retry_config["request_timeout"]
+
         for attempt in range(retry_limit + 1):  # +1 for initial attempt
             # Acquire rate limiting slot
             with self._refresh_tracker:
                 try:
                     # API call with proper timeout (FIXED: timeout parameter applied)
-                    if hasattr(self.jira_client, 'get_user_info_with_timeout'):
-                        jira_user_data = self.jira_client.get_user_info_with_timeout(username, timeout=request_timeout)
+                    if hasattr(self.jira_client, "get_user_info_with_timeout"):
+                        jira_user_data = self.jira_client.get_user_info_with_timeout(
+                            username,
+                            timeout=request_timeout,
+                        )
                     else:
                         # Fallback for clients without timeout support
                         jira_user_data = self.jira_client.get_user_info(username)
-                    
+
                     # CRITICAL FIX: Handle None return values properly
                     if jira_user_data is None:
-                        raise JiraApiError(f"No user data returned for user '{username}'")
-                    
+                        msg = f"No user data returned for user '{username}'"
+                        raise JiraApiError(
+                            msg,
+                        )
+
                     if attempt > 0:
-                        self.logger.info(f"Jira user lookup for '{username}' succeeded on attempt {attempt + 1}")
+                        self.logger.info(
+                            f"Jira user lookup for '{username}' succeeded on attempt {attempt + 1}",
+                        )
                     else:
-                        self.logger.debug(f"Jira user lookup for '{username}' succeeded on first attempt")
-                        
+                        self.logger.debug(
+                            f"Jira user lookup for '{username}' succeeded on first attempt",
+                        )
+
                     return jira_user_data
-                        
+
                 except Exception as e:
                     last_error = e
-                    
+
                     # Enhanced error context logging with helper method (YOLO FIX: no duplication)
                     sanitized_error_msg = self._sanitize_error_message(str(e))
-                    
+
                     # Get accurate concurrent call count (FIXED: thread-safe access)
                     concurrent_active = self._refresh_tracker.get_active_count()
-                    
+
                     error_context = {
-                        'username': username,
-                        'attempt': attempt + 1,
-                        'total_attempts': retry_limit + 1,
-                        'error_type': type(e).__name__,
-                        'error_message': sanitized_error_msg,
-                        'concurrent_limit': self.MAX_CONCURRENT_REFRESHES,
-                        'concurrent_active': concurrent_active
+                        "username": username,
+                        "attempt": attempt + 1,
+                        "total_attempts": retry_limit + 1,
+                        "error_type": type(e).__name__,
+                        "error_message": sanitized_error_msg,
+                        "concurrent_limit": self.MAX_CONCURRENT_REFRESHES,
+                        "concurrent_active": concurrent_active,
                     }
-                    
+
                     if attempt < retry_limit:  # Not the final attempt
                         # Calculate delay with exponential backoff and cap
-                        raw_delay = self.retry_config['base_delay'] * (2 ** attempt)
-                        actual_delay = min(raw_delay, self.retry_config['max_delay'])
-                        
+                        raw_delay = self.retry_config["base_delay"] * (2**attempt)
+                        actual_delay = min(raw_delay, self.retry_config["max_delay"])
+
                         # YOLO FIX: Use helper method for consistent sanitization
                         sanitized_error = sanitized_error_msg
 
                         self.logger.warning(
                             f"Jira user lookup for '{username}' failed on attempt {attempt + 1}/{retry_limit + 1}. "
-                            f"Error: {type(e).__name__}: {sanitized_error}. Retrying in {actual_delay}s..."
+                            f"Error: {type(e).__name__}: {sanitized_error}. Retrying in {actual_delay}s...",
                         )
 
                         # CRITICAL FIX: Release semaphore during sleep to avoid blocking other threads
-                        pass  # Semaphore is automatically released at end of 'with' block
+                        # Semaphore is automatically released at end of 'with' block
                     else:
                         # YOLO FIX: Use helper method for consistent sanitization
                         sanitized_error = sanitized_error_msg
 
                         # YOLO FIX: Include error context directly in log message
-                        self.logger.error(
+                        self.logger.exception(
                             f"Jira user lookup for '{username}' exhausted all retry attempts. "
                             f"Final error: {type(e).__name__}: {sanitized_error}. "
-                            f"Error context: {error_context}"
+                            f"Error context: {error_context}",
                         )
 
             # CRITICAL FIX: Sleep outside semaphore context to avoid blocking other threads
@@ -1320,40 +1728,52 @@ class EnhancedUserAssociationMigrator:
 
         # CRITICAL FIX: Null pointer protection - guard against None last_error before raising
         if last_error is None:
-            raise RuntimeError(f"No error recorded during retry attempts for user '{username}' - this should not happen")
-        
+            msg = f"No error recorded during retry attempts for user '{username}' - this should not happen"
+            raise RuntimeError(
+                msg,
+            )
+
         raise last_error
 
     def refresh_user_mapping(self, username: str) -> UserAssociationMapping | None:
         """Refresh a stale user mapping by re-fetching from Jira.
-        
+
         This method fetches fresh user data from Jira and updates the mapping
         with a new timestamp and any changed information.
-        
+
         Args:
             username: Jira username to refresh
-            
+
         Returns:
             Refreshed mapping if successful, None if refresh failed
+
         """
         try:
             # MONITORING: Refresh attempt logging
             self.logger.debug("Starting refresh for user mapping: %s", username)
             self.logger.info("Refreshing user mapping for: %s", username)
-            
+
             # Get fresh data from Jira with retry logic and exponential backoff
             jira_user_data = self._get_jira_user_with_retry(username)
-            
+
             if not jira_user_data:
                 # MONITORING: User not found logging
-                self.logger.debug("User %s not found in Jira during refresh - applying fallback", username)
-                self.logger.warning("User %s not found in Jira during refresh", username)
+                self.logger.debug(
+                    "User %s not found in Jira during refresh - applying fallback",
+                    username,
+                )
+                self.logger.warning(
+                    "User %s not found in Jira during refresh",
+                    username,
+                )
                 # Apply fallback strategy for not found user
                 return self._apply_fallback_strategy(username, None, "user_not_found")
-            
+
             # Get current mapping or create new one
-            current_mapping = self.enhanced_user_mappings.get(username, {})
-            
+            current_mapping: UserAssociationMapping = self.enhanced_user_mappings.get(
+                username, {}
+            )
+
             # Update Jira metadata
             refreshed_mapping = {
                 **current_mapping,
@@ -1365,53 +1785,74 @@ class EnhancedUserAssociationMigrator:
                     "jira_email": jira_user_data.get("emailAddress"),
                     "jira_account_id": jira_user_data.get("accountId"),
                     "refresh_success": True,
-                    "refresh_error": None
-                }
+                    "refresh_error": None,
+                },
             }
-            
+
             # Validate refreshed user data
-            validation_result = self._validate_refreshed_user(username, jira_user_data, current_mapping)
-            
+            validation_result = self._validate_refreshed_user(
+                username,
+                jira_user_data,
+                current_mapping,
+            )
+
             if not validation_result["is_valid"]:
                 # MONITORING: Validation failure logging
-                self.logger.debug("User %s failed validation after refresh: %s - applying fallback", 
-                                username, validation_result["reason"])
-                self.logger.warning("User %s failed validation after refresh: %s", 
-                                  username, validation_result["reason"])
+                self.logger.debug(
+                    "User %s failed validation after refresh: %s - applying fallback",
+                    username,
+                    validation_result["reason"],
+                )
+                self.logger.warning(
+                    "User %s failed validation after refresh: %s",
+                    username,
+                    validation_result["reason"],
+                )
                 # Apply fallback strategy for validation failure
-                return self._apply_fallback_strategy(username, jira_user_data, validation_result["reason"])
-            
+                return self._apply_fallback_strategy(
+                    username,
+                    jira_user_data,
+                    validation_result["reason"],
+                )
+
             # MONITORING: Validation success logging
             self.logger.debug("User %s passed validation after refresh", username)
-            
+
             # If validation passes and user is active, try OpenProject mapping if needed
             if not refreshed_mapping.get("openproject_user_id"):
                 # MONITORING: OpenProject mapping attempt logging
                 self.logger.debug("Attempting OpenProject mapping for %s", username)
-                refreshed_mapping = self._attempt_openproject_mapping(refreshed_mapping, jira_user_data)
+                refreshed_mapping = self._attempt_openproject_mapping(
+                    refreshed_mapping,
+                    jira_user_data,
+                )
             else:
                 # MONITORING: OpenProject mapping already exists
                 self.logger.debug("OpenProject mapping already exists for %s", username)
-            
+
             # Mark as successfully mapped
             refreshed_mapping["mapping_status"] = "mapped"
-            
+
             # Update the mapping
             self.enhanced_user_mappings[username] = refreshed_mapping
-            
+
             # Save updated mappings
             self._save_enhanced_mappings()
-            
+
             # MONITORING: Refresh success logging
             self.logger.debug("Successfully completed refresh for %s", username)
             self.logger.info("Successfully refreshed mapping for %s", username)
             return refreshed_mapping
-            
+
         except Exception as e:
             # MONITORING: Refresh error logging
             self.logger.debug("Refresh failed for %s with error: %s", username, str(e))
-            self.logger.exception("Error refreshing user mapping for %s: %s", username, e)
-            
+            self.logger.exception(
+                "Error refreshing user mapping for %s: %s",
+                username,
+                e,
+            )
+
             # Update mapping with error information but preserve existing data
             current_mapping = self.enhanced_user_mappings.get(username, {})
             error_mapping = {
@@ -1420,143 +1861,202 @@ class EnhancedUserAssociationMigrator:
                 "metadata": {
                     **current_mapping.get("metadata", {}),
                     "refresh_success": False,
-                    "refresh_error": str(e)
-                }
+                    "refresh_error": str(e),
+                },
             }
             self.enhanced_user_mappings[username] = error_mapping
-            
+
             try:
                 self._save_enhanced_mappings()
-            except (IOError, json.JSONDecodeError, ValueError) as e:
-                self.logger.error("Failed to save error mapping for %s: %s", username, e)
-            
+            except (OSError, json.JSONDecodeError, ValueError) as e:
+                self.logger.exception(
+                    "Failed to save error mapping for %s: %s",
+                    username,
+                    e,
+                )
+
             return None
 
-    def _validate_refreshed_user(self, username: str, jira_user_data: dict[str, Any], 
-                                current_mapping: UserAssociationMapping) -> dict[str, Any]:
+    def _validate_refreshed_user(
+        self,
+        username: str,
+        jira_user_data: dict[str, Any],
+        current_mapping: UserAssociationMapping,
+    ) -> dict[str, Any]:
         """Validate refreshed user data to ensure it's suitable for mapping.
-        
+
         Args:
             username: Jira username being validated
             jira_user_data: Fresh user data from Jira
             current_mapping: Current mapping data for comparison
-            
+
         Returns:
             Dictionary with validation result: {"is_valid": bool, "reason": str}
+
         """
         # Check if user is active in Jira
         jira_active = jira_user_data.get("active", True)
         if not jira_active:
-            return {
-                "is_valid": False,
-                "reason": "user_inactive_in_jira"
-            }
-        
+            return {"is_valid": False, "reason": "user_inactive_in_jira"}
+
         # Check for email/username consistency if we have previous data
         current_metadata = current_mapping.get("metadata", {})
         previous_email = current_metadata.get("jira_email")
         current_email = jira_user_data.get("emailAddress")
-        
-        if previous_email and current_email and previous_email.lower() != current_email.lower():
+
+        if (
+            previous_email
+            and current_email
+            and previous_email.lower() != current_email.lower()
+        ):
             return {
                 "is_valid": False,
-                "reason": f"email_mismatch_previous:{previous_email}_current:{current_email}"
+                "reason": f"email_mismatch_previous:{previous_email}_current:{current_email}",
             }
-        
+
         # Check for account ID consistency if we have previous data
         previous_account_id = current_metadata.get("jira_account_id")
         current_account_id = jira_user_data.get("accountId")
-        
-        if previous_account_id and current_account_id and previous_account_id != current_account_id:
+
+        if (
+            previous_account_id
+            and current_account_id
+            and previous_account_id != current_account_id
+        ):
             return {
                 "is_valid": False,
-                "reason": f"account_id_mismatch_previous:{previous_account_id}_current:{current_account_id}"
+                "reason": f"account_id_mismatch_previous:{previous_account_id}_current:{current_account_id}",
             }
-        
-        # All validations passed
-        return {
-            "is_valid": True,
-            "reason": "validation_passed"
-        }
 
-    def _apply_fallback_strategy(self, username: str, jira_user_data: dict[str, Any] | None, 
-                                reason: str) -> UserAssociationMapping | None:
+        # All validations passed
+        return {"is_valid": True, "reason": "validation_passed"}
+
+    def _apply_fallback_strategy(
+        self,
+        username: str,
+        jira_user_data: dict[str, Any] | None,
+        reason: str,
+    ) -> UserAssociationMapping | None:
         """Apply the configured fallback strategy when user validation fails.
-        
+
         Args:
             username: Jira username that failed validation
             jira_user_data: Jira user data (None if user not found)
             reason: Reason for fallback
-            
+
         Returns:
             Updated mapping after applying fallback, or None if skipped
+
         """
         strategy = self.fallback_strategy
-        current_mapping = self.enhanced_user_mappings.get(username, {})
-        
-        self.logger.info("Applying fallback strategy '%s' for user %s (reason: %s)", 
-                        strategy, username, reason)
-        
+        current_mapping: UserAssociationMapping = self.enhanced_user_mappings.get(
+            username, {}
+        )
+
+        self.logger.info(
+            "Applying fallback strategy '%s' for user %s (reason: %s)",
+            strategy,
+            username,
+            reason,
+        )
+
         if strategy == "skip":
             return self._execute_skip_fallback(username, reason, current_mapping)
-        elif strategy == "assign_admin":
-            return self._execute_assign_admin_fallback(username, reason, current_mapping, jira_user_data)
-        elif strategy == "create_placeholder":
-            return self._execute_create_placeholder_fallback(username, reason, current_mapping, jira_user_data)
-        else:
-            self.logger.error("Unknown fallback strategy: %s", strategy)
-            return self._execute_skip_fallback(username, f"unknown_strategy_{strategy}", current_mapping)
+        if strategy == "assign_admin":
+            return self._execute_assign_admin_fallback(
+                username,
+                reason,
+                current_mapping,
+                jira_user_data,
+            )
+        if strategy == "create_placeholder":
+            return self._execute_create_placeholder_fallback(
+                username,
+                reason,
+                current_mapping,
+                jira_user_data,
+            )
+        self.logger.error("Unknown fallback strategy: %s", strategy)
+        return self._execute_skip_fallback(
+            username,
+            f"unknown_strategy_{strategy}",
+            current_mapping,
+        )
 
-    def _execute_skip_fallback(self, username: str, reason: str, 
-                              current_mapping: UserAssociationMapping) -> None:
+    def _execute_skip_fallback(
+        self,
+        username: str,
+        reason: str,
+        current_mapping: UserAssociationMapping,
+    ) -> UserAssociationMapping | None:
         """Execute 'skip' fallback strategy - remove mapping and log warning.
-        
+
         Args:
             username: Username to skip
             reason: Reason for skipping
             current_mapping: Current mapping data
+
         """
         self.logger.warning("Skipping user mapping for %s due to: %s", username, reason)
-        
+
         # Remove from mappings if exists
         if username in self.enhanced_user_mappings:
             del self.enhanced_user_mappings[username]
-        
+
         # Update metrics
-        if hasattr(self, 'metrics_collector') and self.metrics_collector:
+        if hasattr(self, "metrics_collector") and self.metrics_collector:
             self.metrics_collector.increment_counter(
-                'mapping_fallback_total',
-                tags={'fallback_strategy': 'skip', 'reason': reason}
+                "mapping_fallback_total",
+                tags={"fallback_strategy": "skip", "reason": reason},
             )
-        
+
         try:
             self._save_enhanced_mappings()
-        except (IOError, json.JSONDecodeError, ValueError) as e:
-            self.logger.error("Failed to save after skip fallback for %s: %s", username, e)
-        
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            self.logger.exception(
+                "Failed to save after skip fallback for %s: %s",
+                username,
+                e,
+            )
+
         return None
 
-    def _execute_assign_admin_fallback(self, username: str, reason: str, 
-                                      current_mapping: UserAssociationMapping,
-                                      jira_user_data: dict[str, Any] | None) -> UserAssociationMapping:
+    def _execute_assign_admin_fallback(
+        self,
+        username: str,
+        reason: str,
+        current_mapping: UserAssociationMapping,
+        jira_user_data: dict[str, Any] | None,
+    ) -> UserAssociationMapping:
         """Execute 'assign_admin' fallback strategy - map to configured admin user.
-        
+
         Args:
             username: Username to assign to admin
             reason: Reason for admin assignment
             current_mapping: Current mapping data
             jira_user_data: Jira user data (may be None)
-            
+
         Returns:
             Updated mapping pointing to admin user
+
         """
         if not self.admin_user_id:
-            self.logger.error("Cannot execute assign_admin fallback: no admin_user_id configured")
-            return self._execute_skip_fallback(username, f"no_admin_configured_{reason}", current_mapping)
-        
-        self.logger.warning("Assigning user %s to admin user %s due to: %s", 
-                           username, self.admin_user_id, reason)
-        
+            self.logger.error(
+                "Cannot execute assign_admin fallback: no admin_user_id configured",
+            )
+            return self._execute_skip_fallback(
+                username,
+                f"no_admin_configured_{reason}",
+                current_mapping,
+            )
+
+        self.logger.warning(
+            "Assigning user %s to admin user %s due to: %s",
+            username,
+            self.admin_user_id,
+            reason,
+        )
+
         # Create mapping to admin user
         admin_mapping = {
             "jira_username": username,
@@ -1569,47 +2069,68 @@ class EnhancedUserAssociationMigrator:
                 "fallback_reason": reason,
                 "fallback_admin_user_id": self.admin_user_id,
                 "fallback_timestamp": datetime.now(tz=UTC).isoformat(),
-                "jira_active": jira_user_data.get("active", False) if jira_user_data else False,
-                "jira_display_name": jira_user_data.get("displayName") if jira_user_data else None,
-                "jira_email": jira_user_data.get("emailAddress") if jira_user_data else None,
-                "jira_account_id": jira_user_data.get("accountId") if jira_user_data else None,
-                "needs_review": True
-            }
+                "jira_active": (
+                    jira_user_data.get("active", False) if jira_user_data else False
+                ),
+                "jira_display_name": (
+                    jira_user_data.get("displayName") if jira_user_data else None
+                ),
+                "jira_email": (
+                    jira_user_data.get("emailAddress") if jira_user_data else None
+                ),
+                "jira_account_id": (
+                    jira_user_data.get("accountId") if jira_user_data else None
+                ),
+                "needs_review": True,
+            },
         }
-        
+
         # Update mappings
         self.enhanced_user_mappings[username] = admin_mapping
-        
+
         # Update metrics
-        if hasattr(self, 'metrics_collector') and self.metrics_collector:
+        if hasattr(self, "metrics_collector") and self.metrics_collector:
             self.metrics_collector.increment_counter(
-                'mapping_fallback_total',
-                tags={'fallback_strategy': 'assign_admin', 'reason': reason}
+                "mapping_fallback_total",
+                tags={"fallback_strategy": "assign_admin", "reason": reason},
             )
-        
+
         try:
             self._save_enhanced_mappings()
-        except (IOError, json.JSONDecodeError, ValueError) as e:
-            self.logger.error("Failed to save after assign_admin fallback for %s: %s", username, e)
-        
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            self.logger.exception(
+                "Failed to save after assign_admin fallback for %s: %s",
+                username,
+                e,
+            )
+
         return admin_mapping
 
-    def _execute_create_placeholder_fallback(self, username: str, reason: str,
-                                           current_mapping: UserAssociationMapping,
-                                           jira_user_data: dict[str, Any] | None) -> UserAssociationMapping:
+    def _execute_create_placeholder_fallback(
+        self,
+        username: str,
+        reason: str,
+        current_mapping: UserAssociationMapping,
+        jira_user_data: dict[str, Any] | None,
+    ) -> UserAssociationMapping:
         """Execute 'create_placeholder' fallback strategy - create placeholder with review flag.
-        
+
         Args:
             username: Username to create placeholder for
             reason: Reason for placeholder creation
             current_mapping: Current mapping data
             jira_user_data: Jira user data (may be None)
-            
+
         Returns:
             Updated mapping with placeholder and review flag
+
         """
-        self.logger.warning("Creating placeholder mapping for user %s due to: %s", username, reason)
-        
+        self.logger.warning(
+            "Creating placeholder mapping for user %s due to: %s",
+            username,
+            reason,
+        )
+
         # Create placeholder mapping
         placeholder_mapping = {
             "jira_username": username,
@@ -1623,125 +2144,167 @@ class EnhancedUserAssociationMigrator:
                 "fallback_timestamp": datetime.now(tz=UTC).isoformat(),
                 "needs_review": True,
                 "is_placeholder": True,
-                "jira_active": jira_user_data.get("active", False) if jira_user_data else False,
-                "jira_display_name": jira_user_data.get("displayName") if jira_user_data else None,
-                "jira_email": jira_user_data.get("emailAddress") if jira_user_data else None,
-                "jira_account_id": jira_user_data.get("accountId") if jira_user_data else None,
-                "placeholder_created": datetime.now(tz=UTC).isoformat()
-            }
+                "jira_active": (
+                    jira_user_data.get("active", False) if jira_user_data else False
+                ),
+                "jira_display_name": (
+                    jira_user_data.get("displayName") if jira_user_data else None
+                ),
+                "jira_email": (
+                    jira_user_data.get("emailAddress") if jira_user_data else None
+                ),
+                "jira_account_id": (
+                    jira_user_data.get("accountId") if jira_user_data else None
+                ),
+                "placeholder_created": datetime.now(tz=UTC).isoformat(),
+            },
         }
-        
+
         # Update mappings
         self.enhanced_user_mappings[username] = placeholder_mapping
-        
+
         # Update metrics
-        if hasattr(self, 'metrics_collector') and self.metrics_collector:
+        if hasattr(self, "metrics_collector") and self.metrics_collector:
             self.metrics_collector.increment_counter(
-                'mapping_fallback_total',
-                tags={'fallback_strategy': 'create_placeholder', 'reason': reason}
+                "mapping_fallback_total",
+                tags={"fallback_strategy": "create_placeholder", "reason": reason},
             )
-        
+
         try:
             self._save_enhanced_mappings()
-        except (IOError, json.JSONDecodeError, ValueError) as e:
-            self.logger.error("Failed to save after create_placeholder fallback for %s: %s", username, e)
-        
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            self.logger.exception(
+                "Failed to save after create_placeholder fallback for %s: %s",
+                username,
+                e,
+            )
+
         return placeholder_mapping
 
-    def _attempt_openproject_mapping(self, mapping: UserAssociationMapping, jira_user_data: dict[str, Any]) -> UserAssociationMapping:
+    def _attempt_openproject_mapping(
+        self,
+        mapping: UserAssociationMapping,
+        jira_user_data: dict[str, Any],
+    ) -> UserAssociationMapping:
         """Attempt to find OpenProject mapping for a user during refresh.
-        
+
         Args:
             mapping: Current mapping data
             jira_user_data: Fresh Jira user data
-            
+
         Returns:
             Updated mapping with OpenProject information if found
+
         """
         try:
             jira_email = jira_user_data.get("emailAddress", "").strip().lower()
-            
+
             if jira_email:
                 # Try to find user in OpenProject by email
                 openproject_user = self.op_client.get_user_by_email(jira_email)
-                
+
                 if openproject_user:
-                    mapping.update({
-                        "openproject_user_id": openproject_user["id"],
-                        "mapping_status": "mapped",
-                        "metadata": {
-                            **mapping.get("metadata", {}),
-                            "openproject_active": openproject_user.get("status") == "active",
-                            "openproject_email": openproject_user.get("email"),
-                            "openproject_name": f"{openproject_user.get('firstname', '')} {openproject_user.get('lastname', '')}".strip(),
-                            "mapping_method": "email_refresh"
-                        }
-                    })
-                    self.logger.info("Found OpenProject mapping during refresh for %s: user ID %d", 
-                                   mapping.get("jira_username", "unknown"), openproject_user["id"])
+                    mapping.update(
+                        {
+                            "openproject_user_id": openproject_user["id"],
+                            "mapping_status": "mapped",
+                            "metadata": {
+                                **mapping.get("metadata", {}),
+                                "openproject_active": openproject_user.get("status")
+                                == "active",
+                                "openproject_email": openproject_user.get("email"),
+                                "openproject_name": (
+                                    f"{openproject_user.get('firstname', '')} "
+                                    f"{openproject_user.get('lastname', '')}"
+                                ).strip(),
+                                "mapping_method": "email_refresh",
+                            },
+                        },
+                    )
+                    self.logger.info(
+                        "Found OpenProject mapping during refresh for %s: user ID %d",
+                        mapping.get("jira_username", "unknown"),
+                        openproject_user["id"],
+                    )
                 else:
                     mapping["mapping_status"] = "no_openproject_match"
                     mapping["metadata"] = {
                         **mapping.get("metadata", {}),
                         "openproject_search_attempted": True,
-                        "openproject_search_email": jira_email
+                        "openproject_search_email": jira_email,
                     }
-                    self.logger.debug("No OpenProject user found for email %s during refresh", jira_email)
+                    self.logger.debug(
+                        "No OpenProject user found for email %s during refresh",
+                        jira_email,
+                    )
             else:
                 mapping["mapping_status"] = "no_email"
-                self.logger.debug("No email available for OpenProject lookup during refresh")
-                
+                self.logger.debug(
+                    "No email available for OpenProject lookup during refresh",
+                )
+
         except Exception as e:
-            self.logger.warning("Error attempting OpenProject mapping during refresh: %s", e)
+            self.logger.warning(
+                "Error attempting OpenProject mapping during refresh: %s",
+                e,
+            )
             mapping["metadata"] = {
                 **mapping.get("metadata", {}),
-                "openproject_mapping_error": str(e)
+                "openproject_mapping_error": str(e),
             }
-        
+
         return mapping
 
     def trigger_mapping_refresh(self, username: str, force: bool = False) -> bool:
         """Trigger a mapping refresh for a specific user.
-        
+
         Args:
             username: Jira username to refresh
             force: Whether to force refresh even if mapping is fresh
-            
+
         Returns:
             True if refresh was successful, False otherwise
+
         """
         try:
             # Check if refresh is needed (unless forced)
             if not force and not self.is_mapping_stale(username):
                 self.logger.debug("Mapping for %s is fresh, skipping refresh", username)
                 return True
-            
+
             # Attempt refresh
             refreshed_mapping = self.refresh_user_mapping(username)
-            
+
             if refreshed_mapping:
                 self.logger.info("Successfully triggered refresh for %s", username)
                 return True
-            else:
-                self.logger.warning("Failed to refresh mapping for %s", username)
-                return False
-                
+            self.logger.warning("Failed to refresh mapping for %s", username)
+            return False
+
         except Exception as e:
             self.logger.exception("Error triggering refresh for %s: %s", username, e)
             return False
 
-    def validate_mapping_freshness(self, usernames: list[str] | None = None) -> dict[str, Any]:
+    def validate_mapping_freshness(
+        self,
+        usernames: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Validate freshness of multiple mappings and provide refresh recommendations.
-        
+
         Args:
             usernames: Optional list of usernames to validate. If None, validates all mappings.
-            
+
         Returns:
             Dictionary with validation results and recommendations
+
         """
         current_time = datetime.now(tz=UTC)
-        check_usernames = usernames if usernames is not None else list(self.enhanced_user_mappings.keys())
-        
+        check_usernames = (
+            usernames
+            if usernames is not None
+            else list(self.enhanced_user_mappings.keys())
+        )
+
         validation_results = {
             "total_checked": len(check_usernames),
             "fresh_mappings": 0,
@@ -1750,80 +2313,103 @@ class EnhancedUserAssociationMigrator:
             "error_mappings": 0,
             "stale_users": [],
             "missing_users": [],
-            "recommendations": []
+            "recommendations": [],
         }
-        
+
         for username in check_usernames:
             try:
                 mapping = self.enhanced_user_mappings.get(username)
-                
+
                 if not mapping:
                     validation_results["missing_mappings"] += 1
                     validation_results["missing_users"].append(username)
                     continue
-                
+
                 # Check staleness
                 if self.is_mapping_stale(username, current_time):
                     validation_results["stale_mappings"] += 1
                     validation_results["stale_users"].append(username)
-                    
+
                     # Determine staleness reason for recommendation
                     last_refreshed = mapping.get("lastRefreshed")
                     age_seconds = 0  # Initialize age_seconds outside try block
-                    
+
                     if not last_refreshed:
                         reason = "Never refreshed"
                     else:
                         try:
-                            last_refresh_time = datetime.fromisoformat(last_refreshed.replace('Z', '+00:00'))
-                            age_seconds = (current_time - last_refresh_time).total_seconds()
+                            last_refresh_time = datetime.fromisoformat(
+                                last_refreshed,
+                            )
+                            age_seconds = (
+                                current_time - last_refresh_time
+                            ).total_seconds()
                             reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
                         except ValueError:
                             reason = "Invalid timestamp"
-                            age_seconds = self.refresh_interval_seconds * 3  # Assume very stale for invalid timestamps
-                    
-                    validation_results["recommendations"].append({
-                        "username": username,
-                        "action": "refresh",
-                        "reason": reason,
-                        "priority": "high" if age_seconds > (self.refresh_interval_seconds * 2) else "medium"
-                    })
+                            age_seconds = (
+                                self.refresh_interval_seconds * 3
+                            )  # Assume very stale for invalid timestamps
+
+                    validation_results["recommendations"].append(
+                        {
+                            "username": username,
+                            "action": "refresh",
+                            "reason": reason,
+                            "priority": (
+                                "high"
+                                if age_seconds > (self.refresh_interval_seconds * 2)
+                                else "medium"
+                            ),
+                        },
+                    )
                 else:
                     validation_results["fresh_mappings"] += 1
-                    
+
             except Exception as e:
                 validation_results["error_mappings"] += 1
                 self.logger.warning("Error validating mapping for %s: %s", username, e)
-        
+
         # Add summary recommendations
         if validation_results["stale_mappings"] > 0:
-            validation_results["recommendations"].append({
-                "username": "ALL_STALE",
-                "action": "batch_refresh",
-                "reason": f"Detected {validation_results['stale_mappings']} stale mappings",
-                "priority": "high" if validation_results["stale_mappings"] > 10 else "medium"
-            })
-        
+            validation_results["recommendations"].append(
+                {
+                    "username": "ALL_STALE",
+                    "action": "batch_refresh",
+                    "reason": f"Detected {validation_results['stale_mappings']} stale mappings",
+                    "priority": (
+                        "high"
+                        if validation_results["stale_mappings"] > 10
+                        else "medium"
+                    ),
+                },
+            )
+
         if validation_results["missing_mappings"] > 0:
-            validation_results["recommendations"].append({
-                "username": "ALL_MISSING",
-                "action": "investigate",
-                "reason": f"Found {validation_results['missing_mappings']} missing mappings",
-                "priority": "medium"
-            })
-        
+            validation_results["recommendations"].append(
+                {
+                    "username": "ALL_MISSING",
+                    "action": "investigate",
+                    "reason": f"Found {validation_results['missing_mappings']} missing mappings",
+                    "priority": "medium",
+                },
+            )
+
         self.logger.info(
             "Mapping validation complete: %d fresh, %d stale, %d missing, %d errors",
             validation_results["fresh_mappings"],
             validation_results["stale_mappings"],
             validation_results["missing_mappings"],
-            validation_results["error_mappings"]
+            validation_results["error_mappings"],
         )
-        
+
         return validation_results
 
     def _queue_rails_author_operation(
-        self, jira_key: str, author_id: int, author_data: dict[str, Any]
+        self,
+        jira_key: str,
+        author_id: int,
+        author_data: dict[str, Any],
     ) -> None:
         """Queue Rails console operation for author preservation."""
         operation = {
@@ -1835,69 +2421,76 @@ class EnhancedUserAssociationMigrator:
         }
         self._rails_operations_cache.append(operation)
 
-    def execute_rails_author_operations(self, work_package_mapping: dict[str, Any]) -> dict[str, Any]:
+    def execute_rails_author_operations(
+        self,
+        work_package_mapping: dict[str, Any],
+    ) -> dict[str, Any]:
         """Execute queued Rails operations for author preservation."""
         if not self._rails_operations_cache:
             return {"processed": 0, "errors": []}
 
         # Generate Rails script for author updates
         script = self._generate_author_preservation_script(work_package_mapping)
-        
+
         try:
             # Execute via Rails console
-            result = self.op_client.rails_client.execute_script(script)
-            
+            result = self.op_client.rails_client.execute(script)
+
             # Clear cache after successful execution
             processed_count = len(self._rails_operations_cache)
             self._rails_operations_cache.clear()
-            
-            return {
-                "processed": processed_count,
-                "errors": [],
-                "result": result
-            }
-        except (IOError, subprocess.SubprocessError, ValueError) as e:
-            self.logger.error("Failed to execute Rails author operations due to process/file error: %s", e)
-        except Exception as e:
-            self.logger.exception("Unexpected error executing Rails author operations: %s", e)
-            return {
-                "processed": 0,
-                "errors": [str(e)]
-            }
 
-    def _generate_author_preservation_script(self, work_package_mapping: dict[str, Any]) -> str:
+            return {"processed": processed_count, "errors": [], "result": result}
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            self.logger.exception(
+                "Failed to execute Rails author operations due to process/file error: %s",
+                e,
+            )
+            return {"processed": 0, "errors": [str(e)]}
+        except Exception as e:
+            self.logger.exception(
+                "Unexpected error executing Rails author operations: %s",
+                e,
+            )
+            return {"processed": 0, "errors": [str(e)]}
+
+    def _generate_author_preservation_script(
+        self,
+        work_package_mapping: dict[str, Any],
+    ) -> str:
         """Generate Rails script for preserving author information.
-        
+
         SECURITY: This method generates Ruby code that will be executed in the Rails
-        console. To prevent injection attacks, all user-provided data (especially 
+        console. To prevent injection attacks, all user-provided data (especially
         jira_key values) must be validated and properly escaped before inclusion.
-        
+
         Security Measures Implemented:
         1. Validates all jira_key values via _validate_jira_key() before use
-        2. Uses json.dumps() to escape jira_key for safe Ruby hash literals  
+        2. Uses json.dumps() to escape jira_key for safe Ruby hash literals
         3. Wraps each operation in begin/rescue blocks for error isolation
         4. Uses parameterized database queries (WorkPackage.find(id))
-        
+
         Generated Script Structure:
         - Ruby requires json library for safe data handling
         - Each operation wrapped in begin/rescue for error isolation
         - Operations and errors tracked in arrays for audit trail
         - Human-readable output for monitoring and debugging
-        
+
         Args:
             work_package_mapping: Dict mapping work package IDs to their metadata,
                                  including jira_key for cross-reference
-                                 
+
         Returns:
             str: Safe Ruby script ready for Rails console execution
-            
+
         Raises:
             ValueError: If any jira_key fails security validation
-            
+
         Note:
             This method assumes _rails_operations_cache contains validated operations
-            from _queue_rails_author_operation(). All external data should be 
+            from _queue_rails_author_operation(). All external data should be
             validated before reaching this point.
+
         """
         script_lines = [
             "# Enhanced Author Preservation Script",
@@ -1911,11 +2504,11 @@ class EnhancedUserAssociationMigrator:
         for operation in self._rails_operations_cache:
             jira_key = operation["jira_key"]
             author_id = operation["author_id"]
-            
+
             # SECURITY: Validate jira_key before using in script generation
             # This prevents injection attacks by rejecting malicious input
             self._validate_jira_key(jira_key)
-            
+
             # Find OpenProject work package ID from mapping
             wp_id = None
             for mapping_entry in work_package_mapping.values():
@@ -1928,32 +2521,36 @@ class EnhancedUserAssociationMigrator:
                 # json.dumps() ensures quotes, newlines, and special chars are properly escaped
                 # Example: "TEST'; DROP TABLE users;" becomes "\"TEST'; DROP TABLE users;\""
                 escaped_jira_key = json.dumps(jira_key)
-                script_lines.extend([
-                    f"# Update author for work package {wp_id} (Jira: {jira_key})",
-                    f"begin",
-                    f"  wp = WorkPackage.find({wp_id})",
-                    f"  wp.author_id = {author_id}",
-                    f"  wp.save(validate: false)  # Skip validations for metadata updates",
-                    f"  operations << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, status: 'success'}}",
-                    f"rescue => e",
-                    f"  errors << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, error: e.message}}",
-                    f"end",
-                    "",
-                ])
+                script_lines.extend(
+                    [
+                        f"# Update author for work package {wp_id} (Jira: {jira_key})",
+                        "begin",
+                        f"  wp = WorkPackage.find({wp_id})",
+                        f"  wp.author_id = {author_id}",
+                        "  wp.save(validate: false)  # Skip validations for metadata updates",
+                        f"  operations << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, status: 'success'}}",
+                        "rescue => e",
+                        f"  errors << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, error: e.message}}",
+                        "end",
+                        "",
+                    ],
+                )
 
-        script_lines.extend([
-            "puts \"Author preservation completed:\"",
-            "puts \"Successful operations: #{operations.length}\"",
-            "puts \"Errors: #{errors.length}\"",
-            "",
-            "if errors.any?",
-            "  puts \"Errors encountered:\"",
-            "  errors.each { |error| puts \"  #{error[:jira_key]}: #{error[:error]}\" }",
-            "end",
-            "",
-            "# Return results",
-            "{operations: operations, errors: errors}",
-        ])
+        script_lines.extend(
+            [
+                'puts "Author preservation completed:"',
+                'puts "Successful operations: #{operations.length}"',
+                'puts "Errors: #{errors.length}"',
+                "",
+                "if errors.any?",
+                '  puts "Errors encountered:"',
+                '  errors.each { |error| puts "  #{error[:jira_key]}: #{error[:error]}" }',
+                "end",
+                "",
+                "# Return results",
+                "{operations: operations, errors: errors}",
+            ],
+        )
 
         return "\n".join(script_lines)
 
@@ -1966,18 +2563,29 @@ class EnhancedUserAssociationMigrator:
                 enhanced_mapping_file = Path(data_path) / "enhanced_user_mappings.json"
             else:
                 enhanced_mapping_file = data_path / "enhanced_user_mappings.json"
-            
+
             # YOLO FIX: Convert to serializable format, handling Mock objects
-            serializable_mappings = self._make_json_serializable(self.enhanced_user_mappings)
-            
+            serializable_mappings = self._make_json_serializable(
+                self.enhanced_user_mappings,
+            )
+
             with enhanced_mapping_file.open("w") as f:
                 json.dump(serializable_mappings, f, indent=2)
-            
-            self.logger.debug("Saved enhanced user mappings to %s", enhanced_mapping_file)
-        except (IOError, json.JSONDecodeError, ValueError) as e:
-            self.logger.error("Failed to save enhanced user mappings due to file/JSON error: %s", e)
+
+            self.logger.debug(
+                "Saved enhanced user mappings to %s",
+                enhanced_mapping_file,
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            self.logger.exception(
+                "Failed to save enhanced user mappings due to file/JSON error: %s",
+                e,
+            )
         except OSError as e:
-            self.logger.error("File system error saving enhanced user mappings: %s", e)
+            self.logger.exception(
+                "File system error saving enhanced user mappings: %s",
+                e,
+            )
 
     def save_enhanced_mappings(self) -> None:
         """Public API to save enhanced user mappings to file."""
@@ -1986,17 +2594,31 @@ class EnhancedUserAssociationMigrator:
     def generate_association_report(self) -> dict[str, Any]:
         """Generate comprehensive report on user association migration."""
         total_users = len(self.enhanced_user_mappings)
-        mapped_users = sum(1 for m in self.enhanced_user_mappings.values() if m["mapping_status"] == "mapped")
-        unmapped_users = sum(1 for m in self.enhanced_user_mappings.values() if m["mapping_status"] == "unmapped")
-        deleted_users = sum(1 for m in self.enhanced_user_mappings.values() if m["mapping_status"] == "deleted")
+        mapped_users = sum(
+            1
+            for m in self.enhanced_user_mappings.values()
+            if m["mapping_status"] == "mapped"
+        )
+        unmapped_users = sum(
+            1
+            for m in self.enhanced_user_mappings.values()
+            if m["mapping_status"] == "unmapped"
+        )
+        deleted_users = sum(
+            1
+            for m in self.enhanced_user_mappings.values()
+            if m["mapping_status"] == "deleted"
+        )
 
-        report = {
+        return {
             "summary": {
                 "total_users": total_users,
                 "mapped_users": mapped_users,
                 "unmapped_users": unmapped_users,
                 "deleted_users": deleted_users,
-                "mapping_percentage": (mapped_users / total_users * 100) if total_users > 0 else 0,
+                "mapping_percentage": (
+                    (mapped_users / total_users * 100) if total_users > 0 else 0
+                ),
             },
             "fallback_users": self.fallback_users,
             "rails_operations_pending": len(self._rails_operations_cache),
@@ -2004,43 +2626,48 @@ class EnhancedUserAssociationMigrator:
             "generated_at": self._get_current_timestamp(),
         }
 
-        return report 
-
     def _load_staleness_config(self) -> None:
         """Load and validate staleness detection configuration."""
         try:
             mapping_config = config.migration_config.get("mapping", {})
-            
+
             # Validate refresh_interval
             self.refresh_interval_seconds = self._parse_duration(
-                mapping_config.get("refresh_interval", "24h")
+                mapping_config.get("refresh_interval", "24h"),
             )
-            
+
             # Validate fallback_strategy
             self.fallback_strategy = self._validate_fallback_strategy(
-                mapping_config.get("fallback_strategy", self.DEFAULT_FALLBACK_STRATEGY)
+                mapping_config.get("fallback_strategy", self.DEFAULT_FALLBACK_STRATEGY),
             )
-            
+
             # Get admin user ID for assign_admin strategy
             self.admin_user_id = mapping_config.get("fallback_admin_user_id")
             if self.fallback_strategy == "assign_admin" and not self.admin_user_id:
                 self.logger.warning(
-                    "fallback_strategy is 'assign_admin' but no fallback_admin_user_id configured"
+                    "fallback_strategy is 'assign_admin' but no fallback_admin_user_id configured",
                 )
-            
+
             self.logger.debug(
                 "Staleness config loaded: refresh_interval=%ds, fallback_strategy=%s",
-                self.refresh_interval_seconds, self.fallback_strategy
+                self.refresh_interval_seconds,
+                self.fallback_strategy,
             )
-            
-        except (IOError, json.JSONDecodeError, ValueError, KeyError) as e:
-            self.logger.warning("Failed to load staleness configuration due to file/data error: %s", e)
+
+        except (OSError, json.JSONDecodeError, ValueError, KeyError) as e:
+            self.logger.warning(
+                "Failed to load staleness configuration due to file/data error: %s",
+                e,
+            )
             # Set defaults using class constants
             self.refresh_interval_seconds = self.DEFAULT_REFRESH_INTERVAL_SECONDS
             self.fallback_strategy = self.DEFAULT_FALLBACK_STRATEGY
             self.admin_user_id = None
         except Exception as e:
-            self.logger.exception("Unexpected error loading staleness configuration: %s", e)
+            self.logger.exception(
+                "Unexpected error loading staleness configuration: %s",
+                e,
+            )
             # Set defaults using class constants
             self.refresh_interval_seconds = self.DEFAULT_REFRESH_INTERVAL_SECONDS
             self.fallback_strategy = self.DEFAULT_FALLBACK_STRATEGY
@@ -2048,57 +2675,68 @@ class EnhancedUserAssociationMigrator:
 
     def _parse_duration(self, duration_str: str) -> int:
         """Parse duration string like '1h', '30m', '2d' into seconds.
-        
+
         Args:
             duration_str: Duration string (e.g., '1h', '30m', '2d')
-            
+
         Returns:
             Duration in seconds
-            
+
         Raises:
             ValueError: If duration format is invalid or zero/negative
+
         """
         duration_str = duration_str.strip()  # Handle whitespace defensively
-        pattern = r'^(\d+)([smhd])$'
+        pattern = r"^(\d+)([smhd])$"
         match = re.match(pattern, duration_str.lower())
-        
+
         if not match:
-            raise ValueError(f"Invalid duration format: {duration_str}")
-        
+            msg = f"Invalid duration format: {duration_str}"
+            raise ValueError(msg)
+
         value, unit = match.groups()
         value = int(value)
-        
+
         # Validate positive non-zero duration
         if value <= 0:
-            raise ValueError(f"Duration must be positive: {duration_str}")
-        
+            msg = f"Duration must be positive: {duration_str}"
+            raise ValueError(msg)
+
         multipliers = {
-            's': 1,          # seconds
-            'm': 60,         # minutes
-            'h': 3600,       # hours
-            'd': 86400,      # days
+            "s": 1,  # seconds
+            "m": 60,  # minutes
+            "h": 3600,  # hours
+            "d": 86400,  # days
         }
-        
+
         return value * multipliers[unit]
 
     def _validate_fallback_strategy(self, strategy: str) -> str:
         """Validate fallback strategy value.
-        
+
         Args:
             strategy: Strategy string to validate
-            
+
         Returns:
             Validated fallback strategy string
-            
+
         Raises:
             ValueError: If strategy is invalid
+
         """
-        valid_strategies: tuple[FallbackStrategy, ...] = ("skip", "assign_admin", "create_placeholder")
-        
+        valid_strategies: tuple[FallbackStrategy, ...] = (
+            "skip",
+            "assign_admin",
+            "create_placeholder",
+        )
+
         if strategy not in valid_strategies:
-            raise ValueError(
+            msg = (
                 f"Invalid fallback_strategy: {strategy}. "
                 f"Valid options: {', '.join(valid_strategies)}"
             )
-        
-        return strategy 
+            raise ValueError(
+                msg,
+            )
+
+        return strategy

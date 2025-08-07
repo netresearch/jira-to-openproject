@@ -2,43 +2,38 @@
 """OpenProject client for interacting with OpenProject instances via SSH and Rails console."""
 
 import json
-import logging
+import os
 import random
 import re
-import shlex
-import subprocess
-import threading
 import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any
+from urllib.parse import quote
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
-from src.display import configure_logging
+from src import config
+from src.clients.docker_client import DockerClient
 from src.clients.exceptions import (
     ConnectionError,
     JsonParseError,
     QueryExecutionError,
     RecordNotFoundError,
-    RateLimitError,
 )
-from src.utils.performance_optimizer import PerformanceOptimizer
-from src.utils.rate_limiter import RateLimiter
+from src.clients.rails_console_client import RailsConsoleClient, RubyError
 from src.clients.ssh_client import SSHClient
-from src.clients.docker_client import DockerClient
-from src.clients.rails_console_client import RailsConsoleClient
-from src.utils.metrics_collector import MetricsCollector
-from src.utils.idempotency_manager import get_idempotency_manager
+from src.display import configure_logging
+from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
+from src.utils.file_manager import FileManager
 from src.utils.idempotency_decorators import batch_idempotent
+from src.utils.metrics_collector import MetricsCollector
+from src.utils.performance_optimizer import PerformanceOptimizer
+from src.utils.rate_limiter import create_openproject_rate_limiter
 
 logger = configure_logging("INFO", None)
 
 
 class OpenProjectError(Exception):
     """Base exception for OpenProject client errors."""
-    pass
 
 
 class FileTransferError(Exception):
@@ -68,7 +63,7 @@ class OpenProjectClient:
         ssh_client: SSHClient | None = None,
         docker_client: DockerClient | None = None,
         rails_client: RailsConsoleClient | None = None,
-        **kwargs
+        **kwargs,
     ) -> None:
         """Initialize the OpenProject client with dependency injection.
 
@@ -104,7 +99,8 @@ class OpenProjectClient:
         self.ssh_host = ssh_host or op_config.get("server")
         self.ssh_user = ssh_user or op_config.get("user")
         self.tmux_session_name = tmux_session_name or op_config.get(
-            "tmux_session_name", "rails_console"
+            "tmux_session_name",
+            "rails_console",
         )
         self.command_timeout = command_timeout
         self.retry_count = retry_count
@@ -161,31 +157,50 @@ class OpenProjectClient:
 
         # ===== PERFORMANCE OPTIMIZER SETUP =====
         # Performance configuration from kwargs (passed from migration.py)
-        
-        # Validate performance configuration parameters using SecurityValidator  
+
+        # Validate performance configuration parameters using SecurityValidator
         try:
-            cache_size = SecurityValidator.validate_numeric_parameter('cache_size', kwargs.get('cache_size', 1500))
-            cache_ttl = SecurityValidator.validate_numeric_parameter('cache_ttl', kwargs.get('cache_ttl', 2400))
-            batch_size = SecurityValidator.validate_numeric_parameter('batch_size', kwargs.get('batch_size', 50))
-            max_workers = SecurityValidator.validate_numeric_parameter('max_workers', kwargs.get('max_workers', 12))
-            rate_limit = SecurityValidator.validate_numeric_parameter('rate_limit_per_sec', kwargs.get('rate_limit', 12.0))
-            
+            cache_size = SecurityValidator.validate_numeric_parameter(
+                "cache_size",
+                kwargs.get("cache_size", 1500),
+            )
+            cache_ttl = SecurityValidator.validate_numeric_parameter(
+                "cache_ttl",
+                kwargs.get("cache_ttl", 2400),
+            )
+            batch_size = SecurityValidator.validate_numeric_parameter(
+                "batch_size",
+                kwargs.get("batch_size", 50),
+            )
+            max_workers = SecurityValidator.validate_numeric_parameter(
+                "max_workers",
+                kwargs.get("max_workers", 12),
+            )
+            rate_limit = SecurityValidator.validate_numeric_parameter(
+                "rate_limit_per_sec",
+                kwargs.get("rate_limit", 12.0),
+            )
+
             # Validate resource allocation to prevent system overload
-            SecurityValidator.validate_resource_allocation(batch_size, max_workers, 2048)  # 2GB memory limit
-            
+            SecurityValidator.validate_resource_allocation(
+                batch_size,
+                max_workers,
+                2048,
+            )  # 2GB memory limit
+
         except ConfigurationValidationError as e:
-            logger.error(f"OpenProjectClient configuration validation failed: {e}")
+            logger.exception(f"OpenProjectClient configuration validation failed: {e}")
             raise
-        
+
         # Initialize performance optimizer with validated parameters
         self.performance_optimizer = PerformanceOptimizer(
             cache_size=cache_size,
             cache_ttl=cache_ttl,
             batch_size=batch_size,
             max_workers=max_workers,
-            rate_limit=rate_limit
+            rate_limit=rate_limit,
         )
-        
+
         self.batch_size = batch_size
         self.parallel_workers = max_workers
 
@@ -200,19 +215,20 @@ class OpenProjectClient:
 
     def _generate_unique_temp_filename(self, base_name: str) -> str:
         """Generate a unique temporary filename to prevent race conditions.
-        
+
         Combines timestamp, process ID, and random component to ensure uniqueness
         across concurrent migration processes.
-        
+
         Args:
             base_name: Base name for the file (e.g., 'users', 'projects')
-            
+
         Returns:
             Unique temporary file path (e.g., '/tmp/users_1703123456_12345_abc123.json')
+
         """
         timestamp = int(time.time())
         pid = os.getpid()
-        random_suffix = format(random.randint(0, 0xffffff), '06x')
+        random_suffix = format(random.randint(0, 0xFFFFFF), "06x")
         return f"/tmp/{base_name}_{timestamp}_{pid}_{random_suffix}.json"
 
     def _create_script_file(self, script_content: str) -> Path:
@@ -282,7 +298,8 @@ class OpenProjectClient:
             self.docker_client.transfer_file_to_container(abs_path, container_path)
 
             logger.debug(
-                "Successfully transferred file to container at %s", container_path
+                "Successfully transferred file to container at %s",
+                container_path,
             )
 
         except Exception as e:
@@ -350,7 +367,9 @@ class OpenProjectClient:
             return {"result": result}
 
     def transfer_file_to_container(
-        self, local_path: Path, container_path: Path
+        self,
+        local_path: Path,
+        container_path: Path,
     ) -> None:
         """Transfer a file from local to the OpenProject container.
 
@@ -411,7 +430,10 @@ class OpenProjectClient:
 
         # Use provided timeout or default to 30 seconds for complex operations
         effective_timeout = timeout if timeout is not None else 30
-        return self.rails_client._send_command_to_tmux(f"puts ({query})", effective_timeout)
+        return self.rails_client._send_command_to_tmux(
+            f"puts ({query})",
+            effective_timeout,
+        )
 
     def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> Any:
         """Execute a Rails query and return parsed JSON result.
@@ -432,7 +454,7 @@ class OpenProjectClient:
             # Get the configured batch size from migration config
             # This respects user configuration instead of hardcoded limits
             default_batch_size = config.migration_config.get("batch_size", 100)
-            
+
             # For other queries, execute directly but be careful about automatic modifications
             # Only add .limit() for queries that are clearly meant to return collections
             collection_indicators = [
@@ -514,7 +536,9 @@ class OpenProjectClient:
                         if ".as_json" in query:
                             # If query already has .as_json, we need to restructure it
                             base_query = query.replace(".as_json", "")
-                            query = f"({base_query}).limit({default_batch_size}).to_json"
+                            query = (
+                                f"({base_query}).limit({default_batch_size}).to_json"
+                            )
                         else:
                             query = f"({query}).limit({default_batch_size}).to_json"
                     else:
@@ -528,11 +552,13 @@ class OpenProjectClient:
             return self._parse_rails_output(result_output)
 
         except Exception as e:
-            logger.error(f"Error in execute_query_to_json_file: {e}")
+            logger.exception(f"Error in execute_query_to_json_file: {e}")
             raise
 
     def _execute_batched_query(
-        self, model_name: str, timeout: int | None = None
+        self,
+        model_name: str,
+        timeout: int | None = None,
     ) -> list[dict[str, Any]]:
         """Execute a query in batches to avoid any truncation issues."""
         try:
@@ -564,7 +590,8 @@ class OpenProjectClient:
                     logger.debug("Retrieved non-list data using simple query")
                     # For non-dict, non-list data, return empty list
                     logger.warning(
-                        "Unexpected data type from simple query: %s", type(simple_data)
+                        "Unexpected data type from simple query: %s",
+                        type(simple_data),
                     )
                     return []
                 else:
@@ -572,7 +599,8 @@ class OpenProjectClient:
 
             except Exception as e:
                 logger.debug(
-                    "Simple query failed, falling back to batched approach: %s", e
+                    "Simple query failed, falling back to batched approach: %s",
+                    e,
                 )
 
             # Fall back to batched approach for larger datasets
@@ -630,18 +658,23 @@ class OpenProjectClient:
                         break
 
                 except Exception as e:
-                    logger.error("Failed to parse batch at offset %d: %s", offset, e)
+                    logger.exception(
+                        "Failed to parse batch at offset %d: %s",
+                        offset,
+                        e,
+                    )
                     # Record error for rate limiting adaptation
                     self.rate_limiter.record_response(operation_time, 500)
                     break
 
             logger.debug(
-                "Retrieved %d total records using batched approach", len(all_results)
+                "Retrieved %d total records using batched approach",
+                len(all_results),
             )
             return all_results
 
         except Exception as e:
-            logger.error("Batched query failed: %s", e)
+            logger.exception("Batched query failed: %s", e)
             # Return empty list instead of failing completely
             return []
 
@@ -689,10 +722,12 @@ class OpenProjectClient:
                 ):  # JSON array with id field
                     tmux_start_idx = i
                     logger.debug(
-                        "Found start marker at line %d: %s", i, repr(line[:100])
+                        "Found start marker at line %d: %s",
+                        i,
+                        repr(line[:100]),
                     )
                     break
-                elif (
+                if (
                     line.strip().startswith("open-project(")
                     and i < len(lines) - 1
                     and (
@@ -717,17 +752,16 @@ class OpenProjectClient:
                     break
 
             logger.debug(
-                "TMUX marker indices: start=%d, end=%d", tmux_start_idx, tmux_end_idx
+                "TMUX marker indices: start=%d, end=%d",
+                tmux_start_idx,
+                tmux_end_idx,
             )
 
             # Extract between markers
             content_lines = []
             if tmux_start_idx >= 0:
                 start_line = tmux_start_idx + 1
-                if tmux_end_idx >= 0:
-                    end_line = tmux_end_idx
-                else:
-                    end_line = len(lines)
+                end_line = tmux_end_idx if tmux_end_idx >= 0 else len(lines)
 
                 # Extract all content lines between markers
                 content_lines = lines[start_line:end_line]
@@ -757,27 +791,28 @@ class OpenProjectClient:
                     if value_part == "nil":
                         logger.debug("Found Rails console nil response")
                         return None
-                    elif value_part == "true":
+                    if value_part == "true":
                         logger.debug("Found Rails console true response")
                         return True
-                    elif value_part == "false":
+                    if value_part == "false":
                         logger.debug("Found Rails console false response")
                         return False
-                    elif value_part.isdigit():
+                    if value_part.isdigit():
                         logger.debug(
-                            "Found Rails console integer response: %s", value_part
+                            "Found Rails console integer response: %s",
+                            value_part,
                         )
                         return int(value_part)
-                    elif (value_part.startswith('"') and value_part.endswith('"')) or (
+                    if (value_part.startswith('"') and value_part.endswith('"')) or (
                         value_part.startswith("'") and value_part.endswith("'")
                     ):
                         logger.debug(
-                            "Found Rails console string response: %s", value_part
+                            "Found Rails console string response: %s",
+                            value_part,
                         )
                         return value_part[1:-1]  # Remove quotes
-                    else:
-                        logger.debug("Found Rails console response: %s", value_part)
-                        return value_part
+                    logger.debug("Found Rails console response: %s", value_part)
+                    return value_part
 
             # Try parsing as JSON first (arrays, objects)
             try:
@@ -789,15 +824,16 @@ class OpenProjectClient:
                     r"\[[^\[\]]*\]",  # Simple arrays
                 ]
 
-                for pattern in json_patterns:
-                    import re
+                import re
 
+                for pattern in json_patterns:
                     matches = re.findall(pattern, clean_output)
                     for match in matches:
                         try:
                             parsed = json.loads(match)
                             logger.debug(
-                                "Successfully parsed embedded JSON: %s", match[:100]
+                                "Successfully parsed embedded JSON: %s",
+                                match[:100],
                             )
                             return parsed
                         except json.JSONDecodeError:
@@ -831,13 +867,10 @@ class OpenProjectClient:
                     continue
 
                 # Look for lines that start with [ or { (JSON indicators)
-                if line.startswith("[") or line.startswith("{"):
+                if line.startswith(("[", "{")):
                     json_lines.append(line)
                 elif json_lines and (
-                    line.endswith("]")
-                    or line.endswith("}")
-                    or "," in line
-                    or '"' in line
+                    line.endswith(("]", "}")) or "," in line or '"' in line
                 ):
                     # Continue collecting lines that seem to be part of JSON
                     json_lines.append(line)
@@ -855,12 +888,7 @@ class OpenProjectClient:
             for line in clean_output.split("\n"):
                 line = line.strip()
                 # Skip lines that look like commands or prompts
-                if (
-                    line.startswith("puts")
-                    or line.startswith("p ")
-                    or line.startswith("pp ")
-                    or ">" in line
-                ):
+                if line.startswith(("puts", "p ", "pp ")) or ">" in line:
                     continue
 
                 # Extract value from Rails console format like "=> value"
@@ -872,21 +900,21 @@ class OpenProjectClient:
                         logger.debug("Found scalar nil value from Rails output")
                         return None
                     # Handle booleans
-                    elif value_part in ["true", "false"]:
+                    if value_part in ["true", "false"]:
                         logger.debug(
                             "Found scalar boolean value from Rails output: %s",
                             value_part,
                         )
                         return value_part == "true"
                     # Handle numbers
-                    elif value_part.isdigit():
+                    if value_part.isdigit():
                         logger.debug(
                             "Found scalar integer value from Rails output: %s",
                             value_part,
                         )
                         return int(value_part)
                     # Handle quoted strings
-                    elif (value_part.startswith('"') and value_part.endswith('"')) or (
+                    if (value_part.startswith('"') and value_part.endswith('"')) or (
                         value_part.startswith("'") and value_part.endswith("'")
                     ):
                         logger.debug(
@@ -895,9 +923,10 @@ class OpenProjectClient:
                         )
                         return value_part[1:-1]  # Remove quotes
                     # For other values, return as string
-                    elif value_part:
+                    if value_part:
                         logger.debug(
-                            "Found scalar value from Rails output: %s", value_part
+                            "Found scalar value from Rails output: %s",
+                            value_part,
                         )
                         return value_part
 
@@ -941,19 +970,21 @@ class OpenProjectClient:
             logger.error("Full clean output: %s", clean_output[:500])
 
             # Raise an exception instead of returning unparsed strings to force proper error handling
+            msg = f"Failed to parse Rails console output: {clean_output[:100]}..."
             raise JsonParseError(
-                f"Failed to parse Rails console output: {clean_output[:100]}..."
+                msg,
             )
 
         except JsonParseError:
             # Re-raise JsonParseError
             raise
         except Exception as e:
-            logger.error("Failed to process query result: %s", repr(e))
-            logger.error("Raw output: %s", result_output[:200])
+            logger.exception("Failed to process query result: %s", repr(e))
+            logger.exception("Raw output: %s", result_output[:200])
             # Raise an exception instead of returning None to ensure proper error handling
+            msg = f"Failed to parse Rails console output: {e}"
             raise QueryExecutionError(
-                f"Failed to parse Rails console output: {e}"
+                msg,
             ) from e
 
     def execute_json_query(self, query: str, timeout: int | None = None) -> Any:
@@ -1057,7 +1088,7 @@ class OpenProjectClient:
         max_delay: float = 60.0,
         backoff_factor: float = 2.0,
         jitter: bool = True,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         """Execute an operation with exponential backoff retry logic.
 
@@ -1076,63 +1107,81 @@ class OpenProjectClient:
 
         Raises:
             Exception: Last exception if all retries are exhausted
+
         """
         last_exception = None
-        
+
         for attempt in range(max_retries + 1):
             try:
                 result = operation()
                 # Track successful batch operations (Zen's observability recommendation)
-                if hasattr(self, 'metrics'):
-                    self.metrics.increment_counter('batch_success_total')
+                if hasattr(self, "metrics"):
+                    self.metrics.increment_counter("batch_success_total")
                 return result
             except (ConnectionError, QueryExecutionError) as e:
                 last_exception = e
-                
+
                 # Check if this is a transient error worth retrying
                 error_message = str(e).lower()
                 transient_indicators = [
-                    'timeout', 'connection', 'network', 'temporary', 
-                    'retry', 'busy', 'overload', '503', '502', '504'
+                    "timeout",
+                    "connection",
+                    "network",
+                    "temporary",
+                    "retry",
+                    "busy",
+                    "overload",
+                    "503",
+                    "502",
+                    "504",
                 ]
-                
-                is_transient = any(indicator in error_message for indicator in transient_indicators)
-                
+
+                is_transient = any(
+                    indicator in error_message for indicator in transient_indicators
+                )
+
                 if not is_transient or attempt >= max_retries:
                     # Track failed batch operations (Zen's observability recommendation)
-                    if hasattr(self, 'metrics'):
-                        self.metrics.increment_counter('batch_failure_total')
+                    if hasattr(self, "metrics"):
+                        self.metrics.increment_counter("batch_failure_total")
                     # Don't retry for non-transient errors or if out of retries
-                    raise e
-                
+                    raise
+
                 # Track retry attempts (Zen's observability recommendation)
-                if hasattr(self, 'metrics'):
-                    self.metrics.increment_counter('batch_retry_total')
-                
+                if hasattr(self, "metrics"):
+                    self.metrics.increment_counter("batch_retry_total")
+
                 # Calculate delay with exponential backoff
-                delay = min(base_delay * (backoff_factor ** attempt), max_delay)
-                
+                delay = min(base_delay * (backoff_factor**attempt), max_delay)
+
                 # Add jitter to prevent thundering herd
                 if jitter:
                     delay = delay * (0.5 + random.random() * 0.5)
-                
+
                 self.logger.warning(
                     "%s failed (attempt %d/%d): %s. Retrying in %.2f seconds...",
-                    operation_name, attempt + 1, max_retries + 1, e, delay
+                    operation_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    e,
+                    delay,
                 )
-                
+
                 time.sleep(delay)
-            
+
             except (RecordNotFoundError, JsonParseError) as e:
                 # These are typically permanent errors - don't retry
                 self.logger.debug(
-                    "%s failed with non-transient error: %s", 
-                    operation_name, e
+                    "%s failed with non-transient error: %s",
+                    operation_name,
+                    e,
                 )
-                raise e
-        
+                raise
+
         # This should never be reached, but just in case
-        raise last_exception or Exception(f"{operation_name} failed after {max_retries} retries")
+        raise last_exception or Exception(
+            f"{operation_name} failed after {max_retries} retries",
+        )
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for batch record lookups
     def batch_find_records(
@@ -1140,7 +1189,7 @@ class OpenProjectClient:
         model: str,
         ids: list[int | str],
         batch_size: int | None = None,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[int | str, dict[str, Any]]:
         """Find multiple records by IDs in batches with idempotency support.
 
@@ -1155,46 +1204,47 @@ class OpenProjectClient:
 
         Raises:
             QueryExecutionError: If query fails
+
         """
         if not ids:
             return {}
 
         # Validate and clamp batch size to prevent memory exhaustion
-        effective_batch_size = batch_size or getattr(self, 'batch_size', 100)
+        effective_batch_size = batch_size or getattr(self, "batch_size", 100)
         effective_batch_size = self._validate_batch_size(effective_batch_size)
-        
+
         results = {}
-        
+
         # Process IDs in batches
         for i in range(0, len(ids), effective_batch_size):
-            batch_ids = ids[i:i + effective_batch_size]
-            
+            batch_ids = ids[i : i + effective_batch_size]
+
             def batch_operation():
                 # Use safe query builder with ActiveRecord parameterization
-                query = self._build_safe_batch_query(model, 'id', batch_ids)
+                query = self._build_safe_batch_query(model, "id", batch_ids)
                 return self.execute_json_query(query)
-            
+
             try:
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
                     f"Batch fetch {model} records {batch_ids[:3]}{'...' if len(batch_ids) > 3 else ''}",
-                    headers=headers
+                    headers=headers,
                 )
-                
+
                 if batch_results:
                     # Ensure we have a list
                     if isinstance(batch_results, dict):
                         batch_results = [batch_results]
-                    
+
                     # Optimize ID mapping - create lookup sets for O(1) performance
                     batch_id_set = {str(bid) for bid in batch_ids}
                     original_id_map = {str(bid): bid for bid in batch_ids}
-                    
+
                     # Map results by ID with O(1) lookups
                     for record in batch_results:
-                        if isinstance(record, dict) and 'id' in record:
-                            record_id_str = str(record['id'])
+                        if isinstance(record, dict) and "id" in record:
+                            record_id_str = str(record["id"])
                             if record_id_str in batch_id_set:
                                 original_id = original_id_map[record_id_str]
                                 results[original_id] = record
@@ -1204,14 +1254,16 @@ class OpenProjectClient:
                     "Failed to fetch batch of %s records (IDs %s) after retries: %s",
                     model,
                     batch_ids,
-                    e
+                    e,
                 )
                 # Continue processing other batches rather than failing completely
                 # Log individual failures for post-run review
                 for batch_id in batch_ids:
                     self.logger.debug(
-                        "Failed to fetch %s record ID %s: %s", 
-                        model, batch_id, e
+                        "Failed to fetch %s record ID %s: %s",
+                        model,
+                        batch_id,
+                        e,
                     )
                 continue
 
@@ -1240,15 +1292,17 @@ class OpenProjectClient:
         def format_value(v):
             if isinstance(v, bool):
                 return "true" if v else "false"
-            elif isinstance(v, str):
+            if isinstance(v, str):
                 return f"'{v}'"
-            else:
-                return str(v)
+            return str(v)
 
         attributes_str = ", ".join(
-            [f"'{k}' => {format_value(v)}" for k, v in attributes.items()]
+            [f"'{k}' => {format_value(v)}" for k, v in attributes.items()],
         )
-        command = f"record = {model}.new({{{attributes_str}}}); record.save ? record.as_json : {{'error' => record.errors.full_messages}}"
+        command = (
+            f"record = {model}.new({{{attributes_str}}}); "
+            f"record.save ? record.as_json : {{'error' => record.errors.full_messages}}"
+        )
 
         try:
             # Try execute_query_to_json_file first for better output handling
@@ -1261,7 +1315,7 @@ class OpenProjectClient:
             # If result is None, empty, or not a dict, try the fallback method
             if result is None or not isinstance(result, dict):
                 logger.debug(
-                    f"First method returned invalid result ({type(result)}), trying fallback"
+                    f"First method returned invalid result ({type(result)}), trying fallback",
                 )
 
                 # Fallback to simpler command with execute_json_query
@@ -1280,7 +1334,8 @@ class OpenProjectClient:
                 # If we still don't have a dict, but the command didn't raise an error,
                 # assume success and try to get the record by its attributes
                 logger.warning(
-                    f"Could not parse JSON response from {model} creation, but command executed. Attempting to find created record."
+                    f"Could not parse JSON response from {model} creation, "
+                    f"but command executed. Attempting to find created record.",
                 )
 
                 # Try to find the record we just created
@@ -1319,7 +1374,10 @@ class OpenProjectClient:
             raise QueryExecutionError(msg) from e
 
     def update_record(
-        self, model: str, id: int, attributes: dict[str, Any]
+        self,
+        model: str,
+        id: int,
+        attributes: dict[str, Any],
     ) -> dict[str, Any]:
         """Update a record with given attributes.
 
@@ -1354,7 +1412,10 @@ class OpenProjectClient:
         try:
             result = self.execute_json_query(command)
             if not isinstance(result, dict):
-                msg = f"Failed to update {model}: Invalid response from OpenProject (type={type(result)}, value={result})"
+                msg = (
+                    f"Failed to update {model}: Invalid response from OpenProject "
+                    f"(type={type(result)}, value={result})"
+                )
                 raise QueryExecutionError(msg)
             return result
         except RubyError as e:
@@ -1544,7 +1605,11 @@ class OpenProjectClient:
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
             file_path_interpolated = f"'{file_path}'"
-            write_query = f'users = User.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(users)); puts "Users data written to {file_path} (#{{users.count}} users)"; nil'
+            write_query = (
+                f"users = User.all.as_json; File.write({file_path_interpolated}, "
+                f'JSON.pretty_generate(users)); puts "Users data written to {file_path} '
+                f'(#{{users.count}} users)"; nil'
+            )
 
             # Execute the write command with extended timeout for large user sets
             self.rails_client.execute(write_query, timeout=60, suppress_output=True)
@@ -1555,15 +1620,17 @@ class OpenProjectClient:
                 # Use SSH to read the file from the Docker container
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
                 stdout, stderr, returncode = self.ssh_client.execute_command(
-                    ssh_command
+                    ssh_command,
                 )
 
                 if returncode != 0:
                     logger.error(
-                        "Failed to read file from container, stderr: %s", stderr
+                        "Failed to read file from container, stderr: %s",
+                        stderr,
                     )
+                    msg = f"SSH command failed with code {returncode}: {stderr}"
                     raise QueryExecutionError(
-                        f"SSH command failed with code {returncode}: {stderr}"
+                        msg,
                     )
 
                 file_content = stdout.strip()
@@ -1579,11 +1646,14 @@ class OpenProjectClient:
                     len(json_data) if isinstance(json_data, list) else 0,
                 )
             except (json.JSONDecodeError, Exception) as e:
-                logger.error(
-                    "Failed to read users from container file %s: %s", file_path, e
+                logger.exception(
+                    "Failed to read users from container file %s: %s",
+                    file_path,
+                    e,
                 )
+                msg = f"Failed to read users from container file: {e}"
                 raise QueryExecutionError(
-                    f"Failed to read users from container file: {e}"
+                    msg,
                 )
 
             # Validate that we got a list
@@ -1593,8 +1663,11 @@ class OpenProjectClient:
                     type(json_data),
                     str(json_data)[:200],
                 )
-                raise QueryExecutionError(
+                msg = (
                     f"Invalid users data format - expected list, got {type(json_data)}"
+                )
+                raise QueryExecutionError(
+                    msg,
                 )
 
             # Update cache
@@ -1753,7 +1826,11 @@ class OpenProjectClient:
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
             file_path_interpolated = f"'{file_path}'"
-            write_query = f'custom_fields = CustomField.all.as_json; File.write({file_path_interpolated}, JSON.pretty_generate(custom_fields)); puts "Custom fields data written to {file_path} (#{{custom_fields.count}} fields)"; nil'
+            write_query = (
+                f"custom_fields = CustomField.all.as_json; File.write({file_path_interpolated}, "
+                f'JSON.pretty_generate(custom_fields)); puts "Custom fields data written to '
+                f'{file_path} (#{{custom_fields.count}} fields)"; nil'
+            )
 
             # Execute the write command - fail immediately if Rails console fails
             self.rails_client.execute(write_query, suppress_output=True)
@@ -1764,15 +1841,17 @@ class OpenProjectClient:
                 # Use SSH to read the file from the Docker container
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
                 stdout, stderr, returncode = self.ssh_client.execute_command(
-                    ssh_command
+                    ssh_command,
                 )
 
                 if returncode != 0:
                     logger.error(
-                        "Failed to read file from container, stderr: %s", stderr
+                        "Failed to read file from container, stderr: %s",
+                        stderr,
                     )
+                    msg = f"SSH command failed with code {returncode}: {stderr}"
                     raise QueryExecutionError(
-                        f"SSH command failed with code {returncode}: {stderr}"
+                        msg,
                     )
 
                 file_content = stdout.strip()
@@ -1795,9 +1874,13 @@ class OpenProjectClient:
                 return custom_fields
 
             except (json.JSONDecodeError, Exception) as e:
-                logger.error("Failed to read custom fields from container file: %s", e)
+                logger.exception(
+                    "Failed to read custom fields from container file: %s",
+                    e,
+                )
+                msg = f"Failed to read/parse custom fields from file: {e}"
                 raise QueryExecutionError(
-                    f"Failed to read/parse custom fields from file: {e}"
+                    msg,
                 )
 
         except Exception as e:
@@ -1853,7 +1936,12 @@ class OpenProjectClient:
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
             file_path_interpolated = f"'{file_path}'"
-            write_query = f'projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json; File.write({file_path_interpolated}, JSON.pretty_generate(projects)); puts "Projects data written to {file_path} (#{{projects.count}} projects)"; nil'
+            write_query = (
+                f"projects = Project.all.select(:id, :name, :identifier, :description, "
+                f":status_code).as_json; File.write({file_path_interpolated}, "
+                f'JSON.pretty_generate(projects)); puts "Projects data written to '
+                f'{file_path} (#{{projects.count}} projects)"; nil'
+            )
 
             # Execute the write command - fail immediately if Rails console fails
             self.rails_client.execute(write_query, suppress_output=True)
@@ -1864,15 +1952,17 @@ class OpenProjectClient:
                 # Use SSH to read the file from the Docker container
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
                 stdout, stderr, returncode = self.ssh_client.execute_command(
-                    ssh_command
+                    ssh_command,
                 )
 
                 if returncode != 0:
                     logger.error(
-                        "Failed to read file from container, stderr: %s", stderr
+                        "Failed to read file from container, stderr: %s",
+                        stderr,
                     )
+                    msg = f"SSH command failed with code {returncode}: {stderr}"
                     raise QueryExecutionError(
-                        f"SSH command failed with code {returncode}: {stderr}"
+                        msg,
                     )
 
                 file_content = stdout.strip()
@@ -1888,11 +1978,14 @@ class OpenProjectClient:
                     len(result) if isinstance(result, list) else 0,
                 )
             except (json.JSONDecodeError, Exception) as e:
-                logger.error(
-                    "Failed to read projects from container file %s: %s", file_path, e
+                logger.exception(
+                    "Failed to read projects from container file %s: %s",
+                    file_path,
+                    e,
                 )
+                msg = f"Failed to read projects from container file: {e}"
                 raise QueryExecutionError(
-                    f"Failed to read projects from container file: {e}"
+                    msg,
                 )
 
             # The execute_query_to_json_file method should return the parsed JSON
@@ -1902,8 +1995,11 @@ class OpenProjectClient:
                     type(result),
                     str(result)[:200],
                 )
-                raise QueryExecutionError(
+                msg = (
                     f"Invalid projects data format - expected list, got {type(result)}"
+                )
+                raise QueryExecutionError(
+                    msg,
                 )
 
             # Validate and clean project data
@@ -1916,29 +2012,34 @@ class OpenProjectClient:
                         "id": project.get("id"),
                         "name": project.get("name", ""),
                         "identifier": project.get(
-                            "identifier", f"project-{project.get('id')}"
+                            "identifier",
+                            f"project-{project.get('id')}",
                         ),  # Generate if missing
                         "description": project.get("description", ""),
                         "public": project.get("public", False),
                         "status": project.get(
-                            "status_code", 1
+                            "status_code",
+                            1,
                         ),  # Use status_code from DB
                     }
                     validated_projects.append(validated_project)
                     logger.debug("Validated project: %s", validated_project)
                 else:
                     logger.debug(
-                        "Skipping invalid project data (missing ID): %s", project
+                        "Skipping invalid project data (missing ID): %s",
+                        project,
                     )
 
             logger.info(
-                "Retrieved %d projects using file-based method", len(validated_projects)
+                "Retrieved %d projects using file-based method",
+                len(validated_projects),
             )
             return validated_projects
 
         except Exception as e:
-            logger.error("Failed to get projects using file-based method: %s", e)
-            raise QueryExecutionError(f"Failed to retrieve projects: {e}") from e
+            logger.exception("Failed to get projects using file-based method: %s", e)
+            msg = f"Failed to retrieve projects: {e}"
+            raise QueryExecutionError(msg) from e
 
     def get_project_by_identifier(self, identifier: str) -> dict[str, Any]:
         """Get a project by identifier.
@@ -2073,12 +2174,13 @@ class OpenProjectClient:
 
     def get_time_entry_activities(self) -> list[dict[str, Any]]:
         """Get all available time entry activities from OpenProject.
-        
+
         Returns:
             List of time entry activity dictionaries with id, name, and other properties
-            
+
         Raises:
             QueryExecutionError: If the query fails
+
         """
         script = """
         activities = TimeEntryActivity.active.map do |activity|
@@ -2092,7 +2194,7 @@ class OpenProjectClient:
         end
         activities
         """
-        
+
         try:
             result = self.execute_json_query(script)
             return result if isinstance(result, list) else []
@@ -2100,55 +2202,63 @@ class OpenProjectClient:
             msg = "Failed to retrieve time entry activities."
             raise QueryExecutionError(msg) from e
 
-    def create_time_entry(self, time_entry_data: dict[str, Any]) -> dict[str, Any] | None:
+    def create_time_entry(
+        self,
+        time_entry_data: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Create a time entry in OpenProject.
-        
+
         Args:
             time_entry_data: Time entry data in OpenProject API format
-            
+
         Returns:
             Created time entry data with ID, or None if creation failed
-            
+
         Raises:
             QueryExecutionError: If the creation fails
+
         """
         # Extract embedded references and convert to IDs
         embedded = time_entry_data.get("_embedded", {})
-        
+
         # Get work package ID from href
         work_package_href = embedded.get("workPackage", {}).get("href", "")
         work_package_id = None
         if work_package_href:
             # Extract ID from href like "/api/v3/work_packages/123"
             import re
-            match = re.search(r'/work_packages/(\d+)', work_package_href)
+
+            match = re.search(r"/work_packages/(\d+)", work_package_href)
             if match:
                 work_package_id = int(match.group(1))
-        
+
         # Get user ID from href
         user_href = embedded.get("user", {}).get("href", "")
         user_id = None
         if user_href:
             # Extract ID from href like "/api/v3/users/456"
-            match = re.search(r'/users/(\d+)', user_href)
+            match = re.search(r"/users/(\d+)", user_href)
             if match:
                 user_id = int(match.group(1))
-        
+
         # Get activity ID from href
         activity_href = embedded.get("activity", {}).get("href", "")
         activity_id = None
         if activity_href:
             # Extract ID from href like "/api/v3/time_entries/activities/789"
-            match = re.search(r'/activities/(\d+)', activity_href)
+            match = re.search(r"/activities/(\d+)", activity_href)
             if match:
                 activity_id = int(match.group(1))
-        
+
         if not all([work_package_id, user_id, activity_id]):
-            raise ValueError(
+            msg = (
                 f"Missing required IDs: work_package_id={work_package_id}, "
                 f"user_id={user_id}, activity_id={activity_id}"
             )
-        
+            raise ValueError(
+                msg,
+            )
+
         # Prepare the script with proper Ruby syntax
         script = f"""
         begin
@@ -2158,9 +2268,9 @@ class OpenProjectClient:
             activity_id: {activity_id},
             hours: {time_entry_data.get('hours', 0)},
             spent_on: Date.parse('{time_entry_data.get('spentOn', '')}'),
-            comments: {repr(time_entry_data.get('comment', {}).get('raw', ''))}
+            comments: {time_entry_data.get('comment', {}).get('raw', '')!r}
           )
-          
+
           if time_entry.save
             {{
               id: time_entry.id,
@@ -2187,53 +2297,54 @@ class OpenProjectClient:
           }}
         end
         """
-        
+
         try:
             result = self.execute_json_query(script)
-            
+
             if isinstance(result, dict):
                 if result.get("error"):
                     logger.warning(f"Time entry creation failed: {result}")
                     return None
                 return result
-            
+
             logger.warning(f"Unexpected time entry creation result: {result}")
             return None
-            
+
         except Exception as e:
             msg = f"Failed to create time entry: {e}"
             raise QueryExecutionError(msg) from e
 
     def get_time_entries(
-        self, 
+        self,
         work_package_id: int | None = None,
         user_id: int | None = None,
-        limit: int = 100
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
         """Get time entries from OpenProject with optional filtering.
-        
+
         Args:
             work_package_id: Filter by work package ID
-            user_id: Filter by user ID  
+            user_id: Filter by user ID
             limit: Maximum number of entries to return
-            
+
         Returns:
             List of time entry dictionaries
-            
+
         Raises:
             QueryExecutionError: If the query fails
+
         """
         conditions = []
         if work_package_id:
             conditions.append(f"work_package_id: {work_package_id}")
         if user_id:
             conditions.append(f"user_id: {user_id}")
-        
+
         where_clause = f".where({', '.join(conditions)})" if conditions else ""
-        
+
         script = f"""
         time_entries = TimeEntry{where_clause}.limit({limit}).includes(:work_package, :user, :activity)
-        
+
         time_entries.map do |entry|
           {{
             id: entry.id,
@@ -2251,7 +2362,7 @@ class OpenProjectClient:
           }}
         end
         """
-        
+
         try:
             result = self.execute_json_query(script)
             return result if isinstance(result, list) else []
@@ -2259,70 +2370,78 @@ class OpenProjectClient:
             msg = "Failed to retrieve time entries."
             raise QueryExecutionError(msg) from e
 
-    def batch_create_time_entries(self, time_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    def batch_create_time_entries(
+        self,
+        time_entries: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Create multiple time entries in a single operation.
-        
+
         Args:
             time_entries: List of time entry data dictionaries
-            
+
         Returns:
             Dictionary with creation results and statistics
-            
+
         Raises:
             QueryExecutionError: If the batch operation fails
+
         """
         if not time_entries:
             return {"created": 0, "failed": 0, "results": []}
-        
+
         # Build the batch creation script
         entries_data = []
         for i, entry_data in enumerate(time_entries):
             # Extract required data similar to create_time_entry
             embedded = entry_data.get("_embedded", {})
-            
+
             # Get work package ID
             work_package_href = embedded.get("workPackage", {}).get("href", "")
             work_package_id = None
             if work_package_href:
                 import re
-                match = re.search(r'/work_packages/(\d+)', work_package_href)
+
+                match = re.search(r"/work_packages/(\d+)", work_package_href)
                 if match:
                     work_package_id = int(match.group(1))
-            
+
             # Get user ID
             user_href = embedded.get("user", {}).get("href", "")
             user_id = None
             if user_href:
-                match = re.search(r'/users/(\d+)', user_href)
+                match = re.search(r"/users/(\d+)", user_href)
                 if match:
                     user_id = int(match.group(1))
-            
+
             # Get activity ID
             activity_href = embedded.get("activity", {}).get("href", "")
             activity_id = None
             if activity_href:
-                match = re.search(r'/activities/(\d+)', activity_href)
+                match = re.search(r"/activities/(\d+)", activity_href)
                 if match:
                     activity_id = int(match.group(1))
-            
+
             if all([work_package_id, user_id, activity_id]):
-                entries_data.append({
-                    "index": i,
-                    "work_package_id": work_package_id,
-                    "user_id": user_id,
-                    "activity_id": activity_id,
-                    "hours": entry_data.get('hours', 0),
-                    "spent_on": entry_data.get('spentOn', ''),
-                    "comments": entry_data.get('comment', {}).get('raw', '')
-                })
-        
+                entries_data.append(
+                    {
+                        "index": i,
+                        "work_package_id": work_package_id,
+                        "user_id": user_id,
+                        "activity_id": activity_id,
+                        "hours": entry_data.get("hours", 0),
+                        "spent_on": entry_data.get("spentOn", ""),
+                        "comments": entry_data.get("comment", {}).get("raw", ""),
+                    },
+                )
+
         if not entries_data:
             return {"created": 0, "failed": len(time_entries), "results": []}
-        
+
         # Generate Ruby script for batch creation
         entries_ruby = []
         for entry in entries_data:
-            entries_ruby.append(f"""
+            entries_ruby.append(
+                f"""
             {{
               index: {entry['index']},
               work_package_id: {entry['work_package_id']},
@@ -2330,15 +2449,16 @@ class OpenProjectClient:
               activity_id: {entry['activity_id']},
               hours: {entry['hours']},
               spent_on: '{entry['spent_on']}',
-              comments: {repr(entry['comments'])}
-            }}""")
-        
+              comments: {entry['comments']!r}
+            }}""",
+            )
+
         script = f"""
         entries_data = [{', '.join(entries_ruby)}]
         results = []
         created_count = 0
         failed_count = 0
-        
+
         entries_data.each do |entry_data|
           begin
             time_entry = TimeEntry.new(
@@ -2349,7 +2469,7 @@ class OpenProjectClient:
               spent_on: Date.parse(entry_data[:spent_on]),
               comments: entry_data[:comments]
             )
-            
+
             if time_entry.save
               created_count += 1
               results << {{
@@ -2376,44 +2496,55 @@ class OpenProjectClient:
             }}
           end
         end
-        
+
         {{
           created: created_count,
           failed: failed_count,
           results: results
         }}
         """
-        
+
         try:
             result = self.execute_json_query(script)
-            return result if isinstance(result, dict) else {"created": 0, "failed": len(time_entries), "results": []}
+            return (
+                result
+                if isinstance(result, dict)
+                else {"created": 0, "failed": len(time_entries), "results": []}
+            )
         except Exception as e:
             msg = f"Failed to batch create time entries: {e}"
             raise QueryExecutionError(msg) from e
 
     # ===== ENHANCED PERFORMANCE FEATURES =====
-    
-    def get_performance_stats(self) -> Dict[str, Any]:
+
+    def get_performance_stats(self) -> dict[str, Any]:
         """Get comprehensive performance statistics."""
         return self.performance_optimizer.get_comprehensive_stats()
 
     # ===== BATCH OPERATIONS =====
-    
-    def batch_create_work_packages(self, work_packages: List[Dict[str, Any]]) -> Dict[str, Any]:
+
+    def batch_create_work_packages(
+        self,
+        work_packages: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Create multiple work packages in batches for optimal performance."""
         if not work_packages:
             return {"created": 0, "failed": 0, "results": []}
-            
+
         return self.performance_optimizer.batch_processor.process_batches(
             work_packages,
-            self._create_work_packages_batch
+            self._create_work_packages_batch,
         )
-    
-    def _create_work_packages_batch(self, work_packages: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
+
+    def _create_work_packages_batch(
+        self,
+        work_packages: list[dict[str, Any]],
+        **kwargs,
+    ) -> dict[str, Any]:
         """Create a batch of work packages using Rails."""
         if not work_packages:
             return {"created": 0, "failed": 0, "results": []}
-            
+
         # Build batch work package creation script
         work_packages_json = json.dumps(work_packages)
         script = f"""
@@ -2421,95 +2552,99 @@ class OpenProjectClient:
         created_count = 0
         failed_count = 0
         results = []
-        
+
         work_packages_data.each do |wp_data|
           begin
             # Create work package with provided attributes
             wp = WorkPackage.new
-            
+
             # Set basic attributes
             wp.subject = wp_data['subject'] if wp_data['subject']
             wp.description = wp_data['description'] if wp_data['description']
-            
+
             # Set project (required)
             if wp_data['project_id']
               wp.project = Project.find(wp_data['project_id'])
             end
-            
-            # Set type (required) 
+
+            # Set type (required)
             if wp_data['type_id']
               wp.type = Type.find(wp_data['type_id'])
             elsif wp_data['type_name']
               wp.type = Type.find_by(name: wp_data['type_name'])
             end
-            
+
             # Set status
             if wp_data['status_id']
               wp.status = Status.find(wp_data['status_id'])
             elsif wp_data['status_name']
               wp.status = Status.find_by(name: wp_data['status_name'])
             end
-            
+
             # Set priority
             if wp_data['priority_id']
               wp.priority = IssuePriority.find(wp_data['priority_id'])
             elsif wp_data['priority_name']
               wp.priority = IssuePriority.find_by(name: wp_data['priority_name'])
             end
-            
+
             # Set author
             if wp_data['author_id']
               wp.author = User.find(wp_data['author_id'])
             end
-            
+
             # Set assignee
             if wp_data['assigned_to_id']
               wp.assigned_to = User.find(wp_data['assigned_to_id'])
             end
-            
+
             # Save the work package
             if wp.save
               created_count += 1
               results << {{ id: wp.id, status: 'created', subject: wp.subject }}
             else
               failed_count += 1
-              results << {{ 
-                subject: wp_data['subject'], 
-                status: 'failed', 
-                errors: wp.errors.full_messages 
+              results << {{
+                subject: wp_data['subject'],
+                status: 'failed',
+                errors: wp.errors.full_messages
               }}
             end
-            
+
           rescue => e
             failed_count += 1
-            results << {{ 
-              subject: wp_data['subject'], 
-              status: 'failed', 
-              error: e.message 
+            results << {{
+              subject: wp_data['subject'],
+              status: 'failed',
+              error: e.message
             }}
           end
         end
-        
+
         {{
           created: created_count,
           failed: failed_count,
           results: results
         }}
         """
-        
+
         try:
             result = self.execute_json_query(script)
-            return result if isinstance(result, dict) else {"created": 0, "failed": len(work_packages), "results": []}
+            return (
+                result
+                if isinstance(result, dict)
+                else {"created": 0, "failed": len(work_packages), "results": []}
+            )
         except Exception as e:
             msg = f"Failed to batch create work packages: {e}"
             raise QueryExecutionError(msg) from e
-    
-    def get_project_enhanced(self, project_id: int) -> Dict[str, Any]:
+
+    def get_project_enhanced(self, project_id: int) -> dict[str, Any]:
         """Get comprehensive project information with caching."""
         script = f"""
         project = Project.find({project_id})
         work_package_count = project.work_packages.count
-        
+
         {{
           project: {{
             id: project.id,
@@ -2526,34 +2661,34 @@ class OpenProjectClient:
           }}
         }}
         """
-        
+
         try:
             return self.execute_json_query(script)
         except Exception as e:
             msg = f"Failed to get enhanced project data for ID {project_id}: {e}"
             raise QueryExecutionError(msg) from e
 
-    def batch_get_users_by_ids(self, user_ids: List[int]) -> Dict[int, dict]:
+    def batch_get_users_by_ids(self, user_ids: list[int]) -> dict[int, dict]:
         """Retrieve multiple users in batches."""
         if not user_ids:
             return {}
-            
+
         # Get all users and filter to requested IDs
         all_users = self.get_all_users()
-        return {
-            user['id']: user 
-            for user in all_users 
-            if user['id'] in user_ids
-        }
+        return {user["id"]: user for user in all_users if user["id"] in user_ids}
 
-    def stream_work_packages_for_project(self, project_id: int, batch_size: int = None) -> Iterator[Dict[str, Any]]:
+    def stream_work_packages_for_project(
+        self,
+        project_id: int,
+        batch_size: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """Stream work packages for a project with memory-efficient pagination."""
         effective_batch_size = batch_size or self.batch_size
-        
+
         script = f"""
         project = Project.find({project_id})
         work_packages = project.work_packages.limit({effective_batch_size})
-        
+
         work_packages.map do |wp|
           {{
             id: wp.id,
@@ -2569,20 +2704,24 @@ class OpenProjectClient:
           }}
         end
         """
-        
+
         try:
             results = self.execute_json_query(script)
             if isinstance(results, list):
-                for wp in results:
-                    yield wp
+                yield from results
         except Exception as e:
-            logger.error(f"Failed to stream work packages for project {project_id}: {e}")
+            logger.exception(
+                f"Failed to stream work packages for project {project_id}: {e}",
+            )
 
-    def batch_update_work_packages(self, updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def batch_update_work_packages(
+        self,
+        updates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Update multiple work packages in batches."""
         if not updates:
             return {"updated": 0, "failed": 0, "results": []}
-            
+
         # Build batch update script
         updates_json = json.dumps(updates)
         script = f"""
@@ -2590,13 +2729,13 @@ class OpenProjectClient:
         updated_count = 0
         failed_count = 0
         results = []
-        
+
         updates.each do |update|
           begin
             wp = WorkPackage.find(update['id'])
-            update.each do |key, value|
-              next if key == 'id'
-              wp.send("#{key}=", value) if wp.respond_to?("#{key}=")
+            update.each do |key, value|  # noqa: F821
+              next if key == 'id'  # noqa: F821
+              wp.send("#{key}=", value) if wp.respond_to?("#{key}=")  # noqa: F821
             end
             wp.save!
             updated_count += 1
@@ -2606,14 +2745,14 @@ class OpenProjectClient:
             results << {{ id: update['id'], status: 'failed', error: e.message }}
           end
         end
-        
+
         {{
           updated: updated_count,
           failed: failed_count,
           results: results
         }}
         """
-        
+
         try:
             return self.execute_json_query(script)
         except Exception as e:
@@ -2625,7 +2764,7 @@ class OpenProjectClient:
         self,
         emails: list[str],
         batch_size: int | None = None,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple users by email addresses in batches with idempotency support.
 
@@ -2639,42 +2778,43 @@ class OpenProjectClient:
 
         Raises:
             QueryExecutionError: If query fails
+
         """
         if not emails:
             return {}
 
         # Validate and clamp batch size to prevent memory exhaustion
-        effective_batch_size = batch_size or getattr(self, 'batch_size', 100)
+        effective_batch_size = batch_size or getattr(self, "batch_size", 100)
         effective_batch_size = self._validate_batch_size(effective_batch_size)
-        
+
         results = {}
-        
+
         # Process emails in batches
         for i in range(0, len(emails), effective_batch_size):
-            batch_emails = emails[i:i + effective_batch_size]
-            
+            batch_emails = emails[i : i + effective_batch_size]
+
             def batch_operation():
                 # Use safe query builder with ActiveRecord parameterization
-                query = self._build_safe_batch_query('User', 'mail', batch_emails)
+                query = self._build_safe_batch_query("User", "mail", batch_emails)
                 return self.execute_json_query(query)
-            
+
             try:
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
                     f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}",
-                    headers=headers
+                    headers=headers,
                 )
-                
+
                 if batch_results:
                     # Ensure we have a list
                     if isinstance(batch_results, dict):
                         batch_results = [batch_results]
-                    
+
                     # Map results by email
                     for record in batch_results:
-                        if isinstance(record, dict) and 'mail' in record:
-                            email = record['mail']
+                        if isinstance(record, dict) and "mail" in record:
+                            email = record["mail"]
                             if email in batch_emails:
                                 results[email] = record
 
@@ -2682,15 +2822,12 @@ class OpenProjectClient:
                 self.logger.warning(
                     "Failed to fetch batch of user emails %s after retries: %s",
                     batch_emails,
-                    e
+                    e,
                 )
                 # Continue processing other batches rather than failing completely
                 # Log individual failures for post-run review
                 for email in batch_emails:
-                    self.logger.debug(
-                        "Failed to fetch user by email %s: %s", 
-                        email, e
-                    )
+                    self.logger.debug("Failed to fetch user by email %s: %s", email, e)
                 continue
 
         return results
@@ -2700,7 +2837,7 @@ class OpenProjectClient:
         self,
         identifiers: list[str],
         batch_size: int | None = None,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple projects by identifiers in batches with idempotency support.
 
@@ -2714,42 +2851,48 @@ class OpenProjectClient:
 
         Raises:
             QueryExecutionError: If query fails
+
         """
         if not identifiers:
             return {}
 
         # Validate and clamp batch size to prevent memory exhaustion
-        effective_batch_size = batch_size or getattr(self, 'batch_size', 100)
+        effective_batch_size = batch_size or getattr(self, "batch_size", 100)
         effective_batch_size = self._validate_batch_size(effective_batch_size)
-        
+
         results = {}
-        
+
         # Process identifiers in batches
         for i in range(0, len(identifiers), effective_batch_size):
-            batch_identifiers = identifiers[i:i + effective_batch_size]
-            
+            batch_identifiers = identifiers[i : i + effective_batch_size]
+
             def batch_operation():
-                # Use safe query builder with ActiveRecord parameterization  
-                query = self._build_safe_batch_query('Project', 'identifier', batch_identifiers)
+                # Use safe query builder with ActiveRecord parameterization
+                query = self._build_safe_batch_query(
+                    "Project",
+                    "identifier",
+                    batch_identifiers,
+                )
                 return self.execute_json_query(query)
-            
+
             try:
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch projects by identifier {batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}",
-                    headers=headers
+                    f"Batch fetch projects by identifier "
+                    f"{batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}",
+                    headers=headers,
                 )
-                
+
                 if batch_results:
                     # Ensure we have a list
                     if isinstance(batch_results, dict):
                         batch_results = [batch_results]
-                    
+
                     # Map results by identifier
                     for record in batch_results:
-                        if isinstance(record, dict) and 'identifier' in record:
-                            identifier = record['identifier']
+                        if isinstance(record, dict) and "identifier" in record:
+                            identifier = record["identifier"]
                             if identifier in batch_identifiers:
                                 results[identifier] = record
 
@@ -2757,25 +2900,28 @@ class OpenProjectClient:
                 self.logger.warning(
                     "Failed to fetch batch of project identifiers %s after retries: %s",
                     batch_identifiers,
-                    e
+                    e,
                 )
                 # Continue processing other batches rather than failing completely
                 # Log individual failures for post-run review
                 for identifier in batch_identifiers:
                     self.logger.debug(
-                        "Failed to fetch project by identifier %s: %s", 
-                        identifier, e
+                        "Failed to fetch project by identifier %s: %s",
+                        identifier,
+                        e,
                     )
                 continue
 
         return results
 
-    @batch_idempotent(ttl=7200)  # 2 hour TTL for custom field lookups (less frequent changes)
+    @batch_idempotent(
+        ttl=7200,
+    )  # 2 hour TTL for custom field lookups (less frequent changes)
     def batch_get_custom_fields_by_names(
         self,
         names: list[str],
         batch_size: int | None = None,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple custom fields by names in batches with idempotency support.
 
@@ -2789,42 +2935,43 @@ class OpenProjectClient:
 
         Raises:
             QueryExecutionError: If query fails
+
         """
         if not names:
             return {}
 
         # Validate and clamp batch size to prevent memory exhaustion
-        effective_batch_size = batch_size or getattr(self, 'batch_size', 100)
+        effective_batch_size = batch_size or getattr(self, "batch_size", 100)
         effective_batch_size = self._validate_batch_size(effective_batch_size)
-        
+
         results = {}
-        
+
         # Process names in batches
         for i in range(0, len(names), effective_batch_size):
-            batch_names = names[i:i + effective_batch_size]
-            
+            batch_names = names[i : i + effective_batch_size]
+
             def batch_operation():
                 # Use safe query builder with ActiveRecord parameterization
-                query = self._build_safe_batch_query('CustomField', 'name', batch_names)
+                query = self._build_safe_batch_query("CustomField", "name", batch_names)
                 return self.execute_json_query(query)
-            
+
             try:
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
                     f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}",
-                    headers=headers
+                    headers=headers,
                 )
-                
+
                 if batch_results:
                     # Ensure we have a list
                     if isinstance(batch_results, dict):
                         batch_results = [batch_results]
-                    
+
                     # Map results by name
                     for record in batch_results:
-                        if isinstance(record, dict) and 'name' in record:
-                            name = record['name']
+                        if isinstance(record, dict) and "name" in record:
+                            name = record["name"]
                             if name in batch_names:
                                 results[name] = record
 
@@ -2832,105 +2979,132 @@ class OpenProjectClient:
                 self.logger.warning(
                     "Failed to fetch batch of custom field names %s after retries: %s",
                     batch_names,
-                    e
+                    e,
                 )
                 # Continue processing other batches rather than failing completely
                 # Log individual failures for post-run review
                 for name in batch_names:
                     self.logger.debug(
-                        "Failed to fetch custom field by name %s: %s", 
-                        name, e
+                        "Failed to fetch custom field by name %s: %s",
+                        name,
+                        e,
                     )
                 continue
 
         return results
 
-
-
     def _validate_batch_size(self, batch_size: int) -> int:
         """Validate and clamp batch size to safe limits.
-        
+
         Args:
             batch_size: Requested batch size
-            
+
         Returns:
             Safe batch size within limits
-            
+
         Raises:
             ValueError: If batch_size is invalid
+
         """
         if not isinstance(batch_size, int) or batch_size <= 0:
-            raise ValueError(f"batch_size must be a positive integer, got: {batch_size}")
-        
+            msg = f"batch_size must be a positive integer, got: {batch_size}"
+            raise ValueError(
+                msg,
+            )
+
         # Enforce maximum batch size to prevent memory exhaustion
         MAX_BATCH_SIZE = 1000
         if batch_size > MAX_BATCH_SIZE:
             self.logger.warning(
                 "batch_size %d exceeds maximum %d, clamping to maximum",
-                batch_size, MAX_BATCH_SIZE
+                batch_size,
+                MAX_BATCH_SIZE,
             )
             return MAX_BATCH_SIZE
-        
+
         return batch_size
 
     def _validate_model_name(self, model: str) -> str:
         """Validate model name against whitelist to prevent injection.
-        
+
         Args:
             model: Model name to validate
-            
+
         Returns:
             Validated model name
-            
+
         Raises:
             ValueError: If model name is not allowed
+
         """
         # Whitelist of allowed OpenProject model names
         ALLOWED_MODELS = {
-            'User', 'Project', 'WorkPackage', 'CustomField', 
-            'Status', 'Type', 'Priority', 'Category', 'Version',
-            'TimeEntry', 'Attachment', 'Repository', 'News',
-            'Wiki', 'WikiPage', 'Forum', 'Message', 'Board'
+            "User",
+            "Project",
+            "WorkPackage",
+            "CustomField",
+            "Status",
+            "Type",
+            "Priority",
+            "Category",
+            "Version",
+            "TimeEntry",
+            "Attachment",
+            "Repository",
+            "News",
+            "Wiki",
+            "WikiPage",
+            "Forum",
+            "Message",
+            "Board",
         }
-        
+
         if model not in ALLOWED_MODELS:
-            raise ValueError(f"Model '{model}' not in allowed list: {sorted(ALLOWED_MODELS)}")
-        
+            msg = f"Model '{model}' not in allowed list: {sorted(ALLOWED_MODELS)}"
+            raise ValueError(
+                msg,
+            )
+
         return model
 
     def _build_safe_batch_query(self, model: str, field: str, values: list[Any]) -> str:
         """Build a safe batch query using ActiveRecord patterns.
-        
+
         Args:
             model: Validated model name
             field: Field name to query (e.g., 'id', 'mail', 'identifier')
             values: List of values to query for
-            
+
         Returns:
             Safe Ruby query string using ActiveRecord WHERE methods
-            
+
         Raises:
             ValueError: If field name is invalid or payload too large
+
         """
-        import re
-        
         # Validate model name first
         safe_model = self._validate_model_name(model)
-        
+
         # Validate field name to prevent injection (Zen's critical recommendation)
         if not re.match(r"^[a-zA-Z_]+$", field):
-            raise ValueError(f"Illegal field name '{field}' - only letters and underscores allowed")
-        
+            msg = f"Illegal field name '{field}' - only letters and underscores allowed"
+            raise ValueError(
+                msg,
+            )
+
         # Use ActiveRecord's built-in parameterization instead of string building
         # This approach delegates sanitization to Rails rather than DIY
         values_json = json.dumps(values)
-        
+
         # Add payload byte cap to prevent memory exhaustion (Zen's recommendation)
         payload_bytes = len(values_json.encode("utf-8"))
         MAX_PAYLOAD_BYTES = 256_000  # 256 KB limit
         if payload_bytes > MAX_PAYLOAD_BYTES:
-            raise ValueError(f"Batch payload {payload_bytes} bytes exceeds {MAX_PAYLOAD_BYTES} limit")
-        
-        query = f"{safe_model}.where({field}: {values_json}).map(&:as_json)"
-        
-        return query
+            msg = (
+                f"Batch payload {payload_bytes} bytes exceeds {MAX_PAYLOAD_BYTES} limit"
+            )
+            raise ValueError(
+                msg,
+            )
+
+        return f"{safe_model}.where({field}: {values_json}).map(&:as_json)"

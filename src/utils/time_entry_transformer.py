@@ -3,7 +3,7 @@
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class TimeEntryTransformer:
         work_package_mapping: dict[str, int] | None = None,
         activity_mapping: dict[str, int] | None = None,
         default_activity_id: int | None = None,
-    ):
+    ) -> None:
         """Initialize the transformer with necessary mappings.
 
         Args:
@@ -25,6 +25,7 @@ class TimeEntryTransformer:
             work_package_mapping: Map Jira issue key to OpenProject work package ID
             activity_mapping: Map activity names to OpenProject activity IDs
             default_activity_id: Default activity ID if mapping not found
+
         """
         self.user_mapping = user_mapping or {}
         self.work_package_mapping = work_package_mapping or {}
@@ -69,6 +70,7 @@ class TimeEntryTransformer:
 
         Returns:
             OpenProject time entry data structure
+
         """
         try:
             # Extract basic information
@@ -112,14 +114,14 @@ class TimeEntryTransformer:
             work_package_id = self._map_work_package(issue_key)
             if work_package_id:
                 time_entry["_embedded"]["workPackage"] = {
-                    "href": f"/api/v3/work_packages/{work_package_id}"
+                    "href": f"/api/v3/work_packages/{work_package_id}",
                 }
 
             # Map activity (try to detect from comment or use default)
             activity_id = self._detect_activity(comment)
             if activity_id:
                 time_entry["_embedded"]["activity"] = {
-                    "href": f"/api/v3/time_entries/activities/{activity_id}"
+                    "href": f"/api/v3/time_entries/activities/{activity_id}",
                 }
 
             # Handle custom fields if mapping provided
@@ -129,7 +131,7 @@ class TimeEntryTransformer:
             return time_entry
 
         except Exception as e:
-            logger.error(
+            logger.exception(
                 "Failed to transform Jira work log %s: %s",
                 work_log.get("id", "unknown"),
                 e,
@@ -149,6 +151,7 @@ class TimeEntryTransformer:
 
         Returns:
             OpenProject time entry data structure
+
         """
         try:
             # Extract basic information
@@ -191,7 +194,7 @@ class TimeEntryTransformer:
             work_package_id = self._map_work_package(issue_key)
             if work_package_id:
                 time_entry["_embedded"]["workPackage"] = {
-                    "href": f"/api/v3/work_packages/{work_package_id}"
+                    "href": f"/api/v3/work_packages/{work_package_id}",
                 }
 
             # Handle Tempo-specific fields
@@ -201,7 +204,7 @@ class TimeEntryTransformer:
             activity_id = self._detect_activity_from_tempo(tempo_log)
             if activity_id:
                 time_entry["_embedded"]["activity"] = {
-                    "href": f"/api/v3/time_entries/activities/{activity_id}"
+                    "href": f"/api/v3/time_entries/activities/{activity_id}",
                 }
 
             # Handle custom fields if mapping provided
@@ -211,7 +214,7 @@ class TimeEntryTransformer:
             return time_entry
 
         except Exception as e:
-            logger.error(
+            logger.exception(
                 "Failed to transform Tempo work log %s: %s",
                 tempo_log.get("tempoWorklogId", "unknown"),
                 e,
@@ -219,7 +222,9 @@ class TimeEntryTransformer:
             raise
 
     def batch_transform_work_logs(
-        self, work_logs: list[dict[str, Any]], source_type: str = "jira"
+        self,
+        work_logs: list[dict[str, Any]],
+        source_type: str = "jira",
     ) -> list[dict[str, Any]]:
         """Transform multiple work logs in batch.
 
@@ -229,6 +234,7 @@ class TimeEntryTransformer:
 
         Returns:
             List of transformed OpenProject time entries
+
         """
         transformed_entries = []
         failed_count = 0
@@ -252,7 +258,7 @@ class TimeEntryTransformer:
                 transformed_entries.append(entry)
 
             except Exception as e:
-                logger.error("Failed to transform work log: %s", e)
+                logger.exception("Failed to transform work log: %s", e)
                 failed_count += 1
                 continue
 
@@ -271,6 +277,7 @@ class TimeEntryTransformer:
 
         Returns:
             Date string in YYYY-MM-DD format
+
         """
         try:
             # Handle various Jira date formats
@@ -282,10 +289,11 @@ class TimeEntryTransformer:
             date_clean = re.sub(r"\.\d{3}$", "", date_clean)
 
             # Parse the datetime
-            if "T" in date_clean:
-                dt = datetime.fromisoformat(date_clean)
-            else:
-                dt = datetime.strptime(date_clean, "%Y-%m-%d")
+            dt = (
+                datetime.fromisoformat(date_clean)
+                if "T" in date_clean
+                else datetime.strptime(date_clean, "%Y-%m-%d")
+            )
 
             return dt.strftime("%Y-%m-%d")
 
@@ -301,6 +309,7 @@ class TimeEntryTransformer:
 
         Returns:
             Plain text string
+
         """
         try:
             if isinstance(content, str):
@@ -329,10 +338,11 @@ class TimeEntryTransformer:
 
         Returns:
             Plain text string
+
         """
         text_parts = []
 
-        def extract_from_node(node):
+        def extract_from_node(node) -> None:
             if isinstance(node, dict):
                 if node.get("type") == "text":
                     text_parts.append(node.get("text", ""))
@@ -352,6 +362,7 @@ class TimeEntryTransformer:
 
         Returns:
             OpenProject user ID or None if not found
+
         """
         user_id = self.user_mapping.get(username)
         if not user_id:
@@ -366,6 +377,7 @@ class TimeEntryTransformer:
 
         Returns:
             OpenProject work package ID or None if not found
+
         """
         work_package_id = self.work_package_mapping.get(issue_key)
         if not work_package_id:
@@ -380,6 +392,7 @@ class TimeEntryTransformer:
 
         Returns:
             OpenProject activity ID or None
+
         """
         if not comment:
             return self.default_activity_id
@@ -403,6 +416,7 @@ class TimeEntryTransformer:
 
         Returns:
             OpenProject activity ID or None
+
         """
         # Check Tempo work attributes first
         work_attributes = tempo_log.get("workAttributes", [])
@@ -421,13 +435,16 @@ class TimeEntryTransformer:
         return self._detect_activity(description)
 
     def _handle_tempo_specific_fields(
-        self, tempo_log: dict[str, Any], time_entry: dict[str, Any]
-    ):
+        self,
+        tempo_log: dict[str, Any],
+        time_entry: dict[str, Any],
+    ) -> None:
         """Handle Tempo-specific fields and attributes.
 
         Args:
             tempo_log: Tempo work log data
             time_entry: OpenProject time entry being built
+
         """
         # Add Tempo metadata
         time_entry["_meta"]["tempo_billable"] = tempo_log.get("billableSeconds", 0) > 0
@@ -455,13 +472,14 @@ class TimeEntryTransformer:
         source_log: dict[str, Any],
         time_entry: dict[str, Any],
         field_mapping: dict[str, str],
-    ):
+    ) -> None:
         """Map custom fields from source to OpenProject time entry.
 
         Args:
             source_log: Source work log data
             time_entry: Target OpenProject time entry
             field_mapping: Map source field names to OpenProject field names
+
         """
         custom_fields = {}
 
@@ -476,7 +494,8 @@ class TimeEntryTransformer:
             time_entry["_meta"]["custom_fields"] = custom_fields
 
     def get_transformation_stats(
-        self, transformed_entries: list[dict[str, Any]]
+        self,
+        transformed_entries: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Get statistics about the transformation results.
 
@@ -485,6 +504,7 @@ class TimeEntryTransformer:
 
         Returns:
             Statistics dictionary
+
         """
         total_entries = len(transformed_entries)
         total_hours = sum(entry.get("hours", 0) for entry in transformed_entries)

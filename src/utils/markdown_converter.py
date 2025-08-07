@@ -32,12 +32,13 @@ class MarkdownConverter:
         self,
         user_mapping: dict[str, int] | None = None,
         work_package_mapping: dict[str, int] | None = None,
-    ):
+    ) -> None:
         """Initialize the markdown converter.
 
         Args:
             user_mapping: Optional mapping of Jira usernames to OpenProject user IDs
             work_package_mapping: Optional mapping of Jira issue keys to OpenProject work package IDs
+
         """
         self.user_mapping = user_mapping or {}
         self.work_package_mapping = work_package_mapping or {}
@@ -76,7 +77,8 @@ class MarkdownConverter:
 
         # Code block patterns
         self.code_block_pattern = re.compile(
-            r"\{code(?::([^}]*))?\}(.*?)\{code\}", re.DOTALL
+            r"\{code(?::([^}]*))?\}(.*?)\{code\}",
+            re.DOTALL,
         )
         self.noformat_pattern = re.compile(r"\{noformat\}(.*?)\{noformat\}", re.DOTALL)
 
@@ -103,18 +105,21 @@ class MarkdownConverter:
 
         # Panel and macro patterns
         self.panel_pattern = re.compile(
-            r"\{panel(?::([^}]*))?\}(.*?)\{panel\}", re.DOTALL
+            r"\{panel(?::([^}]*))?\}(.*?)\{panel\}",
+            re.DOTALL,
         )
         self.info_pattern = re.compile(r"\{info(?::([^}]*))?\}(.*?)\{info\}", re.DOTALL)
         self.warning_pattern = re.compile(
-            r"\{warning(?::([^}]*))?\}(.*?)\{warning\}", re.DOTALL
+            r"\{warning(?::([^}]*))?\}(.*?)\{warning\}",
+            re.DOTALL,
         )
         self.note_pattern = re.compile(r"\{note(?::([^}]*))?\}(.*?)\{note\}", re.DOTALL)
         self.tip_pattern = re.compile(r"\{tip(?::([^}]*))?\}(.*?)\{tip\}", re.DOTALL)
 
         # Advanced macro patterns
         self.expand_pattern = re.compile(
-            r"\{expand(?::([^}]*))?\}(.*?)\{expand\}", re.DOTALL
+            r"\{expand(?::([^}]*))?\}(.*?)\{expand\}",
+            re.DOTALL,
         )
         self.tabs_pattern = re.compile(r"\{tabs\}(.*?)\{tabs\}", re.DOTALL)
         self.tab_pattern = re.compile(r"\{tab:([^}]+)\}(.*?)(?=\{tab:|$)", re.DOTALL)
@@ -128,6 +133,7 @@ class MarkdownConverter:
 
         Returns:
             Converted OpenProject markdown text
+
         """
         if not jira_markup or not isinstance(jira_markup, str):
             return ""
@@ -140,12 +146,12 @@ class MarkdownConverter:
         # Apply conversions in order of complexity (most specific first)
         text = self._convert_code_blocks(text)
         text = self._convert_advanced_macros(
-            text
+            text,
         )  # Advanced macros before basic panels
         text = self._convert_panels_and_macros(text)
         text = self._convert_tables(text)
         text = self._convert_lists(
-            text
+            text,
         )  # Convert lists before headings to avoid conflicts
         text = self._convert_headings(text)
         text = self._convert_block_quotes(text)
@@ -187,9 +193,7 @@ class MarkdownConverter:
         text = self.underline_pattern.sub(r"<u>\1</u>", text)
 
         # Monospace/inline code: {{text}} -> `text`
-        text = self.monospace_pattern.sub(r"`\1`", text)
-
-        return text
+        return self.monospace_pattern.sub(r"`\1`", text)
 
     def _convert_lists(self, text: str) -> str:
         """Convert Jira lists to markdown lists."""
@@ -218,9 +222,7 @@ class MarkdownConverter:
             md_indent = "  " * level
             return f"{md_indent}1. {content}"
 
-        text = self.ordered_list_pattern.sub(replace_ordered_list, text)
-
-        return text
+        return self.ordered_list_pattern.sub(replace_ordered_list, text)
 
     def _convert_block_quotes(self, text: str) -> str:
         """Convert Jira block quotes to markdown block quotes."""
@@ -247,9 +249,7 @@ class MarkdownConverter:
             content = match.group(1).strip()
             return f"```\n{content}\n```"
 
-        text = self.noformat_pattern.sub(replace_noformat, text)
-
-        return text
+        return self.noformat_pattern.sub(replace_noformat, text)
 
     def _convert_links(self, text: str) -> str:
         """Convert Jira links to markdown links."""
@@ -260,8 +260,8 @@ class MarkdownConverter:
 
             if second_part:  # [title|url] format
                 return f"[{first_part}]({second_part})"
-            else:  # [url] format (or [title] for internal)
-                return f"[{first_part}]({first_part})"
+            # [url] format (or [title] for internal)
+            return f"[{first_part}]({first_part})"
 
         return self.link_pattern.sub(replace_link, text)
 
@@ -275,9 +275,8 @@ class MarkdownConverter:
             if self.work_package_mapping and jira_key in self.work_package_mapping:
                 wp_id = self.work_package_mapping[jira_key]
                 return f"#{wp_id}"
-            else:
-                # Fallback: preserve original reference with notation
-                return f"~~{jira_key}~~ *(migrated issue)*"
+            # Fallback: preserve original reference with notation
+            return f"~~{jira_key}~~ *(migrated issue)*"
 
         return self.issue_ref_pattern.sub(replace_issue_ref, text)
 
@@ -289,9 +288,8 @@ class MarkdownConverter:
             if self.user_mapping and username in self.user_mapping:
                 user_id = self.user_mapping[username]
                 return f"@{user_id}"
-            else:
-                # Return original format if no mapping exists or user not found
-                return match.group(0)  # Return the original [~username] format
+            # Return original format if no mapping exists or user not found
+            return match.group(0)  # Return the original [~username] format
 
         return self.user_mention_pattern.sub(replace_user_mention, text)
 
@@ -436,9 +434,7 @@ class MarkdownConverter:
             content = match.group(2).strip()
             return f"**📋 {title}**\n\n{content}"
 
-        text = self.panel_pattern.sub(replace_panel, text)
-
-        return text
+        return self.panel_pattern.sub(replace_panel, text)
 
     def _convert_advanced_macros(self, text: str) -> str:
         """Convert advanced Jira macros to markdown equivalents."""
@@ -511,9 +507,7 @@ class MarkdownConverter:
             indicator = color_indicators.get(color.lower(), f"({color})")
             return f"{indicator} {content}"
 
-        text = self.color_pattern.sub(replace_color, text)
-
-        return text
+        return self.color_pattern.sub(replace_color, text)
 
     def _cleanup_whitespace(self, text: str) -> str:
         """Clean up excessive whitespace and line breaks."""
@@ -527,7 +521,9 @@ class MarkdownConverter:
         return "\n".join(cleaned_lines)
 
     def convert_with_context(
-        self, jira_markup: str, context: dict[str, Any] | None = None
+        self,
+        jira_markup: str,
+        context: dict[str, Any] | None = None,
     ) -> str:
         """Convert Jira markup with additional context information.
 
@@ -537,6 +533,7 @@ class MarkdownConverter:
 
         Returns:
             Converted OpenProject markdown text with context-aware processing
+
         """
         if context:
             # Update mappings if provided in context

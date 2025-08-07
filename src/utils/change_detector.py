@@ -1,5 +1,7 @@
-from src.display import configure_logging
 #!/usr/bin/env python3
+
+from src.display import configure_logging
+
 """Change detection system for idempotent migration operations.
 
 This module provides functionality to detect changes in Jira entities between
@@ -65,6 +67,7 @@ class ChangeDetector:
         Args:
             snapshot_dir: Directory to store entity snapshots.
                          Defaults to var/snapshots/
+
         """
         self.logger = configure_logging("INFO", None)
         self.snapshot_dir = snapshot_dir or config.get_path("data").parent / "snapshots"
@@ -82,6 +85,7 @@ class ChangeDetector:
 
         Returns:
             SHA256 checksum of the entity data
+
         """
         # Create a normalized representation for checksum calculation
         # Remove fields that change frequently but don't indicate real changes
@@ -103,7 +107,9 @@ class ChangeDetector:
 
         # Sort the dictionary to ensure consistent ordering
         normalized_json = json.dumps(
-            normalized_data, sort_keys=True, separators=(",", ":")
+            normalized_data,
+            sort_keys=True,
+            separators=(",", ":"),
         )
         return hashlib.sha256(normalized_json.encode("utf-8")).hexdigest()
 
@@ -115,6 +121,7 @@ class ChangeDetector:
 
         Returns:
             Last modified timestamp or None if not available
+
         """
         # Common timestamp fields in Jira entities
         timestamp_fields = ["updated", "lastModified", "created"]
@@ -140,6 +147,7 @@ class ChangeDetector:
 
         Returns:
             Path to the created snapshot file
+
         """
         timestamp = datetime.now(tz=UTC).isoformat()
 
@@ -207,6 +215,7 @@ class ChangeDetector:
 
         Returns:
             Entity ID or None if not found
+
         """
         # Common ID fields for different entity types
         id_field_mapping = {
@@ -236,7 +245,9 @@ class ChangeDetector:
         return None
 
     def detect_changes(
-        self, current_entities: list[dict[str, Any]], entity_type: str
+        self,
+        current_entities: list[dict[str, Any]],
+        entity_type: str,
     ) -> ChangeReport:
         """Detect changes between current entities and stored snapshot.
 
@@ -246,6 +257,7 @@ class ChangeDetector:
 
         Returns:
             Change detection report
+
         """
         detection_timestamp = datetime.now(tz=UTC).isoformat()
 
@@ -279,7 +291,9 @@ class ChangeDetector:
                     old_data=None,
                     new_data=current_entity,
                     priority=self._calculate_change_priority(
-                        entity_type, "created", current_entity
+                        entity_type,
+                        "created",
+                        current_entity,
                     ),
                 )
                 changes.append(change)
@@ -314,7 +328,10 @@ class ChangeDetector:
                     old_data=baseline_entity["data"],
                     new_data=None,
                     priority=self._calculate_change_priority(
-                        entity_type, "deleted", None, baseline_entity["data"]
+                        entity_type,
+                        "deleted",
+                        None,
+                        baseline_entity["data"],
                     ),
                 )
                 changes.append(change)
@@ -351,6 +368,7 @@ class ChangeDetector:
 
         Returns:
             Baseline snapshot data or None if not found
+
         """
         current_snapshot_path = self.snapshot_dir / "current" / f"{entity_type}.json"
 
@@ -376,7 +394,9 @@ class ChangeDetector:
 
         except (json.JSONDecodeError, KeyError) as e:
             self.logger.warning(
-                "Error loading baseline snapshot for %s: %s", entity_type, e
+                "Error loading baseline snapshot for %s: %s",
+                entity_type,
+                e,
             )
             return None
 
@@ -397,6 +417,7 @@ class ChangeDetector:
 
         Returns:
             Priority score (1-10, higher is more important)
+
         """
         base_priority = {
             "projects": 9,  # High priority - affects everything else
@@ -426,13 +447,15 @@ class ChangeDetector:
             elif entity_type == "users" and not new_data.get("active", True):
                 content_modifier += 1  # User deactivation is notable
 
-        final_priority = min(
-            10, max(1, base_priority + change_type_modifier + content_modifier)
+        return min(
+            10,
+            max(1, base_priority + change_type_modifier + content_modifier),
         )
-        return final_priority
 
     def get_changes_since_timestamp(
-        self, entity_type: str, since_timestamp: str
+        self,
+        entity_type: str,
+        since_timestamp: str,
     ) -> ChangeReport | None:
         """Get changes for an entity type since a specific timestamp.
 
@@ -442,6 +465,7 @@ class ChangeDetector:
 
         Returns:
             Change report or None if no baseline found
+
         """
         # This would require fetching current data from Jira
         # For now, return None as this needs integration with Jira client
@@ -456,6 +480,7 @@ class ChangeDetector:
 
         Returns:
             Number of files deleted
+
         """
         cutoff_timestamp = datetime.now(tz=UTC).timestamp() - (keep_days * 24 * 60 * 60)
         deleted_count = 0
@@ -472,7 +497,9 @@ class ChangeDetector:
                     self.logger.debug("Deleted old snapshot: %s", snapshot_file.name)
                 except OSError as e:
                     self.logger.warning(
-                        "Failed to delete snapshot %s: %s", snapshot_file.name, e
+                        "Failed to delete snapshot %s: %s",
+                        snapshot_file.name,
+                        e,
                     )
 
         if deleted_count > 0:

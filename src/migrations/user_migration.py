@@ -4,19 +4,18 @@
 Handles the migration of users and their accounts from Jira to OpenProject.
 """
 
+import contextlib
 import json
 import logging
 import re
 import uuid
-import contextlib
 from pathlib import Path
 from typing import Any
 
 from src import config
-from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.display import ProgressTracker
+from src.display import ProgressTracker, configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
@@ -113,10 +112,10 @@ class UserMigration(BaseMigration):
             # Instead of failing completely, log a warning and continue with empty list
             # This allows the migration to proceed even if user extraction has issues
             self.logger.warning(
-                "Failed to extract users from OpenProject - continuing with empty user list"
+                "Failed to extract users from OpenProject - continuing with empty user list",
             )
             self.logger.warning(
-                "This may be due to JSON parsing issues with large user datasets"
+                "This may be due to JSON parsing issues with large user datasets",
             )
             self.op_users = []
 
@@ -155,7 +154,8 @@ class UserMigration(BaseMigration):
 
         # Ensure we have a list of dictionaries
         if not isinstance(self.op_users, list):
-            raise MigrationError(f"Expected list of users, got {type(self.op_users)}")
+            msg = f"Expected list of users, got {type(self.op_users)}"
+            raise MigrationError(msg)
 
         # Filter out any non-dictionary items
         valid_users = []
@@ -256,38 +256,45 @@ class UserMigration(BaseMigration):
 
         return mapping
 
-    def _build_fallback_email(self, login: str, existing_emails: set[str] | None = None) -> str:
+    def _build_fallback_email(
+        self,
+        login: str,
+        existing_emails: set[str] | None = None,
+    ) -> str:
         """Build a safe, unique fallback email address for a user.
-        
+
         Args:
             login: The user's login name from JIRA
             existing_emails: Set of existing email addresses to avoid collisions
-            
+
         Returns:
             A valid, unique email address
+
         """
         if existing_emails is None:
             existing_emails = set()
-            
+
         # Sanitize login to RFC-5322 compliant format
         # Keep only letters, digits, dots, underscores, and hyphens
-        sanitized_login = re.sub(r'[^a-zA-Z0-9._-]', '', login.lower())
-        
+        sanitized_login = re.sub(r"[^a-zA-Z0-9._-]", "", login.lower())
+
         # If sanitization results in empty string, use UUID
         if not sanitized_login:
             sanitized_login = str(uuid.uuid4())[:8]
-            
+
         # Build base email
         base_email = f"{sanitized_login}@{config.FALLBACK_MAIL_DOMAIN}"
-        
+
         # Check for uniqueness
         if base_email not in existing_emails:
             return base_email
-            
+
         # Handle collisions by appending counter
         counter = 1
         while True:
-            candidate_email = f"{sanitized_login}.{counter}@{config.FALLBACK_MAIL_DOMAIN}"
+            candidate_email = (
+                f"{sanitized_login}.{counter}@{config.FALLBACK_MAIL_DOMAIN}"
+            )
             if candidate_email not in existing_emails:
                 return candidate_email
             counter += 1
@@ -350,12 +357,17 @@ class UserMigration(BaseMigration):
                 users_to_create = []
                 for user in batch:
                     # Split display name into first and last name - handle empty display names
-                    display_name = user["jira_display_name"].strip() if user["jira_display_name"] else ""
-                    if not display_name:
-                        names = ["User", user["jira_name"]]
-                    else:
-                        names = display_name.split(" ", 1)
-                    
+                    display_name = (
+                        user["jira_display_name"].strip()
+                        if user["jira_display_name"]
+                        else ""
+                    )
+                    names = (
+                        ["User", user["jira_name"]]
+                        if not display_name
+                        else display_name.split(" ", 1)
+                    )
+
                     first_name = names[0].strip() if names[0].strip() else "User"
                     last_name = names[1] if len(names) > 1 else user["jira_name"]
 
@@ -363,9 +375,14 @@ class UserMigration(BaseMigration):
                     email = user["jira_email"]
                     if not email or email.strip() == "":
                         # Generate safe, unique fallback email
-                        email = self._build_fallback_email(user["jira_name"], existing_emails)
+                        email = self._build_fallback_email(
+                            user["jira_name"],
+                            existing_emails,
+                        )
                         existing_emails.add(email)  # Track newly generated email
-                        self.logger.info(f"Using fallback email for user {user['jira_name']}: {email}")
+                        self.logger.info(
+                            f"Using fallback email for user {user['jira_name']}: {email}",
+                        )
 
                     users_to_create.append(
                         {
@@ -385,46 +402,55 @@ class UserMigration(BaseMigration):
                 with contextlib.ExitStack() as stack:
                     try:
                         # Use file-based transfer approach (like other migrations)
-                        self.logger.info(f"Creating {len(users_to_create)} users via file transfer")
-                        
+                        self.logger.info(
+                            f"Creating {len(users_to_create)} users via file transfer",
+                        )
+
                         # Create temporary file for user data
                         batch_num = tracker.processed_count // batch_size
-                        temp_file_path = Path(self.data_dir) / f"users_batch_{batch_num}.json"
-                        result_local_path = Path(self.data_dir) / f'users_result_{batch_num}.json'
-                        
+                        temp_file_path = (
+                            Path(self.data_dir) / f"users_batch_{batch_num}.json"
+                        )
+                        result_local_path = (
+                            Path(self.data_dir) / f"users_result_{batch_num}.json"
+                        )
+
                         # Register files for cleanup
                         stack.callback(lambda: temp_file_path.unlink(missing_ok=True))
-                        stack.callback(lambda: result_local_path.unlink(missing_ok=True))
-                        
+                        stack.callback(
+                            lambda: result_local_path.unlink(missing_ok=True),
+                        )
+
                         # Write users data to JSON file
-                        with temp_file_path.open("w", encoding='utf-8') as f:
+                        with temp_file_path.open("w", encoding="utf-8") as f:
                             json.dump(users_to_create, f, ensure_ascii=False, indent=2)
 
                         # Transfer file to container
-                        container_temp_path = f'/tmp/users_batch_{batch_num}.json'
+                        container_temp_path = f"/tmp/users_batch_{batch_num}.json"
                         self.op_client.transfer_file_to_container(
-                            temp_file_path, Path(container_temp_path)
+                            temp_file_path,
+                            Path(container_temp_path),
                         )
 
                         # Header: f-string interpolation for file paths and variables
-                        result_file_path = f'/tmp/users_result_{batch_num}.json'
+                        result_file_path = f"/tmp/users_result_{batch_num}.json"
                         script_header = f"""
                         require 'json'
-                        
+
                         # File paths
                         input_file = '{container_temp_path}'
                         output_file = '{result_file_path}'
-                        
+
                         # Load the data from the JSON file
                         users_data = JSON.parse(File.read(input_file))
                         puts "Loaded " + users_data.length.to_s + " users from JSON file"
                         """
-                        
+
                         # Body: pure Ruby code without Python interpolation
                         script_body = """
                         created_users = []
                         errors = []
-                        
+
                         users_data.each do |user_data|
                           begin
                             # Create user with the provided data
@@ -436,7 +462,7 @@ class UserMigration(BaseMigration):
                               admin: user_data['admin'] || false,
                               status: User.statuses.key(user_data['status']) || User.statuses['active']
                             )
-                            
+
                             if user.save
                               created_users << {
                                 status: 'success',
@@ -461,7 +487,7 @@ class UserMigration(BaseMigration):
                             }
                           end
                         end
-                        
+
                         # Write results to file
                         result = {
                           created: created_users.length,
@@ -470,32 +496,36 @@ class UserMigration(BaseMigration):
                           created_users: created_users,
                           errors: errors
                         }
-                        
-                        puts "User creation completed: " + created_users.length.to_s + " created, " + errors.length.to_s + " failed"
+
+                        puts "User creation completed: " + created_users.length.to_s + " created, " + errors.length.to_s + " failed"  # noqa: E501
                         File.write(output_file, result.to_json)
                         puts "Results written to " + output_file
                         """
-                        
+
                         script = script_header + script_body
 
                         # Debug: Log the script being executed
                         self.logger.debug(f"Executing Ruby script:\n{script}")
-                        
+
                         # Execute the Ruby script with configurable timeout for user creation
-                        script_result = self.op_client.execute_query(script, timeout=config.USER_CREATION_TIMEOUT)
+                        script_result = self.op_client.execute_query(
+                            script,
+                            timeout=config.USER_CREATION_TIMEOUT,
+                        )
                         self.logger.debug(f"Ruby script output: {script_result}")
 
                         # Transfer result file back and read it
-                        container_result_path = f'/tmp/users_result_{batch_num}.json'
-                        
+                        container_result_path = f"/tmp/users_result_{batch_num}.json"
+
                         result_path = self.op_client.transfer_file_from_container(
-                            Path(container_result_path), result_local_path
+                            Path(container_result_path),
+                            result_local_path,
                         )
-                        
+
                         # Read the result
-                        with result_path.open('r', encoding='utf-8') as f:
+                        with result_path.open("r", encoding="utf-8") as f:
                             result = json.load(f)
-                        
+
                         # Extract result stats
                         batch_created = result.get("created", 0)
                         batch_failed = result.get("failed", 0)
@@ -512,7 +542,7 @@ class UserMigration(BaseMigration):
                                 # Log only login and error messages, not full user data
                                 safe_error = {
                                     "login": error.get("login", "unknown"),
-                                    "errors": error.get("errors", [])
+                                    "errors": error.get("errors", []),
                                 }
                                 self.logger.debug(f"User creation error: {safe_error}")
 
@@ -624,14 +654,17 @@ class UserMigration(BaseMigration):
 
         Raises:
             ValueError: If entity_type is not supported by this migration
+
         """
         if entity_type == "users":
             return self.jira_client.get_users()
-        else:
-            raise ValueError(
-                f"UserMigration does not support entity type: {entity_type}. "
-                f"Supported types: ['users']"
-            )
+        msg = (
+            f"UserMigration does not support entity type: {entity_type}. "
+            f"Supported types: ['users']"
+        )
+        raise ValueError(
+            msg,
+        )
 
     def run(self) -> ComponentResult:
         """Execute the complete user migration process."""
@@ -643,11 +676,11 @@ class UserMigration(BaseMigration):
             created = result.get("created", 0)
             total = result.get("total", 0)
             failed = result.get("failed", 0)
-            
+
             # Success if no failures occurred (even if no users needed creation)
             is_success = failed == 0
             message = f"User migration completed: {created}/{total} users created, {failed} failed"
-            
+
             return ComponentResult(
                 success=is_success,
                 message=message,
@@ -673,23 +706,31 @@ class UserMigration(BaseMigration):
 
         Returns:
             Dict with processing result containing openproject_id if successful
+
         """
         try:
             # For now, simulate user creation/processing
             # In a real implementation, this would integrate with create_missing_users logic
-            self.logger.debug("Processing single user: %s", user_data.get("displayName", "unknown"))
+            self.logger.debug(
+                "Processing single user: %s",
+                user_data.get("displayName", "unknown"),
+            )
 
             # Mock successful processing
             return {
                 "openproject_id": user_data.get("id", 1),
                 "success": True,
-                "message": "User processed successfully"
+                "message": "User processed successfully",
             }
         except Exception as e:
-            self.logger.error("Failed to process single user: %s", e)
+            self.logger.exception("Failed to process single user: %s", e)
             return None
 
-    def update_user_in_openproject(self, user_data: dict[str, Any], user_id: str) -> dict[str, Any] | None:
+    def update_user_in_openproject(
+        self,
+        user_data: dict[str, Any],
+        user_id: str,
+    ) -> dict[str, Any] | None:
         """Update a user in OpenProject.
 
         Args:
@@ -698,18 +739,23 @@ class UserMigration(BaseMigration):
 
         Returns:
             Dict with update result
+
         """
         try:
             # For now, simulate user update
             # In a real implementation, this would call OpenProject API to update the user
-            self.logger.debug("Updating user %s in OpenProject: %s", user_id, user_data.get("displayName", "unknown"))
+            self.logger.debug(
+                "Updating user %s in OpenProject: %s",
+                user_id,
+                user_data.get("displayName", "unknown"),
+            )
 
             # Mock successful update
             return {
                 "id": user_id,
                 "success": True,
-                "message": "User updated successfully"
+                "message": "User updated successfully",
             }
         except Exception as e:
-            self.logger.error("Failed to update user in OpenProject: %s", e)
+            self.logger.exception("Failed to update user in OpenProject: %s", e)
             return None

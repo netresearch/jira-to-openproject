@@ -7,11 +7,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from src import config
-from src.display import configure_logging
+from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.display import console
+from src.display import configure_logging, console
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.migrations.custom_field_migration import CustomFieldMigration
 from src.models import ComponentResult, MigrationError
@@ -717,7 +716,8 @@ class LinkTypeMigration(BaseMigration):
                                 "openproject_id": str(op_field.get("id")),
                                 "openproject_name": op_field.get("name"),
                                 "openproject_type": op_field.get(
-                                    "field_format", "text"
+                                    "field_format",
+                                    "text",
                                 ),
                                 "matched_by": "custom_field",
                                 "status": "mapped",
@@ -738,7 +738,7 @@ class LinkTypeMigration(BaseMigration):
                                 "jira_id": jira_id,
                                 "jira_name": mapping["jira_name"],
                                 "error": error_msg,
-                            }
+                            },
                         )
                         failure_count += 1
                         self.logger.warning(error_msg)
@@ -750,7 +750,7 @@ class LinkTypeMigration(BaseMigration):
                             "jira_id": jira_id,
                             "jira_name": mapping["jira_name"],
                             "error": error_msg,
-                        }
+                        },
                     )
                     failure_count += 1
                     self.logger.warning(error_msg)
@@ -763,7 +763,7 @@ class LinkTypeMigration(BaseMigration):
                         "jira_id": jira_id,
                         "jira_name": mapping["jira_name"],
                         "error": error_msg,
-                    }
+                    },
                 )
                 failure_count += 1
                 self.logger.error(error_msg, exc_info=True)

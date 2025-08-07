@@ -8,8 +8,9 @@ import argparse
 import sys
 from typing import TYPE_CHECKING, TypeVar
 
-from src.display import configure_logging
+from src import config
 from src.clients.openproject_client import OpenProjectClient
+from src.display import configure_logging
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -270,7 +271,9 @@ def main() -> None:
         "Defaults to all entities if none are specified.",
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="Run in dry-run mode (no actual changes)"
+        "--dry-run",
+        action="store_true",
+        help="Run in dry-run mode (no actual changes)",
     )
 
     entity_choices = [
@@ -340,7 +343,8 @@ def main() -> None:
 
     try:
         cleaner = OpenProjectCleaner(
-            entities_to_delete=entities_to_delete, dry_run=args.dry_run
+            entities_to_delete=entities_to_delete,
+            dry_run=args.dry_run,
         )
         cleaner.run_cleanup()
 

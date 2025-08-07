@@ -8,7 +8,7 @@ import time
 from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Generic, Protocol, TypeVar, cast
+from typing import Any, Protocol, TypeVar, cast
 
 from rich.console import Console
 from rich.live import Live
@@ -162,7 +162,7 @@ def configure_logging(
     return cast("ExtendedLogger", logger)
 
 
-class ProgressTracker(Generic[T]):
+class ProgressTracker[T]:
     """Centralized progress tracker.
 
     Provides standardized rich progress bars with a rolling log of recent

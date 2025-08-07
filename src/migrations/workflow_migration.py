@@ -7,10 +7,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.display import configure_logging
+from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.display import ProgressTracker
+from src.display import ProgressTracker, configure_logging
 
 # Get logger from config
 logger = configure_logging("INFO", None)
@@ -97,7 +97,8 @@ class WorkflowMigration:
             return workflows
         except Exception as e:
             logger.exception("Failed to get workflows from Jira: %s", e)
-            raise RuntimeError(f"Unable to retrieve workflows from Jira: {e}") from e
+            msg = f"Unable to retrieve workflows from Jira: {e}"
+            raise RuntimeError(msg) from e
 
     def extract_jira_statuses(self) -> list[dict[str, Any]]:
         """Extract workflow statuses from Jira.
@@ -125,7 +126,8 @@ class WorkflowMigration:
             return statuses
         except Exception as e:
             logger.exception("Failed to get statuses from Jira: %s", e)
-            raise RuntimeError(f"Unable to retrieve statuses from Jira: {e}") from e
+            msg = f"Unable to retrieve statuses from Jira: {e}"
+            raise RuntimeError(msg) from e
 
     def extract_openproject_statuses(self) -> list[dict[str, Any]]:
         """Extract workflow statuses from OpenProject.
@@ -143,8 +145,9 @@ class WorkflowMigration:
             self.op_statuses = self.op_client.get_statuses()
         except Exception as e:
             logger.exception("Failed to get statuses from OpenProject: %s", e)
+            msg = f"Unable to retrieve statuses from OpenProject: {e}"
             raise RuntimeError(
-                f"Unable to retrieve statuses from OpenProject: {e}"
+                msg,
             ) from e
 
         logger.info(
@@ -177,7 +180,9 @@ class WorkflowMigration:
         mapping = {}
 
         with ProgressTracker(
-            "Mapping statuses", len(self.jira_statuses), "Recent Status Mappings"
+            "Mapping statuses",
+            len(self.jira_statuses),
+            "Recent Status Mappings",
         ) as tracker:
             for jira_status in self.jira_statuses:
                 jira_id = jira_status.get("id")
@@ -198,13 +203,14 @@ class WorkflowMigration:
                         "matched_by": "name",
                     }
                     tracker.add_log_item(
-                        f"Matched by name: {jira_name} → {op_status.get('name')}"
+                        f"Matched by name: {jira_name} → {op_status.get('name')}",
                     )
                 else:
                     match_found = False
                     for op_name, op_status in op_statuses_by_name.items():
                         if op_name.replace(" ", "").lower() == jira_name_lower.replace(
-                            " ", ""
+                            " ",
+                            "",
                         ):
                             mapping[jira_id] = {
                                 "jira_id": jira_id,
@@ -215,7 +221,7 @@ class WorkflowMigration:
                                 "matched_by": "normalized_name",
                             }
                             tracker.add_log_item(
-                                f"Matched by normalized name: {jira_name} → {op_status.get('name')}"
+                                f"Matched by normalized name: {jira_name} → {op_status.get('name')}",
                             )
                             match_found = True
                             break
@@ -254,7 +260,8 @@ class WorkflowMigration:
         return mapping
 
     def create_status_in_openproject(
-        self, jira_status: dict[str, Any]
+        self,
+        jira_status: dict[str, Any],
     ) -> dict[str, Any]:
         """Create a status in OpenProject based on a Jira status.
 
@@ -281,14 +288,17 @@ class WorkflowMigration:
 
         try:
             result = self.op_client.create_status(
-                name=name, color=color, is_closed=is_closed
+                name=name,
+                color=color,
+                is_closed=is_closed,
             )
 
             if result.get("success", False):
                 logger.info("Successfully created status: %s.", name)
             else:
                 message = "Failed to create status: {} - {}.".format(
-                    name, result.get("message", "Unknown error")
+                    name,
+                    result.get("message", "Unknown error"),
                 )
                 logger.error(message)
                 raise RuntimeError(message)
@@ -327,11 +337,14 @@ class WorkflowMigration:
         )
 
         with ProgressTracker(
-            "Migrating statuses", len(statuses_to_create), "Recent Statuses"
+            "Migrating statuses",
+            len(statuses_to_create),
+            "Recent Statuses",
         ) as tracker:
             for _i, (jira_id, mapping) in enumerate(statuses_to_create):
                 jira_status = next(
-                    (s for s in self.jira_statuses if s.get("id") == jira_id), None
+                    (s for s in self.jira_statuses if s.get("id") == jira_id),
+                    None,
                 )
 
                 if not jira_status:
@@ -353,7 +366,7 @@ class WorkflowMigration:
                     mapping["is_closed"] = op_status.get("isClosed", False)
                     mapping["matched_by"] = "created"
                     tracker.add_log_item(
-                        f"Created: {status_name} (ID: {op_status.get('id')})"
+                        f"Created: {status_name} (ID: {op_status.get('id')})",
                     )
                 else:
                     tracker.add_log_item(f"Failed: {status_name}")

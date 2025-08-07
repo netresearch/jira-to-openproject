@@ -91,7 +91,7 @@ def save(
         return False
 
 
-def load(
+def load[T](
     model_class: type[T],
     filename: str | Path,
     directory: str | Path | None = None,
@@ -125,7 +125,8 @@ def load(
     filepath = directory / filename
 
     if not filepath.exists():
-        raise FileNotFoundError(f"File not found: {filepath}")
+        msg = f"File not found: {filepath}"
+        raise FileNotFoundError(msg)
 
     try:
         with filepath.open("r", encoding="utf-8") as f:
@@ -144,7 +145,8 @@ def load(
         config.logger.info("Loaded data from %s", filepath)
         return result
     except Exception as e:
-        raise MigrationError(f"Failed to load data from {filepath}: {e}") from e
+        msg = f"Failed to load data from {filepath}: {e}"
+        raise MigrationError(msg) from e
 
 
 def load_dict(
@@ -302,7 +304,10 @@ def save_to_path(
 
 
 def save_dict(
-    data: dict[str, Any], filepath: Path, indent: int = 2, ensure_ascii: bool = False
+    data: dict[str, Any],
+    filepath: Path,
+    indent: int = 2,
+    ensure_ascii: bool = False,
 ) -> bool:
     """Save dictionary data to a JSON file.
 
@@ -321,8 +326,10 @@ def save_dict(
     return save_to_path(data, filepath, indent, ensure_ascii)
 
 
-def load_model(
-    model_class: type[T], filename: str | Path, directory: str | Path | None = None
+def load_model[T](
+    model_class: type[T],
+    filename: str | Path,
+    directory: str | Path | None = None,
 ) -> T | None:
     """Load a Pydantic model from a JSON file.
 

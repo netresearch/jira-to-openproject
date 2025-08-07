@@ -189,21 +189,21 @@ class Mappings:
         """
         mappings = {}
         mapping_attrs = [
-            'user_mapping',
-            'project_mapping', 
-            'account_mapping',
-            'company_mapping',
-            'issue_type_mapping',
-            'status_mapping',
-            'link_type_mapping',
-            'custom_field_mapping',
-            'issue_type_id_mapping'
+            "user_mapping",
+            "project_mapping",
+            "account_mapping",
+            "company_mapping",
+            "issue_type_mapping",
+            "status_mapping",
+            "link_type_mapping",
+            "custom_field_mapping",
+            "issue_type_id_mapping",
         ]
-        
+
         for attr in mapping_attrs:
             if hasattr(self, attr):
                 mappings[attr] = getattr(self, attr)
-        
+
         return mappings
 
     def set_mapping(self, mapping_name: str, mapping_data: dict[str, Any]) -> None:

@@ -9,11 +9,10 @@ from typing import Any
 
 import requests
 
-from src.display import configure_logging
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient, OpenProjectError
+from src.config import get_path, jira_config, logger, migration_config
 from src.display import ProgressTracker
-from src.config import logger, migration_config, jira_config, get_path
 
 # Get batch size from migration config
 batch_size = migration_config.get("batch_size", 1000)
@@ -201,7 +200,8 @@ class TempoAccountMigration:
         return mapping
 
     def create_company_in_openproject(
-        self, tempo_account: dict[str, Any]
+        self,
+        tempo_account: dict[str, Any],
     ) -> dict[str, Any]:
         """Create a company in OpenProject based on a Tempo account.
 
@@ -235,10 +235,12 @@ class TempoAccountMigration:
         identifier = identifier[:100]
 
         logger.info(
-            "Creating company in OpenProject: %s (Identifier: %s)", name, identifier
+            "Creating company in OpenProject: %s (Identifier: %s)",
+            name,
+            identifier,
         )
 
-        if config.migration_config.get("dry_run", False):
+        if migration_config.get("dry_run", False):
             logger.info("DRY RUN: Would create company: %s", name)
             # Return a placeholder for dry run
             return {
@@ -256,7 +258,8 @@ class TempoAccountMigration:
         )
 
         if not company:
-            raise OpenProjectError(f"Failed to create company: {name}")
+            msg = f"Failed to create company: {name}"
+            raise OpenProjectError(msg)
 
         if was_created:
             logger.info("Successfully created company: %s", name)
@@ -297,7 +300,9 @@ class TempoAccountMigration:
         )
 
         with ProgressTracker(
-            "Migrating accounts", len(accounts_to_process), "Recent Accounts"
+            "Migrating accounts",
+            len(accounts_to_process),
+            "Recent Accounts",
         ) as tracker:
             for _i, (tempo_id, mapping) in enumerate(accounts_to_process):
                 # Find the Tempo account definition
@@ -308,10 +313,11 @@ class TempoAccountMigration:
 
                 if not tempo_account:
                     logger.warning(
-                        "Could not find Tempo account definition for ID: %s", tempo_id
+                        "Could not find Tempo account definition for ID: %s",
+                        tempo_id,
                     )
                     tracker.add_log_item(
-                        f"Skipped: Unknown Tempo account ID {tempo_id}"
+                        f"Skipped: Unknown Tempo account ID {tempo_id}",
                     )
                     tracker.increment()
                     continue
@@ -327,11 +333,15 @@ class TempoAccountMigration:
                     mapping["openproject_name"] = op_company.get("name")
                     mapping["matched_by"] = "created"
                     tracker.add_log_item(
-                        f"Created: {account_name} (ID: {op_company.get('id')})"
+                        f"Created: {account_name} (ID: {op_company.get('id')})",
                     )
                 except OpenProjectError as e:
                     tracker.add_log_item(f"Failed: {account_name} - {e}")
-                    logger.error("Failed to create company for account %s: %s", account_name, e)
+                    logger.error(
+                        "Failed to create company for account %s: %s",
+                        account_name,
+                        e,
+                    )
 
                 tracker.increment()
 
@@ -352,7 +362,8 @@ class TempoAccountMigration:
         )
 
         logger.success(
-            "Tempo account migration complete for %s accounts", total_accounts
+            "Tempo account migration complete for %s accounts",
+            total_accounts,
         )
         match_percentage = (
             (matched_accounts / total_accounts * 100) if total_accounts > 0 else 0
@@ -379,7 +390,7 @@ class TempoAccountMigration:
                     self.account_mapping = json.load(f)
             else:
                 logger.error(
-                    "No account mapping found. Run create_account_mapping() first."
+                    "No account mapping found. Run create_account_mapping() first.",
                 )
                 return {}
 

@@ -13,8 +13,8 @@ Part of the layered client architecture where:
 from pathlib import Path
 from shlex import quote
 
-from src.display import configure_logging
 from src.clients.ssh_client import SSHClient
+from src.display import configure_logging
 from src.utils.file_manager import FileManager
 
 logger = configure_logging("INFO", None)
@@ -268,6 +268,7 @@ class DockerClient:
         try:
             # Use a temporary file on the remote server for intermediate storage
             import uuid
+
             temp_filename = f"docker_transfer_{uuid.uuid4().hex}.tmp"
             remote_temp_path = f"/tmp/{temp_filename}"
 
@@ -289,26 +290,29 @@ class DockerClient:
             try:
                 # Ensure local directory exists
                 local_path.parent.mkdir(parents=True, exist_ok=True)
-                
+
                 # Copy from remote to local
                 result_path = self.ssh_client.copy_file_from_remote(
-                    remote_temp_path, local_path
+                    remote_temp_path,
+                    local_path,
                 )
-                
+
                 logger.debug(
                     f"Successfully copied file from container: "
                     f"{container_path} -> {local_path}",
                 )
-                
+
                 return result_path
-                
+
             finally:
                 # Step 3: Clean up temporary file on remote server
                 try:
                     cleanup_cmd = f"rm -f {quote(remote_temp_path)}"
                     self.ssh_client.execute_command(cleanup_cmd, check=False)
                 except Exception as cleanup_error:
-                    logger.warning(f"Failed to clean up temporary file {remote_temp_path}: {cleanup_error}")
+                    logger.warning(
+                        f"Failed to clean up temporary file {remote_temp_path}: {cleanup_error}",
+                    )
 
         except FileNotFoundError:
             # Re-raise file not found errors
@@ -431,16 +435,25 @@ class DockerClient:
         """
         # INPUT VALIDATION: Validate critical parameters to prevent errors
         import re
-        
+
         if user and not re.match(r"^[\w]+:?[\w]*$", user):
-            raise ValueError(f"Invalid user format: {user}. Expected format: 'user' or 'uid:gid'")
-        
+            msg = f"Invalid user format: {user}. Expected format: 'user' or 'uid:gid'"
+            raise ValueError(
+                msg,
+            )
+
         if memory_limit and not re.match(r"^\d+[mgMGT]?$", memory_limit):
-            raise ValueError(f"Invalid memory_limit format: {memory_limit}. Expected format: '512m', '1g', etc.")
-        
+            msg = f"Invalid memory_limit format: {memory_limit}. Expected format: '512m', '1g', etc."
+            raise ValueError(
+                msg,
+            )
+
         if cpu_limit and not re.match(r"^\d*\.?\d+$", cpu_limit):
-            raise ValueError(f"Invalid cpu_limit format: {cpu_limit}. Expected format: '0.5', '1', '2.0', etc.")
-        
+            msg = f"Invalid cpu_limit format: {cpu_limit}. Expected format: '0.5', '1', '2.0', etc."
+            raise ValueError(
+                msg,
+            )
+
         # Build docker run command
         docker_cmd = ["docker", "run"]
 
@@ -495,7 +508,10 @@ class DockerClient:
         docker_cmd_str = " ".join(docker_cmd)
 
         # Execute via SSH
-        return self.ssh_client.execute_command(docker_cmd_str, timeout=self.command_timeout)
+        return self.ssh_client.execute_command(
+            docker_cmd_str,
+            timeout=self.command_timeout,
+        )
 
     def get_container_info(self) -> dict[str, str]:
         """Get information about the container including user and resource settings.
@@ -519,6 +535,7 @@ class DockerClient:
                 raise ValueError(msg)
 
             import json
+
             inspect_data = json.loads(stdout)
             if not inspect_data:
                 msg = f"No data returned for container: {self.container_name}"

@@ -136,50 +136,67 @@ class ConfigLoader:
 
     def _load_database_config(self) -> None:
         """Load and validate database configuration from environment or Docker secrets.
-        
+
         Tries to load POSTGRES_PASSWORD from:
         1. POSTGRES_PASSWORD environment variable
         2. /run/secrets/postgres_password Docker secret file
-        
+
         Raises:
             RuntimeError: If POSTGRES_PASSWORD is not found or is empty
+
         """
         # Initialize database section if not present
         if "database" not in self.config:
             self.config["database"] = {}
-        
+
         # Try to load PostgreSQL password from environment first
         postgres_password = os.environ.get("POSTGRES_PASSWORD")
-        
+
         if not postgres_password:
             # Try to load from Docker secrets
             secret_path = Path("/run/secrets/postgres_password")
             if secret_path.exists():
                 try:
                     postgres_password = secret_path.read_text().strip()
-                    config_logger.debug("Successfully loaded PostgreSQL password from Docker secret")
-                except (IOError, OSError, PermissionError) as e:
-                    config_logger.warning("Failed to read Docker secret: %s", e.__class__.__name__)
+                    config_logger.debug(
+                        "Successfully loaded PostgreSQL password from Docker secret",
+                    )
+                except (OSError, PermissionError) as e:
+                    config_logger.warning(
+                        "Failed to read Docker secret: %s",
+                        e.__class__.__name__,
+                    )
             else:
                 config_logger.debug("Docker secret file not found: %s", secret_path)
         else:
-            config_logger.debug("Successfully loaded PostgreSQL password from environment variable")
-        
+            config_logger.debug(
+                "Successfully loaded PostgreSQL password from environment variable",
+            )
+
         # Validate password is present and non-empty
         if not postgres_password or not postgres_password.strip():
-            raise RuntimeError(
+            msg = (
                 "POSTGRES_PASSWORD is required but not found. "
                 "Please set the POSTGRES_PASSWORD environment variable "
                 "or create a Docker secret at /run/secrets/postgres_password"
             )
-        
+            raise RuntimeError(
+                msg,
+            )
+
         # Store in config
         self.config["database"]["postgres_password"] = postgres_password
-        
+
         # Also load other PostgreSQL environment variables with defaults
-        self.config["database"]["postgres_db"] = os.environ.get("POSTGRES_DB", "jira_migration")
-        self.config["database"]["postgres_user"] = os.environ.get("POSTGRES_USER", "postgres")
-        
+        self.config["database"]["postgres_db"] = os.environ.get(
+            "POSTGRES_DB",
+            "jira_migration",
+        )
+        self.config["database"]["postgres_user"] = os.environ.get(
+            "POSTGRES_USER",
+            "postgres",
+        )
+
         config_logger.debug("Database configuration loaded successfully")
 
     def _apply_environment_overrides(self) -> None:
@@ -193,7 +210,15 @@ class ConfigLoader:
                 case ["J2O", "LOG", "LEVEL"]:
                     # Cast to proper log level type
                     log_level = env_value.upper()
-                    if log_level in ["DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "SUCCESS"]:
+                    if log_level in [
+                        "DEBUG",
+                        "INFO",
+                        "NOTICE",
+                        "WARNING",
+                        "ERROR",
+                        "CRITICAL",
+                        "SUCCESS",
+                    ]:
                         self.config["migration"]["log_level"] = log_level
                     config_logger.debug("Applied log level: %s", log_level)
 
@@ -220,14 +245,18 @@ class ConfigLoader:
                         # Regular Jira config
                         self.config["jira"][key] = self._convert_value(env_value)
                         config_logger.debug(
-                            "Applied Jira config: %s=%s", key, env_value,
+                            "Applied Jira config: %s=%s",
+                            key,
+                            env_value,
                         )
 
                 case ["J2O", "OPENPROJECT", *rest] if rest:
                     key = "_".join(rest).lower()
                     self.config["openproject"][key] = self._convert_value(env_value)
                     config_logger.debug(
-                        "Applied OpenProject config: %s=%s", key, env_value,
+                        "Applied OpenProject config: %s=%s",
+                        key,
+                        env_value,
                     )
 
                     # Special handling for tmux_session_name
@@ -318,7 +347,8 @@ class ConfigLoader:
         """
         password = self.config.get("database", {}).get("postgres_password")
         if not password:
-            raise RuntimeError("PostgreSQL password not configured")
+            msg = "PostgreSQL password not configured"
+            raise RuntimeError(msg)
         return password
 
     def get_value(self, section: SectionName, key: str, default: Any = None) -> Any:

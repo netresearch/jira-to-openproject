@@ -2,15 +2,16 @@
 Handles the migration of Tempo companies to OpenProject projects.
 """
 
+import contextlib
 import json
 import re
-from src import config
 from pathlib import Path
 from typing import Any
 
-from src.display import configure_logging
+from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
+from src.display import configure_logging
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
@@ -99,7 +100,8 @@ class CompanyMigration(BaseMigration):
         # Check if we already have companies loaded
         if self.tempo_companies:
             self.logger.info(
-                "Using %d companies from memory", len(self.tempo_companies)
+                "Using %d companies from memory",
+                len(self.tempo_companies),
             )
             return self.tempo_companies
 
@@ -139,7 +141,8 @@ class CompanyMigration(BaseMigration):
                         )
 
             self.logger.info(
-                "Loaded %d companies from cache", len(self.tempo_companies)
+                "Loaded %d companies from cache",
+                len(self.tempo_companies),
             )
             return self.tempo_companies
 
@@ -391,7 +394,7 @@ class CompanyMigration(BaseMigration):
             and total_companies > 0
         ):
             analysis["match_percentage"] = int(
-                (matched_companies / total_companies) * 100
+                (matched_companies / total_companies) * 100,
             )
         else:
             analysis["match_percentage"] = 0
@@ -408,7 +411,8 @@ class CompanyMigration(BaseMigration):
         self.logger.info("- Matched by name: %d", analysis["matched_by_name"])
         self.logger.info("- Created in OpenProject: %d", analysis["actually_created"])
         self.logger.info(
-            "- Already existing in OpenProject: %d", analysis["matched_by_existing"]
+            "- Already existing in OpenProject: %d",
+            analysis["matched_by_existing"],
         )
         self.logger.info("Unmatched companies: %d", analysis["unmatched_companies"])
 
@@ -441,7 +445,8 @@ class CompanyMigration(BaseMigration):
             company
             for company in self.tempo_companies.values()
             if self.company_mapping.get(
-                company.get("id", company.get("tempo_id", "")), {}
+                company.get("id", company.get("tempo_id", "")),
+                {},
             ).get("matched_by")
             == "none"
         ]
@@ -512,7 +517,7 @@ class CompanyMigration(BaseMigration):
 
         if not companies_data:
             self.logger.info(
-                "No companies need to be created, all matched or already exist"
+                "No companies need to be created, all matched or already exist",
             )
             self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
             return self.company_mapping
@@ -601,7 +606,8 @@ class CompanyMigration(BaseMigration):
 
             # Copy the file to the container
             self.op_client.transfer_file_to_container(
-                temp_file_path, container_temp_path
+                temp_file_path,
+                container_temp_path,
             )
 
             # Process companies in smaller batches to avoid console crashes
@@ -625,7 +631,7 @@ class CompanyMigration(BaseMigration):
 
                 # Create a smaller JSON file for this batch
                 batch_file_path = Path(self.data_dir).joinpath(
-                    f"tempo_companies_batch_{i}.json"
+                    f"tempo_companies_batch_{i}.json",
                 )
                 with batch_file_path.open("w") as f:
                     json.dump(batch_companies, f, indent=2)
@@ -633,7 +639,8 @@ class CompanyMigration(BaseMigration):
                 # Copy batch file to container
                 batch_container_path = Path(f"/tmp/tempo_companies_batch_{i}.json")
                 self.op_client.transfer_file_to_container(
-                    batch_file_path, batch_container_path
+                    batch_file_path,
+                    batch_container_path,
                 )
 
                 # Prepare smaller Ruby script for this batch
@@ -653,27 +660,28 @@ class CompanyMigration(BaseMigration):
                                 "tempo_name": company.get("tempo_name"),
                                 "openproject_id": company.get("openproject_id"),
                                 "openproject_identifier": company.get(
-                                    "openproject_identifier"
+                                    "openproject_identifier",
                                 ),
                                 "openproject_name": company.get("openproject_name"),
                                 "matched_by": company.get(
-                                    "status", "created"
+                                    "status",
+                                    "created",
                                 ),  # "existing" or "created"
                             }
                 except MigrationError as e:
-                    self.logger.error("Batch %d failed: %s", i, e)
+                    self.logger.exception("Batch %d failed: %s", i, e)
                     # Continue with next batch on error
-                    errors.append({
-                        "batch_index": i,
-                        "error": str(e),
-                        "type": "batch_processing_error"
-                    })
+                    errors.append(
+                        {
+                            "batch_index": i,
+                            "error": str(e),
+                            "type": "batch_processing_error",
+                        },
+                    )
 
                 # Clean up batch file
-                try:
+                with contextlib.suppress(OSError):
                     batch_file_path.unlink()
-                except OSError:
-                    pass
 
             # Prepare summary result
             output = {
@@ -705,7 +713,9 @@ class CompanyMigration(BaseMigration):
             raise MigrationError(error_msg) from e
 
     def _create_companies_batch(
-        self, batch_file_path: Path, batch_index: int
+        self,
+        batch_file_path: Path,
+        batch_index: int,
     ) -> dict[str, Any]:
         """Create a batch of companies using a smaller Ruby script to avoid console crashes.
 
@@ -718,6 +728,7 @@ class CompanyMigration(BaseMigration):
 
         Raises:
             MigrationError: If batch processing fails
+
         """
         try:
             # Create a compact Ruby script for this batch
@@ -841,20 +852,20 @@ class CompanyMigration(BaseMigration):
 
             if isinstance(result, dict):
                 return result
-            else:
-                self.logger.error(
-                    "Batch %d: Expected dict result, got %s: %s",
-                    batch_index,
-                    type(result),
-                    str(result)[:200],
-                )
-                raise ValueError(
-                    f"Batch {batch_index}: Invalid result format - expected dict, got {type(result)}"
-                )
+            self.logger.error(
+                "Batch %d: Expected dict result, got %s: %s",
+                batch_index,
+                type(result),
+                str(result)[:200],
+            )
+            msg = f"Batch {batch_index}: Invalid result format - expected dict, got {type(result)}"
+            raise ValueError(
+                msg,
+            )
 
         except (ValueError, Exception) as e:
             error_msg = f"Failed to create companies batch {batch_index}: {e}"
-            self.logger.error(error_msg)
+            self.logger.exception(error_msg)
             raise MigrationError(error_msg) from e
 
     def migrate_customer_metadata(self) -> ComponentResult:

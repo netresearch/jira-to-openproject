@@ -60,7 +60,8 @@ class CustomFieldMigration(BaseMigration):
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
         self.jira_custom_fields = self._load_from_json(
-            Path("jira_custom_fields.json"), []
+            Path("jira_custom_fields.json"),
+            [],
         )
         self.op_custom_fields = self._load_from_json(Path("op_custom_fields.json"), [])
         self.mapping = self._load_from_json(Path("custom_field_mapping.json"), {})
@@ -820,11 +821,13 @@ puts "Custom field migration completed. Results written to #{output_file}"
 
             try:
                 self.op_client.transfer_file_from_container(
-                    container_result_path, local_result_path
+                    container_result_path,
+                    local_result_path,
                 )
             except Exception as e:
                 self.logger.exception(
-                    "Failed to transfer result file from container: %s", str(e)
+                    "Failed to transfer result file from container: %s",
+                    str(e),
                 )
                 return False
 
@@ -837,7 +840,8 @@ puts "Custom field migration completed. Results written to #{output_file}"
                 result = json.load(f)
 
             if not isinstance(result, dict):
-                raise MigrationError(f"Unexpected result type: {type(result)}")
+                msg = f"Unexpected result type: {type(result)}"
+                raise MigrationError(msg)
 
             # Extract results
             created_fields = result.get("created", [])
@@ -851,18 +855,22 @@ puts "Custom field migration completed. Results written to #{output_file}"
 
             if existing_fields:
                 self.logger.info(
-                    "Found %d existing custom fields", len(existing_fields)
+                    "Found %d existing custom fields",
+                    len(existing_fields),
                 )
             else:
                 self.logger.info("No existing custom fields found")
 
             if error_fields:
                 self.logger.error(
-                    "Failed to create %d custom fields", len(error_fields)
+                    "Failed to create %d custom fields",
+                    len(error_fields),
                 )
                 for error in error_fields:
                     self.logger.error(
-                        "Error for field '%s': %s", error["name"], error["errors"]
+                        "Error for field '%s': %s",
+                        error["name"],
+                        error["errors"],
                     )
 
             # Consider it successful if either fields were created OR fields already exist (and no errors)
@@ -1064,14 +1072,17 @@ puts "Custom field migration completed. Results written to #{output_file}"
 
         Raises:
             ValueError: If entity_type is not supported by this migration
+
         """
         if entity_type == "custom_fields":
             return self.jira_client.get_custom_fields()
-        else:
-            raise ValueError(
-                f"CustomFieldMigration does not support entity type: {entity_type}. "
-                f"Supported types: ['custom_fields']"
-            )
+        msg = (
+            f"CustomFieldMigration does not support entity type: {entity_type}. "
+            f"Supported types: ['custom_fields']"
+        )
+        raise ValueError(
+            msg,
+        )
 
     def run(self) -> ComponentResult:
         """Run the custom field migration process.

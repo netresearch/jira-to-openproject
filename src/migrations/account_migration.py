@@ -167,7 +167,7 @@ class AccountMigration(BaseMigration):
         if not self.op_projects:
             self.logger.warning(
                 "Failed to get projects from OpenProject - no projects found. "
-                "This may be due to JSON parsing issues. Continuing with empty project list."
+                "This may be due to JSON parsing issues. Continuing with empty project list.",
             )
             self.op_projects = []
 
@@ -374,7 +374,7 @@ class AccountMigration(BaseMigration):
         # Create the field
         result = self.op_client.create_record("CustomField", field_options)
         self.logger.debug(
-            f"Result from create_record: type={type(result)}, value={result}"
+            f"Result from create_record: type={type(result)}, value={result}",
         )
 
         # Check if field was created successfully or already exists
@@ -398,7 +398,7 @@ class AccountMigration(BaseMigration):
             error_messages = result.get("error", [])
             if any("already been taken" in str(msg) for msg in error_messages):
                 self.logger.info(
-                    "Tempo Account custom field already exists, attempting to find existing field..."
+                    "Tempo Account custom field already exists, attempting to find existing field...",
                 )
                 # Try to get the existing field ID
                 try:
@@ -411,11 +411,12 @@ class AccountMigration(BaseMigration):
                         )
                     else:
                         self.logger.warning(
-                            "Custom field already exists but couldn't retrieve its ID"
+                            "Custom field already exists but couldn't retrieve its ID",
                         )
                 except Exception as e:
                     self.logger.warning(
-                        "Failed to retrieve existing custom field ID: %s", e
+                        "Failed to retrieve existing custom field ID: %s",
+                        e,
                     )
             else:
                 msg = f"Failed to create custom field: OpenProject error: {error_messages}"
@@ -678,7 +679,8 @@ class AccountMigration(BaseMigration):
 
             if existing_id is None:
                 self.logger.info("No existing 'Tempo Account' custom field found")
-                raise MigrationError("Tempo Account custom field does not exist")
+                msg = "Tempo Account custom field does not exist"
+                raise MigrationError(msg)
 
             self.logger.info(
                 "Found existing 'Tempo Account' custom field with ID: %d",
@@ -788,7 +790,8 @@ class AccountMigration(BaseMigration):
             try:
                 validated_field_id = int(field_id)
                 if validated_field_id <= 0:
-                    raise ValueError("Field ID must be positive")
+                    msg = "Field ID must be positive"
+                    raise ValueError(msg)
             except (ValueError, TypeError) as e:
                 error_msg = f"Invalid field_id provided: {field_id!r} (must be positive integer)"
                 raise MigrationError(error_msg) from e
@@ -815,12 +818,13 @@ class AccountMigration(BaseMigration):
                     success = True
             elif isinstance(result, str):
                 # Check if the command executed successfully (no error output)
-                if "SUCCESS" in result or "=> nil" in result:
-                    success = True
-                # If there's no error indication, assume success
-                elif not any(
-                    error_word in result.lower()
-                    for error_word in ["error", "exception", "failed"]
+                if (
+                    "SUCCESS" in result
+                    or "=> nil" in result
+                    or not any(
+                        error_word in result.lower()
+                        for error_word in ["error", "exception", "failed"]
+                    )
                 ):
                     success = True
 

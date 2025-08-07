@@ -75,7 +75,7 @@ const dashboardApp = createApp({
         const connectWebSocket = () => {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws/dashboard`;
-            
+
             websocket.value = new WebSocket(wsUrl);
             connectionStatus.value = false;
 
@@ -83,10 +83,10 @@ const dashboardApp = createApp({
                 connectionStatus.value = true;
                 reconnectAttempts.value = 0;
                 console.log('WebSocket connected');
-                
+
                 // Start heartbeat
                 startHeartbeat();
-                
+
                 // Request initial status
                 sendWebSocketMessage({
                     type: 'request_status'
@@ -106,7 +106,7 @@ const dashboardApp = createApp({
                 connectionStatus.value = false;
                 console.log('WebSocket disconnected');
                 stopHeartbeat();
-                
+
                 // Attempt to reconnect
                 if (reconnectAttempts.value < maxReconnectAttempts) {
                     reconnectAttempts.value++;
@@ -150,29 +150,29 @@ const dashboardApp = createApp({
                 case 'connection_established':
                     console.log('Connection established:', data.client_id);
                     break;
-                    
+
                 case 'progress_update':
                     Object.assign(progress, data.data);
                     updateProgressChart();
                     break;
-                    
+
                 case 'metrics_update':
                     Object.assign(metrics, data.data);
                     updateMetricsCharts();
                     break;
-                    
+
                 case 'event':
                     addEvent(data.data);
                     break;
-                    
+
                 case 'status_update':
                     updateStatus(data.data);
                     break;
-                    
+
                 case 'heartbeat_response':
                     // Heartbeat acknowledged
                     break;
-                    
+
                 case 'error':
                     addEvent({
                         level: 'error',
@@ -180,7 +180,7 @@ const dashboardApp = createApp({
                         timestamp: new Date().toISOString()
                     });
                     break;
-                    
+
                 default:
                     console.log('Unknown message type:', data.type);
             }
@@ -235,7 +235,7 @@ const dashboardApp = createApp({
             if (charts.progress) {
                 const processed = progress.processed_entities;
                 const remaining = progress.total_entities - progress.processed_entities;
-                
+
                 charts.progress.data.datasets[0].data = [processed, remaining];
                 charts.progress.update('none'); // Update without animation for performance
             }
@@ -247,13 +247,13 @@ const dashboardApp = createApp({
                 const now = new Date();
                 charts.throughput.data.labels.push(now.toLocaleTimeString());
                 charts.throughput.data.datasets[0].data.push(metrics.entities_per_second);
-                
+
                 // Keep only last 20 data points
                 if (charts.throughput.data.labels.length > 20) {
                     charts.throughput.data.labels.shift();
                     charts.throughput.data.datasets[0].data.shift();
                 }
-                
+
                 charts.throughput.update('none');
             }
         };
@@ -373,7 +373,7 @@ const dashboardApp = createApp({
                         }
                     })
                 });
-                
+
                 if (response.ok) {
                     const result = await response.json();
                     console.log('Migration started:', result);
@@ -401,7 +401,7 @@ const dashboardApp = createApp({
                 const response = await fetch('/api/migration/stop', {
                     method: 'POST'
                 });
-                
+
                 if (response.ok) {
                     const result = await response.json();
                     console.log('Migration stopped:', result);
@@ -429,7 +429,7 @@ const dashboardApp = createApp({
                 const response = await fetch('/api/migration/pause', {
                     method: 'POST'
                 });
-                
+
                 if (response.ok) {
                     const result = await response.json();
                     console.log('Migration paused:', result);
@@ -457,7 +457,7 @@ const dashboardApp = createApp({
                 const response = await fetch('/api/migration/resume', {
                     method: 'POST'
                 });
-                
+
                 if (response.ok) {
                     const result = await response.json();
                     console.log('Migration resumed:', result);
@@ -485,7 +485,7 @@ const dashboardApp = createApp({
                 const response = await fetch('/api/metrics/csv');
                 if (response.ok) {
                     const data = await response.json();
-                    
+
                     // Create and download CSV file
                     const blob = new Blob([data.csv_content], { type: 'text/csv' });
                     const url = window.URL.createObjectURL(blob);
@@ -496,7 +496,7 @@ const dashboardApp = createApp({
                     a.click();
                     document.body.removeChild(a);
                     window.URL.revokeObjectURL(url);
-                    
+
                     addEvent({
                         level: 'info',
                         message: 'Metrics exported successfully',
@@ -518,7 +518,7 @@ const dashboardApp = createApp({
                 const response = await fetch('/api/progress');
                 if (response.ok) {
                     const data = await response.json();
-                    
+
                     // Create and download JSON file
                     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
                     const url = window.URL.createObjectURL(blob);
@@ -529,7 +529,7 @@ const dashboardApp = createApp({
                     a.click();
                     document.body.removeChild(a);
                     window.URL.revokeObjectURL(url);
-                    
+
                     addEvent({
                         level: 'info',
                         message: 'Progress exported successfully',
@@ -554,7 +554,7 @@ const dashboardApp = createApp({
         onMounted(() => {
             connectWebSocket();
             initializeCharts();
-            
+
             // Load initial data
             fetch('/api/migration/status')
                 .then(response => response.json())
@@ -609,4 +609,4 @@ const dashboardApp = createApp({
 // Mount the app when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     dashboardApp.mount('#app');
-}); 
+});

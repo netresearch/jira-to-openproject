@@ -40,7 +40,7 @@ class ApiError(ClientError):
 
 class RateLimitError(ClientError):
     """Error when rate limit is exceeded."""
-    
-    def __init__(self, message: str, retry_after: int = None):
+
+    def __init__(self, message: str, retry_after: int | None = None) -> None:
         super().__init__(message)
-        self.retry_after = retry_after 
+        self.retry_after = retry_after

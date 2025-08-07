@@ -168,11 +168,11 @@ body {
     .metrics-grid {
         grid-template-columns: 1fr;
     }
-    
+
     .dashboard-header {
         padding: 1rem 0;
     }
-    
+
     .metric-value {
         font-size: 1.5rem;
     }
@@ -220,4 +220,4 @@ body {
 
 .log-container::-webkit-scrollbar-thumb:hover {
     background: #777;
-} 
+}

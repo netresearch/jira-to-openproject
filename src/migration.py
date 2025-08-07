@@ -36,7 +36,7 @@ from src.migrations.work_package_migration import WorkPackageMigration
 from src.models import ComponentResult, MigrationResult
 from src.performance.migration_performance_manager import (
     MigrationPerformanceManager,
-    PerformanceConfig
+    PerformanceConfig,
 )
 from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler
@@ -49,11 +49,11 @@ console = Console()
 
 class Migration:
     """Main migration orchestrator class."""
-    
-    def __init__(self, components: list[ComponentName] | None = None):
+
+    def __init__(self, components: list[ComponentName] | None = None) -> None:
         self.components = components or []
         self.performance_manager = MigrationPerformanceManager()
-    
+
     async def run(
         self,
         stop_on_error: bool = False,
@@ -193,49 +193,46 @@ def restore_backup(backup_dir: Path) -> bool:
 def create_performance_config(
     batch_size: int = 100,
     max_concurrent_batches: int = 5,
-    enable_performance_tracking: bool = True
+    enable_performance_tracking: bool = True,
 ) -> PerformanceConfig:
     """Create performance configuration based on migration settings.
-    
+
     Args:
         batch_size: Size of batches for API processing
         max_concurrent_batches: Maximum concurrent batch operations
         enable_performance_tracking: Whether to enable performance tracking
-    
+
     Returns:
         Configured PerformanceConfig instance
+
     """
     # Get rate limiting settings from config or use defaults
-    max_requests_per_minute = getattr(config, 'max_requests_per_minute', 100)
-    
+    max_requests_per_minute = getattr(config, "max_requests_per_minute", 100)
+
     # Determine if this is a large migration (affects performance tuning)
     is_large_migration = batch_size > 50 or max_concurrent_batches > 3
-    
+
     return PerformanceConfig(
         # Batching configuration
         batch_size=batch_size,
         max_concurrent_batches=max_concurrent_batches,
         batch_timeout=60.0 if is_large_migration else 30.0,
-        
         # Rate limiting configuration
         max_requests_per_minute=max_requests_per_minute,
         burst_size=min(20, batch_size // 5),
         adaptive_rate_limiting=True,
-        
         # Retry configuration
         max_retries=3,
         base_delay=1.0,
         max_delay=60.0,
-        
         # Progress tracking
         enable_progress_tracking=enable_performance_tracking,
         progress_update_interval=2.0,
         save_progress_to_file=True,
-        
         # Performance tuning
         enable_parallel_processing=is_large_migration,
         memory_limit_mb=1024 if is_large_migration else 512,
-        enable_streaming=is_large_migration
+        enable_streaming=is_large_migration,
     )
 
 
@@ -267,12 +264,14 @@ async def run_migration(
         perf_config = create_performance_config(
             batch_size=batch_size,
             max_concurrent_batches=max_concurrent,
-            enable_performance_tracking=True
+            enable_performance_tracking=True,
         )
         performance_manager = MigrationPerformanceManager(perf_config)
         config.logger.info("Performance optimization enabled")
-        config.logger.info(f"Batch size: {batch_size}, Max concurrent: {max_concurrent}")
-    
+        config.logger.info(
+            f"Batch size: {batch_size}, Max concurrent: {max_concurrent}",
+        )
+
     try:
         # Check if we need a migration mode header
         if config.migration_config.get("dry_run", False):
@@ -313,7 +312,8 @@ async def run_migration(
         # Create a backup if not disabled
         backup_path = None
         if not config.migration_config.get(
-            "no_backup", False
+            "no_backup",
+            False,
         ) and not config.migration_config.get("dry_run", False):
             config.logger.info("Creating backup before migration...")
             backup_path = create_backup()
@@ -334,15 +334,17 @@ async def run_migration(
 
         # Check if we're running in mock mode
         # Debug: Print all J2O environment variables
-        j2o_env_vars = {k: v for k, v in os.environ.items() if k.startswith('J2O_')}
+        j2o_env_vars = {k: v for k, v in os.environ.items() if k.startswith("J2O_")}
         config.logger.info(f"All J2O environment variables: {j2o_env_vars}")
-        
+
         mock_mode = os.environ.get("J2O_TEST_MOCK_MODE", "false").lower() == "true"
-        config.logger.info(f"J2O_TEST_MOCK_MODE environment variable: {os.environ.get('J2O_TEST_MOCK_MODE', 'NOT_SET')}")
+        config.logger.info(
+            f"J2O_TEST_MOCK_MODE environment variable: {os.environ.get('J2O_TEST_MOCK_MODE', 'NOT_SET')}",
+        )
         config.logger.info(f"Mock mode enabled: {mock_mode}")
         if mock_mode:
             config.logger.info(
-                "Running in MOCK MODE - using mock clients instead of real connections"
+                "Running in MOCK MODE - using mock clients instead of real connections",
             )
 
         # Create clients in the correct hierarchical order
@@ -351,10 +353,11 @@ async def run_migration(
             # Add tests directory to Python path for mock client imports
             import sys
             from pathlib import Path
+
             tests_dir = Path(__file__).parent.parent / "tests"
             if str(tests_dir) not in sys.path:
                 sys.path.insert(0, str(tests_dir))
-            
+
             from integration.test_file_transfer_chain import (
                 MockDockerClient,
                 MockRailsConsoleClient,
@@ -394,104 +397,140 @@ async def run_migration(
             # 3. Create the Rails console client
             rails_client = RailsConsoleClient(
                 tmux_session_name=config.openproject_config.get(
-                    "tmux_session_name", "rails_console"
+                    "tmux_session_name",
+                    "rails_console",
                 ),
             )
 
         # 4. Finally, create the enhanced Jira client and OpenProject client (which uses the other clients)
         # Get performance configuration from migration config
         performance_config = {
-            'cache_size': config.migration_config.get('cache_size', 2000),
-            'cache_ttl': config.migration_config.get('cache_ttl', 1800),
-            'batch_size': batch_size,
-            'max_workers': max_concurrent,
-            'rate_limit': config.migration_config.get('rate_limit_per_sec', 15.0)
+            "cache_size": config.migration_config.get("cache_size", 2000),
+            "cache_ttl": config.migration_config.get("cache_ttl", 1800),
+            "batch_size": batch_size,
+            "max_workers": max_concurrent,
+            "rate_limit": config.migration_config.get("rate_limit_per_sec", 15.0),
         }
-        
+
         if mock_mode:
             # Create mock Jira client for mock mode
             class MockJiraClient:
-                def __init__(self, **kwargs):
+                def __init__(self, **kwargs) -> None:
                     # Create a mock jira object with the fields method
                     class MockJira:
                         def fields(self):
                             return []
+
                         def server_info(self):
                             return {
                                 "serverTime": "2025-08-04T12:00:00.000+0000",
                                 "serverTimeZone": "UTC",
                                 "baseUrl": "https://jira.local",
-                                "version": "9.0.0"
+                                "version": "9.0.0",
                             }
+
                         def _get_json(self, endpoint):
                             # Mock responses for different endpoints
                             if "status" in endpoint:
                                 return [
-                                    {"id": "1", "name": "To Do", "statusCategory": {"id": 2, "name": "To Do"}},
-                                    {"id": "2", "name": "In Progress", "statusCategory": {"id": 3, "name": "In Progress"}},
-                                    {"id": "3", "name": "Done", "statusCategory": {"id": 4, "name": "Done"}}
+                                    {
+                                        "id": "1",
+                                        "name": "To Do",
+                                        "statusCategory": {"id": 2, "name": "To Do"},
+                                    },
+                                    {
+                                        "id": "2",
+                                        "name": "In Progress",
+                                        "statusCategory": {
+                                            "id": 3,
+                                            "name": "In Progress",
+                                        },
+                                    },
+                                    {
+                                        "id": "3",
+                                        "name": "Done",
+                                        "statusCategory": {"id": 4, "name": "Done"},
+                                    },
                                 ]
-                            elif "statuscategory" in endpoint:
+                            if "statuscategory" in endpoint:
                                 return [
                                     {"id": 2, "name": "To Do", "key": "new"},
-                                    {"id": 3, "name": "In Progress", "key": "indeterminate"},
-                                    {"id": 4, "name": "Done", "key": "done"}
+                                    {
+                                        "id": 3,
+                                        "name": "In Progress",
+                                        "key": "indeterminate",
+                                    },
+                                    {"id": 4, "name": "Done", "key": "done"},
                                 ]
-                            else:
-                                return []
-                    
+                            return []
+
                     self.jira = MockJira()
                     self.scriptrunner_enabled = False
                     self.scriptrunner_client = None
                     config.logger.info("Mock Jira client initialized")
-                
+
                 def get_projects(self):
                     return []
-                
+
                 def get_issues(self, **kwargs):
                     return []
-                
+
                 def get_issue_link_types(self, **kwargs):
-                    return [{"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"}, {"id": "10001", "name": "Relates to", "inward": "relates to", "outward": "relates to"}]
-                
+                    return [
+                        {
+                            "id": "10000",
+                            "name": "Blocks",
+                            "inward": "is blocked by",
+                            "outward": "blocks",
+                        },
+                        {
+                            "id": "10001",
+                            "name": "Relates to",
+                            "inward": "relates to",
+                            "outward": "relates to",
+                        },
+                    ]
+
                 def get_status_categories(self, **kwargs):
                     return [
                         {"id": 2, "name": "To Do", "key": "new"},
                         {"id": 3, "name": "In Progress", "key": "indeterminate"},
-                        {"id": 4, "name": "Done", "key": "done"}
+                        {"id": 4, "name": "Done", "key": "done"},
                     ]
+
                 def get_tempo_accounts(self, **kwargs):
                     return []
+
                 def get_users(self):
                     return []
-                
+
                 def get_custom_fields(self, **kwargs):
                     return []
-                
+
                 def get_issue_types(self):
                     return []
-                
+
                 def get_statuses(self):
                     return []
-                
+
                 def get_workflows(self):
                     return []
-                
+
                 def get_versions(self):
                     return []
-                
+
                 def get_components(self):
                     return []
-                
+
                 def get_attachments(self, **kwargs):
                     return []
-                
+
                 def get_comments(self, **kwargs):
                     return []
-                
+
                 def get_worklogs(self, **kwargs):
                     return []
-            
+
             jira_client = MockJiraClient(**performance_config)
         else:
             jira_client = JiraClient(**performance_config)
@@ -499,7 +538,7 @@ async def run_migration(
         if mock_mode:
             # Create mock OpenProject client for mock mode
             class MockRailsClient:
-                def __init__(self, **kwargs):
+                def __init__(self, **kwargs) -> None:
                     pass
 
                 def execute(self, command):
@@ -507,85 +546,99 @@ async def run_migration(
                     if command.startswith("ls ") or command == "ls":
                         # Mock file existence check - return success for any file check
                         return "Mock file exists"
-                    elif command.startswith("cat "):
+                    if command.startswith("cat "):
                         # Mock file content reading
                         return "Mock file content"
-                    elif command.startswith("echo "):
+                    if command.startswith("echo "):
                         # Mock echo command
                         return command[5:]  # Return the content after "echo "
-                    else:
-                        return "Mock Rails execution result"
+                    return "Mock Rails execution result"
 
                 def execute_query(self, query):
                     return {"result": "Mock query result"}
 
-                def transfer_file_to_container(self, local_path, container_path):
+                def transfer_file_to_container(
+                    self,
+                    local_path,
+                    container_path,
+                ) -> bool:
                     return True
 
-                def transfer_file_from_container(self, container_path, local_path):
+                def transfer_file_from_container(
+                    self,
+                    container_path,
+                    local_path,
+                ) -> bool:
                     return True
 
             class MockOpenProjectClient:
-                def __init__(self, **kwargs):
+                def __init__(self, **kwargs) -> None:
                     self.rails_client = MockRailsClient()
                     config.logger.info("Mock OpenProject client initialized")
-                
+
                 def create_project(self, **kwargs):
                     return {"id": 1, "name": "Mock Project"}
-                
+
                 def create_user(self, **kwargs):
                     return {"id": 1, "name": "Mock User"}
-                
+
                 def create_custom_field(self, **kwargs):
                     return {"id": 1, "name": "Mock Field"}
-                
+
                 def create_issue_type(self, **kwargs):
                     return {"id": 1, "name": "Mock Issue Type"}
-                
+
                 def create_status(self, **kwargs):
                     return {"id": 1, "name": "Mock Status"}
-                
+
                 def create_work_package(self, **kwargs):
                     return {"id": 1, "subject": "Mock Work Package"}
-                
+
                 def create_attachment(self, **kwargs):
                     return {"id": 1, "filename": "mock_attachment.txt"}
-                
+
                 def create_comment(self, **kwargs):
                     return {"id": 1, "comment": "Mock comment"}
-                
+
                 def create_time_entry(self, **kwargs):
                     return {"id": 1, "hours": 1.0}
-                
+
                 def get_projects(self):
                     return []
-                
+
                 def get_users(self, **kwargs):
                     return []
-                
+
                 def get_custom_fields(self, **kwargs):
                     return []
-                
+
                 def get_issue_types(self):
                     return []
-                
+
                 def get_statuses(self):
                     return []
+
                 def create_record(self, *args, **kwargs):
                     return {"id": 1, "name": "Mock Record"}
+
                 def get_work_package_types(self, **kwargs):
                     return []
+
                 def execute_query(self, *args, **kwargs):
                     return {"status": "success"}
+
                 def execute_json_query(self, *args, **kwargs):
                     return []
-                def transfer_file_to_container(self, *args, **kwargs):
+
+                def transfer_file_to_container(self, *args, **kwargs) -> bool:
                     return True
+
                 def get_time_entry_activities(self, **kwargs):
                     return []
-                def get_custom_field_id_by_name(self, name):
+
+                def get_custom_field_id_by_name(self, name) -> int:
                     return 1
-                
+
                 def execute_script_with_data(self, script_content, data):
                     # Mock script execution - return success for any script
                     # For status creation, return a realistic response
@@ -593,62 +646,85 @@ async def run_migration(
                         created_count = len(data) if isinstance(data, list) else 1
                         # Create the data structure expected by the status migration
                         status_data = {}
-                        for i, item in enumerate(data if isinstance(data, list) else [data]):
-                            jira_id = item.get("jira_id", str(i+1))
+                        for i, item in enumerate(
+                            data if isinstance(data, list) else [data],
+                        ):
+                            jira_id = item.get("jira_id", str(i + 1))
                             status_data[str(jira_id)] = {
-                                "id": i+1,
+                                "id": i + 1,
                                 "name": item.get("name", f"Status {i+1}"),
                                 "is_closed": item.get("is_closed", False),
-                                "already_existed": False
+                                "already_existed": False,
                             }
                         return {
-                            "status": "success", 
+                            "status": "success",
                             "message": f"Successfully created {created_count} status(es)",
                             "output": f"Created statuses: {created_count}",
                             "created_count": created_count,
-                            "data": status_data  # This is the key that was missing!
+                            "data": status_data,  # This is the key that was missing!
                         }
-                    return {"status": "success", "message": "Mock script executed successfully"}
+                    return {
+                        "status": "success",
+                        "message": "Mock script executed successfully",
+                    }
+
             op_client = MockOpenProjectClient()
         else:
             # For real mode, create a simplified OpenProject client that doesn't require real connections
             # Adjust performance config for OpenProject (typically lower rates)
             op_performance_config = performance_config.copy()
-            op_performance_config.update({
-                'cache_size': config.migration_config.get('op_cache_size', 1500),
-                'cache_ttl': config.migration_config.get('op_cache_ttl', 2400),
-                'batch_size': config.migration_config.get('op_batch_size', 50),
-                'rate_limit': config.migration_config.get('op_rate_limit_per_sec', 12.0)
-            })
-            
+            op_performance_config.update(
+                {
+                    "cache_size": config.migration_config.get("op_cache_size", 1500),
+                    "cache_ttl": config.migration_config.get("op_cache_ttl", 2400),
+                    "batch_size": config.migration_config.get("op_batch_size", 50),
+                    "rate_limit": config.migration_config.get(
+                        "op_rate_limit_per_sec",
+                        12.0,
+                    ),
+                },
+            )
+
             op_client = OpenProjectClient(
                 container_name=config.openproject_config.get("container", None),
                 ssh_host=config.openproject_config.get("server", None),
                 ssh_user=config.openproject_config.get("user", None),
                 tmux_session_name=config.openproject_config.get(
-                    "tmux_session_name", None
+                    "tmux_session_name",
+                    None,
                 ),
-                **op_performance_config
+                **op_performance_config,
             )
 
         config.logger.success("All clients initialized successfully")
 
         # Initialize validation framework
-        from src.utils.advanced_validation import ValidationFramework, validate_pre_migration
+        from src.utils.advanced_validation import (
+            ValidationFramework,
+            validate_pre_migration,
+        )
+
         validation_framework = ValidationFramework()
         config.logger.info("Validation framework initialized")
 
         # Initialize advanced configuration manager
-        from src.utils.advanced_config_manager import ConfigurationManager, EnvironmentType
+        from src.utils.advanced_config_manager import (
+            ConfigurationManager,
+        )
+
         config_manager = ConfigurationManager(
             config_dir=Path("config"),
             templates_dir=Path("config/templates"),
-            backups_dir=Path("config/backups")
+            backups_dir=Path("config/backups"),
         )
         config.logger.info("Advanced configuration manager initialized")
 
         # Initialize advanced security system
-        from src.utils.advanced_security import SecurityManager, SecurityConfig, UserRole, SecurityLevel
+        from src.utils.advanced_security import (
+            SecurityConfig,
+            SecurityManager,
+        )
+
         security_config = SecurityConfig(
             encryption_key_path=Path("config/security/keys"),
             audit_log_path=Path("logs/audit"),
@@ -657,28 +733,43 @@ async def run_migration(
             password_min_length=12,
             session_timeout=3600,
             max_login_attempts=5,
-            lockout_duration=900
+            lockout_duration=900,
         )
         security_manager = SecurityManager(security_config)
         config.logger.info("Advanced security system initialized")
 
         # Initialize large-scale optimizer for performance
-        from src.utils.large_scale_optimizer import LargeScaleOptimizer, get_optimized_config_for_size
-        large_scale_config = get_optimized_config_for_size(100000)  # Default to 100k+ optimization
+        from src.utils.large_scale_optimizer import (
+            LargeScaleOptimizer,
+            get_optimized_config_for_size,
+        )
+
+        large_scale_config = get_optimized_config_for_size(
+            100000,
+        )  # Default to 100k+ optimization
         large_scale_optimizer = LargeScaleOptimizer(large_scale_config)
         config.logger.info("Large-scale optimizer initialized")
 
         # Initialize comprehensive logging and monitoring
-        from src.utils.comprehensive_logging import start_monitoring, log_migration_start
+        from src.utils.comprehensive_logging import (
+            log_migration_start,
+            start_monitoring,
+        )
+
         await start_monitoring()
         config.logger.info("Comprehensive logging and monitoring initialized")
 
         # Initialize automated testing suite
-        from src.utils.automated_testing_suite import AutomatedTestingSuite, TestSuiteConfig, TestType
+        from src.utils.automated_testing_suite import (
+            AutomatedTestingSuite,
+            TestSuiteConfig,
+            TestType,
+        )
+
         test_config = TestSuiteConfig(
             test_types=[TestType.UNIT, TestType.INTEGRATION],
             parallel_workers=2,
-            enable_coverage=True
+            enable_coverage=True,
         )
         automated_test_suite = AutomatedTestingSuite(test_config)
         config.logger.info("Automated testing suite initialized")
@@ -694,60 +785,75 @@ async def run_migration(
                 "openproject_config": config.openproject_config,
                 "migration_config": config.migration_config,
                 "mappings": config.mappings.get_all_mappings(),
-                "clients": {
-                    "jira_client": jira_client,
-                    "op_client": op_client
-                }
+                "clients": {"jira_client": jira_client, "op_client": op_client},
             }
-            
+
             validation_context = {
                 "migration_timestamp": migration_timestamp,
                 "batch_size": batch_size,
                 "max_concurrent": max_concurrent,
-                "dry_run": config.migration_config.get("dry_run", False)
+                "dry_run": config.migration_config.get("dry_run", False),
             }
-            
-            pre_validation_summary = await validate_pre_migration(pre_migration_data, validation_context)
-            
+
+            pre_validation_summary = await validate_pre_migration(
+                pre_migration_data,
+                validation_context,
+            )
+
             if pre_validation_summary.has_critical_errors():
-                config.logger.error("Pre-migration validation failed with critical errors")
-                config.logger.error(f"Validation summary: {pre_validation_summary.to_dict()}")
+                config.logger.error(
+                    "Pre-migration validation failed with critical errors",
+                )
+                config.logger.error(
+                    f"Validation summary: {pre_validation_summary.to_dict()}",
+                )
                 if not config.migration_config.get("force", False):
-                    raise Exception("Pre-migration validation failed. Use --force to override.")
-                else:
-                    config.logger.warning("Continuing despite validation errors due to --force flag")
+                    msg = "Pre-migration validation failed. Use --force to override."
+                    raise Exception(
+                        msg,
+                    )
+                config.logger.warning(
+                    "Continuing despite validation errors due to --force flag",
+                )
             elif pre_validation_summary.errors > 0:
-                config.logger.warning(f"Pre-migration validation completed with {pre_validation_summary.errors} errors")
-                config.logger.info(f"Success rate: {pre_validation_summary.get_success_rate():.1f}%")
+                config.logger.warning(
+                    f"Pre-migration validation completed with {pre_validation_summary.errors} errors",
+                )
+                config.logger.info(
+                    f"Success rate: {pre_validation_summary.get_success_rate():.1f}%",
+                )
             else:
                 config.logger.success("Pre-migration validation passed successfully")
-                
+
             # Store validation results
-            results.overall["pre_migration_validation"] = pre_validation_summary.to_dict()
-            
+            results.overall["pre_migration_validation"] = (
+                pre_validation_summary.to_dict()
+            )
+
             # Log migration start with comprehensive logging
-            from src.utils.comprehensive_logging import log_migration_start
             log_migration_start(
                 migration_id=migration_timestamp,
                 components=components,
                 batch_size=batch_size,
                 max_concurrent=max_concurrent,
                 stop_on_error=stop_on_error,
-                dry_run=config.migration_config.get("dry_run", False)
+                dry_run=config.migration_config.get("dry_run", False),
             )
-            
+
         except Exception as e:
             config.logger.error(f"Pre-migration validation failed: {e}")
             if not config.migration_config.get("force", False):
                 raise
-            else:
-                config.logger.warning("Continuing despite validation failure due to --force flag")
+            config.logger.warning(
+                "Continuing despite validation failure due to --force flag",
+            )
 
         # Run security validation and audit logging
         config.logger.info("Running security validation and audit logging...")
         try:
             # Audit log the migration start
             from src.utils.advanced_security import AuditEventType
+
             security_manager.audit_logger.log_migration_event(
                 event_type=AuditEventType.MIGRATION_START,
                 migration_id=migration_timestamp,
@@ -756,74 +862,61 @@ async def run_migration(
                     "components": components,
                     "batch_size": batch_size,
                     "max_concurrent": max_concurrent,
-                    "dry_run": config.migration_config.get("dry_run", False)
-                }
+                    "dry_run": config.migration_config.get("dry_run", False),
+                },
             )
-            
+
             # Validate security configuration
             security_scan_result = security_manager.security_scanner.scan_configuration(
                 config_path=Path("config/config.yaml"),
-                scan_type="configuration"
+                scan_type="configuration",
             )
-            
+
             if security_scan_result.vulnerabilities:
-                config.logger.warning(f"Security scan found {len(security_scan_result.vulnerabilities)} potential issues")
+                config.logger.warning(
+                    f"Security scan found {len(security_scan_result.vulnerabilities)} potential issues",
+                )
                 for vuln in security_scan_result.vulnerabilities:
-                    config.logger.warning(f"Security issue: {vuln.severity} - {vuln.description}")
+                    config.logger.warning(
+                        f"Security issue: {vuln.severity} - {vuln.description}",
+                    )
             else:
                 config.logger.success("Security validation passed")
-                
+
             # Store security validation results
             results.overall["security_validation"] = {
                 "scan_result": security_scan_result.to_dict(),
-                "audit_events": security_manager.audit_logger.get_recent_events(10)
+                "audit_events": security_manager.audit_logger.get_recent_events(10),
             }
-            
+
         except Exception as e:
             config.logger.error(f"Security validation failed: {e}")
             if not config.migration_config.get("force", False):
                 raise
-            else:
-                config.logger.warning("Continuing despite security validation failure due to --force flag")
+            config.logger.warning(
+                "Continuing despite security validation failure due to --force flag",
+            )
 
         # Define all available migration components
         available_components = AvailableComponents(
-            users=UserMigration(
-                jira_client=jira_client, 
-                op_client=op_client
-            ),
+            users=UserMigration(jira_client=jira_client, op_client=op_client),
             custom_fields=CustomFieldMigration(
-                jira_client=jira_client, 
-                op_client=op_client
+                jira_client=jira_client,
+                op_client=op_client,
             ),
-            companies=CompanyMigration(
-                jira_client=jira_client, 
-                op_client=op_client
-            ),
-            projects=ProjectMigration(
-                jira_client=jira_client, 
-                op_client=op_client
-            ),
-            link_types=LinkTypeMigration(
-                jira_client=jira_client, 
-                op_client=op_client
-            ),
+            companies=CompanyMigration(jira_client=jira_client, op_client=op_client),
+            projects=ProjectMigration(jira_client=jira_client, op_client=op_client),
+            link_types=LinkTypeMigration(jira_client=jira_client, op_client=op_client),
             issue_types=IssueTypeMigration(
-                jira_client=jira_client, 
-                op_client=op_client
+                jira_client=jira_client,
+                op_client=op_client,
             ),
-            status_types=StatusMigration(
-                jira_client=jira_client, 
-                op_client=op_client
-            ),
+            status_types=StatusMigration(jira_client=jira_client, op_client=op_client),
             work_packages=WorkPackageMigration(
-                jira_client=jira_client, 
-                op_client=op_client
+                jira_client=jira_client,
+                op_client=op_client,
             ),
-            accounts=AccountMigration(
-                jira_client=jira_client, 
-                op_client=op_client
-            ),
+            accounts=AccountMigration(jira_client=jira_client, op_client=op_client),
         )
 
         # If components parameter is not provided, use default component order
@@ -851,7 +944,8 @@ async def run_migration(
 
         # Show which components will be run
         config.logger.info(
-            "Migration will run the following components in order: %s", components
+            "Migration will run the following components in order: %s",
+            components,
         )
 
         # Initialize work package migration if it's in the components list
@@ -888,7 +982,9 @@ async def run_migration(
                         if performance_manager:
                             perf_summary = performance_manager.get_performance_summary()
                             component_result.details = component_result.details or {}
-                            component_result.details["performance_metrics"] = perf_summary
+                            component_result.details["performance_metrics"] = (
+                                perf_summary
+                            )
 
                         # Store result in the results dictionary
                         results.components[component_name] = component_result
@@ -911,13 +1007,15 @@ async def run_migration(
                                 f"({success_count}/{total_count} items migrated), "
                                 f"took {component_time:.2f} seconds"
                             )
-                            
+
                             if performance_manager and "performance_metrics" in details:
                                 perf = details["performance_metrics"]
                                 throughput = perf.get("throughput", {})
                                 items_per_sec = throughput.get("items_per_second", 0)
-                                log_msg += f", throughput: {items_per_sec:.1f} items/sec"
-                            
+                                log_msg += (
+                                    f", throughput: {items_per_sec:.1f} items/sec"
+                                )
+
                             config.logger.success(log_msg)
                         else:
                             config.logger.error(
@@ -928,14 +1026,16 @@ async def run_migration(
                     else:
                         # Handle case where component didn't return a result (should not happen with dataclass)
                         config.logger.warning(
-                            "Component '%s' did not return a result", component_name
+                            "Component '%s' did not return a result",
+                            component_name,
                         )
                         results.components[component_name] = component_result
 
                 except KeyboardInterrupt:
                     # Handle user interruption within a component
                     config.logger.warning(
-                        "Component '%s' was interrupted by user", component_name
+                        "Component '%s' was interrupted by user",
+                        component_name,
                     )
                     # Create a basic result reflecting interruption
                     interrupted_result = ComponentResult(
@@ -972,7 +1072,8 @@ async def run_migration(
                     # Check if we should stop on error immediately after an exception
                     if stop_on_error:
                         config.logger.error(
-                            f"Component '{component_name}' failed with exception and --stop-on-error is set, aborting migration",
+                            f"Component '{component_name}' failed with exception and "
+                            f"--stop-on-error is set, aborting migration",
                         )
                         break
 
@@ -1018,7 +1119,7 @@ async def run_migration(
 
                         user_input = (
                             input(
-                                f"\nContinue to next component: {next_component}? [Y/n]: "
+                                f"\nContinue to next component: {next_component}? [Y/n]: ",
                             )
                             .strip()
                             .lower()
@@ -1037,7 +1138,8 @@ async def run_migration(
                 # Break out if critical components failed
                 component_result_data = results.components
                 current_component_result = component_result_data.get(
-                    component_name, ComponentResult()
+                    component_name,
+                    ComponentResult(),
                 )
 
                 # Check if component failed - use success flag as primary indicator
@@ -1073,21 +1175,28 @@ async def run_migration(
         if performance_manager:
             overall_perf_summary = performance_manager.get_performance_summary()
             results.overall["performance_summary"] = overall_perf_summary
-            
+
             # Save detailed performance report
-            perf_report_path = config.get_path("data") / f"performance_report_{migration_timestamp}.json"
+            perf_report_path = (
+                config.get_path("data")
+                / f"performance_report_{migration_timestamp}.json"
+            )
             performance_manager.save_performance_report(perf_report_path)
             config.logger.info(f"Performance report saved to: {perf_report_path}")
 
         # Print final status with performance information
         if results.overall["status"] == "success":
-            log_msg = f"Migration completed successfully in {total_seconds:.2f} seconds."
+            log_msg = (
+                f"Migration completed successfully in {total_seconds:.2f} seconds."
+            )
             if performance_manager:
                 perf = results.overall.get("performance_summary", {})
                 throughput = perf.get("throughput", {})
                 overall_items_per_sec = throughput.get("items_per_second", 0)
                 if overall_items_per_sec > 0:
-                    log_msg += f" Overall throughput: {overall_items_per_sec:.1f} items/sec"
+                    log_msg += (
+                        f" Overall throughput: {overall_items_per_sec:.1f} items/sec"
+                    )
             config.logger.success(log_msg)
         else:
             config.logger.error(
@@ -1106,16 +1215,22 @@ async def run_migration(
         config.logger.info("Migration results saved to %s", results_file)
 
         # Log migration completion with comprehensive logging
-        from src.utils.comprehensive_logging import log_migration_complete, stop_monitoring
+        from src.utils.comprehensive_logging import (
+            log_migration_complete,
+            stop_monitoring,
+        )
+
         log_migration_complete(
             migration_id=migration_timestamp,
             success=results.overall["status"] == "success",
             total_components=len(results.components),
-            successful_components=sum(1 for c in results.components.values() if c.success),
+            successful_components=sum(
+                1 for c in results.components.values() if c.success
+            ),
             total_seconds=total_seconds,
-            results_file=results_file
+            results_file=results_file,
         )
-        
+
         # Stop monitoring
         await stop_monitoring()
 
@@ -1129,9 +1244,11 @@ async def run_migration(
                     "migration_id": migration_timestamp,
                     "success": results.overall["status"] == "success",
                     "total_components": len(results.components),
-                    "successful_components": sum(1 for c in results.components.values() if c.success),
-                    "total_seconds": total_seconds
-                }
+                    "successful_components": sum(
+                        1 for c in results.components.values() if c.success
+                    ),
+                    "total_seconds": total_seconds,
+                },
             )
             config.logger.info("Security audit logging completed")
         except Exception as e:
@@ -1146,18 +1263,20 @@ async def run_migration(
 
         # Log security audit for migration failure
         try:
-            if 'security_manager' in locals():
+            if "security_manager" in locals():
                 security_manager.audit_logger.log_migration_event(
                     event_type="MIGRATION_FAILED",
                     migration_id=migration_timestamp,
                     details={
                         "migration_id": migration_timestamp,
                         "error": str(e),
-                        "error_type": type(e).__name__
-                    }
+                        "error_type": type(e).__name__,
+                    },
                 )
         except Exception as audit_error:
-            config.logger.warning(f"Security audit logging failed during error handling: {audit_error}")
+            config.logger.warning(
+                f"Security audit logging failed during error handling: {audit_error}",
+            )
 
         # Create a basic result object
         return MigrationResult(
@@ -1250,7 +1369,8 @@ def setup_tmux_session() -> bool:
     session_name = config.openproject_config.get("tmux_session_name", "rails_console")
 
     config.logger.info(
-        "Setting up tmux session '%s' for Rails console...", session_name
+        "Setting up tmux session '%s' for Rails console...",
+        session_name,
     )
 
     try:
@@ -1303,11 +1423,11 @@ def setup_tmux_session() -> bool:
                     "Please manually run the following command in the tmux session:",
                 )
                 config.logger.info(
-                    "cd /path/to/openproject && bundle exec rails console"
+                    "cd /path/to/openproject && bundle exec rails console",
                 )
 
         config.logger.info(
-            "After running Rails console, you can use the direct migration features."
+            "After running Rails console, you can use the direct migration features.",
         )
 
         return True
@@ -1369,38 +1489,45 @@ def main() -> None:
 
             RailsConsoleClient(
                 tmux_session_name=config.openproject_config.get(
-                    "tmux_session_name", "rails_console"
+                    "tmux_session_name",
+                    "rails_console",
                 ),
             )
 
             # Use default performance config for main() function
             default_performance_config = {
-                'cache_size': config.migration_config.get('cache_size', 2000),
-                'cache_ttl': config.migration_config.get('cache_ttl', 1800),
-                'batch_size': config.migration_config.get('batch_size', 100),
-                'max_workers': config.migration_config.get('max_workers', 5),
-                'rate_limit': config.migration_config.get('rate_limit_per_sec', 15.0)
+                "cache_size": config.migration_config.get("cache_size", 2000),
+                "cache_ttl": config.migration_config.get("cache_ttl", 1800),
+                "batch_size": config.migration_config.get("batch_size", 100),
+                "max_workers": config.migration_config.get("max_workers", 5),
+                "rate_limit": config.migration_config.get("rate_limit_per_sec", 15.0),
             }
-            
+
             jira_client = JiraClient(**default_performance_config)
-            
+
             # Adjust performance config for OpenProject
             op_performance_config = default_performance_config.copy()
-            op_performance_config.update({
-                'cache_size': config.migration_config.get('op_cache_size', 1500),
-                'cache_ttl': config.migration_config.get('op_cache_ttl', 2400),
-                'batch_size': config.migration_config.get('op_batch_size', 50),
-                'rate_limit': config.migration_config.get('op_rate_limit_per_sec', 12.0)
-            })
-            
+            op_performance_config.update(
+                {
+                    "cache_size": config.migration_config.get("op_cache_size", 1500),
+                    "cache_ttl": config.migration_config.get("op_cache_ttl", 2400),
+                    "batch_size": config.migration_config.get("op_batch_size", 50),
+                    "rate_limit": config.migration_config.get(
+                        "op_rate_limit_per_sec",
+                        12.0,
+                    ),
+                },
+            )
+
             op_client = OpenProjectClient(
                 container_name=config.openproject_config.get("container", None),
                 ssh_host=config.openproject_config.get("server", None),
                 ssh_user=config.openproject_config.get("user", None),
                 tmux_session_name=config.openproject_config.get(
-                    "tmux_session_name", None
+                    "tmux_session_name",
+                    None,
                 ),
-                **op_performance_config
+                **op_performance_config,
             )
 
             # List options to choose which mapping to update
@@ -1413,34 +1540,36 @@ def main() -> None:
                     choice = input("Enter choice (1-2): ")
                     if choice == "1":
                         custom_field_migration = CustomFieldMigration(
-                            jira_client=jira_client, op_client=op_client
+                            jira_client=jira_client,
+                            op_client=op_client,
                         )
                         cf_mapping_update_result = (
                             custom_field_migration.update_mapping_file()
                         )
                         if cf_mapping_update_result:
                             config.logger.success(
-                                "Custom field mapping updated successfully."
+                                "Custom field mapping updated successfully.",
                             )
                         else:
                             config.logger.warning(
-                                "No updates were made to custom field mapping."
+                                "No updates were made to custom field mapping.",
                             )
                         break
                     if choice == "2":
                         issue_type_migration = IssueTypeMigration(
-                            jira_client=jira_client, op_client=op_client
+                            jira_client=jira_client,
+                            op_client=op_client,
                         )
                         issue_type_mapping_update_result = (
                             issue_type_migration.update_mapping_file()
                         )
                         if issue_type_mapping_update_result:
                             config.logger.success(
-                                "Issue type mapping updated successfully."
+                                "Issue type mapping updated successfully.",
                             )
                         else:
                             config.logger.warning(
-                                "No updates were made to issue type mapping."
+                                "No updates were made to issue type mapping.",
                             )
                         break
                     config.logger.error("Invalid choice. Please enter 1 or 2.")
@@ -1456,14 +1585,20 @@ def main() -> None:
         config.update_from_cli_args(args)
 
         # Run migration with provided arguments
-        migration_result = asyncio.run(run_migration(
-            components=args.components,
-            stop_on_error=getattr(args, "stop_on_error", False),
-            no_confirm=getattr(args, "no_confirm", False),
-            batch_size=getattr(args, "batch_size", 100),
-            max_concurrent=getattr(args, "max_concurrent", 5),
-            enable_performance_optimization=not getattr(args, "no_performance_optimization", False),
-        ))
+        migration_result = asyncio.run(
+            run_migration(
+                components=args.components,
+                stop_on_error=getattr(args, "stop_on_error", False),
+                no_confirm=getattr(args, "no_confirm", False),
+                batch_size=getattr(args, "batch_size", 100),
+                max_concurrent=getattr(args, "max_concurrent", 5),
+                enable_performance_optimization=not getattr(
+                    args,
+                    "no_performance_optimization",
+                    False,
+                ),
+            ),
+        )
 
         # Display migration results summary
         if migration_result:
@@ -1505,16 +1640,27 @@ def main() -> None:
                     config.logger.error("✗ %s: %s", component, status)
 
             # Show performance summary if available
-            if hasattr(migration_result, "overall") and "performance_summary" in migration_result.overall:
+            if (
+                hasattr(migration_result, "overall")
+                and "performance_summary" in migration_result.overall
+            ):
                 perf_summary = migration_result.overall["performance_summary"]
                 timing = perf_summary.get("timing", {})
                 throughput = perf_summary.get("throughput", {})
-                
+
                 config.logger.info("Performance Summary:")
-                config.logger.info(f"  Total processing time: {timing.get('total_time_seconds', 0):.2f}s")
-                config.logger.info(f"  Overall throughput: {throughput.get('items_per_second', 0):.1f} items/sec")
-                config.logger.info(f"  Success rate: {throughput.get('success_rate', 0):.1%}")
-                config.logger.info(f"  Processing efficiency: {timing.get('processing_efficiency', 0):.1%}")
+                config.logger.info(
+                    f"  Total processing time: {timing.get('total_time_seconds', 0):.2f}s",
+                )
+                config.logger.info(
+                    f"  Overall throughput: {throughput.get('items_per_second', 0):.1f} items/sec",
+                )
+                config.logger.info(
+                    f"  Success rate: {throughput.get('success_rate', 0):.1%}",
+                )
+                config.logger.info(
+                    f"  Processing efficiency: {timing.get('processing_efficiency', 0):.1%}",
+                )
 
     except KeyboardInterrupt:
         console.print("\nMigration manually interrupted. Exiting...")

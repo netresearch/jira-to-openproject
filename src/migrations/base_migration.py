@@ -3,116 +3,71 @@
 
 from __future__ import annotations
 
-from src.display import configure_logging
-
 import json
-import logging
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Callable
+from typing import Any
+
+from pybreaker import CircuitBreakerError
 
 from src import config
-from src.models import ComponentResult, MigrationError
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
+from src.display import configure_logging
+from src.models import ComponentResult, MigrationError
 
-if TYPE_CHECKING:
-    pass
-
-# Import dependencies that were missing
-try:
-    from src.utils.change_detector import ChangeDetector
-except ImportError:
-    # Create a mock ChangeDetector if not available
-    class ChangeDetector:
-        def detect_changes(self, current_entities, entity_type):
-            return {"has_changes": False, "changes": []}
-
-try:
-    from src.utils.state_manager import StateManager
-except ImportError:
-    # Create a mock StateManager if not available
-    class StateManager:
-        def save_current_state(self):
-            pass
-
-try:
-    from src.utils.data_preservation_manager import DataPreservationManager
-except ImportError:
-    # Create a mock DataPreservationManager if not available
-    class DataPreservationManager:
-        def __init__(self, jira_client=None, openproject_client=None):
-            pass
-        
-        def store_original_state(self, entity_id, entity_type, entity_data, source):
-            pass
-
-try:
-    from src.utils.selective_update_manager import SelectiveUpdateManager
-except ImportError:
-    # Create a mock SelectiveUpdateManager if not available
-    class SelectiveUpdateManager:
-        def __init__(self, jira_client=None, op_client=None, state_manager=None):
-            pass
-
-try:
-    from src.utils.checkpoint_manager import CheckpointManager
-except ImportError:
-    # Create a mock CheckpointManager if not available
-    class CheckpointManager:
-        def __init__(self, checkpoint_dir=None):
-            pass
-
-try:
-    from src.utils.error_recovery import ErrorRecoverySystem, error_recovery
-except ImportError:
-    # Create a mock ErrorRecoverySystem if not available
-    class ErrorRecoverySystem:
-        def __init__(self, db_path=None):
-            pass
-        def execute_with_recovery(self, *args, **kwargs):
-            return None
-        def resume_migration(self, *args, **kwargs):
-            return []
-        def get_migration_status(self, *args, **kwargs):
-            return {'total': 0, 'completed': 0, 'failed': 0, 'pending': 0}
-    
-    error_recovery = ErrorRecoverySystem()
+# Import dependencies
+from src.utils.change_detector import ChangeDetector, ChangeReport
+from src.utils.data_preservation_manager import DataPreservationManager
+from src.utils.error_recovery import ErrorRecoverySystem, error_recovery
+from src.utils.state_manager import StateManager
 
 
 class EntityTypeRegistry:
     """Centralized registry for mapping migration classes to their supported entity types.
-    
+
     This replaces brittle string matching with a robust registry system that ensures
     fail-fast behavior when entity types cannot be resolved.
     """
-    
+
     _registry: dict[type[BaseMigration], list[str]] = {}
     _type_to_class_map: dict[str, type[BaseMigration]] = {}
-    
+
     @classmethod
-    def register(cls, migration_class: type[BaseMigration], entity_types: list[str]) -> None:
+    def register(
+        cls,
+        migration_class: type[BaseMigration],
+        entity_types: list[str],
+    ) -> None:
         """Register a migration class with its supported entity types.
-        
+
         Args:
             migration_class: The migration class to register
             entity_types: List of entity types this class supports
-            
+
         Raises:
             ValueError: If entity_types is empty or migration_class is invalid
+
         """
         if migration_class is None:
-            raise ValueError("Migration class cannot be None")
-            
+            msg = "Migration class cannot be None"
+            raise ValueError(msg)
+
         if not entity_types:
-            raise ValueError(f"Migration class {migration_class.__name__} must support at least one entity type")
-        
+            msg = f"Migration class {migration_class.__name__} must support at least one entity type"
+            raise ValueError(
+                msg,
+            )
+
         if not issubclass(migration_class, BaseMigration):
-            raise ValueError(f"Class {migration_class.__name__} must inherit from BaseMigration")
-            
+            msg = f"Class {migration_class.__name__} must inherit from BaseMigration"
+            raise ValueError(
+                msg,
+            )
+
         cls._registry[migration_class] = entity_types.copy()
-        
+
         # Build reverse mapping for quick lookups
         for entity_type in entity_types:
             if entity_type in cls._type_to_class_map:
@@ -122,74 +77,87 @@ class EntityTypeRegistry:
                     logger.warning(
                         f"Entity type '{entity_type}' is supported by multiple classes: "
                         f"{existing_class.__name__} and {migration_class.__name__}. "
-                        f"Using {migration_class.__name__}."
+                        f"Using {migration_class.__name__}.",
                     )
             cls._type_to_class_map[entity_type] = migration_class
-    
+
     @classmethod
     def resolve(cls, migration_class: type[BaseMigration]) -> str:
         """Resolve the primary entity type for a migration class.
-        
+
         Args:
             migration_class: The migration class to resolve
-            
+
         Returns:
             The primary (first) entity type supported by this class
-            
+
         Raises:
             ValueError: If the migration class is not registered or has no entity types
+
         """
         if migration_class is None:
-            raise ValueError("Migration class cannot be None")
-            
+            msg = "Migration class cannot be None"
+            raise ValueError(msg)
+
         if migration_class not in cls._registry:
-            raise ValueError(
+            msg = (
                 f"Migration class {migration_class.__name__} is not registered with EntityTypeRegistry. "
                 f"Add SUPPORTED_ENTITY_TYPES class attribute and ensure the class is properly registered."
             )
-        
+            raise ValueError(
+                msg,
+            )
+
         entity_types = cls._registry[migration_class]
         if not entity_types:
-            raise ValueError(f"Migration class {migration_class.__name__} has no registered entity types")
-            
+            msg = f"Migration class {migration_class.__name__} has no registered entity types"
+            raise ValueError(
+                msg,
+            )
+
         return entity_types[0]  # Return primary (first) entity type
-    
+
     @classmethod
     def get_supported_types(cls, migration_class: type[BaseMigration]) -> list[str]:
         """Get all entity types supported by a migration class.
-        
+
         Args:
             migration_class: The migration class to query
-            
+
         Returns:
             List of all entity types supported by this class
-            
+
         Raises:
             ValueError: If the migration class is not registered
+
         """
         if migration_class not in cls._registry:
-            raise ValueError(f"Migration class {migration_class.__name__} is not registered with EntityTypeRegistry")
-            
+            msg = f"Migration class {migration_class.__name__} is not registered with EntityTypeRegistry"
+            raise ValueError(
+                msg,
+            )
+
         return cls._registry[migration_class].copy()
-    
+
     @classmethod
     def get_class_for_type(cls, entity_type: str) -> type[BaseMigration] | None:
         """Get the migration class that handles a specific entity type.
-        
+
         Args:
             entity_type: The entity type to look up
-            
+
         Returns:
             The migration class that handles this entity type, or None if not found
+
         """
         return cls._type_to_class_map.get(entity_type)
-    
+
     @classmethod
     def clear_registry(cls) -> None:
         """Clear all registrations. Used primarily for testing."""
         cls._registry.clear()
         cls._type_to_class_map.clear()
-    
+
     @classmethod
     def get_all_registered_types(cls) -> set[str]:
         """Get all registered entity types across all migration classes."""
@@ -201,21 +169,24 @@ class EntityTypeRegistry:
 
 def register_entity_types(*entity_types: str):
     """Decorator to register entity types for a migration class.
-    
+
     Args:
         entity_types: Entity types supported by the decorated class
-        
+
     Returns:
         Decorator function that registers the class
-        
+
     Example:
         @register_entity_types("users", "user_accounts")
         class UserMigration(BaseMigration):
             pass
+
     """
+
     def decorator(cls: type[BaseMigration]) -> type[BaseMigration]:
         EntityTypeRegistry.register(cls, list(entity_types))
         return cls
+
     return decorator
 
 
@@ -226,32 +197,30 @@ class ComponentInitializationError(Exception):
     initialization fails, following proper exception-based error handling.
     """
 
-    pass
-
 
 class BaseMigration:
     """Base class for all migration classes.
 
     Provides common functionality and initialization for all migration types.
-    
+
     Includes API call caching with thread safety and memory management.
 
     Follows the layered client architecture:
     1. OpenProjectClient - Manages all lower-level clients and operations
     2. BaseMigration - Uses OpenProjectClient for migrations
     """
-    
+
     # Cache configuration - production-ready limits
     MAX_CACHE_SIZE_PER_TYPE = 1000  # Maximum entities per cache type
-    MAX_TOTAL_CACHE_SIZE = 5000     # Maximum total cached entities across all types
-    CACHE_CLEANUP_THRESHOLD = 0.8   # Cleanup when 80% full
-    
+    MAX_TOTAL_CACHE_SIZE = 5000  # Maximum total cached entities across all types
+    CACHE_CLEANUP_THRESHOLD = 0.8  # Cleanup when 80% full
+
     # Cache statistics tracking
     _global_cache_stats = {
         "total_hits": 0,
-        "total_misses": 0, 
+        "total_misses": 0,
         "total_evictions": 0,
-        "memory_cleanups": 0
+        "memory_cleanups": 0,
     }
 
     def __init__(
@@ -261,7 +230,7 @@ class BaseMigration:
         change_detector: ChangeDetector | None = None,
         state_manager: StateManager | None = None,
         data_preservation_manager: DataPreservationManager | None = None,
-        performance_manager = None,
+        performance_manager=None,
     ) -> None:
         """Initialize the base migration with common attributes.
 
@@ -284,7 +253,8 @@ class BaseMigration:
         self.data_preservation_manager = (
             data_preservation_manager
             or DataPreservationManager(
-                jira_client=self.jira_client, openproject_client=self.op_client
+                jira_client=self.jira_client,
+                openproject_client=self.op_client,
             )
         )
         self.performance_manager = performance_manager
@@ -301,16 +271,19 @@ class BaseMigration:
         except config.MappingsInitializationError as e:
             # Only perform diagnostics if mappings initialization fails
             self.logger.exception(
-                "Failed to initialize mappings in %s: %s", self.__class__.__name__, e
+                "Failed to initialize mappings in %s: %s",
+                self.__class__.__name__,
+                e,
             )
+            msg = f"Cannot initialize {self.__class__.__name__}: {e}"
             raise ComponentInitializationError(
-                f"Cannot initialize {self.__class__.__name__}: {e}"
+                msg,
             ) from e
 
         # Initialize managers
         self.state_manager = StateManager()
         self.data_preservation_manager = DataPreservationManager()
-        
+
         # Initialize thread-safe cache infrastructure for API call optimization
         self._cache_lock = threading.RLock()
         self._global_entity_cache: dict[str, list[dict[str, Any]]] = {}
@@ -319,63 +292,71 @@ class BaseMigration:
             "misses": 0,
             "evictions": 0,
             "memory_cleanups": 0,
-            "total_size": 0
+            "total_size": 0,
         }
-        
+
         # Progress tracking
         self._current_migration_record_id: str | None = None
         self._current_checkpoints: list[str] = []
-        
+
         # Setup performance features for enhanced clients
         self._setup_performance_features()
 
     def _setup_performance_features(self) -> None:
         """Setup performance features and provide easy access to enhanced client capabilities."""
         # Check if clients have enhanced features
-        self.has_enhanced_jira = hasattr(self.jira_client, 'performance_optimizer')
-        self.has_enhanced_openproject = hasattr(self.op_client, 'performance_optimizer')
-        
+        self.has_enhanced_jira = hasattr(self.jira_client, "performance_optimizer")
+        self.has_enhanced_openproject = hasattr(self.op_client, "performance_optimizer")
+
         if self.has_enhanced_jira:
-            self.logger.debug("Enhanced Jira client detected - batch operations and caching available")
-        
+            self.logger.debug(
+                "Enhanced Jira client detected - batch operations and caching available",
+            )
+
         if self.has_enhanced_openproject:
-            self.logger.debug("Enhanced OpenProject client detected - batch operations and caching available")
-            
+            self.logger.debug(
+                "Enhanced OpenProject client detected - batch operations and caching available",
+            )
+
     def get_performance_stats(self) -> dict[str, Any]:
         """Get performance statistics from enhanced clients."""
         stats = {}
-        
+
         if self.has_enhanced_jira:
-            stats['jira'] = self.jira_client.get_performance_stats()
-            
+            stats["jira"] = self.jira_client.get_performance_stats()
+
         if self.has_enhanced_openproject:
-            stats['openproject'] = self.op_client.get_performance_stats()
-            
+            stats["openproject"] = self.op_client.get_performance_stats()
+
         return stats
-        
+
     def is_batch_operations_available(self) -> bool:
         """Check if batch operations are available."""
         return self.has_enhanced_jira or self.has_enhanced_openproject
 
     def _cleanup_cache_if_needed(self) -> None:
         """Clean up global cache if memory usage exceeds thresholds.
-        
+
         Implements LRU-like eviction strategy to prevent memory exhaustion.
         Thread-safe implementation with comprehensive logging.
         """
         with self._cache_lock:
-            current_size = sum(len(entities) for entities in self._global_entity_cache.values())
+            current_size = sum(
+                len(entities) for entities in self._global_entity_cache.values()
+            )
             self._cache_stats["total_size"] = current_size
-            
+
             if current_size > self.MAX_TOTAL_CACHE_SIZE * self.CACHE_CLEANUP_THRESHOLD:
                 # Sort cache types by size (largest first) for efficient cleanup
-                cache_sizes = [(k, len(v)) for k, v in self._global_entity_cache.items()]
+                cache_sizes = [
+                    (k, len(v)) for k, v in self._global_entity_cache.items()
+                ]
                 cache_sizes.sort(key=lambda x: x[1], reverse=True)
-                
+
                 target_size = self.MAX_TOTAL_CACHE_SIZE // 2
                 removed_count = 0
                 removed_types = []
-                
+
                 for cache_key, size in cache_sizes:
                     if current_size - removed_count <= target_size:
                         break
@@ -384,33 +365,36 @@ class BaseMigration:
                     removed_types.append(cache_key)
                     self._cache_stats["evictions"] += 1
                     BaseMigration._global_cache_stats["total_evictions"] += 1
-                
+
                 self._cache_stats["memory_cleanups"] += 1
                 BaseMigration._global_cache_stats["memory_cleanups"] += 1
-                
+
                 self.logger.info(
-                    "Cache cleanup: removed %d entities from %d types: %s", 
-                    removed_count, len(removed_types), removed_types
+                    "Cache cleanup: removed %d entities from %d types: %s",
+                    removed_count,
+                    len(removed_types),
+                    removed_types,
                 )
 
     def _get_cached_entities_threadsafe(
-        self, 
+        self,
         entity_type: str,
         cache_invalidated: set[str],
-        entity_cache: dict[str, list[dict[str, Any]]]
+        entity_cache: dict[str, list[dict[str, Any]]],
     ) -> list[dict[str, Any]]:
         """Thread-safe cached entity retrieval with size limits and error handling.
-        
+
         Args:
             entity_type: Type of entities to retrieve
-            cache_invalidated: Set of invalidated cache types  
+            cache_invalidated: Set of invalidated cache types
             entity_cache: Local cache for this migration run
-            
+
         Returns:
             List of entities from cache or fresh API call
-            
+
         Raises:
             MigrationError: If API call fails and no cached data available
+
         """
         try:
             # Check local cache first (fastest path)
@@ -419,32 +403,40 @@ class BaseMigration:
                 BaseMigration._global_cache_stats["total_hits"] += 1
                 self.logger.debug("Cache hit (local): cached %s", entity_type)
                 return entity_cache[entity_type]
-            
+
             # Check global cache with thread safety
             with self._cache_lock:
-                if entity_type in self._global_entity_cache and entity_type not in cache_invalidated:
+                if (
+                    entity_type in self._global_entity_cache
+                    and entity_type not in cache_invalidated
+                ):
                     entities = self._global_entity_cache[entity_type].copy()
                     entity_cache[entity_type] = entities
                     self._cache_stats["hits"] += 1
                     BaseMigration._global_cache_stats["total_hits"] += 1
                     self.logger.debug("Cache hit (global): cached %s", entity_type)
                     return entities
-            
+
             # Cache miss - perform API call with error handling
             self._cache_stats["misses"] += 1
             BaseMigration._global_cache_stats["total_misses"] += 1
             self.logger.debug("Cache miss: fetching cached %s from API", entity_type)
-            
+
             try:
                 entities = self._get_current_entities_for_type(entity_type)
             except Exception as e:
-                self.logger.error("Failed to fetch entities for %s: %s", entity_type, e)
-                raise MigrationError(f"API call failed for {entity_type}: {e}") from e
-            
+                self.logger.exception(
+                    "Failed to fetch entities for %s: %s",
+                    entity_type,
+                    e,
+                )
+                msg = f"API call failed for {entity_type}: {e}"
+                raise MigrationError(msg) from e
+
             # Store in caches with size validation
             if len(entities) <= self.MAX_CACHE_SIZE_PER_TYPE:
                 entity_cache[entity_type] = entities
-                
+
                 with self._cache_lock:
                     # Check if cleanup needed before adding to global cache
                     self._cleanup_cache_if_needed()
@@ -453,16 +445,22 @@ class BaseMigration:
             else:
                 self.logger.warning(
                     "Entity list too large to cache: %s has %d entities (limit: %d)",
-                    entity_type, len(entities), self.MAX_CACHE_SIZE_PER_TYPE
+                    entity_type,
+                    len(entities),
+                    self.MAX_CACHE_SIZE_PER_TYPE,
                 )
                 # Still store in local cache for this run, but not global
                 entity_cache[entity_type] = entities
                 cache_invalidated.discard(entity_type)
-            
+
             return entities
-            
+
         except Exception as e:
-            self.logger.error("Critical error in cache retrieval for %s: %s", entity_type, e)
+            self.logger.exception(
+                "Critical error in cache retrieval for %s: %s",
+                entity_type,
+                e,
+            )
             raise
 
     def register_entity_mapping(
@@ -484,6 +482,7 @@ class BaseMigration:
 
         Returns:
             Mapping ID for future reference
+
         """
         migration_component = self.__class__.__name__
         return self.state_manager.register_entity_mapping(
@@ -496,7 +495,9 @@ class BaseMigration:
         )
 
     def get_entity_mapping(
-        self, jira_entity_type: str, jira_entity_id: str
+        self,
+        jira_entity_type: str,
+        jira_entity_id: str,
     ) -> dict[str, Any] | None:
         """Get entity mapping by Jira entity information.
 
@@ -506,6 +507,7 @@ class BaseMigration:
 
         Returns:
             Entity mapping or None if not found
+
         """
         return self.state_manager.get_entity_mapping(jira_entity_type, jira_entity_id)
 
@@ -526,6 +528,7 @@ class BaseMigration:
 
         Returns:
             Record ID for future reference
+
         """
         migration_component = self.__class__.__name__
         return self.state_manager.start_migration_record(
@@ -550,6 +553,7 @@ class BaseMigration:
             success_count: Number of successfully processed entities
             error_count: Number of entities that failed
             errors: List of error messages
+
         """
         self.state_manager.complete_migration_record(
             record_id=record_id,
@@ -559,7 +563,9 @@ class BaseMigration:
         )
 
     def create_state_snapshot(
-        self, description: str, metadata: dict[str, Any] | None = None
+        self,
+        description: str,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Create a complete state snapshot for rollback purposes.
 
@@ -569,10 +575,13 @@ class BaseMigration:
 
         Returns:
             Snapshot ID
+
         """
         migration_component = self.__class__.__name__
         return self.state_manager.create_state_snapshot(
-            description=description, user=migration_component, metadata=metadata
+            description=description,
+            user=migration_component,
+            metadata=metadata,
         )
 
     def store_original_entity_state(
@@ -589,6 +598,7 @@ class BaseMigration:
             entity_type: Type of entity (users, projects, work_packages, etc.)
             entity_data: Current state of the entity
             source: Source of the data ("migration" or "manual")
+
         """
         self.data_preservation_manager.store_original_state(
             entity_id=entity_id,
@@ -614,6 +624,7 @@ class BaseMigration:
 
         Returns:
             ConflictInfo if conflict detected, None otherwise
+
         """
         return self.data_preservation_manager.detect_conflicts(
             jira_changes=jira_changes,
@@ -637,13 +648,19 @@ class BaseMigration:
 
         Returns:
             Resolved entity data
+
         """
         return self.data_preservation_manager.resolve_conflict(
-            conflict=conflict, jira_data=jira_data, openproject_data=openproject_data
+            conflict=conflict,
+            jira_data=jira_data,
+            openproject_data=openproject_data,
         )
 
     def create_entity_backup(
-        self, entity_id: str, entity_type: str, entity_data: dict[str, Any]
+        self,
+        entity_id: str,
+        entity_type: str,
+        entity_data: dict[str, Any],
     ) -> Path:
         """Create a backup of entity data before updating.
 
@@ -654,13 +671,18 @@ class BaseMigration:
 
         Returns:
             Path to the backup file
+
         """
         return self.data_preservation_manager.create_backup(
-            entity_id=entity_id, entity_type=entity_type, entity_data=entity_data
+            entity_id=entity_id,
+            entity_type=entity_type,
+            entity_data=entity_data,
         )
 
     def analyze_preservation_status(
-        self, jira_changes: dict[str, dict[str, Any]], entity_type: str
+        self,
+        jira_changes: dict[str, dict[str, Any]],
+        entity_type: str,
     ) -> dict[str, Any]:
         """Analyze potential conflicts for a set of entities.
 
@@ -670,13 +692,17 @@ class BaseMigration:
 
         Returns:
             Report of all conflicts detected
+
         """
         return self.data_preservation_manager.analyze_preservation_status(
-            jira_changes=jira_changes, entity_type=entity_type
+            jira_changes=jira_changes,
+            entity_type=entity_type,
         )
 
     def detect_changes(
-        self, current_entities: list[dict[str, Any]], entity_type: str
+        self,
+        current_entities: list[dict[str, Any]],
+        entity_type: str,
     ) -> ChangeReport:
         """Detect changes in entities since the last migration run.
 
@@ -686,6 +712,7 @@ class BaseMigration:
 
         Returns:
             Change detection report
+
         """
         return self.change_detector.detect_changes(current_entities, entity_type)
 
@@ -702,14 +729,19 @@ class BaseMigration:
 
         Returns:
             Path to the created snapshot file
+
         """
         migration_component = self.__class__.__name__
         return self.change_detector.create_snapshot(
-            entities, entity_type, migration_component
+            entities,
+            entity_type,
+            migration_component,
         )
 
     def should_skip_migration(
-        self, entity_type: str, cache_func=None
+        self,
+        entity_type: str,
+        cache_func=None,
     ) -> tuple[bool, ChangeReport | None]:
         """Check if migration should be skipped based on change detection.
 
@@ -723,6 +755,7 @@ class BaseMigration:
         Returns:
             Tuple of (should_skip, change_report). should_skip is True if no changes
             are detected and migration can be skipped.
+
         """
         try:
             # Get current entities from Jira for the specific entity type
@@ -739,7 +772,8 @@ class BaseMigration:
 
             if should_skip:
                 self.logger.info(
-                    "No changes detected for %s, skipping migration", entity_type
+                    "No changes detected for %s, skipping migration",
+                    entity_type,
                 )
             else:
                 self.logger.info(
@@ -774,10 +808,14 @@ class BaseMigration:
 
         Raises:
             NotImplementedError: If subclass doesn't implement this method
+
         """
-        raise NotImplementedError(
+        msg = (
             f"Subclass {self.__class__.__name__} must implement _get_current_entities_for_type() "
             f"to support change detection for entity type: {entity_type}"
+        )
+        raise NotImplementedError(
+            msg,
         )
 
     def run_with_state_management(
@@ -804,22 +842,23 @@ class BaseMigration:
 
         Returns:
             ComponentResult with migration results and state information
+
         """
         # If no entity type specified, run standard migration without change detection
         if not entity_type:
             self.logger.debug(
-                "No entity type specified, running migration without change detection"
+                "No entity type specified, running migration without change detection",
             )
             return self.run()
 
         migration_record_id = None
         snapshot_id = None
-        
+
         # Initialize entity cache for this migration run
         entity_cache: dict[str, list[dict[str, Any]]] = {}
         cache_invalidated: set[str] = set()
         total_cache_invalidations = 0
-        
+
         # Clear global cache to ensure isolation between migration runs
         with self._cache_lock:
             self._global_entity_cache.clear()
@@ -827,25 +866,35 @@ class BaseMigration:
 
         def get_cached_entities(type_name: str) -> list[dict[str, Any]]:
             """Get entities with enhanced thread-safe caching."""
-            return self._get_cached_entities_threadsafe(type_name, cache_invalidated, entity_cache)
-        
+            return self._get_cached_entities_threadsafe(
+                type_name,
+                cache_invalidated,
+                entity_cache,
+            )
+
         def invalidate_cache(type_name: str) -> None:
             """Invalidate cache for a specific entity type."""
             nonlocal total_cache_invalidations
             cache_invalidated.add(type_name)
             total_cache_invalidations += 1
-            
+
             # Also invalidate from global cache for thread safety
             with self._cache_lock:
                 if type_name in self._global_entity_cache:
                     del self._global_entity_cache[type_name]
-                    self.logger.debug("Invalidated global cache for entity type %s", type_name)
-            
+                    self.logger.debug(
+                        "Invalidated global cache for entity type %s",
+                        type_name,
+                    )
+
             self.logger.debug("Invalidated cache for entity type %s", type_name)
 
         try:
             # Step 1: Check for changes (using cached entities)
-            should_skip, change_report = self.should_skip_migration(entity_type, get_cached_entities)
+            should_skip, change_report = self.should_skip_migration(
+                entity_type,
+                get_cached_entities,
+            )
 
             if should_skip:
                 return ComponentResult(
@@ -862,8 +911,8 @@ class BaseMigration:
                             "cache_evictions": self._cache_stats["evictions"],
                             "memory_cleanups": self._cache_stats["memory_cleanups"],
                             "total_cache_size": self._cache_stats["total_size"],
-                            "global_cache_types": len(self._global_entity_cache)
-                        }
+                            "global_cache_types": len(self._global_entity_cache),
+                        },
                     },
                     success_count=0,
                     failed_count=0,
@@ -880,7 +929,7 @@ class BaseMigration:
 
             # Step 3: Run the actual migration
             result = self.run()
-            
+
             # Invalidate cache after migration since entities may have been modified
             if result.success and entity_type:
                 invalidate_cache(entity_type)
@@ -906,7 +955,8 @@ class BaseMigration:
                     )
                 except Exception as e:
                     self.logger.warning(
-                        "Failed to create change detection snapshot: %s", e
+                        "Failed to create change detection snapshot: %s",
+                        e,
                     )
 
                 # Create state snapshot for rollback
@@ -947,9 +997,9 @@ class BaseMigration:
                             "cache_evictions": self._cache_stats["evictions"],
                             "memory_cleanups": self._cache_stats["memory_cleanups"],
                             "total_cache_size": self._cache_stats["total_size"],
-                            "global_cache_types": len(self._global_entity_cache)
-                        }
-                    }
+                            "global_cache_types": len(self._global_entity_cache),
+                        },
+                    },
                 )
 
             else:
@@ -1015,23 +1065,24 @@ class BaseMigration:
 
         Returns:
             ComponentResult with migration results, state, and preservation information
+
         """
         # If no entity type specified, run standard migration without advanced features
         if not entity_type:
             self.logger.debug(
-                "No entity type specified, running migration without data preservation"
+                "No entity type specified, running migration without data preservation",
             )
             return self.run()
 
         migration_record_id = None
         snapshot_id = None
         conflict_report = None
-        
+
         # Initialize enhanced entity cache for this migration run
         entity_cache: dict[str, list[dict[str, Any]]] = {}
         cache_invalidated: set[str] = set()
         total_cache_invalidations = 0
-        
+
         # Clear global cache to ensure isolation between migration runs
         with self._cache_lock:
             self._global_entity_cache.clear()
@@ -1039,31 +1090,40 @@ class BaseMigration:
 
         def get_cached_entities(type_name: str) -> list[dict[str, Any]]:
             """Get entities with enhanced thread-safe caching and memory management.
-            
+
             Args:
                 type_name: Type of entities to retrieve
-                
+
             Returns:
                 List of entities from cache or fresh API call
+
             """
-            return self._get_cached_entities_threadsafe(type_name, cache_invalidated, entity_cache)
-        
+            return self._get_cached_entities_threadsafe(
+                type_name,
+                cache_invalidated,
+                entity_cache,
+            )
+
         def invalidate_cache(type_name: str) -> None:
             """Invalidate cache for a specific entity type.
-            
+
             Args:
                 type_name: Type of entities to invalidate from cache
+
             """
             nonlocal total_cache_invalidations
             cache_invalidated.add(type_name)
             total_cache_invalidations += 1
-            
+
             # Also invalidate from global cache for thread safety
             with self._cache_lock:
                 if type_name in self._global_entity_cache:
                     del self._global_entity_cache[type_name]
-                    self.logger.debug("Invalidated global cache for entity type %s", type_name)
-            
+                    self.logger.debug(
+                        "Invalidated global cache for entity type %s",
+                        type_name,
+                    )
+
             self.logger.debug("Invalidated cache for entity type %s", type_name)
 
         try:
@@ -1080,7 +1140,8 @@ class BaseMigration:
                     }
 
                     conflict_report = self.analyze_preservation_status(
-                        jira_changes, entity_type
+                        jira_changes,
+                        entity_type,
                     )
 
                     if conflict_report["total_conflicts"] > 0:
@@ -1093,11 +1154,15 @@ class BaseMigration:
 
                 except Exception as e:
                     self.logger.warning(
-                        "Failed to analyze conflicts before migration: %s", e
+                        "Failed to analyze conflicts before migration: %s",
+                        e,
                     )
 
             # Step 2: Check for changes (using cache)
-            should_skip, change_report = self.should_skip_migration(entity_type, get_cached_entities)
+            should_skip, change_report = self.should_skip_migration(
+                entity_type,
+                get_cached_entities,
+            )
 
             if should_skip:
                 return ComponentResult(
@@ -1175,7 +1240,8 @@ class BaseMigration:
                     )
                 except Exception as e:
                     self.logger.warning(
-                        "Failed to create change detection snapshot: %s", e
+                        "Failed to create change detection snapshot: %s",
+                        e,
                     )
 
                 # Create state snapshot for rollback
@@ -1227,9 +1293,9 @@ class BaseMigration:
                             "cache_evictions": self._cache_stats["evictions"],
                             "memory_cleanups": self._cache_stats["memory_cleanups"],
                             "total_cache_size": self._cache_stats["total_size"],
-                            "global_cache_types": len(self._global_entity_cache)
-                        }
-                    }
+                            "global_cache_types": len(self._global_entity_cache),
+                        },
+                    },
                 )
 
             else:
@@ -1240,7 +1306,7 @@ class BaseMigration:
                     error_count=result.failed_count,
                     errors=result.errors,
                 )
-                
+
                 # Add cache stats to failed result details
                 if not result.details:
                     result.details = {}
@@ -1258,9 +1324,9 @@ class BaseMigration:
                             "cache_evictions": self._cache_stats["evictions"],
                             "memory_cleanups": self._cache_stats["memory_cleanups"],
                             "total_cache_size": self._cache_stats["total_size"],
-                            "global_cache_types": len(self._global_entity_cache)
-                        }
-                    }
+                            "global_cache_types": len(self._global_entity_cache),
+                        },
+                    },
                 )
 
             return result
@@ -1282,7 +1348,8 @@ class BaseMigration:
             raise
 
     def run_with_change_detection(
-        self, entity_type: str | None = None
+        self,
+        entity_type: str | None = None,
     ) -> ComponentResult:
         """Run migration with change detection support and enhanced caching.
 
@@ -1296,11 +1363,12 @@ class BaseMigration:
 
         Returns:
             ComponentResult with migration results
+
         """
         # If no entity type specified, run standard migration without change detection
         if not entity_type:
             self.logger.debug(
-                "No entity type specified, running migration without change detection"
+                "No entity type specified, running migration without change detection",
             )
             return self.run()
 
@@ -1308,7 +1376,7 @@ class BaseMigration:
         entity_cache: dict[str, list[dict[str, Any]]] = {}
         cache_invalidated: set[str] = set()
         total_cache_invalidations = 0
-        
+
         # Clear global cache to ensure isolation between migration runs
         with self._cache_lock:
             self._global_entity_cache.clear()
@@ -1316,25 +1384,35 @@ class BaseMigration:
 
         def get_cached_entities(type_name: str) -> list[dict[str, Any]]:
             """Get entities with enhanced thread-safe caching."""
-            return self._get_cached_entities_threadsafe(type_name, cache_invalidated, entity_cache)
-        
+            return self._get_cached_entities_threadsafe(
+                type_name,
+                cache_invalidated,
+                entity_cache,
+            )
+
         def invalidate_cache(type_name: str) -> None:
             """Invalidate cache for a specific entity type."""
             nonlocal total_cache_invalidations
             cache_invalidated.add(type_name)
             total_cache_invalidations += 1
-            
+
             # Also invalidate from global cache for thread safety
             with self._cache_lock:
                 if type_name in self._global_entity_cache:
                     del self._global_entity_cache[type_name]
-                    self.logger.debug("Invalidated global cache for entity type %s", type_name)
-            
+                    self.logger.debug(
+                        "Invalidated global cache for entity type %s",
+                        type_name,
+                    )
+
             self.logger.debug("Invalidated cache for entity type %s", type_name)
 
         try:
             # Check if migration should be skipped (using cached entities)
-            should_skip, change_report = self.should_skip_migration(entity_type, get_cached_entities)
+            should_skip, change_report = self.should_skip_migration(
+                entity_type,
+                get_cached_entities,
+            )
 
             if should_skip:
                 return ComponentResult(
@@ -1350,8 +1428,8 @@ class BaseMigration:
                             "cache_evictions": self._cache_stats["evictions"],
                             "memory_cleanups": self._cache_stats["memory_cleanups"],
                             "total_cache_size": self._cache_stats["total_size"],
-                            "global_cache_types": len(self._global_entity_cache)
-                        }
+                            "global_cache_types": len(self._global_entity_cache),
+                        },
                     },
                     success_count=0,
                     failed_count=0,
@@ -1360,7 +1438,7 @@ class BaseMigration:
 
             # Run the actual migration
             result = self.run()
-            
+
             # Invalidate cache after migration since entities may have been modified
             if result.success and entity_type:
                 invalidate_cache(entity_type)
@@ -1371,31 +1449,36 @@ class BaseMigration:
                     current_entities = get_cached_entities(entity_type)
                     snapshot_path = self.create_snapshot(current_entities, entity_type)
                     self.logger.info(
-                        "Created snapshot for %s: %s", entity_type, snapshot_path
+                        "Created snapshot for %s: %s",
+                        entity_type,
+                        snapshot_path,
                     )
 
                     # Add snapshot info to result details
                     if not result.details:
                         result.details = {}
-                    result.details.update({
-                        "snapshot_created": str(snapshot_path),
-                        "change_report": change_report,
-                        "cache_stats": {
-                            "types_cached": len(entity_cache),
-                            "cache_invalidations": total_cache_invalidations,
-                            "cache_hits": self._cache_stats["hits"],
-                            "cache_misses": self._cache_stats["misses"],
-                            "cache_evictions": self._cache_stats["evictions"],
-                            "memory_cleanups": self._cache_stats["memory_cleanups"],
-                            "total_cache_size": self._cache_stats["total_size"],
-                            "global_cache_types": len(self._global_entity_cache)
-                        }
-                    })
+                    result.details.update(
+                        {
+                            "snapshot_created": str(snapshot_path),
+                            "change_report": change_report,
+                            "cache_stats": {
+                                "types_cached": len(entity_cache),
+                                "cache_invalidations": total_cache_invalidations,
+                                "cache_hits": self._cache_stats["hits"],
+                                "cache_misses": self._cache_stats["misses"],
+                                "cache_evictions": self._cache_stats["evictions"],
+                                "memory_cleanups": self._cache_stats["memory_cleanups"],
+                                "total_cache_size": self._cache_stats["total_size"],
+                                "global_cache_types": len(self._global_entity_cache),
+                            },
+                        },
+                    )
 
                 except Exception as e:
                     # Don't fail the migration if snapshot creation fails
                     self.logger.warning(
-                        "Failed to create snapshot after successful migration: %s", e
+                        "Failed to create snapshot after successful migration: %s",
+                        e,
                     )
 
             return result
@@ -1428,6 +1511,7 @@ class BaseMigration:
 
         Returns:
             ComponentResult with full migration, state, and preservation information
+
         """
         # Auto-detect entity type if not provided
         if not entity_type:
@@ -1486,6 +1570,7 @@ class BaseMigration:
 
         Raises:
             MigrationError: If selective update fails
+
         """
         try:
             # Import here to avoid circular imports
@@ -1493,16 +1578,20 @@ class BaseMigration:
 
             start_time = datetime.now(tz=UTC)
             self.logger.info(
-                "Starting selective update for %s", self.__class__.__name__
+                "Starting selective update for %s",
+                self.__class__.__name__,
             )
 
             # Auto-detect entity type if not provided
             if not entity_type:
                 entity_type = self._auto_detect_entity_type()
                 if not entity_type:
-                    raise MigrationError(
+                    msg = (
                         "Could not determine entity type for selective update. "
                         "Please specify entity_type parameter."
+                    )
+                    raise MigrationError(
+                        msg,
                     )
 
             # Step 1: Perform change detection
@@ -1602,9 +1691,10 @@ class BaseMigration:
 
         Returns:
             Entity type string from the registry
-            
+
         Raises:
             ValueError: If the migration class is not registered with EntityTypeRegistry
+
         """
         try:
             return EntityTypeRegistry.resolve(self.__class__)
@@ -1614,7 +1704,7 @@ class BaseMigration:
                 "Migration class %s is not registered with EntityTypeRegistry. "
                 "Add @register_entity_types decorator to the class. Error: %s",
                 self.__class__.__name__,
-                e
+                e,
             )
             return None
 
@@ -1717,16 +1807,17 @@ class BaseMigration:
 
         Returns:
             ComponentResult with full migration, recovery, and state information
+
         """
         if not entity_type:
             self.logger.warning(
-                "No entity type specified for recovery-enabled migration, using standard run"
+                "No entity type specified for recovery-enabled migration, using standard run",
             )
             return self.run()
 
         migration_record_id = None
         recovery_plan_id = None
-        
+
         try:
             # Check if this is a resumed migration
             if self.checkpoint_manager.can_resume_migration(entity_type):
@@ -1738,7 +1829,7 @@ class BaseMigration:
                         resume_point["step_name"],
                         resume_point["progress_percentage"],
                     )
-                    
+
                     # Ask user if they want to resume
                     if self._should_resume_migration(resume_point):
                         return self._resume_migration_from_checkpoint(resume_point)
@@ -1754,13 +1845,14 @@ class BaseMigration:
                     "enable_checkpoints": enable_checkpoints,
                 },
             )
-            
+
             self._current_migration_record_id = migration_record_id
 
             # Start progress tracking
             estimated_steps = self._estimate_migration_steps(entity_type, entity_count)
             self.checkpoint_manager.start_progress_tracking(
-                migration_record_id, estimated_steps
+                migration_record_id,
+                estimated_steps,
             )
 
             # Create initial checkpoint
@@ -1807,11 +1899,13 @@ class BaseMigration:
                 # Add recovery info to result
                 if not result.details:
                     result.details = {}
-                result.details.update({
-                    "migration_record_id": migration_record_id,
-                    "recovery_enabled": True,
-                    "checkpoints_created": len(self._current_checkpoints),
-                })
+                result.details.update(
+                    {
+                        "migration_record_id": migration_record_id,
+                        "recovery_enabled": True,
+                        "checkpoints_created": len(self._current_checkpoints),
+                    },
+                )
 
             else:
                 # Migration failed - create recovery plan
@@ -1825,9 +1919,12 @@ class BaseMigration:
                 # Fail the current checkpoint if any
                 if self._current_checkpoints:
                     current_checkpoint = self._current_checkpoints[-1]
-                    error_message = result.errors[0] if result.errors else "Migration failed"
+                    error_message = (
+                        result.errors[0] if result.errors else "Migration failed"
+                    )
                     self.checkpoint_manager.fail_checkpoint(
-                        current_checkpoint, error_message
+                        current_checkpoint,
+                        error_message,
                     )
 
                     # Create recovery plan
@@ -1835,18 +1932,22 @@ class BaseMigration:
                         checkpoint_id=current_checkpoint,
                         failure_type=self._classify_failure_type(result.errors),
                         error_message=error_message,
-                        manual_steps=self._generate_manual_recovery_steps(result.errors),
+                        manual_steps=self._generate_manual_recovery_steps(
+                            result.errors,
+                        ),
                     )
 
                 # Add recovery info to result
                 if not result.details:
                     result.details = {}
-                result.details.update({
-                    "migration_record_id": migration_record_id,
-                    "recovery_plan_id": recovery_plan_id,
-                    "recovery_enabled": True,
-                    "can_resume": True,
-                })
+                result.details.update(
+                    {
+                        "migration_record_id": migration_record_id,
+                        "recovery_plan_id": recovery_plan_id,
+                        "recovery_enabled": True,
+                        "can_resume": True,
+                    },
+                )
 
             return result
 
@@ -1858,9 +1959,10 @@ class BaseMigration:
                 try:
                     current_checkpoint = self._current_checkpoints[-1]
                     self.checkpoint_manager.fail_checkpoint(
-                        current_checkpoint, f"Critical error: {e}"
+                        current_checkpoint,
+                        f"Critical error: {e}",
                     )
-                    
+
                     recovery_plan_id = self.checkpoint_manager.create_recovery_plan(
                         checkpoint_id=current_checkpoint,
                         failure_type="system_error",
@@ -1874,7 +1976,10 @@ class BaseMigration:
                         ],
                     )
                 except Exception as recovery_error:
-                    self.logger.error("Failed to create emergency recovery plan: %s", recovery_error)
+                    self.logger.exception(
+                        "Failed to create emergency recovery plan: %s",
+                        recovery_error,
+                    )
 
             # Fall back to standard migration
             return self.run()
@@ -1888,58 +1993,62 @@ class BaseMigration:
         checkpoint_frequency: int = 10,
     ) -> ComponentResult:
         """Run migration with enhanced error recovery system.
-        
+
         This method integrates the comprehensive error recovery system with:
         - Exponential backoff retry logic
         - Circuit breaker pattern for external services
         - Advanced checkpointing with SQLite database
         - Structured logging with detailed error categorization
         - Automatic resume capabilities
-        
+
         Args:
             entity_type: Type of entities being migrated
             operation_type: Type of operation being performed
             entity_count: Number of entities to be processed
             enable_checkpoints: Whether to create checkpoints during migration
             checkpoint_frequency: Create checkpoint every N entities processed
-            
+
         Returns:
             ComponentResult with enhanced recovery information
+
         """
         if not entity_type:
             self.logger.warning(
-                "No entity type specified for enhanced recovery migration, using standard run"
+                "No entity type specified for enhanced recovery migration, using standard run",
             )
             return self.run()
 
         migration_id = f"{entity_type}_{operation_type}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
-        
+
         try:
             # Check for existing pending checkpoints
-            pending_checkpoints = error_recovery.resume_migration(migration_id, entity_type)
+            pending_checkpoints = error_recovery.resume_migration(
+                migration_id,
+                entity_type,
+            )
             if pending_checkpoints:
                 self.logger.info(
                     "Found %d pending checkpoints for migration %s, resuming...",
                     len(pending_checkpoints),
-                    migration_id
+                    migration_id,
                 )
-                
+
                 # Resume from pending checkpoints
-                return self._resume_from_enhanced_checkpoints(migration_id, pending_checkpoints)
+                return self._resume_from_enhanced_checkpoints(
+                    migration_id,
+                    pending_checkpoints,
+                )
 
             # Start new migration with enhanced recovery
             self.logger.info(
                 "Starting enhanced recovery migration for %s (ID: %s)",
                 entity_type,
-                migration_id
+                migration_id,
             )
 
             # Get migration status before starting
             initial_status = error_recovery.get_migration_status(migration_id)
-            self.logger.info(
-                "Initial migration status: %s",
-                initial_status
-            )
+            self.logger.info("Initial migration status: %s", initial_status)
 
             # Run the actual migration with enhanced recovery
             result = self._run_with_enhanced_recovery(
@@ -1951,27 +2060,29 @@ class BaseMigration:
 
             # Get final migration status
             final_status = error_recovery.get_migration_status(migration_id)
-            
+
             # Add enhanced recovery details to result
             if not result.details:
                 result.details = {}
-            result.details.update({
-                "migration_id": migration_id,
-                "enhanced_recovery_enabled": True,
-                "initial_status": initial_status,
-                "final_status": final_status,
-                "checkpoints_created": final_status.get('total', 0),
-                "checkpoints_completed": final_status.get('completed', 0),
-                "checkpoints_failed": final_status.get('failed', 0),
-                "checkpoints_pending": final_status.get('pending', 0),
-            })
+            result.details.update(
+                {
+                    "migration_id": migration_id,
+                    "enhanced_recovery_enabled": True,
+                    "initial_status": initial_status,
+                    "final_status": final_status,
+                    "checkpoints_created": final_status.get("total", 0),
+                    "checkpoints_completed": final_status.get("completed", 0),
+                    "checkpoints_failed": final_status.get("failed", 0),
+                    "checkpoints_pending": final_status.get("pending", 0),
+                },
+            )
 
             # Clean up if migration was successful
-            if result.success and final_status.get('pending', 0) == 0:
+            if result.success and final_status.get("pending", 0) == 0:
                 error_recovery.clear_migration_data(migration_id)
                 self.logger.info(
                     "Migration %s completed successfully, cleared checkpoint data",
-                    migration_id
+                    migration_id,
                 )
 
             return result
@@ -1982,10 +2093,10 @@ class BaseMigration:
                 str(e),
                 exc_info=True,
             )
-            
+
             return ComponentResult(
                 success=False,
-                errors=[f"Enhanced recovery migration failed: {str(e)}"],
+                errors=[f"Enhanced recovery migration failed: {e!s}"],
                 success_count=0,
                 failed_count=1,
                 total_count=entity_count,
@@ -2004,10 +2115,14 @@ class BaseMigration:
 
         Returns:
             ComponentResult from the resumed migration
+
         """
         resume_point = self.checkpoint_manager.get_resume_point(migration_record_id)
         if not resume_point:
-            raise ValueError(f"No resume point found for migration {migration_record_id}")
+            msg = f"No resume point found for migration {migration_record_id}"
+            raise ValueError(
+                msg,
+            )
 
         self.logger.info(
             "Resuming migration %s from checkpoint %s",
@@ -2025,15 +2140,20 @@ class BaseMigration:
 
         Returns:
             Dictionary containing progress information
+
         """
         progress = self.checkpoint_manager.get_progress_status(migration_record_id)
-        checkpoints = self.checkpoint_manager.get_checkpoints_for_migration(migration_record_id)
+        checkpoints = self.checkpoint_manager.get_checkpoints_for_migration(
+            migration_record_id,
+        )
 
         return {
             "migration_record_id": migration_record_id,
             "progress": progress,
             "checkpoints": checkpoints,
-            "can_resume": self.checkpoint_manager.can_resume_migration(migration_record_id),
+            "can_resume": self.checkpoint_manager.can_resume_migration(
+                migration_record_id,
+            ),
             "checkpoint_count": len(checkpoints),
             "last_checkpoint": checkpoints[-1] if checkpoints else None,
         }
@@ -2046,11 +2166,12 @@ class BaseMigration:
 
         Returns:
             True if rollback was successful, False otherwise
+
         """
         try:
             # This would be implemented by subclasses to handle specific rollback logic
             self.logger.info("Initiating rollback to checkpoint %s", checkpoint_id[:8])
-            
+
             # The specific rollback implementation would depend on the migration type
             # For now, we'll just log the attempt
             self.logger.warning(
@@ -2058,11 +2179,15 @@ class BaseMigration:
                 "Specific rollback logic should be implemented by migration subclasses.",
                 checkpoint_id[:8],
             )
-            
+
             return True
-            
+
         except Exception as e:
-            self.logger.exception("Failed to rollback to checkpoint %s: %s", checkpoint_id, e)
+            self.logger.exception(
+                "Failed to rollback to checkpoint %s: %s",
+                checkpoint_id,
+                e,
+            )
             return False
 
     def _run_with_checkpoints(
@@ -2083,10 +2208,11 @@ class BaseMigration:
 
         Returns:
             ComponentResult from the migration
+
         """
         # This is a wrapper that would be overridden by specific migration classes
         # to provide checkpoint creation during their processing loops
-        
+
         # For now, create checkpoints at key stages
         if self._current_migration_record_id:
             # Pre-processing checkpoint
@@ -2124,7 +2250,10 @@ class BaseMigration:
 
         return result
 
-    def _resume_migration_from_checkpoint(self, resume_point: dict[str, Any]) -> ComponentResult:
+    def _resume_migration_from_checkpoint(
+        self,
+        resume_point: dict[str, Any],
+    ) -> ComponentResult:
         """Resume migration from a specific checkpoint.
 
         Args:
@@ -2132,6 +2261,7 @@ class BaseMigration:
 
         Returns:
             ComponentResult from the resumed migration
+
         """
         self.logger.info(
             "Resuming migration from checkpoint: %s (%.1f%% complete)",
@@ -2141,15 +2271,15 @@ class BaseMigration:
 
         # This would be implemented by specific migration classes to handle
         # resuming from the specific checkpoint state
-        
+
         # For now, we'll start a fresh migration with knowledge of the resume point
         result = self.run()
-        
+
         if not result.details:
             result.details = {}
         result.details["resumed_from_checkpoint"] = resume_point["checkpoint_id"]
         result.details["resume_point"] = resume_point
-        
+
         return result
 
     def _should_resume_migration(self, resume_point: dict[str, Any]) -> bool:
@@ -2160,6 +2290,7 @@ class BaseMigration:
 
         Returns:
             True if user wants to resume, False to start fresh
+
         """
         # For automated systems, always resume if possible
         # Interactive systems could prompt the user
@@ -2174,16 +2305,17 @@ class BaseMigration:
 
         Returns:
             Estimated number of steps
+
         """
         # Basic estimation: pre-processing + entity processing + post-processing
         base_steps = 3
-        
+
         # Add steps based on entity count (batch processing)
         if entity_count > 0:
             batch_size = 10  # Assume batch size of 10
             batch_steps = (entity_count + batch_size - 1) // batch_size
             return base_steps + batch_steps
-        
+
         return base_steps
 
     def _classify_failure_type(self, errors: list[str]) -> str:
@@ -2194,6 +2326,7 @@ class BaseMigration:
 
         Returns:
             Classification of the failure type
+
         """
         if not errors:
             return "unknown_error"
@@ -2202,14 +2335,13 @@ class BaseMigration:
 
         if any(term in error_text for term in ["network", "connection", "timeout"]):
             return "network_error"
-        elif any(term in error_text for term in ["validation", "invalid", "format"]):
+        if any(term in error_text for term in ["validation", "invalid", "format"]):
             return "validation_error"
-        elif any(term in error_text for term in ["auth", "permission", "unauthorized"]):
+        if any(term in error_text for term in ["auth", "permission", "unauthorized"]):
             return "auth_error"
-        elif any(term in error_text for term in ["disk", "memory", "resource"]):
+        if any(term in error_text for term in ["disk", "memory", "resource"]):
             return "resource_error"
-        else:
-            return "unknown_error"
+        return "unknown_error"
 
     def _generate_manual_recovery_steps(self, errors: list[str]) -> list[str]:
         """Generate manual recovery steps based on error messages.
@@ -2219,6 +2351,7 @@ class BaseMigration:
 
         Returns:
             List of manual recovery steps
+
         """
         if not errors:
             return ["Review migration logs for error details"]
@@ -2227,25 +2360,31 @@ class BaseMigration:
         steps = []
 
         if "network" in error_text or "connection" in error_text:
-            steps.extend([
-                "Check network connectivity to Jira and OpenProject",
-                "Verify firewall and proxy settings",
-                "Test API endpoints manually",
-            ])
-        
+            steps.extend(
+                [
+                    "Check network connectivity to Jira and OpenProject",
+                    "Verify firewall and proxy settings",
+                    "Test API endpoints manually",
+                ],
+            )
+
         if "auth" in error_text or "permission" in error_text:
-            steps.extend([
-                "Verify API credentials are valid and not expired",
-                "Check user permissions in both Jira and OpenProject",
-                "Confirm API tokens have required scopes",
-            ])
-        
+            steps.extend(
+                [
+                    "Verify API credentials are valid and not expired",
+                    "Check user permissions in both Jira and OpenProject",
+                    "Confirm API tokens have required scopes",
+                ],
+            )
+
         if "validation" in error_text or "invalid" in error_text:
-            steps.extend([
-                "Review data format requirements",
-                "Check for required fields in source data",
-                "Validate data against target system constraints",
-            ])
+            steps.extend(
+                [
+                    "Review data format requirements",
+                    "Check for required fields in source data",
+                    "Validate data against target system constraints",
+                ],
+            )
 
         if not steps:
             steps = [
@@ -2283,6 +2422,7 @@ class BaseMigration:
 
         Returns:
             Checkpoint ID if created successfully, None otherwise
+
         """
         if not self._current_migration_record_id:
             return None
@@ -2300,29 +2440,33 @@ class BaseMigration:
             )
 
             # Also create enhanced recovery checkpoint if available
-            if hasattr(self, 'error_recovery_system') and self.error_recovery_system:
+            if hasattr(self, "error_recovery_system") and self.error_recovery_system:
                 self._create_migration_checkpoint(
                     entity_type=current_entity_type or "unknown",
                     entity_id=current_entity_id or "unknown",
-                    status="checkpoint_created"
+                    status="checkpoint_created",
                 )
 
             return checkpoint_id
-            
+
             self._current_checkpoints.append(checkpoint_id)
             self.checkpoint_manager.start_checkpoint(checkpoint_id)
-            
+
             # Update progress
             self.checkpoint_manager.update_progress(
                 migration_record_id=self._current_migration_record_id,
                 current_step=step_name,
-                current_step_progress=(entities_processed / entities_total * 100) if entities_total > 0 else 0,
+                current_step_progress=(
+                    (entities_processed / entities_total * 100)
+                    if entities_total > 0
+                    else 0
+                ),
             )
-            
+
             return checkpoint_id
-            
+
         except Exception as e:
-            self.logger.error("Failed to create checkpoint: %s", e)
+            self.logger.exception("Failed to create checkpoint: %s", e)
             return None
 
     def complete_current_checkpoint(
@@ -2335,57 +2479,86 @@ class BaseMigration:
         Args:
             entities_processed: Updated count of entities processed
             metadata: Additional metadata for completion
+
         """
         if self._current_checkpoints:
             current_checkpoint = self._current_checkpoints[-1]
             self.checkpoint_manager.complete_checkpoint(
-                current_checkpoint, entities_processed, metadata
+                current_checkpoint,
+                entities_processed,
+                metadata,
             )
 
     def _setup_enhanced_error_recovery(self) -> ErrorRecoverySystem:
         """Set up the enhanced error recovery system."""
-        checkpoint_dir = Path(self.config.checkpoint_dir) if self.config.checkpoint_dir else None
+        checkpoint_dir = (
+            Path(self.config.checkpoint_dir) if self.config.checkpoint_dir else None
+        )
         db_path = checkpoint_dir / "error_recovery.db" if checkpoint_dir else None
-        
+
         return ErrorRecoverySystem(
             db_path=db_path,
             logger=self.logger,
-            max_retries=self.config.max_retries if hasattr(self.config, 'max_retries') else 3,
-            circuit_breaker_failure_threshold=self.config.circuit_breaker_threshold if hasattr(self.config, 'circuit_breaker_threshold') else 5,
-            circuit_breaker_timeout=self.config.circuit_breaker_timeout if hasattr(self.config, 'circuit_breaker_timeout') else 60,
+            max_retries=(
+                self.config.max_retries if hasattr(self.config, "max_retries") else 3
+            ),
+            circuit_breaker_failure_threshold=(
+                self.config.circuit_breaker_threshold
+                if hasattr(self.config, "circuit_breaker_threshold")
+                else 5
+            ),
+            circuit_breaker_timeout=(
+                self.config.circuit_breaker_timeout
+                if hasattr(self.config, "circuit_breaker_timeout")
+                else 60
+            ),
         )
 
-    def _handle_enhanced_recovery_error(self, error: Exception, context: Dict[str, Any]) -> None:
+    def _handle_enhanced_recovery_error(
+        self,
+        error: Exception,
+        context: dict[str, Any],
+    ) -> None:
         """Handle errors in the enhanced recovery system."""
         error_type = type(error).__name__
         error_message = str(error)
-        
+
         # Log with structured logging
         self.logger.error(
             "Enhanced recovery error",
             error_type=error_type,
             error_message=error_message,
             context=context,
-            exc_info=True
         )
-        
+
         # Categorize error for appropriate handling
         if isinstance(error, (ConnectionError, TimeoutError)):
             self.logger.warning("Network-related error detected", error_type=error_type)
         elif isinstance(error, CircuitBreakerError):
-            self.logger.warning("Circuit breaker opened", service=context.get('service', 'unknown'))
+            self.logger.warning(
+                "Circuit breaker opened",
+                service=context.get("service", "unknown"),
+            )
         else:
-            self.logger.error("Unexpected error in enhanced recovery", error_type=error_type)
+            self.logger.error(
+                "Unexpected error in enhanced recovery",
+                error_type=error_type,
+            )
 
-    def _create_migration_checkpoint(self, entity_type: str, entity_id: str, status: str) -> None:
+    def _create_migration_checkpoint(
+        self,
+        entity_type: str,
+        entity_id: str,
+        status: str,
+    ) -> None:
         """Create a migration checkpoint for the enhanced recovery system."""
-        if hasattr(self, 'error_recovery_system') and self.error_recovery_system:
+        if hasattr(self, "error_recovery_system") and self.error_recovery_system:
             self.error_recovery_system.create_checkpoint(
                 entity_type=entity_type,
                 entity_id=entity_id,
                 status=status,
                 metadata={
-                    'migration_id': getattr(self, 'migration_id', 'unknown'),
-                    'timestamp': datetime.now(UTC).isoformat(),
-                }
+                    "migration_id": getattr(self, "migration_id", "unknown"),
+                    "timestamp": datetime.now(UTC).isoformat(),
+                },
             )

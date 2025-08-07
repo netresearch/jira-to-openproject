@@ -5,27 +5,24 @@ Enhanced with performance optimizations including batch operations,
 caching, and parallel processing.
 """
 
-import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Iterator, List, Optional, Union
+from collections.abc import Iterator
 from datetime import datetime
+from typing import Any
 
-from jira import JIRA, Issue, JIRAError
-from jira.exceptions import JIRAError as JiraApiError
+from jira import JIRA, Issue
 from requests import Response
 
 from src import config
-from src.utils.rate_limiter import create_jira_rate_limiter
+from src.display import configure_logging
+from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
 from src.utils.performance_optimizer import (
     PerformanceOptimizer,
     StreamingPaginator,
     cached,
     rate_limited,
-    batched
 )
-from src.utils.config_validation import SecurityValidator, ConfigurationValidationError
-from src.display import configure_logging
+from src.utils.rate_limiter import create_jira_rate_limiter
 
 # Get logger
 logger = configure_logging("INFO", None)
@@ -111,28 +108,47 @@ class JiraClient:
         # ===== PERFORMANCE OPTIMIZER SETUP =====
         # Validate performance configuration parameters using SecurityValidator
         try:
-            cache_size = SecurityValidator.validate_numeric_parameter('cache_size', kwargs.get('cache_size', 2000))
-            cache_ttl = SecurityValidator.validate_numeric_parameter('cache_ttl', kwargs.get('cache_ttl', 1800))
-            batch_size = SecurityValidator.validate_numeric_parameter('batch_size', kwargs.get('batch_size', 100))
-            max_workers = SecurityValidator.validate_numeric_parameter('max_workers', kwargs.get('max_workers', 15))
-            rate_limit = SecurityValidator.validate_numeric_parameter('rate_limit_per_sec', kwargs.get('rate_limit', 15.0))
-            
-            # Validate resource allocation to prevent system overload  
-            SecurityValidator.validate_resource_allocation(batch_size, max_workers, 2048)  # 2GB memory limit
-            
+            cache_size = SecurityValidator.validate_numeric_parameter(
+                "cache_size",
+                kwargs.get("cache_size", 2000),
+            )
+            cache_ttl = SecurityValidator.validate_numeric_parameter(
+                "cache_ttl",
+                kwargs.get("cache_ttl", 1800),
+            )
+            batch_size = SecurityValidator.validate_numeric_parameter(
+                "batch_size",
+                kwargs.get("batch_size", 100),
+            )
+            max_workers = SecurityValidator.validate_numeric_parameter(
+                "max_workers",
+                kwargs.get("max_workers", 15),
+            )
+            rate_limit = SecurityValidator.validate_numeric_parameter(
+                "rate_limit_per_sec",
+                kwargs.get("rate_limit", 15.0),
+            )
+
+            # Validate resource allocation to prevent system overload
+            SecurityValidator.validate_resource_allocation(
+                batch_size,
+                max_workers,
+                2048,
+            )  # 2GB memory limit
+
         except ConfigurationValidationError as e:
-            logger.error(f"JiraClient configuration validation failed: {e}")
+            logger.exception(f"JiraClient configuration validation failed: {e}")
             raise
-        
+
         # Initialize performance optimizer with validated parameters
         self.performance_optimizer = PerformanceOptimizer(
             cache_size=cache_size,
             cache_ttl=cache_ttl,
             batch_size=batch_size,
             max_workers=max_workers,
-            rate_limit=rate_limit
+            rate_limit=rate_limit,
         )
-        
+
         self.batch_size = batch_size
         self.parallel_workers = max_workers
 
@@ -285,6 +301,10 @@ class JiraClient:
 
         logger.notice("Fetching all issues for project '%s'...", project_key)
 
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         # Verify project exists
         try:
             # Simple way to check if project exists - will raise exception if not found
@@ -360,6 +380,10 @@ class JiraClient:
             JiraApiError: If the API request fails
 
         """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             issue = self.jira.issue(issue_key)
 
@@ -445,6 +469,10 @@ class JiraClient:
             JiraApiError: If the API request fails
 
         """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             users = self.jira.search_users(
                 user=".",
@@ -486,10 +514,14 @@ class JiraClient:
             JiraApiError: If the API request fails
 
         """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             # Try to get the user by account ID first
             user = self.jira.user(user_key)
-            
+
             if user:
                 return {
                     "accountId": getattr(user, "accountId", None),
@@ -499,7 +531,7 @@ class JiraClient:
                     "key": getattr(user, "key", None),
                     "name": getattr(user, "name", None),
                 }
-            
+
             return None
 
         except Exception as e:
@@ -507,10 +539,9 @@ class JiraClient:
             if "404" in str(e) or "not found" in str(e).lower():
                 logger.debug("User not found: %s", user_key)
                 return None
-            else:
-                error_msg = f"Failed to get user info for {user_key}: {e!s}"
-                logger.exception(error_msg)
-                raise JiraApiError(error_msg) from e
+            error_msg = f"Failed to get user info for {user_key}: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
 
     def get_issue_count(self, project_key: str) -> int:
         """Get the total number of issues in a project.
@@ -526,6 +557,10 @@ class JiraClient:
             JiraApiError: If the API request fails
 
         """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             # Use JQL to count issues in the project - surround with quotes to handle reserved words
             jql = f'project="{project_key}"'
@@ -565,6 +600,10 @@ class JiraClient:
             JiraApiError: If the API request fails
 
         """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             # Use the JIRA library's watchers() method
             result = self.jira.watchers(issue_key)
@@ -604,9 +643,13 @@ class JiraClient:
             JiraApiError: If the API request fails
 
         """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             # Method 1: Use sample issues to extract statuses
-            statuses = []
+            statuses: list[dict[str, Any]] = []
             issues = self.jira.search_issues("order by created DESC", maxResults=50)
             logger.debug("Retrieving statuses from %s sample issues", len(issues))
 
@@ -871,6 +914,7 @@ class JiraClient:
 
         Returns:
             List of custom field dictionaries
+
         """
         try:
             # Use the fields endpoint to get all fields, then filter for custom fields
@@ -878,8 +922,9 @@ class JiraClient:
 
             # Filter for custom fields (custom fields typically start with 'customfield_')
             custom_fields = [
-                field for field in response
-                if field.get('id', '').startswith('customfield_')
+                field
+                for field in response
+                if field.get("id", "").startswith("customfield_")
             ]
 
             logger.debug("Retrieved %d custom fields from Jira", len(custom_fields))
@@ -887,8 +932,8 @@ class JiraClient:
 
         except Exception as e:
             error_msg = f"Failed to retrieve custom fields: {e}"
-            logger.error(error_msg)
-            raise JiraClientError(error_msg) from e
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
 
     def _patch_jira_client(self) -> None:
         """Patch the JIRA client to catch CAPTCHA challenges.
@@ -1183,7 +1228,9 @@ class JiraClient:
                     work_log_data["update_author"] = {
                         "name": getattr(work_log.updateAuthor, "name", None),
                         "display_name": getattr(
-                            work_log.updateAuthor, "displayName", None
+                            work_log.updateAuthor,
+                            "displayName",
+                            None,
                         ),
                         "email": getattr(work_log.updateAuthor, "emailAddress", None),
                         "account_id": getattr(work_log.updateAuthor, "accountId", None),
@@ -1236,7 +1283,8 @@ class JiraClient:
 
             # Get all issues for the project with worklog field expanded
             all_issues = self.get_all_issues_for_project(
-                project_key, expand_changelog=False
+                project_key,
+                expand_changelog=False,
             )
 
             work_logs_by_issue = {}
@@ -1279,7 +1327,8 @@ class JiraClient:
                         )
                         # Record 404 response
                         self.rate_limiter.record_response(
-                            time.time() - request_start, 404
+                            time.time() - request_start,
+                            404,
                         )
                         continue
                     except JiraApiError as e:
@@ -1290,7 +1339,8 @@ class JiraClient:
                         )
                         # Record error response (assuming 500 for API errors)
                         self.rate_limiter.record_response(
-                            time.time() - request_start, 500
+                            time.time() - request_start,
+                            500,
                         )
                         continue
 
@@ -1505,7 +1555,8 @@ class JiraClient:
 
             attributes = response.json()
             logger.info(
-                "Successfully retrieved %s Tempo work attributes", len(attributes)
+                "Successfully retrieved %s Tempo work attributes",
+                len(attributes),
             )
 
             return attributes
@@ -1594,7 +1645,7 @@ class JiraClient:
                         "author": {
                             "username": work_log.get("author", {}).get("name"),
                             "display_name": work_log.get("author", {}).get(
-                                "displayName"
+                                "displayName",
                             ),
                             "account_id": work_log.get("author", {}).get("accountId"),
                         },
@@ -1657,7 +1708,7 @@ class JiraClient:
             if response.status_code == 404:
                 msg = f"Tempo work log {tempo_worklog_id} not found"
                 raise JiraResourceNotFoundError(msg)
-            elif response.status_code != 200:
+            if response.status_code != 200:
                 msg = f"Failed to retrieve Tempo work log {tempo_worklog_id}: HTTP {response.status_code}"
                 logger.error(msg)
                 raise JiraApiError(msg)
@@ -1665,7 +1716,7 @@ class JiraClient:
             work_log = response.json()
 
             # Return enhanced work log data
-            enhanced_work_log = {
+            return {
                 "tempo_worklog_id": work_log.get("tempoWorklogId"),
                 "jira_worklog_id": work_log.get("jiraWorklogId"),
                 "issue_key": work_log.get("issue", {}).get("key"),
@@ -1689,8 +1740,6 @@ class JiraClient:
                 "external_id": work_log.get("externalId"),
                 "origin_task_id": work_log.get("originTaskId"),
             }
-
-            return enhanced_work_log
 
         except Exception as e:
             if "not found" in str(e).lower():
@@ -1737,33 +1786,34 @@ class JiraClient:
         project_keys: list[str] | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
-        user_key: str | None = None
+        user_key: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get Tempo time entries with enhanced metadata for migration.
-        
+
         This method provides a migration-friendly interface to Tempo work logs,
         combining work logs from multiple projects if specified.
-        
+
         Args:
             project_keys: List of project keys to extract entries for (None for all)
             date_from: Start date for extraction (YYYY-MM-DD format)
             date_to: End date for extraction (YYYY-MM-DD format)
             user_key: Specific user key to filter by
-            
+
         Returns:
             List of Tempo time entry dictionaries with migration metadata
-            
+
         Raises:
             JiraApiError: If the API request fails
+
         """
         try:
             logger.info(
                 f"Fetching Tempo time entries for projects: {project_keys}, "
-                f"date range: {date_from} to {date_to}, user: {user_key}"
+                f"date range: {date_from} to {date_to}, user: {user_key}",
             )
-            
+
             all_time_entries = []
-            
+
             if project_keys:
                 # Get work logs for specific projects
                 for project_key in project_keys:
@@ -1771,41 +1821,45 @@ class JiraClient:
                         project_work_logs = self.get_tempo_all_work_logs_for_project(
                             project_key=project_key,
                             date_from=date_from,
-                            date_to=date_to
+                            date_to=date_to,
                         )
-                        
+
                         # Filter by user if specified
                         if user_key:
                             project_work_logs = [
-                                log for log in project_work_logs
+                                log
+                                for log in project_work_logs
                                 if log.get("author", {}).get("key") == user_key
                             ]
-                        
+
                         all_time_entries.extend(project_work_logs)
-                        logger.debug(f"Retrieved {len(project_work_logs)} entries for project {project_key}")
-                        
+                        logger.debug(
+                            f"Retrieved {len(project_work_logs)} entries for project {project_key}",
+                        )
+
                     except Exception as e:
-                        logger.warning(f"Failed to get Tempo entries for project {project_key}: {e}")
+                        logger.warning(
+                            f"Failed to get Tempo entries for project {project_key}: {e}",
+                        )
                         continue
+            # Get work logs using general method (may be limited by Tempo API)
+            elif user_key:
+                all_time_entries = self.get_tempo_user_work_logs(
+                    user_key=user_key,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
             else:
-                # Get work logs using general method (may be limited by Tempo API)
-                if user_key:
-                    all_time_entries = self.get_tempo_user_work_logs(
-                        user_key=user_key,
-                        date_from=date_from,
-                        date_to=date_to
-                    )
-                else:
-                    all_time_entries = self.get_tempo_work_logs(
-                        date_from=date_from,
-                        date_to=date_to
-                    )
-            
+                all_time_entries = self.get_tempo_work_logs(
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+
             # Enhance entries with migration metadata
             enhanced_entries = []
             for entry in all_time_entries:
                 enhanced_entry = entry.copy()
-                
+
                 # Add migration-specific metadata
                 enhanced_entry["_migration_metadata"] = {
                     "source_type": "tempo",
@@ -1813,130 +1867,145 @@ class JiraClient:
                     "tempo_worklog_id": entry.get("tempo_worklog_id"),
                     "jira_worklog_id": entry.get("worklogId"),
                     "issue_key": entry.get("issue", {}).get("key"),
-                    "project_key": entry.get("issue", {}).get("projectKey")
+                    "project_key": entry.get("issue", {}).get("projectKey"),
                 }
-                
+
                 # Ensure consistent field naming for migration
                 if "timeSpentSeconds" in entry:
                     enhanced_entry["timeSpent"] = entry["timeSpentSeconds"]
-                
+
                 if "dateStarted" in entry:
                     enhanced_entry["started"] = entry["dateStarted"]
                 elif "started" not in entry and "created" in entry:
                     enhanced_entry["started"] = entry["created"]
-                
+
                 enhanced_entries.append(enhanced_entry)
-            
-            logger.success(f"Retrieved {len(enhanced_entries)} Tempo time entries total")
+
+            logger.success(
+                f"Retrieved {len(enhanced_entries)} Tempo time entries total",
+            )
             return enhanced_entries
-            
+
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo time entries: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 
     # ===== ENHANCED PERFORMANCE FEATURES =====
-    
-    def get_performance_stats(self) -> Dict[str, Any]:
+
+    def get_performance_stats(self) -> dict[str, Any]:
         """Get comprehensive performance statistics."""
         return self.performance_optimizer.get_comprehensive_stats()
 
     # ===== BATCH OPERATIONS =====
-    
-    def batch_get_issues(self, issue_keys: List[str]) -> Dict[str, Issue]:
+
+    def batch_get_issues(self, issue_keys: list[str]) -> dict[str, Issue]:
         """Retrieve multiple issues in batches for optimal performance."""
         if not issue_keys:
             return {}
-            
+
         return self.performance_optimizer.batch_processor.process_batches(
             issue_keys,
-            self._fetch_issues_batch
+            self._fetch_issues_batch,
         )
-    
-    def _fetch_issues_batch(self, issue_keys: List[str], **kwargs) -> Dict[str, Issue]:
+
+    def _fetch_issues_batch(self, issue_keys: list[str], **kwargs) -> dict[str, Issue]:
         """Fetch a batch of issues from Jira API."""
         if not issue_keys:
             return {}
-            
+
         # Use JQL to fetch multiple issues at once
         jql = f"key in ({','.join(issue_keys)})"
-        
+
         try:
-            issues = self.jira.search_issues(jql, maxResults=len(issue_keys), expand='changelog')
+            issues = self.jira.search_issues(
+                jql,
+                maxResults=len(issue_keys),
+                expand="changelog",
+            )
             return {issue.key: issue for issue in issues}
         except Exception as e:
-            logger.error(f"Batch issue fetch failed for {len(issue_keys)} issues: {e}")
+            logger.exception(
+                f"Batch issue fetch failed for {len(issue_keys)} issues: {e}",
+            )
             return {}
 
-    def batch_get_projects(self, project_keys: List[str]) -> Dict[str, dict]:
+    def batch_get_projects(self, project_keys: list[str]) -> dict[str, dict]:
         """Retrieve multiple projects in batches for optimal performance."""
         if not project_keys:
             return {}
-            
+
         # Get all projects and filter to requested keys
         all_projects = self.get_projects()
         return {
-            project['key']: project 
-            for project in all_projects 
-            if project['key'] in project_keys
+            project["key"]: project
+            for project in all_projects
+            if project["key"] in project_keys
         }
 
     @rate_limited()
-    def stream_all_issues_for_project(self, project_key: str, fields: str = None, batch_size: int = None) -> Iterator[dict[str, Any]]:
+    def stream_all_issues_for_project(
+        self,
+        project_key: str,
+        fields: str | None = None,
+        batch_size: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """Stream all issues for a project with memory-efficient pagination."""
         effective_batch_size = batch_size or self.batch_size
-        
+
         paginator = StreamingPaginator(
             batch_size=effective_batch_size,
-            rate_limiter=self.rate_limiter
+            rate_limiter=self.rate_limiter,
         )
-        
+
         return paginator.paginate_jql_search(
             jira_client=self.jira,
             jql=f"project = {project_key}",
-            fields=fields
+            fields=fields,
         )
 
-    def batch_get_users_by_keys(self, user_keys: List[str]) -> Dict[str, dict]:
+    def batch_get_users_by_keys(self, user_keys: list[str]) -> dict[str, dict]:
         """Retrieve multiple users in batches."""
         if not user_keys:
             return {}
-            
+
         # Get all users and filter to requested keys
         all_users = self.get_users()
-        user_dict = {user.get('key', user.get('accountId', '')): user for user in all_users}
-        
-        return {
-            key: user_dict[key] 
-            for key in user_keys 
-            if key in user_dict
+        user_dict = {
+            user.get("key", user.get("accountId", "")): user for user in all_users
         }
 
+        return {key: user_dict[key] for key in user_keys if key in user_dict}
+
     @cached(ttl=3600)  # Cache for 1 hour
-    def get_project_metadata_enhanced(self, project_key: str) -> Dict[str, Any]:
+    def get_project_metadata_enhanced(self, project_key: str) -> dict[str, Any]:
         """Get comprehensive project metadata with caching."""
         try:
             project = self.jira.project(project_key)
-            
+
             # Get additional metadata
             issue_types = self.jira.createmeta_issuetypes(project.key)
             statuses = self.jira.project_status(project.key)
-            
+
             return {
                 "project": {
                     "id": project.id,
                     "key": project.key,
                     "name": project.name,
-                    "description": getattr(project, 'description', ''),
-                    "lead": getattr(project, 'lead', {}).get('name', 'Unknown') if hasattr(project, 'lead') else 'Unknown',
-                    "project_type_key": getattr(project, 'projectTypeKey', 'software'),
+                    "description": getattr(project, "description", ""),
+                    "lead": (
+                        getattr(project, "lead", {}).get("name", "Unknown")
+                        if hasattr(project, "lead")
+                        else "Unknown"
+                    ),
+                    "project_type_key": getattr(project, "projectTypeKey", "software"),
                 },
                 "issue_types": [
                     {
                         "id": it.id,
                         "name": it.name,
-                        "description": getattr(it, 'description', ''),
-                        "subtask": getattr(it, 'subtask', False)
+                        "description": getattr(it, "description", ""),
+                        "subtask": getattr(it, "subtask", False),
                     }
                     for it in issue_types
                 ],
@@ -1944,13 +2013,18 @@ class JiraClient:
                     {
                         "id": status.id,
                         "name": status.name,
-                        "description": getattr(status, 'description', ''),
-                        "category": getattr(status, 'statusCategory', {}).get('name', 'Unknown')
+                        "description": getattr(status, "description", ""),
+                        "category": getattr(status, "statusCategory", {}).get(
+                            "name",
+                            "Unknown",
+                        ),
                     }
                     for status in statuses
-                ]
+                ],
             }
         except Exception as e:
-            error_msg = f"Failed to get enhanced project metadata for {project_key}: {e}"
-            logger.error(error_msg)
+            error_msg = (
+                f"Failed to get enhanced project metadata for {project_key}: {e}"
+            )
+            logger.exception(error_msg)
             raise JiraApiError(error_msg) from e

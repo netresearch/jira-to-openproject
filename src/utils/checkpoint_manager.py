@@ -1,10 +1,12 @@
-from src.display import configure_logging
 #!/usr/bin/env python3
+
+from src.display import configure_logging
+
 """Checkpoint management system for resilient migration operations.
 
 This module provides functionality to:
 - Track migration progress at a granular level
-- Create checkpoints during long-running operations  
+- Create checkpoints during long-running operations
 - Enable resuming interrupted migrations from checkpoints
 - Provide rollback capabilities to specific checkpoints
 - Monitor real-time progress and status
@@ -13,15 +15,16 @@ This module provides functionality to:
 import json
 import uuid
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, TypedDict
-from enum import Enum
 
 from src import config
 
 
 class CheckpointStatus(Enum):
     """Status of a checkpoint."""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -31,6 +34,7 @@ class CheckpointStatus(Enum):
 
 class RecoveryAction(Enum):
     """Available recovery actions for different failure scenarios."""
+
     RETRY_FROM_CHECKPOINT = "retry_from_checkpoint"
     ROLLBACK_TO_CHECKPOINT = "rollback_to_checkpoint"
     SKIP_AND_CONTINUE = "skip_and_continue"
@@ -40,7 +44,7 @@ class RecoveryAction(Enum):
 
 class ProgressCheckpoint(TypedDict):
     """Represents a specific checkpoint in migration progress."""
-    
+
     checkpoint_id: str
     migration_record_id: str
     step_name: str
@@ -60,7 +64,7 @@ class ProgressCheckpoint(TypedDict):
 
 class RecoveryPlan(TypedDict):
     """Recovery plan for handling specific failure scenarios."""
-    
+
     plan_id: str
     failure_type: str
     error_message: str
@@ -74,7 +78,7 @@ class RecoveryPlan(TypedDict):
 
 class ProgressTracker(TypedDict):
     """Real-time progress tracking for migration operations."""
-    
+
     migration_record_id: str
     total_steps: int
     completed_steps: int
@@ -97,9 +101,12 @@ class CheckpointManager:
         Args:
             checkpoint_dir: Directory to store checkpoint files.
                            Defaults to var/state/checkpoints/
+
         """
         self.logger = configure_logging("INFO", None)
-        self.checkpoint_dir = checkpoint_dir or config.get_path("data").parent / "state" / "checkpoints"
+        self.checkpoint_dir = (
+            checkpoint_dir or config.get_path("data").parent / "state" / "checkpoints"
+        )
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Ensure checkpoint directory structure exists
@@ -139,9 +146,10 @@ class CheckpointManager:
 
         Returns:
             Checkpoint ID
+
         """
         checkpoint_id = self._generate_id()
-        
+
         progress_percentage = (
             (entities_processed / entities_total * 100) if entities_total > 0 else 0.0
         )
@@ -203,6 +211,7 @@ class CheckpointManager:
             checkpoint_id: ID of the checkpoint
             entities_processed: Updated count of entities processed
             metadata: Additional metadata to store
+
         """
         checkpoint = self._active_checkpoints.get(checkpoint_id)
         if not checkpoint:
@@ -243,6 +252,7 @@ class CheckpointManager:
             checkpoint_id: ID of the checkpoint
             error_message: Error message describing the failure
             metadata: Additional metadata about the failure
+
         """
         checkpoint = self._active_checkpoints.get(checkpoint_id)
         if not checkpoint:
@@ -275,15 +285,15 @@ class CheckpointManager:
 
         Returns:
             Last completed checkpoint or None if no suitable resume point
+
         """
         checkpoints = self.get_checkpoints_for_migration(migration_record_id)
-        
+
         # Find the last completed checkpoint
         completed_checkpoints = [
-            cp for cp in checkpoints 
-            if cp["status"] == CheckpointStatus.COMPLETED.value
+            cp for cp in checkpoints if cp["status"] == CheckpointStatus.COMPLETED.value
         ]
-        
+
         if not completed_checkpoints:
             return None
 
@@ -299,11 +309,15 @@ class CheckpointManager:
 
         Returns:
             True if the migration can be resumed, False otherwise
+
         """
         resume_point = self.get_resume_point(migration_record_id)
         return resume_point is not None
 
-    def get_checkpoints_for_migration(self, migration_record_id: str) -> list[ProgressCheckpoint]:
+    def get_checkpoints_for_migration(
+        self,
+        migration_record_id: str,
+    ) -> list[ProgressCheckpoint]:
         """Get all checkpoints for a specific migration.
 
         Args:
@@ -311,6 +325,7 @@ class CheckpointManager:
 
         Returns:
             List of checkpoints for the migration
+
         """
         checkpoints = []
 
@@ -328,7 +343,11 @@ class CheckpointManager:
                 if checkpoint["migration_record_id"] == migration_record_id:
                     checkpoints.append(checkpoint)
             except Exception as e:
-                self.logger.warning("Failed to load checkpoint %s: %s", checkpoint_file, e)
+                self.logger.warning(
+                    "Failed to load checkpoint %s: %s",
+                    checkpoint_file,
+                    e,
+                )
 
         # Check failed checkpoints
         failed_dir = self.checkpoint_dir / "failed"
@@ -339,7 +358,11 @@ class CheckpointManager:
                 if checkpoint["migration_record_id"] == migration_record_id:
                     checkpoints.append(checkpoint)
             except Exception as e:
-                self.logger.warning("Failed to load checkpoint %s: %s", checkpoint_file, e)
+                self.logger.warning(
+                    "Failed to load checkpoint %s: %s",
+                    checkpoint_file,
+                    e,
+                )
 
         # Sort by creation time
         checkpoints.sort(key=lambda x: x["created_at"])
@@ -362,12 +385,16 @@ class CheckpointManager:
 
         Returns:
             Recovery plan ID
+
         """
         plan_id = self._generate_id()
-        
+
         # Determine recommended action based on failure type
-        recommended_action = self._determine_recovery_action(failure_type, error_message)
-        
+        recommended_action = self._determine_recovery_action(
+            failure_type,
+            error_message,
+        )
+
         recovery_plan = RecoveryPlan(
             plan_id=plan_id,
             failure_type=failure_type,
@@ -405,6 +432,7 @@ class CheckpointManager:
 
         Returns:
             True if recovery was successful, False otherwise
+
         """
         plan_path = self.checkpoint_dir / "recovery_plans" / f"{plan_id}.json"
         if not plan_path.exists():
@@ -416,22 +444,22 @@ class CheckpointManager:
                 plan = json.load(f)
 
             action = RecoveryAction(plan["recommended_action"])
-            
+
             if action == RecoveryAction.RETRY_FROM_CHECKPOINT:
                 return self._retry_from_checkpoint(plan["checkpoint_id"])
-            elif action == RecoveryAction.ROLLBACK_TO_CHECKPOINT:
+            if action == RecoveryAction.ROLLBACK_TO_CHECKPOINT:
                 return self._rollback_to_checkpoint(plan["checkpoint_id"])
-            elif action == RecoveryAction.SKIP_AND_CONTINUE:
+            if action == RecoveryAction.SKIP_AND_CONTINUE:
                 return self._skip_and_continue(plan["checkpoint_id"])
-            elif action == RecoveryAction.ABORT_MIGRATION:
+            if action == RecoveryAction.ABORT_MIGRATION:
                 return self._abort_migration(plan["checkpoint_id"])
-            else:  # MANUAL_INTERVENTION
-                self.logger.warning(
-                    "Manual intervention required for recovery plan %s. Steps: %s",
-                    plan_id[:8],
-                    ", ".join(plan["manual_steps"]),
-                )
-                return False
+            # MANUAL_INTERVENTION
+            self.logger.warning(
+                "Manual intervention required for recovery plan %s. Steps: %s",
+                plan_id[:8],
+                ", ".join(plan["manual_steps"]),
+            )
+            return False
 
         except Exception as e:
             self.logger.exception("Failed to execute recovery plan %s: %s", plan_id, e)
@@ -449,6 +477,7 @@ class CheckpointManager:
             migration_record_id: ID of the migration record
             total_steps: Total number of steps in the migration
             current_step: Current step name
+
         """
         tracker = ProgressTracker(
             migration_record_id=migration_record_id,
@@ -485,11 +514,13 @@ class CheckpointManager:
             current_step: Current step name
             current_step_progress: Progress within current step (0.0-100.0)
             completed_steps: Number of completed steps
+
         """
         tracker = self._progress_trackers.get(migration_record_id)
         if not tracker:
             self.logger.warning(
-                "Progress tracker not found for migration %s", migration_record_id
+                "Progress tracker not found for migration %s",
+                migration_record_id,
             )
             return
 
@@ -503,7 +534,9 @@ class CheckpointManager:
         # Calculate overall progress
         if tracker["total_steps"] > 0:
             step_progress = tracker["completed_steps"] / tracker["total_steps"]
-            current_progress = tracker["current_step_progress"] / 100.0 / tracker["total_steps"]
+            current_progress = (
+                tracker["current_step_progress"] / 100.0 / tracker["total_steps"]
+            )
             tracker["overall_progress"] = (step_progress + current_progress) * 100.0
 
         tracker["last_update"] = datetime.now(tz=UTC).isoformat()
@@ -519,6 +552,7 @@ class CheckpointManager:
 
         Returns:
             Current progress tracker or None if not found
+
         """
         return self._progress_trackers.get(migration_record_id)
 
@@ -527,6 +561,7 @@ class CheckpointManager:
 
         Args:
             migration_record_id: ID of the migration record
+
         """
         # Remove from active progress tracking
         if migration_record_id in self._progress_trackers:
@@ -537,7 +572,10 @@ class CheckpointManager:
             if checkpoint["migration_record_id"] == migration_record_id:
                 self._move_checkpoint_to_completed(checkpoint_id)
 
-        self.logger.debug("Cleaned up tracking data for migration %s", migration_record_id)
+        self.logger.debug(
+            "Cleaned up tracking data for migration %s",
+            migration_record_id,
+        )
 
     def _generate_id(self) -> str:
         """Generate a unique identifier."""
@@ -545,62 +583,79 @@ class CheckpointManager:
 
     def _save_checkpoint(self, checkpoint: ProgressCheckpoint) -> None:
         """Save a checkpoint to disk."""
-        checkpoint_path = self.checkpoint_dir / "active" / f"{checkpoint['checkpoint_id']}.json"
+        checkpoint_path = (
+            self.checkpoint_dir / "active" / f"{checkpoint['checkpoint_id']}.json"
+        )
         try:
             with checkpoint_path.open("w") as f:
                 json.dump(checkpoint, f, indent=2)
         except Exception as e:
-            self.logger.error("Failed to save checkpoint %s: %s", checkpoint["checkpoint_id"], e)
+            self.logger.exception(
+                "Failed to save checkpoint %s: %s",
+                checkpoint["checkpoint_id"],
+                e,
+            )
 
     def _move_checkpoint_to_completed(self, checkpoint_id: str) -> None:
         """Move a checkpoint from active to completed directory."""
         active_path = self.checkpoint_dir / "active" / f"{checkpoint_id}.json"
         completed_path = self.checkpoint_dir / "completed" / f"{checkpoint_id}.json"
-        
+
         try:
             if active_path.exists():
                 active_path.rename(completed_path)
             if checkpoint_id in self._active_checkpoints:
                 del self._active_checkpoints[checkpoint_id]
         except Exception as e:
-            self.logger.error("Failed to move checkpoint %s to completed: %s", checkpoint_id, e)
+            self.logger.exception(
+                "Failed to move checkpoint %s to completed: %s",
+                checkpoint_id,
+                e,
+            )
 
     def _move_checkpoint_to_failed(self, checkpoint_id: str) -> None:
         """Move a checkpoint from active to failed directory."""
         active_path = self.checkpoint_dir / "active" / f"{checkpoint_id}.json"
         failed_path = self.checkpoint_dir / "failed" / f"{checkpoint_id}.json"
-        
+
         try:
             if active_path.exists():
                 active_path.rename(failed_path)
             if checkpoint_id in self._active_checkpoints:
                 del self._active_checkpoints[checkpoint_id]
         except Exception as e:
-            self.logger.error("Failed to move checkpoint %s to failed: %s", checkpoint_id, e)
+            self.logger.exception(
+                "Failed to move checkpoint %s to failed: %s",
+                checkpoint_id,
+                e,
+            )
 
-    def _determine_recovery_action(self, failure_type: str, error_message: str) -> RecoveryAction:
+    def _determine_recovery_action(
+        self,
+        failure_type: str,
+        error_message: str,
+    ) -> RecoveryAction:
         """Determine the best recovery action based on failure type and message."""
         error_lower = error_message.lower()
-        
+
         # Network-related errors - retry
         if failure_type in ["network_error", "timeout", "connection_error"]:
             return RecoveryAction.RETRY_FROM_CHECKPOINT
-        
+
         # Validation errors - might need manual intervention
         if failure_type in ["validation_error", "data_error"]:
             if "required field" in error_lower or "invalid format" in error_lower:
                 return RecoveryAction.MANUAL_INTERVENTION
-            else:
-                return RecoveryAction.SKIP_AND_CONTINUE
-        
+            return RecoveryAction.SKIP_AND_CONTINUE
+
         # Authentication/authorization errors - manual intervention
         if failure_type in ["auth_error", "permission_error"]:
             return RecoveryAction.MANUAL_INTERVENTION
-        
+
         # Critical system errors - abort
         if failure_type in ["system_error", "corruption_error"]:
             return RecoveryAction.ABORT_MIGRATION
-        
+
         # Default to retry for unknown errors
         return RecoveryAction.RETRY_FROM_CHECKPOINT
 
@@ -618,36 +673,50 @@ class CheckpointManager:
 
     def _skip_and_continue(self, checkpoint_id: str) -> bool:
         """Skip the failed checkpoint and continue with the next step."""
-        self.logger.info("Skipping failed checkpoint %s and continuing", checkpoint_id[:8])
+        self.logger.info(
+            "Skipping failed checkpoint %s and continuing",
+            checkpoint_id[:8],
+        )
         return True
 
     def _abort_migration(self, checkpoint_id: str) -> bool:
         """Abort the entire migration due to critical failure."""
-        self.logger.error("Aborting migration due to critical failure at checkpoint %s", checkpoint_id[:8])
+        self.logger.error(
+            "Aborting migration due to critical failure at checkpoint %s",
+            checkpoint_id[:8],
+        )
         return False
 
     def _calculate_throughput_and_eta(self, tracker: ProgressTracker) -> None:
         """Calculate throughput and estimated time remaining."""
         try:
-            start_time = datetime.fromisoformat(tracker["start_time"].replace("Z", "+00:00"))
+            start_time = datetime.fromisoformat(
+                tracker["start_time"],
+            )
             current_time = datetime.now(tz=UTC)
             elapsed_minutes = (current_time - start_time).total_seconds() / 60.0
-            
+
             if elapsed_minutes > 0:
                 # Calculate throughput (steps per minute)
-                completed_work = tracker["completed_steps"] + (tracker["current_step_progress"] / 100.0)
+                completed_work = tracker["completed_steps"] + (
+                    tracker["current_step_progress"] / 100.0
+                )
                 tracker["throughput_per_minute"] = completed_work / elapsed_minutes
-                
+
                 # Estimate time remaining
                 if tracker["throughput_per_minute"] > 0:
                     remaining_work = tracker["total_steps"] - completed_work
-                    remaining_minutes = remaining_work / tracker["throughput_per_minute"]
-                    
+                    remaining_minutes = (
+                        remaining_work / tracker["throughput_per_minute"]
+                    )
+
                     if remaining_minutes < 60:
-                        tracker["estimated_time_remaining"] = f"{remaining_minutes:.1f} minutes"
+                        tracker["estimated_time_remaining"] = (
+                            f"{remaining_minutes:.1f} minutes"
+                        )
                     else:
                         hours = remaining_minutes / 60
                         tracker["estimated_time_remaining"] = f"{hours:.1f} hours"
-                        
+
         except Exception as e:
-            self.logger.debug("Failed to calculate throughput and ETA: %s", e) 
+            self.logger.debug("Failed to calculate throughput and ETA: %s", e)

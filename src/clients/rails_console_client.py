@@ -206,7 +206,10 @@ class RailsConsoleClient:
         return command.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
 
     def execute(
-        self, command: str, timeout: int | None = None, suppress_output: bool = False
+        self,
+        command: str,
+        timeout: int | None = None,
+        suppress_output: bool = False,
     ) -> str:
         """Execute a command in the Rails console and wait for completion.
 
@@ -298,13 +301,13 @@ class RailsConsoleClient:
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
                 logger.error(
-                    "Console appears ready despite missing start marker - attempting to extract output"
+                    "Console appears ready despite missing start marker - attempting to extract output",
                 )
 
                 # Look for any output that resembles our command's expected output
                 if "load" in tmux_output:
                     logger.info(
-                        "Found load command execution in output, proceeding with extraction"
+                        "Found load command execution in output, proceeding with extraction",
                     )
 
                     # Try to find the result in the output directly
@@ -325,7 +328,7 @@ class RailsConsoleClient:
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
                 logger.error(
-                    "Console appears ready despite missing end marker - attempting to extract output"
+                    "Console appears ready despite missing end marker - attempting to extract output",
                 )
 
                 # Try to find the result in the output - it usually appears between the start marker and the prompt
@@ -434,7 +437,10 @@ class RailsConsoleClient:
         return result
 
     def _wait_for_console_output(
-        self, target: str, marker: str, timeout: int
+        self,
+        target: str,
+        marker: str,
+        timeout: int,
     ) -> tuple[bool, str]:
         """Wait for specific marker to appear in the console output.
 
@@ -534,7 +540,7 @@ class RailsConsoleClient:
 
                     if attempts >= 2:
                         logger.debug(
-                            "Multiple Ctrl+C attempts failed, trying full stabilization"
+                            "Multiple Ctrl+C attempts failed, trying full stabilization",
                         )
                         self._stabilize_console()
                         attempts = 0
@@ -617,7 +623,9 @@ class RailsConsoleClient:
             )
 
             found_end, last_output = self._wait_for_console_output(
-                target, end_marker, timeout
+                target,
+                end_marker,
+                timeout,
             )
 
             if not found_end:

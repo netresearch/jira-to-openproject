@@ -69,26 +69,26 @@ for message in created_dirs:
 
 # Export logger for use by other modules
 __all__ = [
-    'logger',
-    'update_from_cli_args',
-    'get_config',
-    'get_value',
-    'get_path',
-    'ensure_subdir',
-    'validate_config',
-    'mappings',
-    'get_mappings',
-    'reset_mappings',
-    'jira_config',
-    'openproject_config',
-    'migration_config',
-    'var_dirs',
-    'LOG_LEVEL',
-    'FALLBACK_MAIL_DOMAIN',
-    'USER_CREATION_TIMEOUT',
-    'USER_CREATION_BATCH_SIZE',
-    'ErrorRecoveryConfig', 
-    'load_error_recovery_config'
+    "FALLBACK_MAIL_DOMAIN",
+    "LOG_LEVEL",
+    "USER_CREATION_BATCH_SIZE",
+    "USER_CREATION_TIMEOUT",
+    "ErrorRecoveryConfig",
+    "ensure_subdir",
+    "get_config",
+    "get_mappings",
+    "get_path",
+    "get_value",
+    "jira_config",
+    "load_error_recovery_config",
+    "logger",
+    "mappings",
+    "migration_config",
+    "openproject_config",
+    "reset_mappings",
+    "update_from_cli_args",
+    "validate_config",
+    "var_dirs",
 ]
 
 
@@ -107,7 +107,6 @@ class MappingsInitializationError(Exception):
     This custom exception provides clear diagnostics when mappings initialization
     fails, following proper exception-based error handling patterns.
     """
-    pass
 
 
 def get_mappings() -> "Mappings":
@@ -124,6 +123,7 @@ def get_mappings() -> "Mappings":
 
     Raises:
         MappingsInitializationError: If mappings cannot be initialized
+
     """
     global _mappings
     if _mappings is None:
@@ -132,13 +132,21 @@ def get_mappings() -> "Mappings":
                 try:
                     # Optimistic execution: attempt to create mappings directly
                     from src.mappings.mappings import Mappings
+
                     _mappings = Mappings(data_dir=get_path("data"))
                     logger.debug("Successfully initialized global mappings instance")
                 except Exception as e:
                     # Only perform diagnostics if initialization fails
                     data_dir = get_path("data")
-                    logger.exception("Failed to initialize mappings with data_dir=%s: %s", data_dir, e)
-                    raise MappingsInitializationError(f"Cannot initialize mappings: {e}") from e
+                    logger.exception(
+                        "Failed to initialize mappings with data_dir=%s: %s",
+                        data_dir,
+                        e,
+                    )
+                    msg = f"Cannot initialize mappings: {e}"
+                    raise MappingsInitializationError(
+                        msg,
+                    ) from e
     return _mappings
 
 
@@ -253,7 +261,8 @@ def validate_config() -> bool:
 
     if missing_vars:
         logger.error(
-            "Missing required environment variables: %s", ", ".join(missing_vars),
+            "Missing required environment variables: %s",
+            ", ".join(missing_vars),
         )
         return False
 
@@ -293,4 +302,4 @@ def update_from_cli_args(args: Any) -> None:
 # User Migration Configuration Constants
 FALLBACK_MAIL_DOMAIN = "noreply.migration.local"
 USER_CREATION_TIMEOUT = 60  # seconds
-USER_CREATION_BATCH_SIZE = 10 
+USER_CREATION_BATCH_SIZE = 10
