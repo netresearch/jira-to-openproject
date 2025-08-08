@@ -30,7 +30,7 @@ dependencies = [
     "rich>=14.1.0",
 
     # Redis for caching and idempotency
-    "redis>=6.3.0",
+    "redis>=6.4.0",
 
     # Error recovery and resilience
     "tenacity>=9.1.2",

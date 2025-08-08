@@ -137,8 +137,8 @@ exec: ## Execute command in dev container (use CMD="command here")
 	fi
 	docker compose exec app $(CMD)
 
-install: ## Install/update Python dependencies in container
-	docker compose exec app pip install --user -r requirements.txt
+install: ## Install/update Python dependencies in container (uv lock)
+	docker compose exec app uv pip install --system --frozen .
 
 install-test: ## Install/update Python dependencies in test container
 	docker compose --profile test up -d test
@@ -189,8 +189,8 @@ pre-commit: ## Run pre-commit hooks
 # Local Development (when not using containers)
 # =============================================================================
 
-local-install: ## Install dependencies locally (for local venv usage)
-	pip install -r requirements.txt
+local-install: ## Install dependencies locally (uv)
+	uv pip install --frozen .
 
 # Fast development path - bypasses Docker overhead
 dev-test: ## Run tests locally for fast development feedback (recommended for daily use)
