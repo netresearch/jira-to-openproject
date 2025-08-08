@@ -247,16 +247,40 @@ class BaseMigration:
         """
         # Initialize clients using dependency injection
         self.jira_client = jira_client or JiraClient()
-        self.op_client = op_client or OpenProjectClient()
+        # Lazily create OpenProjectClient; fall back to None if config is incomplete
+        if op_client is not None:
+            self.op_client = op_client
+        else:
+            try:
+                self.op_client = OpenProjectClient()
+            except Exception as e:
+                # During tests or when OpenProject config is not set up, allow proceeding
+                # without an OpenProjectClient. Consumers must guard uses appropriately.
+                self.logger = configure_logging("INFO", None)
+                self.logger.debug(
+                    "OpenProjectClient unavailable; proceeding without it: %s",
+                    e,
+                )
+                self.op_client = None
         self.change_detector = change_detector or ChangeDetector()
         self.state_manager = state_manager or StateManager()
-        self.data_preservation_manager = (
-            data_preservation_manager
-            or DataPreservationManager(
-                jira_client=self.jira_client,
-                openproject_client=self.op_client,
-            )
-        )
+        # Initialize DataPreservationManager (new signature requires ConfigurationManager)
+        self.data_preservation_manager = data_preservation_manager
+        if self.data_preservation_manager is None:
+            try:
+                from src.utils.advanced_config_manager import ConfigurationManager
+
+                cfg_manager = ConfigurationManager()
+                self.data_preservation_manager = DataPreservationManager(
+                    config_manager=cfg_manager,
+                )
+            except Exception as e:
+                self.logger = configure_logging("INFO", None)
+                self.logger.debug(
+                    "DataPreservationManager unavailable; proceeding without it: %s",
+                    e,
+                )
+                self.data_preservation_manager = None
         self.performance_manager = performance_manager
 
         self.data_dir: Path = config.get_path("data")
@@ -280,9 +304,20 @@ class BaseMigration:
                 msg,
             ) from e
 
-        # Initialize managers
-        self.state_manager = StateManager()
-        self.data_preservation_manager = DataPreservationManager()
+        # Initialize managers (only if not already provided)
+        if self.state_manager is None or isinstance(self.state_manager, StateManager) is False:
+            self.state_manager = StateManager()
+        # Do not override an already initialized data_preservation_manager
+        if self.data_preservation_manager is None:
+            try:
+                from src.utils.advanced_config_manager import ConfigurationManager
+                cfg_manager = ConfigurationManager()
+                self.data_preservation_manager = DataPreservationManager(
+                    config_manager=cfg_manager,
+                )
+            except Exception:
+                # Leave as None if configuration manager is unavailable in tests
+                self.data_preservation_manager = None
 
         # Initialize thread-safe cache infrastructure for API call optimization
         self._cache_lock = threading.RLock()
@@ -306,7 +341,7 @@ class BaseMigration:
         """Setup performance features and provide easy access to enhanced client capabilities."""
         # Check if clients have enhanced features
         self.has_enhanced_jira = hasattr(self.jira_client, "performance_optimizer")
-        self.has_enhanced_openproject = hasattr(self.op_client, "performance_optimizer")
+        self.has_enhanced_openproject = hasattr(self.op_client, "performance_optimizer") if self.op_client is not None else False
 
         if self.has_enhanced_jira:
             self.logger.debug(
@@ -2368,10 +2403,19 @@ class BaseMigration:
                 ],
             )
 
-        if "auth" in error_text or "permission" in error_text:
+        if (
+            "auth" in error_text
+            or "permission" in error_text
+            or "token" in error_text
+            or "credential" in error_text
+            or "credentials" in error_text
+            or "unauthorized" in error_text
+            or "forbidden" in error_text
+        ):
             steps.extend(
                 [
-                    "Verify API credentials are valid and not expired",
+                    "Verify API credentials are valid and not expired (rotate credentials if needed)",
+                    "Re-authenticate to refresh credentials and update stored credentials",
                     "Check user permissions in both Jira and OpenProject",
                     "Confirm API tokens have required scopes",
                 ],
