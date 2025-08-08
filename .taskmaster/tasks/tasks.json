@@ -157,7 +157,7 @@
         "description": "Develop idempotent operation capability that allows running the migration tool multiple times to synchronize changes from Jira to OpenProject over time.",
         "details": "Implement the following features:\n1. Change detection and tracking to identify modifications in Jira since last run\n2. State preservation of previous migration runs\n3. Selective update of only changed entities\n4. Safeguards to preserve manually imported or modified data in OpenProject\n5. Resumable operations in case of interruptions\n6. Conflict resolution mechanisms when data has been modified in both systems",
         "testStrategy": "Test with repeated migrations of the same data with controlled changes to verify:\n1. Only changed items are updated\n2. Manually modified data in OpenProject is preserved\n3. No duplicate entities are created\n4. Proper handling of deleted items in Jira\n5. Performance remains consistent across multiple executions",
-        "status": "in-progress",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
         "subtasks": [
@@ -209,8 +209,8 @@
             "id": 5,
             "title": "Recovery and Resilience Features",
             "description": "Implement recovery mechanisms for handling interruptions and failures during migration",
-            "details": "Create resilience features that:\n1. Track migration progress at a granular level\n2. Implement checkpointing during long-running operations\n3. Provide the ability to resume interrupted migrations\n4. Create rollback capabilities for failed migrations\n5. Implement robust error handling with clear remediation steps",
-            "status": "pending",
+            "details": "Create resilience features that:\n1. Track migration progress at a granular level\n2. Implement checkpointing during long-running operations\n3. Provide the ability to resume interrupted migrations\n4. Create rollback capabilities for failed migrations\n5. Implement robust error handling with clear remediation steps\n<info added on 2025-08-08T05:01:01.851Z>\nImplementation plan for Recovery & Resilience\n\nScope:\n- Granular progress tracking, checkpointing, resume, rollback, robust error handling\n\nCode loci to modify/extend:\n- src/migrations/base_migration.py: add run_with_recovery(entity_type, entity_count, enable_checkpoints=True, resume=False), resume_migration(migration_record_id), and wire into existing state_manager, data_preservation, change_detector  \n- src/utils/checkpoint_manager.py: ensure atomic checkpoint save/load with file locking; add checkpoint scopes (global → entity_type → entity_id → batch_id)  \n- src/utils/error_recovery.py: integrate RetryManager/CircuitBreaker; add RecoveryContext dataclass to encapsulate ids, entity ranges, batch offsets, last successful checkpoint  \n- src/utils/batch_processor.py: add optional checkpoint callback hooks per batch; bubble up batch_id and offsets in BatchResult for resume  \n\nCheckpoints:\n- Types: MIGRATION_STARTED, BATCH_COMPLETED, ENTITY_PROCESSED, SNAPSHOT_CREATED, MIGRATION_COMPLETED, MIGRATION_FAILED  \n- Fields: migration_record_id, entity_type, batch_id, processed_count, last_processed_entity_id, timestamp, checksum (optional)  \n- Storage: use StateManager.save_current_state() for durable records plus CheckpointManager JSON per migration with atomic writes  \n\nResume flow:\n- Given migration_record_id: load last checkpoint → detect interruption point → compute remaining entities (by index or marker id) → continue batches with selective update and data preservation enabled  \n\nRollback:\n- Use StateManager.create_state_snapshot() at MIGRATION_STARTED and on failure invoke StateManager.rollback_transaction() to abort  \n\nError handling:\n- Wrap core loops with RetryManager (API/network) and CircuitBreaker; re-raise after max attempts; always persist failing context to checkpoint; propagate ComponentResult with detail keys: migration_record_id, recovery_enabled, resumed, last_checkpoint  \n\nTests to add/verify:\n- tests/functional/test_recovery_integration.py: resume after simulated crash; concurrent checkpoint writes; integration with data preservation  \n- tests/unit/test_checkpoint_manager.py: atomic writes, status transitions, idempotent resume selection  \n\nNext steps:\n1) Implement run_with_recovery and resume_migration in BaseMigration and wire into existing utilities  \n2) Add per-batch checkpoint hooks in ThreadSafeBatchProcessor.process_parallel  \n3) Harden CheckpointManager with file locks and atomic writes  \n4) Add/adjust tests above and run full suite\n</info added on 2025-08-08T05:01:01.851Z>",
+            "status": "done",
             "dependencies": [],
             "testStrategy": "TBD - same as parent task",
             "priority": "high",
@@ -221,45 +221,57 @@
       {
         "id": 17,
         "title": "Enhanced Meta Information Migration",
-        "description": "Ensure complete preservation of all meta information during the migration process.",
-        "details": "Implement comprehensive migration of all meta information including:\n1. Watchers\n2. Authors and creators\n3. Assignees\n4. Creation dates\n5. Modification dates\n6. Reporter information\n7. Audit trail data\n8. Time tracking information\n\nUse Rails console integration to set fields that cannot be modified via the API, ensuring all metadata is properly preserved during migration.",
-        "testStrategy": "Test by:\n1. Verify all meta information fields are correctly migrated\n2. Compare creation/modification dates for accuracy\n3. Ensure user associations (author, assignee, watchers) are preserved\n4. Validate time tracking and audit information is intact\n5. Test with a variety of edge cases (deleted users, special characters, etc.)",
-        "status": "pending",
+        "description": "Ensure full preservation of all meta information when migrating issues from Jira to OpenProject, including user associations (author/creator/assignee/watchers), timestamps (created/updated), audit/history entries, and time tracking links. Use the existing client stack (API first, RailsConsoleClient fallback) with idempotent operations guarded by value checks.",
+        "status": "in-progress",
         "dependencies": [],
         "priority": "high",
+        "details": "Approach:\n- Use existing client stack: prefer API; fall back to RailsConsoleClient for immutable fields (creator, created_at, updated_at) and history insertion.\n- Reuse StateManager mappings and DataPreservationManager conflict rules when writing metadata.\n- Idempotent writes: check existing values, preserve original timestamps, skip writes if identical.\n\nDeliverables:\n- Implement helpers in src/migrations/work_package_migration.py:\n  • _migrate_user_associations(issue, op_wp)\n  • _migrate_timestamps(issue, op_wp)\n  • _migrate_watchers(issue, op_wp)\n  • _migrate_history(issue, op_wp)\n- Extend WorkPackageMigration.run() to invoke these helpers in correct sequence after core field upsert.\n- Guard Rails console writes with feature flag migration_config[\"enable_rails_meta_writes\"] (default false in tests), wrap in try/except.\n- Ensure any new fields conform to typing and logging rules (exception-based, optimistic execution).",
+        "testStrategy": "Unit Tests:\n1. Stub API and RailsConsoleClient calls to each helper; verify correct inputs, guard conditions, idempotency.\n2. Validate StateManager and DataPreservationManager interactions for conflict resolution.\n\nFunctional Tests:\n1. Use a sample Jira issue with creator, assignee, watchers, timestamps, history, and time tracking entries.\n2. Run WorkPackageMigration against a mocked OpenProject client; assert exact replication of metadata in the work package model.\n3. Test feature flag behavior: Rails writes enabled/disabled.\n4. Edge cases: deleted users, missing references, special characters.\n",
         "subtasks": [
           {
             "id": 1,
             "title": "User Association Migration",
-            "description": "Implement migration of all user associations (authors, creators, assignees, watchers)",
-            "details": "Develop comprehensive user association migration that:\n1. Maps all Jira user references to OpenProject users\n2. Preserves creator/author information using Rails console when API limitations exist\n3. Transfers assignee relationships with proper mapping\n4. Migrates watchers and subscribers with all metadata\n5. Handles edge cases like deleted users or missing references",
+            "description": "Implement migration of all user associations (authors, creators, assignees, watchers) via the helper `_migrate_user_associations`.",
             "status": "pending",
             "dependencies": [],
-            "testStrategy": "TBD - same as parent task",
-            "priority": "high",
-            "parentTaskId": 17
+            "details": "• Map Jira user references to OpenProject users using StateManager mappings.\n• Use API for assignments; fallback to RailsConsoleClient for immutable creator/author fields.\n• Ensure idempotency by checking existing associations before writing.\n• Handle deleted or missing users gracefully.\n• Apply DataPreservationManager rules for conflict resolution.",
+            "testStrategy": "Unit tests stub API and RailsConsoleClient; verify mapping logic, idempotent guard checks, and fallback paths."
           },
           {
             "id": 2,
             "title": "Timestamp Preservation",
-            "description": "Implement migration of all timestamp metadata (creation dates, modification dates)",
-            "details": "Develop timestamp preservation mechanisms that:\n1. Extract all timestamp metadata from Jira entities\n2. Use Rails console integration to set immutable timestamp fields in OpenProject\n3. Preserve creation dates exactly as they were in Jira\n4. Maintain modification history and last updated dates\n5. Create proper audit trail entries in OpenProject with original timestamps",
+            "description": "Implement migration of creation and modification timestamps via the helper `_migrate_timestamps`.",
             "status": "pending",
             "dependencies": [],
-            "testStrategy": "TBD - same as parent task",
-            "priority": "high",
-            "parentTaskId": 17
+            "details": "• Extract created_at and updated_at from Jira issue.\n• Use API when allowed; otherwise call RailsConsoleClient to set immutable timestamp fields.\n• Wrap writes in idempotent guards to skip if OpenProject already matches.\n• Record original timestamps in audit trail entries if API does not support direct fields.\n• Respect DataPreservationManager conflict rules.",
+            "testStrategy": "Unit tests stub both API and RailsConsoleClient; assert that timestamps are extracted, guards applied, and fallback used correctly."
           },
           {
             "id": 3,
             "title": "Audit and History Information",
-            "description": "Implement migration of audit trails, history, and activity streams",
-            "details": "Develop comprehensive audit and history migration that:\n1. Extracts activity history from Jira entities\n2. Converts history entries to OpenProject format\n3. Preserves the complete audit trail of changes\n4. Migrates activity streams with proper user attribution\n5. Creates equivalent history records in OpenProject with original metadata",
+            "description": "Implement migration of audit trails and history via the helper `_migrate_history`.",
             "status": "pending",
             "dependencies": [],
-            "testStrategy": "TBD - same as parent task",
-            "priority": "high",
-            "parentTaskId": 17
+            "details": "• Extract activity history from Jira entities.\n• Convert entries into OpenProject format, preserving timestamps and user attribution.\n• Use API when possible; fallback to RailsConsoleClient for direct insertion of history entries.\n• Ensure idempotency by checking for existing equivalent history records.\n• Handle attachments, comments, and status transitions as part of the audit stream.",
+            "testStrategy": "Unit tests stub history extraction and insertion; verify format conversion, guard logic, and feature flag behavior."
+          },
+          {
+            "id": 4,
+            "title": "Watchers Migration",
+            "description": "Implement migration of watchers via the helper `_migrate_watchers`.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "• Retrieve watcher list from Jira issue.\n• Map watcher users to OpenProject users; use StateManager.\n• Add watchers via API if supported; fallback to RailsConsoleClient modification if needed.\n• Apply idempotent checks to avoid duplicate subscriptions.\n• Handle missing or deactivated users gracefully.",
+            "testStrategy": "Unit tests stub watcher list retrieval and API/RailsConsoleClient calls; verify mapping, fallback, and idempotency."
+          },
+          {
+            "id": 5,
+            "title": "Integration in WorkPackageMigration.run()",
+            "description": "Hook the new migration helpers into the WorkPackageMigration.run() workflow.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "• After core work package upsert, call `_migrate_user_associations`, `_migrate_timestamps`, `_migrate_watchers`, then `_migrate_history` in that order.\n• Respect migration_config feature flags for RailsConsoleClient paths.\n• Ensure each call is wrapped with try/except to avoid blocking the run on individual failures.\n• Log successes and failures according to logging conventions.",
+            "testStrategy": "Unit tests stub WorkPackageMigration.run(); verify invocation order, feature-flag guards, exception handling, and logging calls."
           }
         ]
       },
@@ -1242,7 +1254,7 @@
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-08-07T12:35:44.406Z",
+      "updated": "2025-08-08T05:17:08.208Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
