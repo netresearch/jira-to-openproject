@@ -1703,6 +1703,22 @@ class WorkPackageMigration(BaseMigration):
                         jira_id = wp.get("jira_id")
                         if jira_id:
                             self.work_package_mapping[jira_id] = wp
+                            # Enhanced Meta Information Migration (Task 17)
+                            try:
+                                # Recover minimal issue payload if available from audit cache; fallback empty
+                                issue_payload = {
+                                    "id": jira_id,
+                                    "key": wp.get("jira_key"),
+                                    "fields": {},
+                                }
+                                self._migrate_user_associations(issue_payload, wp)
+                                self._migrate_timestamps(issue_payload, wp)
+                                self._migrate_watchers(issue_payload, wp)
+                                self._migrate_history(issue_payload, wp)
+                            except Exception as meta_err:
+                                self.logger.debug(
+                                    f"Meta migration skipped for {wp.get('jira_key')} -> WP {wp.get('openproject_id')}: {meta_err}",
+                                )
 
                     # Handle errors
                     for error in errors:
@@ -1752,6 +1768,21 @@ class WorkPackageMigration(BaseMigration):
                                     jira_id = wp.get("jira_id")
                                     if jira_id:
                                         self.work_package_mapping[jira_id] = wp
+                                        # Enhanced Meta Information Migration (Task 17)
+                                        try:
+                                            issue_payload = {
+                                                "id": jira_id,
+                                                "key": wp.get("jira_key"),
+                                                "fields": {},
+                                            }
+                                            self._migrate_user_associations(issue_payload, wp)
+                                            self._migrate_timestamps(issue_payload, wp)
+                                            self._migrate_watchers(issue_payload, wp)
+                                            self._migrate_history(issue_payload, wp)
+                                        except Exception as meta_err:
+                                            self.logger.debug(
+                                                f"Meta migration skipped for {wp.get('jira_key')} -> WP {wp.get('openproject_id')}: {meta_err}",
+                                            )
 
                                 # Handle errors
                                 for error in errors:
