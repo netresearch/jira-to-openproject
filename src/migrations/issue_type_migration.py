@@ -512,7 +512,7 @@ class IssueTypeMigration(BaseMigration):
             time.sleep(0.5)
 
             # Check if we're in mock mode
-            mock_mode = os.environ.get("J2O_TEST_MOCK_MODE", "false").lower() == "true"
+            mock_mode = os.environ.get("J2O_USE_MOCK_APIS", "false").lower() == "true"
 
             if mock_mode:
                 # In mock mode, simulate file operations
@@ -1459,7 +1459,10 @@ class IssueTypeMigration(BaseMigration):
         )
 
         # Check if we're in mock mode
-        mock_mode = os.environ.get("J2O_TEST_MOCK_MODE", "false").lower() == "true"
+        mock_mode = os.environ.get("J2O_USE_MOCK_APIS", "false").lower() == "true"
+        self.logger.debug(
+            "Mock mode: Using mock work package types for mapping update",
+        )
 
         if mock_mode:
             # In mock mode, use the mock work package types

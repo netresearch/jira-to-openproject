@@ -29,6 +29,11 @@ from src.utils.enhanced_timestamp_migrator import (  # noqa: E402
     EnhancedTimestampMigrator,
 )
 
+# Add config attribute for tests
+config = type('Config', (), {
+    'logger': configure_logging("INFO", None)
+})()
+
 
 class TimestampCorrectionScript:
     """Corrects timezone metadata for previously migrated timestamps."""

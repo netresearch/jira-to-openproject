@@ -101,6 +101,7 @@ class ConfigurationManager:
         self,
         config_dir: Path = Path("config"),
         templates_dir: Path = Path("config/templates"),
+        schemas_dir: Path = Path("config/schemas"),
         backups_dir: Path = Path("config/backups"),
         encryption_key: str | None = None,
     ) -> None:
@@ -109,18 +110,21 @@ class ConfigurationManager:
         Args:
             config_dir: Directory containing configuration files
             templates_dir: Directory containing configuration templates
+            schemas_dir: Directory containing configuration schemas
             backups_dir: Directory for configuration backups
             encryption_key: Optional encryption key for sensitive configs
 
         """
         self.config_dir = config_dir
         self.templates_dir = templates_dir
+        self.schemas_dir = schemas_dir
         self.backups_dir = backups_dir
         self.encryption_key = encryption_key
 
         # Create directories if they don't exist
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.templates_dir.mkdir(parents=True, exist_ok=True)
+        self.schemas_dir.mkdir(parents=True, exist_ok=True)
         self.backups_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize encryption if key provided
@@ -142,10 +146,9 @@ class ConfigurationManager:
     def _load_schemas(self) -> dict[str, dict[str, Any]]:
         """Load configuration schemas."""
         schemas = {}
-        schema_dir = self.config_dir / "schemas"
 
-        if schema_dir.exists():
-            for schema_file in schema_dir.glob("*.json"):
+        if self.schemas_dir.exists():
+            for schema_file in self.schemas_dir.glob("*.json"):
                 try:
                     with open(schema_file) as f:
                         schemas[schema_file.stem] = json.load(f)

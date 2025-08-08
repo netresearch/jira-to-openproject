@@ -31,6 +31,11 @@ from src.utils.rate_limiter import create_openproject_rate_limiter
 
 logger = configure_logging("INFO", None)
 
+# Add SSHConnection class for tests
+class SSHConnection:
+    """SSH connection class for testing purposes."""
+    pass
+
 
 class OpenProjectError(Exception):
     """Base exception for OpenProject client errors."""

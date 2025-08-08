@@ -209,7 +209,9 @@ def mock_docker_client() -> DockerClient:
         DockerClient: A mocked DockerClient instance
 
     """
-    return cast("DockerClient", MagicMock(spec=DockerClient))
+    mock_client = MagicMock(spec=DockerClient)
+    mock_client.container_name = "test-container"
+    return cast("DockerClient", mock_client)
 
 
 @pytest.fixture

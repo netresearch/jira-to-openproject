@@ -398,7 +398,8 @@ class TestCompleteMigrationWorkflow:
 
     @pytest.mark.end_to_end
     @pytest.mark.slow
-    def test_complete_migration_success(self, temp_dir, test_env) -> None:
+    @pytest.mark.asyncio
+    async def test_complete_migration_success(self, temp_dir, test_env) -> None:
         """Test successful migration of all components.
 
         This test validates:
@@ -537,7 +538,7 @@ class TestCompleteMigrationWorkflow:
                     "force": True,  # Force refresh to avoid reading existing files
                 },
             ):
-                result = run_migration(
+                result = await run_migration(
                     components=[
                         "users",
                         "projects",
@@ -577,7 +578,8 @@ class TestCompleteMigrationWorkflow:
 
     @pytest.mark.end_to_end
     @pytest.mark.slow
-    def test_migration_with_component_failure(self, temp_dir, test_env) -> None:
+    @pytest.mark.asyncio
+    async def test_migration_with_component_failure(self, temp_dir, test_env) -> None:
         """Test migration behavior when a component fails.
 
         This test validates:
@@ -624,9 +626,6 @@ class TestCompleteMigrationWorkflow:
             mock_op = MagicMock()
             mock_op_class.return_value = mock_op
 
-            # Configure comprehensive mocks
-            mock_jira, mock_op = configure_comprehensive_mocks(mock_jira, mock_op)
-
             # Configure file operations for issue types
             work_package_types_data = [
                 {"id": 1, "name": "User Story"},
@@ -639,10 +638,27 @@ class TestCompleteMigrationWorkflow:
             mock_file_handle.__exit__.return_value = None
             mock_open.return_value = mock_file_handle
 
-            # Make projects component think it needs to create projects (no existing projects)
+            # Set up Jira client to return projects
+            mock_jira.get_projects.return_value = [
+                {
+                    "id": "10001",
+                    "key": "TEST",
+                    "name": "Test Project",
+                    "description": "A test project",
+                    "lead": {"accountId": "user1"},
+                },
+                {
+                    "id": "10002",
+                    "key": "EVIL",
+                    "name": "Evil Project",
+                    "description": "SQL injection test",
+                },
+            ]
+
+            # Set up OpenProject client to return no projects so that projects need to be created
             mock_op.get_projects.return_value = []
 
-            # Simulate failure in projects component (critical)
+            # Simulate failure in projects component (critical) - this will be called when creating projects
             mock_op.execute_query_to_json_file.side_effect = Exception(
                 "OpenProject API error",
             )
@@ -657,7 +673,7 @@ class TestCompleteMigrationWorkflow:
                 },
             ):
                 # Run migration with stop_on_error=True
-                result = run_migration(
+                result = await run_migration(
                     components=["users", "projects"],
                     stop_on_error=True,
                     no_confirm=True,
@@ -673,7 +689,9 @@ class TestCompleteMigrationWorkflow:
                 assert result.components["projects"].success is False
 
     @pytest.mark.end_to_end
-    def test_dry_run_migration(self, temp_dir, test_env) -> None:
+    @pytest.mark.slow
+    @pytest.mark.asyncio
+    async def test_dry_run_migration(self, temp_dir, test_env) -> None:
         """Test dry run migration mode.
 
         This test validates:
@@ -742,7 +760,7 @@ class TestCompleteMigrationWorkflow:
                     "no_backup": True,
                 },
             ):
-                result = run_migration(
+                result = await run_migration(
                     components=["users", "projects"],
                     no_confirm=True,
                 )
@@ -759,7 +777,9 @@ class TestCompleteMigrationWorkflow:
                 # This depends on implementation details of dry run mode
 
     @pytest.mark.end_to_end
-    def test_backup_and_restore_functionality(self, temp_dir, test_env) -> None:
+    @pytest.mark.slow
+    @pytest.mark.asyncio
+    async def test_backup_and_restore_functionality(self, temp_dir, test_env) -> None:
         """Test backup creation and restoration functionality.
 
         This test validates:
@@ -816,7 +836,8 @@ class TestCompleteMigrationWorkflow:
 
     @pytest.mark.end_to_end
     @pytest.mark.slow
-    def test_large_dataset_migration(self, temp_dir, test_env) -> None:
+    @pytest.mark.asyncio
+    async def test_large_dataset_migration(self, temp_dir, test_env) -> None:
         """Test migration with a larger dataset to validate performance and scalability.
 
         This test validates:
@@ -921,7 +942,7 @@ class TestCompleteMigrationWorkflow:
                     "no_backup": True,
                 },
             ):
-                result = run_migration(
+                result = await run_migration(
                     components=["users", "work_packages"],
                     no_confirm=True,
                 )
@@ -942,7 +963,9 @@ class TestCompleteMigrationWorkflow:
                 assert component_result.success is True
 
     @pytest.mark.end_to_end
-    def test_component_dependency_order(self, temp_dir, test_env) -> None:
+    @pytest.mark.slow
+    @pytest.mark.asyncio
+    async def test_component_dependency_order(self, temp_dir, test_env) -> None:
         """Test that migration components run in the correct dependency order.
 
         This test validates:
@@ -1029,7 +1052,7 @@ class TestCompleteMigrationWorkflow:
                     "no_backup": True,
                 },
             ):
-                result = run_migration(
+                result = await run_migration(
                     components=["users", "projects", "work_packages"],
                     no_confirm=True,
                 )

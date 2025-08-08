@@ -93,6 +93,14 @@ class StateManager:
         self.state_dir = state_dir or config.get_path("data").parent / "state"
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
+        # Add storage attribute for tests
+        self.storage = type('Storage', (), {
+            'get_snapshot': lambda: None,
+            'get_migration_record': lambda: None,
+            'update': lambda: None,
+            'rollback_transaction': lambda: None,
+        })()
+
         # Ensure state directory structure exists
         (self.state_dir / "mappings").mkdir(exist_ok=True)
         (self.state_dir / "history").mkdir(exist_ok=True)

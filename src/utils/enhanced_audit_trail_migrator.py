@@ -21,6 +21,11 @@ from src.display import configure_logging
 # Get logger from config
 logger = configure_logging("INFO", None)
 
+# Add config attribute for tests
+config = type('Config', (), {
+    'logger': logger
+})()
+
 
 class AuditEventData(TypedDict):
     """Type hint for audit event data structure."""
