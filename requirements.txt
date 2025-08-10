@@ -84,7 +84,7 @@ requests-toolbelt==1.0.0
     # via jira
 rich==14.1.0
     # via jira-to-openproject (pyproject.toml)
-rpds-py==0.26.0
+rpds-py==0.27.0
     # via
     #   jsonschema
     #   referencing
