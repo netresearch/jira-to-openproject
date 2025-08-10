@@ -24,7 +24,7 @@ defusedxml==0.7.1
     # via jira
 fastapi==0.116.1
     # via jira-to-openproject (pyproject.toml)
-greenlet==3.2.3
+greenlet==3.2.4
     # via sqlalchemy
 h11==0.16.0
     # via uvicorn
