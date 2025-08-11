@@ -68,6 +68,9 @@ class WorkPackageMigration(BaseMigration):
         self.jira_issues: dict[str, Any] = {}
         self.op_work_packages: dict[str, Any] = {}
         self.work_package_mapping: dict[str, Any] = {}
+        # Some refactored tests expect an attribute named issue_mapping used by
+        # time entry migration helpers; initialize defensively.
+        self.issue_mapping: dict[str, Any] = {}
 
         # Mappings
         self.project_mapping: dict[str, Any] = {}
@@ -2992,18 +2995,34 @@ class WorkPackageMigration(BaseMigration):
             }
 
     def _execute_time_entry_migration(self) -> dict[str, Any]:
-        """Execute time entry migration for all migrated work packages.
+        """Wrapper that executes time entry migration and provides error folding.
 
-        Returns:
-            Dictionary with time entry migration results
-
+        Tests patch `_perform_time_entry_migration`; this method must:
+        - return the underlying result verbatim on success
+        - wrap any exception in MigrationError while preserving the original cause
         """
         try:
-            self.logger.info("Executing time entry migration...")
+            return self._perform_time_entry_migration()
+        except Exception as e:  # pragma: no cover - exercised via tests
+            error_msg = f"Failed to execute time entry migration: {e}"
+            self.logger.exception(error_msg)
+            raise MigrationError(error_msg) from e
 
-            # Get list of migrated issues for time entry extraction
+    def _perform_time_entry_migration(self) -> dict[str, Any]:
+        """Perform time entry migration for all migrated work packages.
+
+        Actual implementation that may be patched in tests. Returns a dictionary
+        with migration results; on empty inputs, returns a "skipped" structure.
+        """
+        self.logger.info("Executing time entry migration...")
+
+        # Prefer helper if tests or callers override it
+        migrated_issues: list[dict[str, Any]]
+        if hasattr(self, "_get_migrated_work_packages"):
+            migrated_issues = self._get_migrated_work_packages()
+        else:  # Fallback to internal mapping if present
             migrated_issues = []
-            for jira_key, wp_data in self.issue_mapping.items():
+            for jira_key, wp_data in getattr(self, "issue_mapping", {}).items():
                 if wp_data.get("migrated", False):
                     migrated_issues.append(
                         {
@@ -3013,54 +3032,36 @@ class WorkPackageMigration(BaseMigration):
                         },
                     )
 
-            if not migrated_issues:
-                self.logger.warning(
-                    "No migrated work packages found for time entry migration",
-                )
-                return {
-                    "status": "skipped",
-                    "reason": "No migrated work packages found",
-                    "jira_work_logs": {"extracted": 0, "migrated": 0, "errors": []},
-                    "tempo_time_entries": {"extracted": 0, "migrated": 0, "errors": []},
-                    "total_time_entries": {"migrated": 0, "failed": 0},
-                }
-
-            self.logger.info(
-                "Found %d migrated work packages for time entry migration",
-                len(migrated_issues),
+        if not migrated_issues:
+            self.logger.warning(
+                "No migrated work packages found for time entry migration",
             )
+            return {
+                "status": "skipped",
+                "reason": "No migrated work packages found",
+                "jira_work_logs": {"extracted": 0, "migrated": 0, "errors": []},
+                "tempo_time_entries": {"extracted": 0, "migrated": 0, "errors": []},
+                "total_time_entries": {"migrated": 0, "failed": 0},
+            }
 
-            # Execute time entry migration
-            migration_result = self.time_entry_migrator.migrate_time_entries_for_issues(
-                migrated_issues,
-            )
+        self.logger.info(
+            "Found %d migrated work packages for time entry migration",
+            len(migrated_issues),
+        )
 
-            # Save migration results
-            time_entry_report_path = (
-                self.data_dir / "reports" / "time_entry_migration_report.json"
-            )
-            time_entry_report_path.parent.mkdir(parents=True, exist_ok=True)
+        # Execute time entry migration
+        migration_result = self.time_entry_migrator.migrate_time_entries_for_issues(
+            migrated_issues,
+        )
 
-            with open(time_entry_report_path, "w", encoding="utf-8") as f:
-                json.dump(migration_result, f, indent=2, default=str)
+        # Save migration results
+        time_entry_report_path = self.data_dir / "reports" / "time_entry_migration_report.json"
+        time_entry_report_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(time_entry_report_path, "w", encoding="utf-8") as f:
+            json.dump(migration_result, f, indent=2, default=str)
 
-            self.logger.info("Time entry migration completed successfully")
-            return {**migration_result, "status": "success"}
-
-        except Exception as e:
-            error_msg = f"Failed to execute time entry migration: {e}"
-            self.logger.exception(error_msg)
-            raise MigrationError(error_msg) from e
-
-    def _perform_time_entry_migration(self) -> dict[str, Any]:
-        """Perform time entry migration for all migrated work packages.
-        
-        This method is called by tests and delegates to _execute_time_entry_migration.
-        
-        Returns:
-            Dictionary with time entry migration results
-        """
-        return self._execute_time_entry_migration()
+        self.logger.info("Time entry migration completed successfully")
+        return migration_result
 
     def _get_migrated_work_packages(self) -> list[dict[str, Any]]:
         """Get list of migrated work packages.
