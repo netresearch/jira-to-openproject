@@ -11,6 +11,13 @@ from unittest.mock import MagicMock
 import pytest
 from _pytest.config import Config
 from dotenv import load_dotenv
+from tests.utils.mock_factory import (
+    create_mock_docker_client,
+    create_mock_jira_client,
+    create_mock_openproject_client,
+    create_mock_rails_client,
+    create_mock_ssh_client,
+)
 
 from src.clients.docker_client import DockerClient
 from src.clients.jira_client import JiraClient
@@ -60,13 +67,36 @@ def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> N
       default to keep CI stable; mark them appropriately or set J2O_RUN_ALL_TESTS=true.
     """
     run_all = _env_flag("J2O_RUN_ALL_TESTS", False)
+    # Global live/mocked mode
+    live_services = _env_flag("J2O_LIVE_SERVICES", False) or config.getoption(
+        "--live-services",
+        default=False,
+    )
     run_integration = _env_flag("J2O_RUN_INTEGRATION", False) or run_all
     run_functional = _env_flag("J2O_RUN_FUNCTIONAL", False) or run_all
     run_e2e = _env_flag("J2O_RUN_E2E", False) or run_all
 
-    enable_docker = _env_flag("J2O_ENABLE_DOCKER", False) or run_all
-    enable_ssh = _env_flag("J2O_ENABLE_SSH", False) or run_all
-    enable_rails = _env_flag("J2O_ENABLE_RAILS", False) or run_all
+    enable_docker = (
+        _env_flag("J2O_ENABLE_DOCKER", False)
+        or _env_flag("J2O_LIVE_DOCKER", False)
+        or config.getoption("--live-docker", default=False)
+        or live_services
+        or run_all
+    )
+    enable_ssh = (
+        _env_flag("J2O_ENABLE_SSH", False)
+        or _env_flag("J2O_LIVE_SSH", False)
+        or config.getoption("--live-ssh", default=False)
+        or live_services
+        or run_all
+    )
+    enable_rails = (
+        _env_flag("J2O_ENABLE_RAILS", False)
+        or _env_flag("J2O_LIVE_RAILS", False)
+        or config.getoption("--live-rails", default=False)
+        or live_services
+        or run_all
+    )
 
     skip_integration = pytest.mark.skip(
         reason="Integration tests disabled by default. Set J2O_RUN_INTEGRATION=true to enable.",
@@ -130,6 +160,36 @@ def pytest_addoption(parser) -> None:
         action="store_true",
         default=False,
         help="Enable real SSH connections for integration tests (default: mock SSH for speed)",
+    )
+    parser.addoption(
+        "--live-services",
+        action="store_true",
+        default=False,
+        help="Run with live external services (Jira, OpenProject, Rails, Docker, SSH). Defaults to fully mocked.",
+    )
+    parser.addoption(
+        "--live-jira",
+        action="store_true",
+        default=False,
+        help="Use live Jira service instead of mocks.",
+    )
+    parser.addoption(
+        "--live-openproject",
+        action="store_true",
+        default=False,
+        help="Use live OpenProject service instead of mocks.",
+    )
+    parser.addoption(
+        "--live-rails",
+        action="store_true",
+        default=False,
+        help="Use live Rails console instead of mocks.",
+    )
+    parser.addoption(
+        "--live-docker",
+        action="store_true",
+        default=False,
+        help="Use live Docker instead of mocks.",
     )
 
 
@@ -351,6 +411,68 @@ def ssh_client(request) -> Generator[SSHClient, None, None]:
     finally:
         # Cleanup will happen in the client's __del__ method
         pass
+
+
+# Session autouse: default to fully mocked external clients, enable live via flags/env
+@pytest.fixture(scope="session", autouse=True)
+def configure_external_clients_mocking(pytestconfig: Config) -> Generator[None, None, None]:
+    live_all = _env_flag("J2O_LIVE_SERVICES", False) or pytestconfig.getoption(
+        "--live-services",
+        default=False,
+    )
+
+    live_jira = live_all or _env_flag("J2O_LIVE_JIRA", False) or pytestconfig.getoption(
+        "--live-jira",
+        default=False,
+    )
+    live_op = live_all or _env_flag("J2O_LIVE_OPENPROJECT", False) or pytestconfig.getoption(
+        "--live-openproject",
+        default=False,
+    )
+    live_rails = live_all or _env_flag("J2O_LIVE_RAILS", False) or pytestconfig.getoption(
+        "--live-rails",
+        default=False,
+    )
+    live_docker = live_all or _env_flag("J2O_LIVE_DOCKER", False) or pytestconfig.getoption(
+        "--live-docker",
+        default=False,
+    )
+    live_ssh = live_all or _env_flag("J2O_LIVE_SSH", False) or pytestconfig.getoption(
+        "--live-ssh",
+        default=False,
+    )
+
+    mp = pytest.MonkeyPatch()
+    try:
+        if not live_jira:
+            mp.setattr(
+                "src.clients.jira_client.JiraClient",
+                lambda *args, **kwargs: create_mock_jira_client(),
+            )
+        if not live_op:
+            mp.setattr(
+                "src.clients.openproject_client.OpenProjectClient",
+                lambda *args, **kwargs: create_mock_openproject_client(),
+            )
+        if not live_rails:
+            mp.setattr(
+                "src.clients.rails_console_client.RailsConsoleClient",
+                lambda *args, **kwargs: create_mock_rails_client(),
+            )
+        if not live_docker:
+            mp.setattr(
+                "src.clients.docker_client.DockerClient",
+                lambda *args, **kwargs: create_mock_docker_client(),
+            )
+        if not live_ssh:
+            mp.setattr(
+                "src.clients.ssh_client.SSHClient",
+                lambda *args, **kwargs: create_mock_ssh_client(),
+            )
+
+        yield
+    finally:
+        mp.undo()
 
 
 # Monkeypatch helper functions for standardized mocking patterns
