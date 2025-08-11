@@ -41,8 +41,10 @@ RUN uv sync --frozen --no-install-project && \
 # Copy project files (this layer changes most frequently, so it's last)
 COPY --chown=appuser:appuser . .
 
-# Only sync dependencies from lock (project installed at runtime in tests)
-RUN uv sync --frozen --no-install-project
+# Sync dependencies from lock, then install project and test extras
+RUN uv sync --frozen --no-install-project && \
+    uv pip install --system . && \
+    uv pip install --system '.[dev,test]'
 
 # Switch to non-root user after installation
 USER appuser
