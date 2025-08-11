@@ -40,7 +40,7 @@ jsonschema==4.25.0
     # via jira-to-openproject (pyproject.toml)
 jsonschema-specifications==2025.4.1
     # via jsonschema
-markdown-it-py==3.0.0
+markdown-it-py==4.0.0
     # via rich
 markupsafe==3.0.2
     # via jinja2
