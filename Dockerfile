@@ -34,7 +34,8 @@ RUN useradd -m -u 1000 appuser && \
 COPY pyproject.toml uv.lock ./
 
 # Install Python dependencies system-wide from lock file
-RUN uv pip install --system --frozen .
+RUN uv sync --frozen --no-install-project && \
+    uv pip install --system .
 
 # Switch to non-root user after dependency installation
 USER appuser
