@@ -84,6 +84,8 @@ setup.py
 setup.cfg
 requirements-*.txt
 !requirements.txt
+!pyproject.toml
+!uv.lock
 
 # AI Tools and configurations (not needed in containers)
 .cursor/
