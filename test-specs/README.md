@@ -36,10 +36,7 @@ The current OpenAPI specifications are **minimal placeholders** created to:
 
 ```bash
 # Start testing profile (includes mock services)
-make dev-testing
-
-# Start everything (dev + services + testing)
-make dev-full
+make test
 ```
 
 ### Accessing Mock APIs

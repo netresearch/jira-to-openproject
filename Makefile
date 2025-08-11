@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs shell test clean dev dev-down dev-services dev-testing dev-full status ps exec install lint format type-check pre-commit
+.PHONY: help build up down restart logs shell test clean dev status ps exec install lint format type-check pre-commit
 
 # Default target
 help: ## Show this help message
@@ -6,11 +6,7 @@ help: ## Show this help message
 	@echo ''
 	@echo 'Development Environment:'
 	@echo '  build          Build development containers'
-	@echo '  dev            Start development environment (app only)'
-	@echo '  dev-services   Start with optional services (Redis, PostgreSQL)'
-	@echo '  dev-testing    Start with testing services (mock APIs)'
-	@echo '  dev-full       Start everything (app + services + testing)'
-	@echo '  up             Alias for dev'
+	@echo '  up             Start the development stack (app + default services)'
 	@echo '  down           Stop all services'
 	@echo '  restart        Restart development environment'
 	@echo '  logs           Show logs from all services'
@@ -59,28 +55,7 @@ check-env: ## Validate required environment variables for services
 	fi
 	@echo "✅ Environment configuration OK"
 
-ensure-test-specs: ## Ensure test-specs directory exists for mock services
-	@echo "Checking test-specs directory..."
-	@if [ ! -d test-specs ]; then \
-		echo "❌ Missing test-specs directory!"; \
-		echo ""; \
-		echo "Mock services require API specifications."; \
-		echo "This directory should be created automatically."; \
-		echo "If you see this error, please report it as a bug."; \
-		exit 1; \
-	fi
-	@if [ ! -f test-specs/jira-openapi.yml ] || [ ! -f test-specs/openproject-openapi.yml ]; then \
-		echo "❌ Missing OpenAPI specification files!"; \
-		echo ""; \
-		echo "Required files:"; \
-		echo "  test-specs/jira-openapi.yml"; \
-		echo "  test-specs/openproject-openapi.yml"; \
-		echo ""; \
-		echo "These files should be created automatically."; \
-		echo "If you see this error, please report it as a bug."; \
-		exit 1; \
-	fi
-	@echo "✅ Test specifications OK"
+## mocks configured via compose test profile
 
 build: ## Build development containers
 	docker compose build
@@ -88,23 +63,15 @@ build: ## Build development containers
 rebuild: ## Rebuild containers without cache
 	docker compose build --no-cache
 
-up dev: ## Start development environment (app only)
-	docker compose --profile dev up -d
+up dev: ## Start the development stack (app + default services)
+	docker compose up -d
 
-dev-services: check-env ## Start development with services (Redis, PostgreSQL)
-	docker compose --profile dev --profile services up -d
-
-dev-testing: ensure-test-specs ## Start development with testing services (mock APIs)
-	docker compose --profile dev --profile testing up -d
-
-dev-full: check-env ensure-test-specs ## Start everything (app + services + testing)
-	docker compose --profile dev --profile services --profile testing up -d
 
 down dev-down: ## Stop all services
 	docker compose down
 
 restart: ## Restart development environment
-	docker compose --profile dev restart
+	docker compose restart
 
 stop: ## Stop services without removing containers
 	docker compose stop
@@ -140,7 +107,7 @@ exec: ## Execute command in dev container (use CMD="command here")
 install: ## Install/update Python dependencies in container (uv lock)
 	docker compose exec app sh -lc 'uv sync --frozen --no-install-project'
 
-install-test: ## Install/update Python dependencies in test container
+install-test: ## Prepare the test container and its dependencies
 	docker compose --profile test up -d test
 
 # =============================================================================
@@ -271,8 +238,8 @@ ci: format lint test ## Run CI pipeline locally
 # Allow passing additional docker compose arguments
 COMPOSE_ARGS ?=
 
-# Default service profiles
-PROFILES ?= dev
+# Default service profiles (simplified: default and test)
+PROFILES ?=
 
 # Test options for flexible test execution
 TEST_OPTS ?=

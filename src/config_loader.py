@@ -275,6 +275,21 @@ class ConfigLoader:
                     self.config["migration"]["ssl_verify"] = ssl_verify
                     config_logger.debug("Applied SSL verify: %s", ssl_verify)
 
+                case ["J2O", "FORCE"]:
+                    force = self._convert_value(env_value) is True
+                    self.config["migration"]["force"] = force
+                    config_logger.debug("Applied migration force: %s", force)
+
+                case ["J2O", "NO", "CONFIRM"]:
+                    no_confirm = self._convert_value(env_value) is True
+                    self.config["migration"]["no_confirm"] = no_confirm
+                    config_logger.debug("Applied migration no_confirm: %s", no_confirm)
+
+                case ["J2O", "STOP", "ON", "ERROR"]:
+                    stop_on_error = self._convert_value(env_value) is True
+                    self.config["migration"]["stop_on_error"] = stop_on_error
+                    config_logger.debug("Applied migration stop_on_error: %s", stop_on_error)
+
     def _convert_value(self, value: str) -> ConfigValue:
         """Convert string value to appropriate type."""
         # Try to convert to int

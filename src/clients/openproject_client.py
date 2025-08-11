@@ -27,7 +27,7 @@ from src.utils.file_manager import FileManager
 from src.utils.idempotency_decorators import batch_idempotent
 from src.utils.metrics_collector import MetricsCollector
 from src.utils.performance_optimizer import PerformanceOptimizer
-from src.utils.rate_limiter import create_openproject_rate_limiter
+from src.utils.rate_limiter import create_openproject_rate_limiter, RateLimiter
 
 logger = configure_logging("INFO", None)
 

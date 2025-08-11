@@ -43,10 +43,10 @@ cp .env.example .env
 ### Development Environment
 
 ```bash
-# Full development setup with services
-make dev-full
+# Start development stack (app + default services)
+make up
 
-# Run tests
+# Run tests (test profile)
 make test
 
 # Code quality checks
