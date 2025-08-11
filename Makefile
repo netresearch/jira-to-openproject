@@ -138,7 +138,7 @@ exec: ## Execute command in dev container (use CMD="command here")
 	docker compose exec app $(CMD)
 
 install: ## Install/update Python dependencies in container (uv lock)
-	docker compose exec app sh -lc 'uv sync --frozen --no-install-project && uv pip install --system .'
+	docker compose exec app sh -lc 'uv sync --frozen --no-install-project'
 
 install-test: ## Install/update Python dependencies in test container
 	docker compose --profile test up -d test

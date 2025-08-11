@@ -34,8 +34,7 @@ RUN useradd -m -u 1000 appuser && \
 COPY pyproject.toml uv.lock ./
 
 # Install Python dependencies system-wide from lock file
-RUN uv sync --frozen --no-install-project && \
-    uv pip install --system .
+RUN uv sync --frozen --no-install-project
 
 # Copy project files (this layer changes most frequently, so it's last)
 COPY --chown=appuser:appuser . .
