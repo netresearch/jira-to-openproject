@@ -38,11 +38,15 @@ RUN uv sync --frozen --no-install-project && \
     uv pip install --system . && \
     uv pip install --system '.[dev,test]'
 
-# Switch to non-root user after dependency installation
-USER appuser
-
 # Copy project files (this layer changes most frequently, so it's last)
 COPY --chown=appuser:appuser . .
+
+# Install the project and dev extras into the system environment
+RUN uv pip install --system . && \
+    uv pip install --system '.[dev,test]'
+
+# Switch to non-root user after installation
+USER appuser
 
 # Set default command for testing
 CMD ["sleep", "infinity"]

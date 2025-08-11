@@ -37,11 +37,14 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project && \
     uv pip install --system .
 
-# Switch to non-root user after dependency installation
-USER appuser
-
 # Copy project files (this layer changes most frequently, so it's last)
 COPY --chown=appuser:appuser . .
+
+# Install the project itself into the system environment (after sources are available)
+RUN uv pip install --system .
+
+# Switch to non-root user after installation
+USER appuser
 
 # Set default command for development
 CMD ["sleep", "infinity"]
