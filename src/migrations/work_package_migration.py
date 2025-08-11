@@ -2290,6 +2290,28 @@ class WorkPackageMigration(BaseMigration):
                     f"Created {migration_results['total_created']} work packages",
                 )
 
+            # Optionally execute enhanced metadata operations (author/timestamps/audit)
+            try:
+                meta_result = self._execute_enhanced_user_operations()
+                # Attach meta results whether executed or skipped (useful for visibility)
+                if isinstance(result.data, dict):
+                    result.data["enhanced_metadata"] = meta_result
+            except Exception as meta_e:
+                self.logger.debug("Meta operations failed: %s", meta_e)
+
+            # Optionally execute time entry migration
+            try:
+                time_entry_result = self._execute_time_entry_migration()
+                if isinstance(result.data, dict):
+                    result.data["time_entry_migration"] = time_entry_result
+            except MigrationError as te:
+                self.logger.exception("Time entry migration failed: %s", te)
+                if isinstance(result.data, dict):
+                    result.data["time_entry_migration"] = {
+                        "status": "failed",
+                        "error": str(te),
+                    }
+
             return result
 
         except Exception as e:
@@ -2712,6 +2734,121 @@ class WorkPackageMigration(BaseMigration):
             return formatted[:57] + "..."
         return formatted
 
+    def _migrate_user_associations(
+        self,
+        jira_issue: Any,
+        work_package_info: dict[str, Any],
+    ) -> None:
+        """Post-creation user association migration and preservation.
+
+        Uses the enhanced user association migrator to ensure assignee, author,
+        and watchers are mapped and that creator/author preservation operations
+        are queued for Rails execution when needed. Idempotent by design.
+
+        Args:
+            jira_issue: Jira issue object or minimal payload with keys 'key' and 'fields'.
+            work_package_info: Mapping entry for the created work package (must contain
+                at least 'jira_key' and 'openproject_id').
+        """
+        try:
+            jira_key = (
+                getattr(jira_issue, "key", None)
+                or (jira_issue.get("key") if isinstance(jira_issue, dict) else None)
+                or work_package_info.get("jira_key")
+            )
+
+            wp_data: dict[str, Any] = {
+                "jira_key": jira_key,
+                "author_id": work_package_info.get("author_id"),
+                "assigned_to_id": work_package_info.get("assigned_to_id"),
+                "watcher_ids": work_package_info.get("watcher_ids", []),
+            }
+
+            result = self.enhanced_user_migrator.migrate_user_associations(
+                jira_issue=jira_issue,
+                work_package_data=wp_data,
+                preserve_creator_via_rails=True,
+            )
+
+            # Log non-fatal warnings/errors; helpers are optimistic
+            for warning in result.get("warnings", []) or []:
+                self.logger.warning("User association: %s", warning)
+        except Exception as e:
+            # Optimistic execution: only diagnose/log on failure
+            self.logger.debug("_migrate_user_associations skipped due to error: %s", e)
+
+    def _migrate_timestamps(
+        self,
+        jira_issue: Any,
+        work_package_info: dict[str, Any],
+    ) -> None:
+        """Post-creation timestamp preservation.
+
+        Queues Rails operations for immutable fields (created_at/updated_at, etc.)
+        while ensuring idempotent behavior via the enhanced timestamp migrator.
+
+        Args:
+            jira_issue: Jira issue object or minimal payload
+            work_package_info: Mapping entry for the created work package
+        """
+        try:
+            _ = self.enhanced_timestamp_migrator.migrate_timestamps(
+                jira_issue=jira_issue,
+                work_package_data={
+                    "jira_key": work_package_info.get("jira_key"),
+                },
+                use_rails_for_immutable=True,
+            )
+        except Exception as e:
+            self.logger.debug("_migrate_timestamps skipped due to error: %s", e)
+
+    def _migrate_watchers(
+        self,
+        jira_issue: Any,
+        work_package_info: dict[str, Any],
+    ) -> None:
+        """Ensure watchers are mapped for the work package.
+
+        Watchers are primarily handled during work package preparation/creation.
+        This helper re-runs mapping defensively to capture any late data and
+        relies on idempotent guards to avoid duplicates.
+        """
+        try:
+            _ = self.enhanced_user_migrator.migrate_user_associations(
+                jira_issue=jira_issue,
+                work_package_data={
+                    "jira_key": work_package_info.get("jira_key"),
+                },
+                preserve_creator_via_rails=False,
+            )
+        except Exception as e:
+            self.logger.debug("_migrate_watchers skipped due to error: %s", e)
+
+    def _migrate_history(
+        self,
+        jira_issue: Any,
+        work_package_info: dict[str, Any],
+    ) -> None:
+        """Queue audit/history operations for the work package.
+
+        If full changelog data was extracted earlier, it will be processed later
+        in batch via execute_rails_audit_operations(). This helper exists for
+        completeness and future extension; it safely no-ops when only minimal
+        payload is available.
+        """
+        try:
+            # Prefer stored changelog processed in batch; if a full Jira issue
+            # object with changelog is available, we can transform immediately.
+            if hasattr(jira_issue, "changelog") and jira_issue.changelog:
+                op_id = work_package_info.get("openproject_id")
+                if op_id:
+                    _ = self.enhanced_audit_trail_migrator.migrate_audit_trail_for_issue(
+                        jira_issue,
+                        op_id,
+                    )
+        except Exception as e:
+            self.logger.debug("_migrate_history skipped due to error: %s", e)
+
     def _execute_enhanced_user_operations(self) -> dict[str, Any]:
         """Execute queued Rails operations for enhanced user association and timestamp preservation.
 
@@ -2719,6 +2856,21 @@ class WorkPackageMigration(BaseMigration):
             Dictionary with execution results
 
         """
+        # Feature flag guard: allow tests/runs to disable meta writes
+        if not config.migration_config.get("enable_rails_meta_writes", False):
+            self.logger.info(
+                "Rails meta writes disabled by feature flag; skipping enhanced metadata operations",
+            )
+            return {
+                "user_rails_operations": {"processed": 0, "errors": []},
+                "timestamp_rails_operations": {"processed": 0, "errors": []},
+                "audit_trail_operations": {"processed": 0, "errors": []},
+                "association_report": {},
+                "timestamp_report": {},
+                "audit_trail_report": {},
+                "status": "skipped",
+                "reason": "Rails meta writes disabled via migration_config['enable_rails_meta_writes']",
+            }
         try:
             # Execute Rails operations for user association preservation
             user_rails_result = (

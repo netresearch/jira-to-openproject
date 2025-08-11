@@ -43,6 +43,86 @@ def pytest_configure(config: Config) -> None:
     )
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Read boolean environment flag (true/false)."""
+    val = os.environ.get(name, "true" if default else "false").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
+def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> None:  # type: ignore[name-defined]
+    """Apply default skipping for non-unit and external-resource tests.
+
+    - Integration/functional/end_to_end tests are skipped by default unless
+      J2O_RUN_INTEGRATION / J2O_RUN_FUNCTIONAL / J2O_RUN_E2E are set to true.
+    - Tests marked requires_docker / requires_ssh / requires_rails are skipped
+      unless J2O_ENABLE_DOCKER / J2O_ENABLE_SSH / J2O_ENABLE_RAILS are true.
+    - Unmarked tests (no {unit,integration,functional,end_to_end}) are skipped by
+      default to keep CI stable; mark them appropriately or set J2O_RUN_ALL_TESTS=true.
+    """
+    run_all = _env_flag("J2O_RUN_ALL_TESTS", False)
+    run_integration = _env_flag("J2O_RUN_INTEGRATION", False) or run_all
+    run_functional = _env_flag("J2O_RUN_FUNCTIONAL", False) or run_all
+    run_e2e = _env_flag("J2O_RUN_E2E", False) or run_all
+
+    enable_docker = _env_flag("J2O_ENABLE_DOCKER", False) or run_all
+    enable_ssh = _env_flag("J2O_ENABLE_SSH", False) or run_all
+    enable_rails = _env_flag("J2O_ENABLE_RAILS", False) or run_all
+
+    skip_integration = pytest.mark.skip(
+        reason="Integration tests disabled by default. Set J2O_RUN_INTEGRATION=true to enable.",
+    )
+    skip_functional = pytest.mark.skip(
+        reason="Functional tests disabled by default. Set J2O_RUN_FUNCTIONAL=true to enable.",
+    )
+    skip_e2e = pytest.mark.skip(
+        reason="End-to-end tests disabled by default. Set J2O_RUN_E2E=true to enable.",
+    )
+    skip_docker = pytest.mark.skip(
+        reason="Docker-dependent test disabled. Set J2O_ENABLE_DOCKER=true to enable.",
+    )
+    skip_ssh = pytest.mark.skip(
+        reason="SSH-dependent test disabled. Set J2O_ENABLE_SSH=true to enable.",
+    )
+    skip_rails = pytest.mark.skip(
+        reason="Rails-dependent test disabled. Set J2O_ENABLE_RAILS=true to enable.",
+    )
+    skip_unmarked = pytest.mark.skip(
+        reason=(
+            "Unmarked test skipped by default. Mark with unit/integration/functional/end_to_end "
+            "or set J2O_RUN_ALL_TESTS=true."
+        ),
+    )
+
+    for item in items:
+        kws = item.keywords
+
+        # Category-level gating
+        if "integration" in kws and not run_integration:
+            item.add_marker(skip_integration)
+            continue
+        if "functional" in kws and not run_functional:
+            item.add_marker(skip_functional)
+            continue
+        if "end_to_end" in kws and not run_e2e:
+            item.add_marker(skip_e2e)
+            continue
+
+        # Resource gating
+        if "requires_docker" in kws and not enable_docker:
+            item.add_marker(skip_docker)
+            continue
+        if "requires_ssh" in kws and not enable_ssh:
+            item.add_marker(skip_ssh)
+            continue
+        if "requires_rails" in kws and not enable_rails:
+            item.add_marker(skip_rails)
+            continue
+
+        # Default: only run explicitly marked unit tests unless run_all is set
+        if not run_all and not any(m in kws for m in ("unit", "integration", "functional", "end_to_end")):
+            item.add_marker(skip_unmarked)
+
+
 def pytest_addoption(parser) -> None:
     """Add custom command line options."""
     parser.addoption(

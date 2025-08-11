@@ -205,4 +205,4 @@ id_rsa.pub
 auth_keys
 .envrc.local
 .env
-.cursor/mcp.json
+.chunkhound*
