@@ -395,6 +395,15 @@ class CheckpointManager:
             error_message,
         )
 
+        # Provide default manual steps for manual intervention scenarios
+        default_manual_steps: list[str] = []
+        if recommended_action == RecoveryAction.MANUAL_INTERVENTION:
+            default_manual_steps = [
+                "Review error details and logs",
+                "Validate input data and correct inconsistencies",
+                "Re-run the failed step after correction",
+            ]
+
         recovery_plan = RecoveryPlan(
             plan_id=plan_id,
             failure_type=failure_type,
@@ -403,7 +412,7 @@ class CheckpointManager:
             checkpoint_id=checkpoint_id,
             rollback_target=None,  # Will be determined based on action
             retry_attempts=0,
-            manual_steps=manual_steps or [],
+            manual_steps=manual_steps or default_manual_steps,
             metadata={
                 "created_at": datetime.now(tz=UTC).isoformat(),
                 "failure_checkpoint": checkpoint_id,
