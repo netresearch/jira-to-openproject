@@ -24,7 +24,7 @@ def create_mock_jira_client() -> JiraClient:
     mock_client.get_custom_fields.return_value = []
     mock_client.get_all_issues_for_project.return_value = []
 
-    # Provide a generic .get method used by URL-encoding tests
+    # Provide a generic .get method used by URL-encoding and refresh tests
     mock_client.get = MagicMock()
     return mock_client
 

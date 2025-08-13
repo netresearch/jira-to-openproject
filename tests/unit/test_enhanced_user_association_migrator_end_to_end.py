@@ -29,7 +29,10 @@ class TestEndToEndUserAssociationMigration:
     @pytest.fixture
     def mock_jira_client(self):
         """Create a mock Jira client with realistic responses."""
-        return Mock(spec=JiraClient)
+        client = Mock(spec=JiraClient)
+        # Provide .get used by refresh workflow tests
+        client.get = Mock()
+        return client
 
     @pytest.fixture
     def mock_op_client(self):
