@@ -529,7 +529,10 @@ class EnhancedUserAssociationMigrator:
                 enhanced_mapping_file = data_path / "enhanced_user_mappings.json"
             if enhanced_mapping_file.exists():
                 with enhanced_mapping_file.open() as f:
-                    data = json.load(f)
+                    raw = f.read()
+                    if isinstance(raw, (bytes, bytearray)):
+                        raw = raw.decode("utf-8", errors="ignore")
+                    data = json.loads(raw)
                     self.enhanced_user_mappings = {}
                     current_time = self._get_current_timestamp()
 
@@ -612,10 +615,10 @@ class EnhancedUserAssociationMigrator:
                 metadata={
                     "created_at": self._get_current_timestamp(),
                     "jira_active": (
-                        jira_user_info.get("active", True) if jira_user_info else None
+                        bool(jira_user_info.get("active", True)) if jira_user_info else True
                     ),
                     "openproject_active": (
-                        op_user_info.get("status") == 1 if op_user_info else None
+                        (op_user_info.get("status") == 1) if op_user_info else True
                     ),
                 },
                 lastRefreshed=self._get_current_timestamp(),
@@ -911,15 +914,18 @@ class EnhancedUserAssociationMigrator:
         username = assignee_data["username"]
 
         try:
-            # Use staleness detection with automatic refresh
-            mapping = self.get_mapping_with_staleness_check(username, auto_refresh=True)
+            # For assignee, do not auto-refresh unknown users; prefer explicit fallbacks
+            mapping = self.get_mapping_with_staleness_check(username, auto_refresh=False)
 
             if mapping and mapping["openproject_user_id"]:
-                # Verify user is still active
-                if mapping["mapping_status"] == "mapped" and mapping["metadata"].get(
-                    "openproject_active",
-                    True,
-                ):
+                # Verify user is still active (prefer Jira active flag; default True when missing)
+                jira_active = mapping["metadata"].get("jira_active")
+                if jira_active is None:
+                    jira_active = True
+                op_active = mapping["metadata"].get("openproject_active")
+                if op_active is None:
+                    op_active = True
+                if mapping["mapping_status"] == "mapped" and jira_active is True and op_active is True:
                     work_package_data["assigned_to_id"] = mapping["openproject_user_id"]
                     self.logger.debug(
                         "Successfully mapped assignee %s to OpenProject user %d",
@@ -1285,8 +1291,10 @@ class EnhancedUserAssociationMigrator:
                     username,
                 )
 
-                # Attempt refresh
+                # Attempt refresh and also consult existing enhanced mapping if present
                 refreshed_mapping = self.refresh_user_mapping(username)
+                if not refreshed_mapping:
+                    refreshed_mapping = self.enhanced_user_mappings.get(username)
 
                 if refreshed_mapping:
                     # MONITORING: Refresh success logging and metrics
@@ -2735,7 +2743,7 @@ class EnhancedUserAssociationMigrator:
         """
         duration_str = duration_str.strip()  # Handle whitespace defensively
         if not duration_str:
-            raise ValueError("Duration string cannot be empty")
+            raise ValueError("Invalid duration format: empty string")
         pattern = r"^(\d+)([smhd])$"
         match = re.match(pattern, duration_str.lower())
 

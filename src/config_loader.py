@@ -131,7 +131,8 @@ class ConfigLoader:
                 config: Config = yaml.safe_load(config_file)
                 return config
         except FileNotFoundError:
-            config_logger.exception("Config file not found: %s", config_file_path)
+            # Log only exception type to avoid exposing sensitive paths
+            config_logger.warning("Config load error: %s", FileNotFoundError.__name__)
             raise
 
     def _load_database_config(self) -> None:
@@ -149,8 +150,19 @@ class ConfigLoader:
         if "database" not in self.config:
             self.config["database"] = {}
 
-        # Try to load PostgreSQL password from environment first
-        postgres_password = os.environ.get("POSTGRES_PASSWORD")
+        # Priority: explicit secret file env -> env var -> default Docker secret path
+        postgres_password: str | None = None
+
+        secret_file_env = os.environ.get("POSTGRES_PASSWORD_FILE")
+        if secret_file_env:
+            try:
+                postgres_password = Path(secret_file_env).read_text().strip()
+            except (OSError, PermissionError, FileNotFoundError) as e:
+                # Log only exception class name, not the file path
+                config_logger.warning("Failed to read Docker secret: %s", e.__class__.__name__)
+
+        if not postgres_password:
+            postgres_password = os.environ.get("POSTGRES_PASSWORD")
 
         if not postgres_password:
             # Try to load from Docker secrets

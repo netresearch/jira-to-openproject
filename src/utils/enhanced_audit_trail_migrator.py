@@ -227,18 +227,18 @@ class EnhancedAuditTrailMigrator:
                     user_id = 1  # Assuming admin user ID is 1
 
                 # Process each change item in the entry
-                for item in entry.get("items", []):
+                for item in entry.get("items", []) or []:
                     # Map field changes to OpenProject audit format
                     changes = self._map_field_changes(item)
 
                     if changes:
                         audit_event: AuditEventData = {
                             "jira_issue_key": jira_issue_key,
-                            "jira_changelog_id": entry["id"],
+                            "jira_changelog_id": entry.get("id", "unknown"),
                             "openproject_work_package_id": openproject_work_package_id,
                             "user_id": user_id,
                             "user_name": user_name,
-                            "created_at": entry["created"],
+                            "created_at": entry.get("created", "1970-01-01T00:00:00Z"),
                             "action": "update",
                             "auditable_type": "WorkPackage",
                             "auditable_id": openproject_work_package_id,
