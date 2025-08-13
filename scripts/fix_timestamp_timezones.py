@@ -109,8 +109,8 @@ class TimestampCorrectionScript:
                     batch_num += 1
             else:
                 for batch in self._get_migrated_work_packages_streaming():
-                if not batch:
-                    break
+                    if not batch:
+                        break
                     self.stats["total_packages"] += len(batch)
                     total_processed += len(batch)
                     self.logger.info(

@@ -265,6 +265,10 @@ class MetricsCollector:
                 "total_count": sum(self._counters.values()),
                 "tagged_metrics": len(self._tagged_counters),
                 "total_tagged_combinations": total_tagged_combinations,
+                "tagged_counters": {
+                    metric: dict(tags)
+                    for metric, tags in self._tagged_counters.items()
+                },
                 "metric_names": list(self._counters.keys()),
                 "memory_usage": {
                     "max_tag_combinations": MAX_TAG_COMBINATIONS,
