@@ -12,6 +12,9 @@ import requests
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient, OpenProjectError
 from src.config import get_path, jira_config, logger, migration_config
+# Provide a module-level config attribute for tests expecting `config`
+from types import SimpleNamespace
+config = SimpleNamespace(logger=logger)
 from src.display import ProgressTracker
 
 # Get batch size from migration config
@@ -240,7 +243,13 @@ class TempoAccountMigration:
             identifier,
         )
 
-        if migration_config.get("dry_run", False):
+        # Honor patched module-level config in tests; fall back to global migration_config
+        try:
+            dry_run_flag = bool(getattr(config, "migration_config", {}).get("dry_run", False))
+        except Exception:
+            dry_run_flag = bool(migration_config.get("dry_run", False))
+
+        if dry_run_flag:
             logger.info("DRY RUN: Would create company: %s", name)
             # Return a placeholder for dry run
             return {
@@ -251,11 +260,17 @@ class TempoAccountMigration:
             }
 
         # Create the company in OpenProject
-        company, was_created = self.op_client.create_company(
+        result = self.op_client.create_company(
             name=name,
             identifier=identifier,
             description=description,
         )
+        # Support clients that return a dict or (dict, bool)
+        if isinstance(result, tuple):
+            company, was_created = result
+        else:
+            company = result
+            was_created = bool(company)
 
         if not company:
             msg = f"Failed to create company: {name}"

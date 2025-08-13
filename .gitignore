@@ -91,6 +91,7 @@ Thumbs.db
 id_mapping.json
 data/*.json
 !data/*.example.json
+data/migration_data/
 
 # AI Tools - keep configurations but ignore dynamic content
 .cursor/rules/*.mdc

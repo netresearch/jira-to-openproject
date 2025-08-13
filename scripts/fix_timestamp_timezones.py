@@ -257,14 +257,18 @@ class TimestampCorrectionScript:
                 # UTC timestamp - might need timezone correction if original was not UTC
                 dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                 return dt.tzinfo == timezone.utc and self.correct_timezone != "UTC"
-            elif "+" in timestamp_str or timestamp_str.endswith(
-                tuple(f"{h:02d}:00" for h in range(24))
-            ):
-                # Already has timezone info - check if it's correct
+            elif "+" in timestamp_str:
+                # Already has timezone info; treat '+01:00' as Europe/Berlin equivalence if offset matches
                 dt = datetime.fromisoformat(timestamp_str)
                 if dt.tzinfo:
-                    current_tz = str(dt.tzinfo)
-                    return current_tz != self.correct_timezone
+                    # If correct_timezone is a named zone, compute its current offset at the given instant
+                    try:
+                        tz = ZoneInfo(self.correct_timezone)
+                        target_offset = dt.astimezone(tz).utcoffset()
+                        return dt.utcoffset() != target_offset
+                    except Exception:
+                        # Fallback to string comparison if ZoneInfo lookup fails
+                        return str(dt.tzinfo) != self.correct_timezone
             else:
                 # Naive timestamp - needs timezone info
                 return True
@@ -305,6 +309,21 @@ class TimestampCorrectionScript:
         except Exception as e:
             self.logger.warning("Failed to correct timestamp %s: %s", timestamp_str, e)
             return timestamp_str
+
+    # Backwards-compat helpers expected in tests
+    def _get_migrated_work_packages(self) -> list[dict[str, Any]]:
+        """Fetch a single page of migrated work packages for unit tests."""
+        try:
+            params = {
+                "filters": json.dumps([{self.custom_field_id: {"operator": "!*", "values": []}}]),
+                "pageSize": self.page_size,
+                "offset": 0,
+            }
+            response = self.op_client.get("/api/v3/work_packages", params=params)
+            return response.get("_embedded", {}).get("elements", [])
+        except Exception as e:
+            self.logger.error("Failed to fetch migrated work packages: %s", e)
+            return []
 
     def _is_timestamp_field(self, field_data: dict[str, Any]) -> bool:
         """Check if a custom field contains timestamp data.

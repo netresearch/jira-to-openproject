@@ -206,26 +206,19 @@ class TestParseRailsOutput:
 class TestQueryExecution:
     """Tests for query execution and modification logic."""
 
-    def test_execute_query_to_json_file_adds_limit_to_collection_query(
+    def test_execute_query_to_json_file_uses_pagination_for_collection_query(
         self,
         op_client,
     ) -> None:
-        """CRITICAL: Verify the dangerous behavior of adding a hardcoded `.limit(5)`.
-        This test exposes a potential data loss bug where the client might silently
-        return partial data.
-        """
+        """Ensure collection queries use proper pagination instead of hardcoded limits."""
         # Arrange
-        op_client.execute_query = MagicMock(return_value="[]")
-        op_client._parse_rails_output = MagicMock(return_value=[])
+        op_client._execute_batched_query = MagicMock(return_value=[])
 
         # Act
         op_client.execute_query_to_json_file("Project.all")
 
-        # Assert
-        op_client.execute_query.assert_called_once_with(
-            "(Project.all).limit(5).to_json",
-            timeout=None,
-        )
+        # Assert: pagination helper invoked for model
+        op_client._execute_batched_query.assert_called_once_with("Project", timeout=None)
 
     @pytest.mark.parametrize(
         ("original_query", "expected_modified_query"),
@@ -379,24 +372,16 @@ class TestQueryModificationEdgeCases:
     These tests expose the dangerous hardcoded .limit(5) behavior.
     """
 
-    def test_hardcoded_limit_data_loss_scenario(self, op_client) -> None:
-        """CRITICAL BUG TEST: Demonstrates potential data loss from hardcoded limit.
-        This test shows that queries for large datasets will silently return only 5 records.
-        """
+    def test_collection_queries_use_pagination_not_hardcoded_limit(self, op_client) -> None:
+        """Regression: ensure no silent truncation via hardcoded limit; use batching."""
         # Arrange
-        op_client.execute_query = MagicMock(return_value="[]")
-        op_client._parse_rails_output = MagicMock(return_value=[])
+        op_client._execute_batched_query = MagicMock(return_value=[])
 
-        # Act: Query for all work packages (potentially thousands)
+        # Act
         op_client.execute_query_to_json_file("WorkPackage.all")
 
-        # Assert: Verify the dangerous .limit(5) was added
-        op_client.execute_query.assert_called_once_with(
-            "(WorkPackage.all).limit(5).to_json",
-            timeout=None,
-        )
-
-        # This is a BUG: User expects all work packages but only gets 5!
+        # Assert
+        op_client._execute_batched_query.assert_called_once_with("WorkPackage", timeout=None)
 
     def test_query_modification_keyword_detection_brittleness(self, op_client) -> None:
         """Test the brittle keyword-based detection for query modification.

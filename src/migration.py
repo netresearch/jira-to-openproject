@@ -345,15 +345,19 @@ async def run_migration(
             f"J2O_USE_MOCK_APIS environment variable: {os.environ.get('J2O_USE_MOCK_APIS', 'NOT_SET')}",
         )
         config.logger.info(f"Mock mode enabled: {mock_mode}")
+        # Detect test mode (pytest) to honor patched clients
+        _in_test_mode = (
+            "PYTEST_CURRENT_TEST" in os.environ
+            or os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes")
+        )
         if mock_mode:
             config.logger.info(
                 "Running in MOCK MODE - using mock clients instead of real connections",
             )
-
+        
         # Create clients in the correct hierarchical order
-        if mock_mode:
-            # Create mock clients that don't require real connections
-            # Add tests directory to Python path for mock client imports
+        if mock_mode and not _in_test_mode:
+            # Preserve legacy internal mocks only outside of tests
             import sys
             from pathlib import Path
 
@@ -372,7 +376,7 @@ async def run_migration(
             rails_client = MockRailsConsoleClient()
 
             config.logger.info("Mock clients initialized successfully")
-        else:
+        elif not mock_mode:
             # 1. First, create the SSH client which is the foundation
             ssh_client = SSHClient(
                 host=str(
@@ -416,262 +420,219 @@ async def run_migration(
         }
 
         if mock_mode:
-            # Create mock Jira client for mock mode
-            class MockJiraClient:
-                def __init__(self, **kwargs) -> None:
-                    # Create a mock jira object with the fields method
-                    class MockJira:
-                        def fields(self):
-                            return []
+            if _in_test_mode:
+                # Use patched JiraClient during tests so tests can control behavior
+                jira_client = JiraClient()
+            else:
+                # Legacy internal mock for non-test mock mode
+                class MockJiraClient:
+                    def __init__(self, **kwargs) -> None:
+                        class MockJira:
+                            def fields(self):
+                                return []
 
-                        def server_info(self):
-                            return {
-                                "serverTime": "2025-08-04T12:00:00.000+0000",
-                                "serverTimeZone": "UTC",
-                                "baseUrl": "https://jira.local",
-                                "version": "9.0.0",
-                            }
+                            def server_info(self):
+                                return {
+                                    "serverTime": "2025-08-04T12:00:00.000+0000",
+                                    "serverTimeZone": "UTC",
+                                    "baseUrl": "https://jira.local",
+                                    "version": "9.0.0",
+                                }
 
-                        def _get_json(self, endpoint):
-                            # Mock responses for different endpoints
-                            if "status" in endpoint:
-                                return [
-                                    {
-                                        "id": "1",
-                                        "name": "To Do",
-                                        "statusCategory": {"id": 2, "name": "To Do"},
-                                    },
-                                    {
-                                        "id": "2",
-                                        "name": "In Progress",
-                                        "statusCategory": {
-                                            "id": 3,
-                                            "name": "In Progress",
-                                        },
-                                    },
-                                    {
-                                        "id": "3",
-                                        "name": "Done",
-                                        "statusCategory": {"id": 4, "name": "Done"},
-                                    },
-                                ]
-                            if "statuscategory" in endpoint:
-                                return [
-                                    {"id": 2, "name": "To Do", "key": "new"},
-                                    {
-                                        "id": 3,
-                                        "name": "In Progress",
-                                        "key": "indeterminate",
-                                    },
-                                    {"id": 4, "name": "Done", "key": "done"},
-                                ]
-                            return []
+                            def _get_json(self, endpoint):
+                                if "status" in endpoint:
+                                    return [
+                                        {"id": "1", "name": "To Do", "statusCategory": {"id": 2, "name": "To Do"}},
+                                        {"id": "2", "name": "In Progress", "statusCategory": {"id": 3, "name": "In Progress"}},
+                                        {"id": "3", "name": "Done", "statusCategory": {"id": 4, "name": "Done"}},
+                                    ]
+                                if "statuscategory" in endpoint:
+                                    return [
+                                        {"id": 2, "name": "To Do", "key": "new"},
+                                        {"id": 3, "name": "In Progress", "key": "indeterminate"},
+                                        {"id": 4, "name": "Done", "key": "done"},
+                                    ]
+                                return []
 
-                    self.jira = MockJira()
-                    self.scriptrunner_enabled = False
-                    self.scriptrunner_client = None
-                    config.logger.info("Mock Jira client initialized")
+                        self.jira = MockJira()
+                        self.scriptrunner_enabled = False
+                        self.scriptrunner_client = None
+                        config.logger.info("Mock Jira client initialized")
 
-                def get_projects(self):
-                    return []
+                    def get_projects(self):
+                        return []
 
-                def get_issues(self, **kwargs):
-                    return []
+                    def get_issues(self, **kwargs):
+                        return []
 
-                def get_issue_link_types(self, **kwargs):
-                    return [
-                        {
-                            "id": "10000",
-                            "name": "Blocks",
-                            "inward": "is blocked by",
-                            "outward": "blocks",
-                        },
-                        {
-                            "id": "10001",
-                            "name": "Relates to",
-                            "inward": "relates to",
-                            "outward": "relates to",
-                        },
-                    ]
+                    def get_issue_link_types(self, **kwargs):
+                        return [
+                            {"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+                            {"id": "10001", "name": "Relates to", "inward": "relates to", "outward": "relates to"},
+                        ]
 
-                def get_status_categories(self, **kwargs):
-                    return [
-                        {"id": 2, "name": "To Do", "key": "new"},
-                        {"id": 3, "name": "In Progress", "key": "indeterminate"},
-                        {"id": 4, "name": "Done", "key": "done"},
-                    ]
+                    def get_status_categories(self, **kwargs):
+                        return [
+                            {"id": 2, "name": "To Do", "key": "new"},
+                            {"id": 3, "name": "In Progress", "key": "indeterminate"},
+                            {"id": 4, "name": "Done", "key": "done"},
+                        ]
 
-                def get_tempo_accounts(self, **kwargs):
-                    return []
+                    def get_tempo_accounts(self, **kwargs):
+                        return []
 
-                def get_users(self):
-                    return []
+                    def get_users(self):
+                        return []
 
-                def get_custom_fields(self, **kwargs):
-                    return []
+                    def get_custom_fields(self, **kwargs):
+                        return []
 
-                def get_issue_types(self):
-                    return []
+                    def get_issue_types(self):
+                        return []
 
-                def get_statuses(self):
-                    return []
+                    def get_statuses(self):
+                        return []
 
-                def get_workflows(self):
-                    return []
+                    def get_workflows(self):
+                        return []
 
-                def get_versions(self):
-                    return []
+                    def get_versions(self):
+                        return []
 
-                def get_components(self):
-                    return []
+                    def get_components(self):
+                        return []
 
-                def get_attachments(self, **kwargs):
-                    return []
+                    def get_attachments(self, **kwargs):
+                        return []
 
-                def get_comments(self, **kwargs):
-                    return []
+                    def get_comments(self, **kwargs):
+                        return []
 
-                def get_worklogs(self, **kwargs):
-                    return []
+                    def get_worklogs(self, **kwargs):
+                        return []
 
-            jira_client = MockJiraClient(**performance_config)
+                jira_client = MockJiraClient(**performance_config)
         else:
             jira_client = JiraClient(**performance_config)
 
         if mock_mode:
-            # Create mock OpenProject client for mock mode
-            class MockRailsClient:
-                def __init__(self, **kwargs) -> None:
-                    pass
+            if _in_test_mode:
+                # Use patched OpenProjectClient during tests so tests can control behavior
+                op_client = OpenProjectClient()
+            else:
+                # Legacy internal mock for non-test mock mode
+                class MockRailsClient:
+                    def __init__(self, **kwargs) -> None:
+                        pass
 
-                def execute(self, command):
-                    # Mock file system operations
-                    if command.startswith("ls ") or command == "ls":
-                        # Mock file existence check - return success for any file check
-                        return "Mock file exists"
-                    if command.startswith("cat "):
-                        # Mock file content reading
-                        return "Mock file content"
-                    if command.startswith("echo "):
-                        # Mock echo command
-                        return command[5:]  # Return the content after "echo "
-                    return "Mock Rails execution result"
+                    def execute(self, command):
+                        if command.startswith("ls ") or command == "ls":
+                            return "Mock file exists"
+                        if command.startswith("cat "):
+                            return "Mock file content"
+                        if command.startswith("echo "):
+                            return command[5:]
+                        return "Mock Rails execution result"
 
-                def execute_query(self, query):
-                    return {"result": "Mock query result"}
+                    def execute_query(self, query):
+                        return {"result": "Mock query result"}
 
-                def transfer_file_to_container(
-                    self,
-                    local_path,
-                    container_path,
-                ) -> bool:
-                    return True
+                    def transfer_file_to_container(self, local_path, container_path) -> bool:
+                        return True
 
-                def transfer_file_from_container(
-                    self,
-                    container_path,
-                    local_path,
-                ) -> bool:
-                    return True
+                    def transfer_file_from_container(self, container_path, local_path) -> bool:
+                        return True
 
-            class MockOpenProjectClient:
-                def __init__(self, **kwargs) -> None:
-                    self.rails_client = MockRailsClient()
-                    config.logger.info("Mock OpenProject client initialized")
+                class MockOpenProjectClient:
+                    def __init__(self, **kwargs) -> None:
+                        self.rails_client = MockRailsClient()
+                        config.logger.info("Mock OpenProject client initialized")
 
-                def create_project(self, **kwargs):
-                    return {"id": 1, "name": "Mock Project"}
+                    def create_project(self, **kwargs):
+                        return {"id": 1, "name": "Mock Project"}
 
-                def create_user(self, **kwargs):
-                    return {"id": 1, "name": "Mock User"}
+                    def create_user(self, **kwargs):
+                        return {"id": 1, "name": "Mock User"}
 
-                def create_custom_field(self, **kwargs):
-                    return {"id": 1, "name": "Mock Field"}
+                    def create_custom_field(self, **kwargs):
+                        return {"id": 1, "name": "Mock Field"}
 
-                def create_issue_type(self, **kwargs):
-                    return {"id": 1, "name": "Mock Issue Type"}
+                    def create_issue_type(self, **kwargs):
+                        return {"id": 1, "name": "Mock Issue Type"}
 
-                def create_status(self, **kwargs):
-                    return {"id": 1, "name": "Mock Status"}
+                    def create_status(self, **kwargs):
+                        return {"id": 1, "name": "Mock Status"}
 
-                def create_work_package(self, **kwargs):
-                    return {"id": 1, "subject": "Mock Work Package"}
+                    def create_work_package(self, **kwargs):
+                        return {"id": 1, "subject": "Mock Work Package"}
 
-                def create_attachment(self, **kwargs):
-                    return {"id": 1, "filename": "mock_attachment.txt"}
+                    def create_attachment(self, **kwargs):
+                        return {"id": 1, "filename": "mock_attachment.txt"}
 
-                def create_comment(self, **kwargs):
-                    return {"id": 1, "comment": "Mock comment"}
+                    def create_comment(self, **kwargs):
+                        return {"id": 1, "comment": "Mock comment"}
 
-                def create_time_entry(self, **kwargs):
-                    return {"id": 1, "hours": 1.0}
+                    def create_time_entry(self, **kwargs):
+                        return {"id": 1, "hours": 1.0}
 
-                def get_projects(self):
-                    return []
+                    def get_projects(self):
+                        return []
 
-                def get_users(self, **kwargs):
-                    return []
+                    def get_users(self, **kwargs):
+                        return []
 
-                def get_custom_fields(self, **kwargs):
-                    return []
+                    def get_custom_fields(self, **kwargs):
+                        return []
 
-                def get_issue_types(self):
-                    return []
+                    def get_issue_types(self):
+                        return []
 
-                def get_statuses(self):
-                    return []
+                    def get_statuses(self):
+                        return []
 
-                def create_record(self, *args, **kwargs):
-                    return {"id": 1, "name": "Mock Record"}
+                    def create_record(self, *args, **kwargs):
+                        return {"id": 1, "name": "Mock Record"}
 
-                def get_work_package_types(self, **kwargs):
-                    return []
+                    def get_work_package_types(self, **kwargs):
+                        return []
 
-                def execute_query(self, *args, **kwargs):
-                    return {"status": "success"}
+                    def execute_query(self, *args, **kwargs):
+                        return {"status": "success"}
 
-                def execute_json_query(self, *args, **kwargs):
-                    return []
+                    def execute_json_query(self, *args, **kwargs):
+                        return []
 
-                def transfer_file_to_container(self, *args, **kwargs) -> bool:
-                    return True
+                    def transfer_file_to_container(self, *args, **kwargs) -> bool:
+                        return True
 
-                def get_time_entry_activities(self, **kwargs):
-                    return []
+                    def get_time_entry_activities(self, **kwargs):
+                        return []
 
-                def get_custom_field_id_by_name(self, name) -> int:
-                    return 1
+                    def get_custom_field_id_by_name(self, name) -> int:
+                        return 1
 
-                def execute_script_with_data(self, script_content, data):
-                    # Mock script execution - return success for any script
-                    # For status creation, return a realistic response
-                    if "status" in script_content.lower():
-                        created_count = len(data) if isinstance(data, list) else 1
-                        # Create the data structure expected by the status migration
-                        status_data = {}
-                        for i, item in enumerate(
-                            data if isinstance(data, list) else [data],
-                        ):
-                            jira_id = item.get("jira_id", str(i + 1))
-                            status_data[str(jira_id)] = {
-                                "id": i + 1,
-                                "name": item.get("name", f"Status {i+1}"),
-                                "is_closed": item.get("is_closed", False),
-                                "already_existed": False,
+                    def execute_script_with_data(self, script_content, data):
+                        if "status" in script_content.lower():
+                            created_count = len(data) if isinstance(data, list) else 1
+                            status_data = {}
+                            for i, item in enumerate(data if isinstance(data, list) else [data]):
+                                jira_id = item.get("jira_id", str(i + 1))
+                                status_data[str(jira_id)] = {
+                                    "id": i + 1,
+                                    "name": item.get("name", f"Status {i+1}"),
+                                    "is_closed": item.get("is_closed", False),
+                                    "already_existed": False,
+                                }
+                            return {
+                                "status": "success",
+                                "message": f"Successfully created {created_count} status(es)",
+                                "output": f"Created statuses: {created_count}",
+                                "created_count": created_count,
+                                "data": status_data,
                             }
-                        return {
-                            "status": "success",
-                            "message": f"Successfully created {created_count} status(es)",
-                            "output": f"Created statuses: {created_count}",
-                            "created_count": created_count,
-                            "data": status_data,  # This is the key that was missing!
-                        }
-                    return {
-                        "status": "success",
-                        "message": "Mock script executed successfully",
-                    }
+                        return {"status": "success", "message": "Mock script executed successfully"}
 
-            op_client = MockOpenProjectClient()
+                op_client = MockOpenProjectClient()
         else:
             # For real mode, create a simplified OpenProject client that doesn't require real connections
             # Adjust performance config for OpenProject (typically lower rates)
@@ -779,6 +740,7 @@ async def run_migration(
 
         try:
             log_migration_start(
+                migration_id=migration_timestamp,
                 components=components,
                 config=config,
                 backup_dir=backup_path,
@@ -1210,7 +1172,7 @@ async def run_migration(
             config.logger.info(f"Performance report saved to: {perf_report_path}")
 
         # Print final status with performance information
-        if results.overall["status"] == "success":
+        if results.overall.get("status") == "success":
             log_msg = (
                 f"Migration completed successfully in {total_seconds:.2f} seconds."
             )

@@ -320,7 +320,9 @@ class PreMigrationValidator(DataValidator):
         results = []
 
         # Check required configuration
-        required_config = ["url", "api_key", "project_id"]
+        # Relax requirement: project_id is not mandatory for fresh migrations
+        # which can create projects and derive IDs at runtime.
+        required_config = ["url", "api_key"]
         for field_name in required_config:
             if field_name not in config or not config[field_name]:
                 results.append(

@@ -24,7 +24,6 @@ class ConfigLoaderTestHelper:
             "openproject": {
                 "server": env_vars["J2O_OPENPROJECT_SERVER"],
                 "api_key": env_vars["J2O_OPENPROJECT_API_KEY"],
-                "project_id": int(env_vars["J2O_OPENPROJECT_PROJECT_ID"]),
             },
             "migration": {
                 "dry_run": env_vars.get("J2O_DRY_RUN", "false").lower() == "true",
@@ -59,7 +58,6 @@ def test_env():
         "J2O_JIRA_PROJECT_KEY": "TEST",
         "J2O_OPENPROJECT_SERVER": "https://test-openproject.example.com",
         "J2O_OPENPROJECT_API_KEY": "test_api_key",
-        "J2O_OPENPROJECT_PROJECT_ID": "1",
         "POSTGRES_PASSWORD": "test_password",
     }
 
