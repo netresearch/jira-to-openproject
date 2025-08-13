@@ -89,9 +89,23 @@ Thumbs.db
 
 # Migration specific
 id_mapping.json
-data/*.json
-!data/*.example.json
+
+# Runtime and migration data directories (not for version control)
+data/
 data/migration_data/
+
+# Backups (top-level legacy; runtime backups handled under var/)
+backups/
+# Also catch accidental singular folder name
+backup/
+
+# Data preservation workspace (created on demand by DataPreservationManager)
+data_preservation/
+
+# Reports and results (output artifacts)
+reports/
+results/
+test_reports/
 
 # AI Tools - keep configurations but ignore dynamic content
 .cursor/rules/*.mdc

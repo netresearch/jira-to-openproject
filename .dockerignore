@@ -27,6 +27,10 @@ logs/
 data/
 !data/*.example.json
 reports/
+backups/
+results/
+test_reports/
+data_preservation/
 repomix-output.txt
 
 # Docker files (no need to copy these into the image)
