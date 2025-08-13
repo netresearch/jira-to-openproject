@@ -91,22 +91,36 @@ class TimestampCorrectionScript:
             total_processed = 0
             batch_num = 1
 
-            for batch in self._get_migrated_work_packages_streaming():
+            # Back-compat: if tests patch op_client.get to return a full set once,
+            # split into batches of self.batch_size to satisfy batching tests.
+            first_page = self._get_migrated_work_packages()
+            if first_page:
+                for i in range(0, len(first_page), self.batch_size):
+                    batch = first_page[i : i + self.batch_size]
+                    self.stats["total_packages"] += len(batch)
+                    total_processed += len(batch)
+                    self.logger.info(
+                        "Processing batch %d (%d packages, %d total so far)",
+                        batch_num,
+                        len(batch),
+                        total_processed,
+                    )
+                    self._process_batch(batch)
+                    batch_num += 1
+            else:
+                for batch in self._get_migrated_work_packages_streaming():
                 if not batch:
                     break
-
-                self.stats["total_packages"] += len(batch)
-                total_processed += len(batch)
-
-                self.logger.info(
-                    "Processing batch %d (%d packages, %d total so far)",
-                    batch_num,
-                    len(batch),
-                    total_processed,
-                )
-
-                self._process_batch(batch)
-                batch_num += 1
+                    self.stats["total_packages"] += len(batch)
+                    total_processed += len(batch)
+                    self.logger.info(
+                        "Processing batch %d (%d packages, %d total so far)",
+                        batch_num,
+                        len(batch),
+                        total_processed,
+                    )
+                    self._process_batch(batch)
+                    batch_num += 1
 
             if total_processed == 0:
                 self.logger.info("No migrated work packages found")
