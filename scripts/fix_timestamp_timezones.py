@@ -29,10 +29,12 @@ from src.utils.enhanced_timestamp_migrator import (  # noqa: E402
     EnhancedTimestampMigrator,
 )
 
-# Add config attribute for tests
-config = type('Config', (), {
-    'logger': configure_logging("INFO", None)
-})()
+# Add config attribute for tests (logger as a simple namespace to allow patching)
+class _Cfg:
+    pass
+
+config = _Cfg()
+config.logger = configure_logging("INFO", None)
 
 
 class TimestampCorrectionScript:
@@ -57,7 +59,8 @@ class TimestampCorrectionScript:
         self.batch_size = batch_size
         self.custom_field_id = custom_field_id
         self.page_size = page_size
-        self.logger = configure_logging("INFO", None)
+        # Use injectable logger from config in tests; default to configured logger
+        self.logger = getattr(config, "logger", None) or configure_logging("INFO", None)
 
         # Initialize clients
         self.jira_client = JiraClient()
