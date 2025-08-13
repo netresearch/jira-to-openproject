@@ -327,7 +327,8 @@ def mock_jira_client() -> JiraClient:
         JiraClient: A mocked JiraClient instance
 
     """
-    return cast("JiraClient", MagicMock(spec=JiraClient))
+    # Use factory to ensure commonly used methods like .get exist for tests
+    return create_mock_jira_client()
 
 
 @pytest.fixture
@@ -374,6 +375,12 @@ def mock_op_client() -> OpenProjectClient:
 
     """
     return cast("OpenProjectClient", MagicMock(spec=OpenProjectClient))
+
+
+@pytest.fixture
+def mock_clients(mock_jira_client: JiraClient, mock_op_client: OpenProjectClient):
+    """Provide (jira_client, op_client) tuple for tests expecting combined fixture."""
+    return mock_jira_client, mock_op_client
 
 
 # Fixtures for integration tests directly using the clients

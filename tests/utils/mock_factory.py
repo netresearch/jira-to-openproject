@@ -17,13 +17,15 @@ def create_mock_jira_client() -> JiraClient:
         JiraClient: A configured mock JiraClient
 
     """
-    mock_client = MagicMock()
+    mock_client = MagicMock(spec=JiraClient)
 
     # Configure common mock behaviors
     mock_client.get_projects.return_value = []
     mock_client.get_custom_fields.return_value = []
     mock_client.get_all_issues_for_project.return_value = []
 
+    # Provide a generic .get method used by URL-encoding tests
+    mock_client.get = MagicMock()
     return mock_client
 
 
