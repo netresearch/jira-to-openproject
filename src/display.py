@@ -103,7 +103,8 @@ def configure_logging(
         else:
             requested_level = getattr(logging, level.upper(), logging.INFO)
 
-        if requested_level != current_level:
+        # Never downgrade. Only upgrade verbosity (e.g., INFO -> DEBUG)
+        if requested_level < current_level:
             current_root.setLevel(requested_level)
             for h in current_root.handlers:
                 try:
