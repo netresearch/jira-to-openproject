@@ -170,13 +170,13 @@ class IssueTypeMigration(BaseMigration):
         try:
             self.op_work_package_types = self.op_client.get_work_package_types()
         except Exception as e:
-            self.logger.warning(
-                "Failed to get work package types from OpenProject: %s",
-                e,
-            )
-            self.logger.warning(
-                "Using an empty list of work package types for OpenProject",
-            )
+            # Honor stop-on-error: fail hard so orchestrator halts and we can fix root cause
+            msg = f"Failed to get work package types from OpenProject: {e}"
+            self.logger.error(msg)
+            if config.migration_config.get("stop_on_error", False):
+                raise MigrationError(msg) from e
+            # Otherwise fallback to empty list (legacy behavior)
+            self.logger.warning("Using an empty list of work package types for OpenProject")
             self.op_work_package_types = []
 
         self.logger.info(

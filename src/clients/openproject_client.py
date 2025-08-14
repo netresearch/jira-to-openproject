@@ -1401,16 +1401,19 @@ class OpenProjectClient:
         if limit:
             query += f".limit({limit})"
 
-        # Add to_json to get the result as JSON
-        query += ".as_json"
+        # Build Ruby expression that returns array/dicts directly
+        ruby_expr = f"{query}.as_json"
 
         try:
-            # Use the JSON-specific method
-            result = self.execute_json_query(query)
-            # Make sure we always return a list, even for empty results
-            if result is None:
+            # Prefer file-based for multi-record results to avoid console artifacts
+            data = self.execute_large_query_to_json_file(
+                ruby_expr,
+                container_file=f"/tmp/j2o_{model.lower()}_records.json",
+                timeout=60,
+            )
+            if data is None:
                 return []
-            return result
+            return data if isinstance(data, list) else [data]
         except Exception as e:
             msg = f"Error finding records for {model}."
             raise QueryExecutionError(msg) from e
@@ -1791,7 +1794,36 @@ class OpenProjectClient:
 
         """
         try:
-            return self.execute_json_query("Type.all") or []
+            # Use file-based JSON to avoid tmux/console artifacts
+            file_path = self._generate_unique_temp_filename("work_package_types")
+            file_path_interpolated = f"'{file_path}'"
+            write_query = (
+                f"types = Type.all.as_json; File.write({file_path_interpolated}, "
+                f'JSON.pretty_generate(types)); puts "Types data written to '
+                f'{file_path} (#{{types.count}} types)"; nil'
+            )
+
+            self.rails_client.execute(write_query, suppress_output=True)
+            logger.debug("Successfully executed work package types write command")
+
+            try:
+                ssh_command = f"docker exec {self.container_name} cat {file_path}"
+                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                if returncode != 0:
+                    raise QueryExecutionError(
+                        f"Failed to read work package types file: {stderr or 'unknown error'}",
+                    )
+                parsed = json.loads(stdout)
+                logger.info(
+                    "Successfully loaded %d work package types from container file",
+                    len(parsed) if isinstance(parsed, list) else 0,
+                )
+                return parsed if isinstance(parsed, list) else []
+            finally:
+                try:
+                    self.ssh_client.execute_command(f"docker exec {self.container_name} rm -f {file_path}")
+                except Exception:
+                    pass
         except Exception as e:
             msg = "Failed to get work package types."
             raise QueryExecutionError(msg) from e
@@ -2217,29 +2249,26 @@ class OpenProjectClient:
 
         where_clause = f".where({', '.join(conditions)})" if conditions else ""
 
-        script = f"""
-        time_entries = TimeEntry{where_clause}.limit({limit}).includes(:work_package, :user, :activity)
-
-        time_entries.map do |entry|
-          {{
-            id: entry.id,
-            work_package_id: entry.work_package_id,
-            work_package_subject: entry.work_package&.subject,
-            user_id: entry.user_id,
-            user_name: entry.user&.name,
-            activity_id: entry.activity_id,
-            activity_name: entry.activity&.name,
-            hours: entry.hours.to_f,
-            spent_on: entry.spent_on.to_s,
-            comments: entry.comments,
-            created_at: entry.created_at.to_s,
-            updated_at: entry.updated_at.to_s
-          }}
-        end
-        """
+        # Build Ruby expression (not a block) that returns the array directly
+        query = (
+            f"TimeEntry{where_clause}.limit({limit}).includes(:work_package, :user, :activity)"
+            
+            ".map do |entry| "
+            "{ id: entry.id, "
+            "work_package_id: entry.work_package_id, "
+            "work_package_subject: entry.work_package&.subject, "
+            "user_id: entry.user_id, user_name: entry.user&.name, "
+            "activity_id: entry.activity_id, activity_name: entry.activity&.name, "
+            "hours: entry.hours.to_f, spent_on: entry.spent_on.to_s, "
+            "comments: entry.comments, created_at: entry.created_at.to_s, updated_at: entry.updated_at.to_s } end"
+        )
 
         try:
-            result = self.execute_json_query(script)
+            result = self.execute_large_query_to_json_file(
+                query,
+                container_file="/tmp/j2o_time_entries.json",
+                timeout=60,
+            )
             return result if isinstance(result, list) else []
         except Exception as e:
             msg = "Failed to retrieve time entries."
