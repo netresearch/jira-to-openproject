@@ -85,7 +85,7 @@ def configure_logging(
 
     """
     # If already configured, return the existing logger without reconfiguring
-    global _LOGGING_CONFIGURED, _LOGGER
+    global _LOGGING_CONFIGURED, _LOGGER, _LOG_LEVEL_NUM
     if _LOGGING_CONFIGURED and _LOGGER is not None:
         # If already configured but requested level differs, upgrade/downgrade levels dynamically
         # This fixes cases where an early import configured INFO before config sets DEBUG
@@ -110,7 +110,6 @@ def configure_logging(
                     h.setLevel(requested_level)
                 except Exception:
                     pass
-            global _LOG_LEVEL_NUM
             _LOG_LEVEL_NUM = requested_level
         return cast("ExtendedLogger", _LOGGER)
 
@@ -196,7 +195,6 @@ def configure_logging(
 
     # Mark as configured and cache instance
     _LOGGING_CONFIGURED = True
-    global _LOG_LEVEL_NUM
     _LOG_LEVEL_NUM = numeric_level
     _LOGGER = logger
 

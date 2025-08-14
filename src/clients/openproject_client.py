@@ -570,11 +570,12 @@ class OpenProjectClient:
             timeout=timeout or 90,
             suppress_output=True,
         )
-        # Defensive: detect silent console errors even if markers went missing
-        self._check_console_output_for_errors(
-            _console_output or "",
-            context="execute_large_query_to_json_file",
-        )
+        # Defensive: detect console errors; rails_console_client will raise RubyError on late errors
+        # If it returns a string with hints of failure, surface as QueryExecutionError
+        try:
+            self._check_console_output_for_errors(_console_output or "", context="execute_large_query_to_json_file")
+        except Exception as e:
+            raise QueryExecutionError(str(e)) from e
 
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"

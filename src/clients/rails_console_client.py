@@ -389,6 +389,20 @@ class RailsConsoleClient:
                     if pattern in line:
                         raise RubyError(line.strip())
 
+        # Defensive: detect late Ruby errors printed by IRB after our end marker
+        try:
+            trailing_output = remainder[end_idx:]
+            if (
+                "SystemStackError" in trailing_output
+                or "Ruby error:" in trailing_output
+                or "full_message':" in trailing_output
+            ):
+                snippet_lines = [ln.strip() for ln in trailing_output.split("\n") if ln.strip()][:5]
+                snippet = " | ".join(snippet_lines)
+                raise RubyError(f"Ruby console reported error after end marker: {snippet}")
+        except Exception as _e:  # If detection itself fails, ignore and continue
+            pass
+
         return command_output
 
     def _get_console_state(self, output: str) -> dict[str, Any]:
