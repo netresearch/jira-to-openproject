@@ -48,6 +48,47 @@ if TYPE_CHECKING:
 
 console = Console()
 
+# Helper: strictly detect any error condition in a component result
+def _component_has_errors(result: ComponentResult | None) -> bool:
+    """Return True if the component result contains any errors or failed items.
+
+    This treats as error when:
+    - result is None
+    - success is False
+    - errors list is non-empty or 'error' field is set
+    - details.status is 'failed'/'error'
+    - any failed counters are > 0 (failed_count, failed, failed_types, failed_issues)
+    """
+    if result is None:
+        return True
+    if not getattr(result, "success", False):
+        return True
+    if getattr(result, "errors", None):
+        if len(result.errors) > 0:
+            return True
+    if getattr(result, "error", None):
+        return True
+    # Check details
+    details = getattr(result, "details", None) or {}
+    if isinstance(details, dict):
+        status = str(details.get("status", "")).lower()
+        if status in ("failed", "error", "errors"):
+            return True
+        if int(details.get("failed_count", 0)) > 0:
+            return True
+        if int(details.get("failed", 0)) > 0:
+            return True
+    # Check explicit counters on the model
+    if int(getattr(result, "failed_count", 0)) > 0:
+        return True
+    if int(getattr(result, "failed", 0)) > 0:
+        return True
+    if int(getattr(result, "failed_types", 0)) > 0:
+        return True
+    if int(getattr(result, "failed_issues", 0)) > 0:
+        return True
+    return False
+
 # Add StateManager class for tests
 class StateManager:
     """State manager class for testing purposes."""
@@ -745,7 +786,7 @@ async def run_migration(
                 config=config,
                 backup_dir=backup_path,
             )
-            monitoring_task = start_monitoring(config)
+            await start_monitoring(config)
             config.logger.info("Comprehensive logging and monitoring started")
         except Exception as e:
             config.logger.warning(f"Failed to initialize comprehensive logging: {e}")
@@ -762,7 +803,7 @@ async def run_migration(
         try:
             test_config = TestSuiteConfig(
                 test_types=[TestType.UNIT, TestType.INTEGRATION],
-                parallel_execution=True,
+                parallel_workers=4,
                 coverage_threshold=80.0,
                 timeout_seconds=300,
             )
@@ -976,8 +1017,8 @@ async def run_migration(
                         # Store result in the results dictionary
                         results.components[component_name] = component_result
 
-                        # Update overall status if component failed
-                        if not component_result.success:
+                        # Update overall status if component failed OR has errors
+                        if (not component_result.success) or _component_has_errors(component_result):
                             results.overall["status"] = "failed"
 
                         # Print component summary based on details dictionary
@@ -988,7 +1029,8 @@ async def run_migration(
                         component_time = details.get("time", 0)
 
                         # Enhanced logging with performance metrics
-                        if component_result.success:
+                        had_errors = _component_has_errors(component_result)
+                        if component_result.success and not had_errors:
                             log_msg = (
                                 f"Component '{component_name}' completed successfully "
                                 f"({success_count}/{total_count} items migrated), "
@@ -1064,15 +1106,11 @@ async def run_migration(
                         )
                         break
 
-                # Check if component failed and we should stop on error (before user confirmation)
+                # Check if component failed or has any errors and we should stop on error (before user confirmation)
                 component_result_obj = results.components.get(component_name)
-                if (
-                    component_result_obj
-                    and not component_result_obj.success
-                    and stop_on_error
-                ):
+                if stop_on_error and _component_has_errors(component_result_obj):
                     config.logger.error(
-                        f"Component '{component_name}' failed and --stop-on-error is set, aborting migration",
+                        f"Component '{component_name}' reported errors and --stop-on-error is set, aborting migration",
                     )
                     break
 
@@ -1081,19 +1119,19 @@ async def run_migration(
                     component_name != components[-1] and not no_confirm
                 ):  # Skip after the last component or if no_confirm is set
                     try:
-                        result: str = "\033[1;90mUNKNOWN RESULT\033[0m"
+                        result: str = "[dim]UNKNOWN RESULT[/dim]"
                         current_result = results.components.get(component_name)
                         if current_result:
                             if hasattr(current_result, "success"):
                                 if current_result.success:
-                                    result = "\033[1;32mSUCCEEDED\033[0m"
+                                    result = "[bold green]SUCCEEDED[/bold green]"
                                 else:
-                                    result = "\033[1;31mFAILED\033[0m"
+                                    result = "[bold red]FAILED[/bold red]"
                             if (
                                 hasattr(current_result, "errors")
                                 and current_result.errors
                             ):
-                                result = f"\033[1;31mFAILED\033[0m with errors: {current_result.errors}"
+                                result = f"[bold red]FAILED[/bold red] with errors: {current_result.errors}"
 
                         console.rule(f"Component '{component_name}' has {result}.")
 
@@ -1629,6 +1667,7 @@ def main() -> None:
             # Show performance summary if available
             if (
                 hasattr(migration_result, "overall")
+                and isinstance(migration_result.overall, dict)
                 and "performance_summary" in migration_result.overall
             ):
                 perf_summary = migration_result.overall["performance_summary"]

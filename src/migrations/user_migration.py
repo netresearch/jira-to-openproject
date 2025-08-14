@@ -19,8 +19,10 @@ from src.display import ProgressTracker, configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
-# Get logger from config
-logger = configure_logging("INFO", None)
+try:
+    from src.config import logger as logger  # type: ignore
+except Exception:
+    logger = configure_logging("INFO", None)
 
 
 @register_entity_types("users", "user_accounts")

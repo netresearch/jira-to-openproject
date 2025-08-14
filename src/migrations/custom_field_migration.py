@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src import config
-from src.clients.jira_client import JiraClient
+from src.clients.jira_client import JiraClient, JiraApiError, JiraAuthenticationError
 from src.clients.openproject_client import OpenProjectClient
 
 # Import RailsConsolePexpect to handle direct Rails console execution
@@ -114,7 +114,13 @@ class CustomFieldMigration(BaseMigration):
 
         try:
             # Get all fields from Jira
-            jira_fields = self.jira_client.jira.fields()
+            try:
+                jira_fields = self.jira_client.jira.fields()
+            except (JiraAuthenticationError, JiraApiError) as auth_err:
+                # Auth errors must be fatal to avoid silent data loss
+                msg = f"Failed to fetch Jira fields due to authentication/API error: {auth_err}"
+                self.logger.error(msg)
+                raise MigrationError(msg) from auth_err
 
             # Try to get all field options from ScriptRunner in one call if available
             scriptrunner_data = {}
@@ -186,32 +192,16 @@ class CustomFieldMigration(BaseMigration):
 
                     custom_fields.append(custom_field_data)
 
-            # Fetch metadata for fields that weren't in ScriptRunner data
+            # New behavior: if ScriptRunner provided data, do not attempt createmeta discovery.
+            # Warn and list fields that could not be resolved via ScriptRunner to avoid long scans.
             if fields_needing_metadata:
-                self.logger.info(
-                    "Fetching metadata for %d fields not found in ScriptRunner data",
+                missing_names = [name for _, name, _ in fields_needing_metadata]
+                self.logger.warning(
+                    "Skipping live metadata discovery for %d fields not present in ScriptRunner data",
                     len(fields_needing_metadata),
                 )
-                for field_id, field_name, custom_field_data in fields_needing_metadata:
-                    try:
-                        field_metadata = self.jira_client.get_field_metadata(field_id)
-                        if "allowedValues" in field_metadata:
-                            allowed_values = []
-                            for value in field_metadata["allowedValues"]:
-                                # Different fields might structure their values differently
-                                if "value" in value:
-                                    allowed_values.append(value["value"])
-                                elif "name" in value:
-                                    allowed_values.append(value["name"])
-                                else:
-                                    allowed_values.append(str(value))
-                            custom_field_data["allowed_values"] = allowed_values
-                    except Exception as e:
-                        self.logger.warning(
-                            "Failed to get metadata for field %s: %s",
-                            field_name,
-                            str(e),
-                        )
+                for name in missing_names:
+                    self.logger.warning("Unresolved custom field (no ScriptRunner data): %s", name)
 
             # Save to file
             if not custom_fields_file.parent.exists():
@@ -1093,6 +1083,11 @@ puts "Custom field migration completed. Results written to #{output_file}"
         """
         self.logger.info("Starting custom field migration")
 
+        # Initialize locals for safe exception handling
+        jira_fields: list[dict[str, Any]] = []
+        op_fields: list[dict[str, Any]] = []
+        mapping: dict[str, Any] = {}
+
         try:
             # Extract data once and cache it
             jira_fields = self.extract_jira_custom_fields()
@@ -1126,6 +1121,6 @@ puts "Custom field migration completed. Results written to #{output_file}"
                 success=False,
                 error=str(e),
                 success_count=0,
-                failed_count=(len(jira_fields) if jira_fields else 0),
-                total_count=(len(jira_fields) if jira_fields else 0),
+                failed_count=len(jira_fields) if jira_fields else 0,
+                total_count=len(jira_fields) if jira_fields else 0,
             )

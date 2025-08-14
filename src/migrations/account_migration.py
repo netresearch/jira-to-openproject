@@ -13,6 +13,7 @@ from src import config
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
+from src.clients.jira_client import JiraApiError, JiraAuthenticationError
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -144,6 +145,14 @@ class AccountMigration(BaseMigration):
             self.logger.error(error_msg)
             raise MigrationError(error_msg)
 
+        except (JiraAuthenticationError, JiraApiError) as e:
+            # Make 401/authorization failures fatal to avoid silent data loss
+            msg = (
+                "Tempo API unauthorized or unavailable (401/403). Blocking migration: "
+                f"{e}"
+            )
+            self.logger.error(msg)
+            raise MigrationError(msg) from e
         except Exception as e:
             error_msg = f"Failed to extract Tempo accounts: {e!s}"
             self.logger.exception(error_msg)
@@ -346,87 +355,66 @@ class AccountMigration(BaseMigration):
             "Ensuring 'Tempo Account' custom field exists in OpenProject...",
         )
 
-        # First, check if field already exists
+        # First, try robust file-based lookup
         try:
-            existing_id = self.get_existing_custom_field_id()
-            self.logger.info(
-                "Found existing Tempo Account custom field with ID %d",
-                existing_id,
-            )
-            self.account_custom_field_id = existing_id
-            return existing_id
-        except MigrationError:
-            # Field doesn't exist, proceed to create it
-            self.logger.info("Custom field doesn't exist, will create it")
+            existing_fields = self.op_client.get_custom_fields(force_refresh=True)
+            for cf in existing_fields:
+                if (cf.get("name") or "").strip().lower() == "tempo account":
+                    self.account_custom_field_id = int(cf.get("id"))
+                    self.logger.info(
+                        "Found existing Tempo Account custom field with ID %d",
+                        self.account_custom_field_id,
+                    )
+                    return self.account_custom_field_id
+            self.logger.info("Tempo Account custom field not found, will create it")
+        except Exception as e:
+            self.logger.warning("Error checking existing custom fields via file: %s", e)
 
-        # Create the custom field using direct API
-        self.logger.info("Creating Tempo Account custom field...")
+        # Try file-based Ruby script approach to avoid console parsing issues
+        self.logger.info("Creating Tempo Account custom field via Rails script...")
 
-        field_options = {
-            "name": "Tempo Account",
-            "field_format": "string",
-            "is_required": False,
-            "searchable": True,
-            "is_filter": True,
-            "type": "WorkPackageCustomField",
-        }
-
-        # Create the field
-        result = self.op_client.create_record("CustomField", field_options)
-        self.logger.debug(
-            f"Result from create_record: type={type(result)}, value={result}",
+        ruby_script = (
+            "cf = CustomField.find_by(name: 'Tempo Account'); "
+            "if cf.nil?; "
+            "cf = CustomField.new(name: 'Tempo Account', field_format: 'string', is_required: false, "
+            "searchable: true, is_filter: true, type: 'WorkPackageCustomField'); "
+            "cf.save!; end; cf.id"
         )
 
-        # Check if field was created successfully or already exists
-        if isinstance(result, dict) and "id" in result:
-            # Check if this is an existing field
-            if result.get("status") == "existing":
-                self.account_custom_field_id = result["id"]
-                self.logger.info(
-                    "Found existing Tempo Account custom field with ID %d",
-                    self.account_custom_field_id,
-                )
-            else:
-                # New field was created
-                self.account_custom_field_id = result["id"]
-                self.logger.info(
-                    "Created Tempo Account custom field with ID %d",
-                    self.account_custom_field_id,
-                )
-        # Check if field already exists (expected error)
-        elif isinstance(result, dict) and "error" in result:
-            error_messages = result.get("error", [])
-            if any("already been taken" in str(msg) for msg in error_messages):
-                self.logger.info(
-                    "Tempo Account custom field already exists, attempting to find existing field...",
-                )
-                # Try to get the existing field ID
-                try:
-                    field_id = self.get_account_custom_field_id()
-                    if field_id:
-                        self.account_custom_field_id = field_id
-                        self.logger.info(
-                            "Found existing Tempo Account custom field with ID %d",
-                            field_id,
-                        )
-                    else:
-                        self.logger.warning(
-                            "Custom field already exists but couldn't retrieve its ID",
-                        )
-                except Exception as e:
-                    self.logger.warning(
-                        "Failed to retrieve existing custom field ID: %s",
-                        e,
-                    )
-            else:
-                msg = f"Failed to create custom field: OpenProject error: {error_messages}"
-                raise MigrationError(msg)
-        else:
-            msg = (
-                f"Failed to create custom field: Invalid response from OpenProject "
-                f"(type={type(result)}, value={result})"
-            )
-            raise MigrationError(msg)
+        try:
+            output = self.op_client.execute_query(ruby_script, timeout=45)
+            # Normalize output to int if possible
+            cf_id: int | None = None
+            if isinstance(output, int):
+                cf_id = output
+            elif isinstance(output, str):
+                out = output.strip()
+                # Some consoles echo with prefix/suffix; extract trailing digits
+                import re as _re
+                m = _re.search(r"(\d+)$", out)
+                if m:
+                    cf_id = int(m.group(1))
+
+            # If still unknown, re-scan custom fields via file-based method
+            if cf_id is None:
+                fields_after = self.op_client.get_custom_fields(force_refresh=True)
+                for cf in fields_after:
+                    if (cf.get("name") or "").strip().lower() == "tempo account":
+                        cf_id = int(cf.get("id"))
+                        break
+
+            if not cf_id:
+                raise MigrationError("Failed to determine Tempo Account custom field ID")
+            self.account_custom_field_id = cf_id
+        except Exception as e:
+            raise MigrationError(f"Failed to create or retrieve Tempo Account custom field: {e}") from e
+        # Field created or found
+
+        # At this point we have a field ID
+        self.logger.info(
+            "Tempo Account custom field ID: %d",
+            self.account_custom_field_id,
+        )
 
         # Associate with all work package types
         self.associate_field_with_work_package_types(self.account_custom_field_id)
@@ -461,12 +449,34 @@ class AccountMigration(BaseMigration):
             # Update mappings in global configuration
             config.mappings.set_mapping("accounts", self.account_mapping)
 
+            matched = analysis.get("matched_accounts", 0)
+            total = analysis.get("total_accounts", 0)
+            unmatched = analysis.get("unmatched_accounts", 0)
+
+            # Unmatched accounts are added to the custom field as selectable values
+            # but not linked to specific projects. Treat as warning, not failure.
+            warnings: list[str] = []
+            if unmatched > 0:
+                warnings.append(
+                    f"{unmatched} accounts not matched to projects; they remain selectable via the custom field"
+                )
+
+            details = {
+                "status": "success",
+                "success_count": matched,
+                "failed_count": 0,
+                "total_count": total,
+            }
+
             return ComponentResult(
                 success=True,
+                message="Accounts processed; unmatched accounts available in custom field",
+                details=details,
                 data=analysis,
-                success_count=analysis["matched_accounts"],
-                failed_count=analysis["unmatched_accounts"],
-                total_count=analysis["total_accounts"],
+                warnings=warnings,
+                success_count=matched,
+                failed_count=0,
+                total_count=total,
             )
         except Exception as e:
             self.logger.exception(

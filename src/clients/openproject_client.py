@@ -56,7 +56,12 @@ from src.utils.metrics_collector import MetricsCollector
 from src.utils.performance_optimizer import PerformanceOptimizer
 from src.utils.rate_limiter import create_openproject_rate_limiter, RateLimiter
 
-logger = configure_logging("INFO", None)
+try:
+    # Prefer shared logger configured at startup
+    from src.config import logger as logger  # type: ignore
+except Exception:
+    # Fallback to local configuration if config logger is unavailable
+    logger = configure_logging("INFO", None)
 
 # Add SSHConnection class for tests
 class SSHConnection:
@@ -516,11 +521,17 @@ class OpenProjectClient:
 
             # Execute the query and parse result
             result_output = self.execute_query(modified_query, timeout=timeout)
-            return self._parse_rails_output(result_output)
+            parsed = self._parse_rails_output(result_output)
+            return parsed
 
-        except Exception as e:
-            logger.exception(f"Error in execute_query_to_json_file: {e}")
+        except JsonParseError as e:
+            # Surface parse errors directly to callers so orchestrator can stop on error
+            logger.error("JSON parsing failed for Rails output: %s", e)
             raise
+        except Exception as e:
+            # Normalize any other errors to QueryExecutionError
+            logger.exception("Error in execute_query_to_json_file: %s", e)
+            raise QueryExecutionError(str(e)) from e
 
     def execute_large_query_to_json_file(
         self,
@@ -718,7 +729,22 @@ class OpenProjectClient:
             logger.debug("Raw result_output: %s", repr(result_output[:500]))
             text = result_output.strip()
 
+            # Sanitize terminal artifacts to protect JSON parsing
+            try:
+                # 1) Strip ANSI escape sequences entirely
+                ansi_re = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+                text = ansi_re.sub("", text)
+                # 2) Remove remaining control chars (except \t, \n, \r)
+                text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+            except Exception:
+                # Continue with original text if sanitization fails
+                pass
+
             # If it's plain JSON, parse immediately
+            # Fast-path for file-write signals emitted by our Ruby scripts
+            if "JSON_WRITE_SUCCESS" in text:
+                return {"status": "success"}
+
             if text.startswith("[") or text.startswith("{"):
                 try:
                     return json.loads(text)
@@ -729,6 +755,13 @@ class OpenProjectClient:
             if "TMUX_CMD_START" in text and "TMUX_CMD_END" in text:
                 seg = text.split("TMUX_CMD_START", 1)[1].split("TMUX_CMD_END", 1)[0]
                 seg = seg.strip()
+                # Clean control characters and ANSI codes inside TMUX segment as well
+                try:
+                    ansi_re = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+                    seg = ansi_re.sub("", seg)
+                    seg = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", seg)
+                except Exception:
+                    pass
                 if seg.startswith("[") or seg.startswith("{"):
                     try:
                         return json.loads(seg)
@@ -782,13 +815,22 @@ class OpenProjectClient:
                 try:
                     return json.loads(text[lb : rb + 1])
                 except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                    raise JsonParseError(str(e)) from e
+                    # As a fallback, strip remaining control characters and retry once
+                    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[lb : rb + 1])
+                    try:
+                        return json.loads(cleaned)
+                    except Exception:
+                        raise JsonParseError(str(e)) from e
             lb = text.find("{"); rb = text.rfind("}")
             if lb != -1 and rb != -1 and rb > lb:
                 try:
                     return json.loads(text[lb : rb + 1])
                 except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                    raise JsonParseError(str(e)) from e
+                    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[lb : rb + 1])
+                    try:
+                        return json.loads(cleaned)
+                    except Exception:
+                        raise JsonParseError(str(e)) from e
 
             # Special case: prompt + JSON + => nil (common Rails console pattern)
             if "=> nil" in text:
@@ -823,7 +865,7 @@ class OpenProjectClient:
             if t in ("true", "false"):
                 return t == "true"
             if t == "nil":
-                        return None
+                return None
             if (t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'")):
                 return t[1:-1]
 
@@ -1707,7 +1749,33 @@ class OpenProjectClient:
 
         """
         try:
-            return self.execute_json_query("Status.all") or []
+            # Use file-based JSON to avoid tmux/console control characters
+            file_path = self._generate_unique_temp_filename("statuses")
+            file_path_interpolated = f"'{file_path}'"
+            write_query = (
+                f"statuses = Status.all.as_json; File.write({file_path_interpolated}, "
+                f'JSON.pretty_generate(statuses)); puts "Statuses data written to '
+                f'{file_path} (#{{statuses.count}} statuses)"; nil'
+            )
+
+            self.rails_client.execute(write_query, suppress_output=True)
+            logger.debug("Successfully executed statuses write command")
+
+            try:
+                ssh_command = f"docker exec {self.container_name} cat {file_path}"
+                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                if returncode != 0:
+                    raise QueryExecutionError(
+                        f"Failed to read statuses file: {stderr or 'unknown error'}",
+                    )
+                parsed = json.loads(stdout)
+                logger.info("Successfully loaded %d statuses from container file", len(parsed))
+                return parsed if isinstance(parsed, list) else []
+            finally:
+                try:
+                    self.ssh_client.execute_command(f"docker exec {self.container_name} rm -f {file_path}")
+                except Exception:
+                    pass
         except Exception as e:
             msg = "Failed to get statuses."
             raise QueryExecutionError(msg) from e
@@ -1991,24 +2059,22 @@ class OpenProjectClient:
             QueryExecutionError: If the query fails
 
         """
-        script = """
-        activities = TimeEntryActivity.active.map do |activity|
-          {
-            id: activity.id,
-            name: activity.name,
-            position: activity.position,
-            is_default: activity.is_default,
-            active: activity.active
-          }
-        end
-        activities
-        """
+        # Use file-based JSON retrieval to avoid console control-character issues
+        query = (
+            "TimeEntryActivity.active.map { |activity| "
+            "{ id: activity.id, name: activity.name, position: activity.position, "
+            "is_default: activity.is_default, active: activity.active } }"
+        )
 
         try:
-            result = self.execute_json_query(script)
+            result = self.execute_large_query_to_json_file(
+                query,
+                container_file="/tmp/j2o_time_entry_activities.json",
+                timeout=60,
+            )
             return result if isinstance(result, list) else []
         except Exception as e:
-            msg = "Failed to retrieve time entry activities."
+            msg = f"Failed to retrieve time entry activities: {e}"
             raise QueryExecutionError(msg) from e
 
     def create_time_entry(

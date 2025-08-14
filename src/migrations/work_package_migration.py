@@ -27,8 +27,10 @@ from src.utils.enhanced_user_association_migrator import EnhancedUserAssociation
 from src.utils.markdown_converter import MarkdownConverter
 from src.utils.time_entry_migrator import TimeEntryMigrator
 
-# Get logger from config
-logger = configure_logging("INFO", None)
+try:
+    from src.config import logger as logger  # type: ignore
+except Exception:
+    logger = configure_logging("INFO", None)
 
 
 @register_entity_types("work_packages", "issues")

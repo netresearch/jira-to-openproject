@@ -20,6 +20,7 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.utils.time_entry_transformer import TimeEntryTransformer
+from src.models.migration_error import MigrationError
 
 # Get logger from config
 logger = configure_logging("INFO", None)
@@ -130,6 +131,8 @@ class TimeEntryMigrator:
 
         except Exception as e:
             self.logger.warning(f"Failed to load some mappings: {e}")
+            if config.migration_config.get("stop_on_error", False):
+                raise MigrationError(f"Failed to load required mappings: {e}") from e
 
     def _load_activity_mapping(self) -> None:
         """Load activity mapping from OpenProject."""
@@ -151,8 +154,13 @@ class TimeEntryMigrator:
 
         except Exception as e:
             self.logger.warning(f"Failed to load activity mappings: {e}")
-            self.activity_mapping = {}
-            self.default_activity_id = None
+            # Honor stop-on-error if configured to avoid silent partial migrations
+            try:
+                if config.migration_config.get("stop_on_error", False):
+                    raise MigrationError(f"Failed to load activity mappings: {e}") from e
+            finally:
+                self.activity_mapping = {}
+                self.default_activity_id = None
 
     def extract_jira_work_logs_for_issues(
         self,

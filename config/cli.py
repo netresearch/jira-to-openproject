@@ -89,23 +89,43 @@ def test_jira_connection(settings: Settings) -> bool:
         True if connection successful, False otherwise
     """
     try:
-        # Test basic connectivity
-        response = requests.get(
-            f"{settings.jira_url}/rest/api/2/myself",
-            auth=(settings.jira_username, settings.jira_api_token),
+        base = settings.jira_url.rstrip("/")
+        # 1) Server availability check (no auth)
+        si = requests.get(
+            f"{base}/rest/api/2/serverInfo",
             timeout=10,
             verify=settings.ssl_verify,
         )
-
-        if response.status_code == 200:
-            user_info = response.json()
+        server_ok = si.status_code == 200
+        if server_ok:
+            info = si.json()
             logger.info(
-                f"✓ Jira connection successful - User: {user_info.get('displayName', 'Unknown')}"
+                f"✓ Jira server reachable: {info.get('baseUrl','')} ({info.get('version','')})"
             )
-            return True
         else:
-            logger.error(f"✗ Jira connection failed - Status: {response.status_code}")
-            return False
+            logger.error(f"✗ Jira server not reachable - Status: {si.status_code}")
+
+        # 2) Auth check using PAT (Bearer)
+        headers = {"Authorization": f"Bearer {settings.jira_api_token}"}
+        me = requests.get(
+            f"{base}/rest/api/2/myself",
+            headers=headers,
+            timeout=10,
+            verify=settings.ssl_verify,
+        )
+        auth_ok = me.status_code == 200
+        if auth_ok:
+            user_info = me.json()
+            logger.info(
+                f"✓ Jira auth successful - User: {user_info.get('displayName', 'Unknown')}"
+            )
+        else:
+            hdr = {k: v for k, v in me.headers.items() if k.lower() in ("www-authenticate", "x-ausername")}
+            logger.error(
+                f"✗ Jira auth failed - Status: {me.status_code} headers={hdr}"
+            )
+
+        return server_ok and auth_ok
 
     except requests.exceptions.RequestException as e:
         logger.error(f"✗ Jira connection failed - {e}")

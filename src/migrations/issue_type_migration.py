@@ -22,8 +22,11 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-# Get logger from config
-logger = configure_logging("INFO", None)
+# Prefer shared logger; fall back if unavailable
+try:
+    from src.config import logger as logger  # type: ignore
+except Exception:
+    logger = configure_logging("INFO", None)
 
 
 @register_entity_types("issue_types", "work_package_types")
@@ -479,30 +482,41 @@ class IssueTypeMigration(BaseMigration):
             self.logger.debug(
                 f"Result from work package type write: type={type(write_result)}, value={write_result}",
             )
-            if not isinstance(write_result, dict):
-                msg = (
-                    "Failed to run work package type write: Invalid response from OpenProject "
-                    f"(type={type(write_result)}, value={write_result})"
-                )
-                self.logger.error(msg)
-                raise MigrationError(msg)
+            # Accept either dict with status or raw string containing our success marker
+            # Also surface any explicit Rails error text if present
+            if isinstance(write_result, dict):
+                output_text = write_result.get("output") or ""
+                if "RAILS_EXEC_ERROR:" in output_text:
+                    msg = f"Rails command reported an error during execution: {output_text}"
+                    self.logger.error(msg)
+                    raise MigrationError(msg)
+                if write_result.get("status") != "success":
+                    error_msg = write_result.get(
+                        "error",
+                        "Unknown error executing Rails command for file write",
+                    )
+                    msg = f"Failed to execute Rails command to write JSON file: {error_msg}"
+                    self.logger.error(msg)
+                    raise MigrationError(msg)
+            else:
+                # string / other: verify contains success token; tolerate prompt noise
+                wr_str = str(write_result)
+                if "JSON_WRITE_SUCCESS" in wr_str:
+                    pass  # treat as success even if prompt noise is present
+                elif "RAILS_EXEC_ERROR:" in wr_str:
+                    msg = f"Rails command reported an error during execution: {wr_str}"
+                    self.logger.error(msg)
+                    raise MigrationError(msg)
+                else:
+                    msg = (
+                        "Failed to run work package type write: Invalid response from OpenProject "
+                        f"(type={type(write_result)}, value={write_result})"
+                    )
+                    self.logger.error(msg)
+                    raise MigrationError(msg)
 
-            if (
-                write_result.get("status") == "success"
-                and write_result.get("output")
-                and "RAILS_EXEC_ERROR:" in write_result["output"]
-            ):
-                msg = f"Rails command reported an error during execution: {write_result['output']}"
-                self.logger.error(msg)
-                raise MigrationError(msg)
-            if write_result.get("status") != "success":
-                error_msg = write_result.get(
-                    "error",
-                    "Unknown error executing Rails command for file write",
-                )
-                msg = f"Failed to execute Rails command to write JSON file: {error_msg}"
-                self.logger.error(msg)
-                raise MigrationError(msg)
+            # Note: Additional dict-specific status checks are handled above when
+            # write_result is a dict. When it's a string, we rely on marker checks.
 
             self.logger.info(
                 "Rails command executed successfully. Checking existence of %s...",
@@ -1496,8 +1510,8 @@ class IssueTypeMigration(BaseMigration):
                 "Mock mode: Using mock work package types for mapping update",
             )
         else:
-            # Get all work package types from OpenProject
-            op_types = self.op_client.get_work_package_types()
+            # Use the robust file-based retrieval only (single consistent path)
+            op_types = self.check_existing_work_package_types()
             if not op_types:
                 msg = "Failed to retrieve work package types from OpenProject"
                 self.logger.error(msg)

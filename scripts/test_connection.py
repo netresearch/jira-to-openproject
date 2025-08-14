@@ -39,6 +39,24 @@ def main() -> None:
     else:
         jira_client = JiraClient()
         logger.info("Jira connection successful!")
+        # Explicit auth check against /myself
+        import requests
+        base = jira_client.base_url.rstrip("/")
+        resp = requests.get(
+            f"{base}/rest/api/2/myself",
+            headers={"Authorization": f"Bearer {jira_config.get('api_token','')}"},
+            timeout=15,
+            verify=jira_client.verify_ssl,
+        )
+        if resp.status_code == 200:
+            me = resp.json()
+            logger.info(
+                "Jira auth verified via /myself: %s",
+                me.get("displayName") or me.get("name") or "(no name)",
+            )
+        else:
+            hdr = {k: v for k, v in resp.headers.items() if k.lower() in ("www-authenticate", "x-ausername")}
+            logger.error("/myself check failed: HTTP %s headers=%s", resp.status_code, hdr)
         # List projects
         projects = jira_client.get_projects()
         logger.info(f"Found {len(projects)} projects in Jira")

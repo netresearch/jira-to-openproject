@@ -8,15 +8,17 @@ from pathlib import Path
 from typing import Any
 
 from src import config
-from src.clients.jira_client import JiraClient
+from src.clients.jira_client import JiraClient, JiraApiError, JiraAuthenticationError
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging, console
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.migrations.custom_field_migration import CustomFieldMigration
 from src.models import ComponentResult, MigrationError
 
-# Get logger from config
-logger = configure_logging("INFO", None)
+try:
+    from src.config import logger as logger  # type: ignore
+except Exception:
+    logger = configure_logging("INFO", None)
 
 # Default OpenProject relation types
 # These are built-in and cannot be modified or extended via API
@@ -263,9 +265,19 @@ class LinkTypeMigration(BaseMigration):
                 )
                 self._save_to_json(self.jira_link_types, Path("jira_link_types.json"))
                 return self.jira_link_types
-            msg = "Failed to extract link types from Jira (API returned None)"
+            # None or empty is an error condition for link types
+            msg = "Jira returned no link types"
             self.logger.error(msg)
             raise MigrationError(msg)
+        except (JiraAuthenticationError, JiraApiError) as e:
+            # Make auth/401 failures fatal: link types influence relation mapping
+            msg = (
+                "Failed to retrieve Jira link types due to authentication/API error (e.g., 401). "
+                "Blocking migration to prevent incomplete relation mappings: "
+                f"{e}"
+            )
+            self.logger.error(msg)
+            raise MigrationError(msg) from e
         except Exception as e:
             msg = f"Error extracting link types from Jira: {e}"
             self.logger.error(msg, exc_info=True)
@@ -311,9 +323,13 @@ class LinkTypeMigration(BaseMigration):
             self.extract_jira_link_types()
 
         if not self.jira_link_types:
-            msg = "Cannot create mapping: Jira link types are missing"
-            self.logger.error(msg)
-            raise MigrationError(msg)
+            # No link types available; return empty mapping and treat as success
+            self.logger.info("No Jira link types available; creating empty mapping")
+            self.link_type_mapping = {}
+            self._save_to_json(self.link_type_mapping, Path("link_type_mapping.json"))
+            self._build_id_mapping()
+            self.analyze_link_type_mapping()
+            return self.link_type_mapping
 
         self.logger.info("Creating link type mapping...")
         mapping = {}

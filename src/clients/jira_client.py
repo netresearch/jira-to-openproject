@@ -24,8 +24,10 @@ from src.utils.performance_optimizer import (
 )
 from src.utils.rate_limiter import create_jira_rate_limiter
 
-# Get logger
-logger = configure_logging("INFO", None)
+try:
+    from src.config import logger as logger  # type: ignore
+except Exception:
+    logger = configure_logging("INFO", None)
 
 
 class JiraError(Exception):
@@ -176,6 +178,24 @@ class JiraClient:
                 server_info.get("baseUrl"),
                 server_info.get("version"),
             )
+            # Explicit auth verification: /rest/api/2/myself must be 200 for valid PAT
+            try:
+                resp = self.jira._session.get(f"{self.base_url}/rest/api/2/myself")
+                if resp.status_code != 200:
+                    logger.error(
+                        "Auth verification failed on /myself: HTTP %s, headers=%s",
+                        resp.status_code,
+                        {k: v for k, v in resp.headers.items() if k.lower() in ("www-authenticate", "x-ausername")},
+                    )
+                    raise JiraAuthenticationError(
+                        f"/myself auth check failed with HTTP {resp.status_code}"
+                    )
+                else:
+                    logger.info("Auth verification successful on /myself")
+            except JiraAuthenticationError:
+                raise
+            except Exception as e:
+                logger.warning("Auth verification error on /myself: %s", e)
             return  # Success
         except Exception as e:
             error_msg = f"Token authentication failed: {e!s}"
@@ -850,34 +870,48 @@ class JiraClient:
                 for issue_type in issue_types:
                     issue_type_id = issue_type.get("id")
 
-                    # Use the createmeta endpoint with expansion for fields
-                    path = f"/rest/api/2/issue/createmeta/{project_key}/issuetypes/{issue_type_id}"
+                    # Use the createmeta endpoint with expansion for fields (query params form)
+                    # API shape (v2): /rest/api/2/issue/createmeta?projectKeys=KEY&issuetypeIds=ID&expand=projects.issuetypes.fields
+                    params = {
+                        "projectKeys": project_key,
+                        "issuetypeIds": issue_type_id,
+                        "expand": "projects.issuetypes.fields",
+                    }
+                    path = "/rest/api/2/issue/createmeta"
                     logger.debug(
-                        f"Trying to get field metadata using project {project_key}"
-                        f" and issue type {issue_type.get('name')}",
+                        "Trying createmeta for project=%s issuetype=%s (%s)",
+                        project_key,
+                        issue_type_id,
+                        issue_type.get("name"),
                     )
 
-                    meta_response = self._make_request(path)
+                    try:
+                        meta_response = self._make_request(path, params=params)
+                    except JiraApiError as e:
+                        logger.debug("createmeta request failed: %s", e)
+                        continue
+
                     if not meta_response or meta_response.status_code != 200:
                         continue
 
-                    meta_data = meta_response.json()
+                    meta_data = meta_response.json() or {}
+                    projects_arr = meta_data.get("projects") or []
+                    if not projects_arr:
+                        continue
+                    issuetypes_arr = (projects_arr[0] or {}).get("issuetypes") or []
+                    if not issuetypes_arr:
+                        continue
+                    fields_map = (issuetypes_arr[0] or {}).get("fields") or {}
+                    if not isinstance(fields_map, dict):
+                        continue
 
-                    # Check for fields in the response structure
-                    if "values" in meta_data:
-                        values = meta_data.get("values", [])
-                        if isinstance(values, list):
-                            for value in values:
-                                field_id_from_response = value.get("fieldId")
-                                if field_id_from_response:
-                                    # Store in cache for future use
-                                    self.field_options_cache[field_id_from_response] = (
-                                        value
-                                    )
+                    # Cache all discovered fields
+                    for fid, fdef in fields_map.items():
+                        self.field_options_cache[fid] = fdef
 
-                                    # If this is the field we're looking for, return it immediately
-                                    if field_id_from_response == field_id:
-                                        return value
+                    # If this is the field we're looking for, return it immediately
+                    if field_id in fields_map:
+                        return fields_map[field_id]
 
             # If we've checked all project/issue type combinations and still haven't found it
             field_data = self.field_options_cache.get(field_id)

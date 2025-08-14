@@ -22,8 +22,11 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 from src.models.migration_error import MigrationError
 
-# Get logger from config
-logger = configure_logging("INFO", None)
+# Prefer shared logger; fall back to local configuration only if needed
+try:
+    from src.config import logger as logger  # type: ignore
+except Exception:
+    logger = configure_logging("INFO", None)
 
 # Define a type variable for ProgressTracker
 T = TypeVar("T")
@@ -755,13 +758,9 @@ class StatusMigration(BaseMigration):
             # Step 1: Extract Jira statuses
             self.jira_statuses = self.extract_jira_statuses()
             if not self.jira_statuses:
-                return ComponentResult(
-                    success=False,
-                    errors=["Failed to extract Jira statuses"],
-                    success_count=0,
-                    failed_count=0,
-                    total_count=0,
-                )
+                msg = "No Jira statuses found"
+                logger.error(msg)
+                raise MigrationError(msg)
 
             # Step 2: Extract Jira status categories
             self.jira_status_categories = self.extract_status_categories()

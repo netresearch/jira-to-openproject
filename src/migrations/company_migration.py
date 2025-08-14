@@ -17,8 +17,10 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 from src.utils import data_handler
 
-# Get logger from config
-logger = configure_logging("INFO", None)
+try:
+    from src.config import logger as logger  # type: ignore
+except Exception:
+    logger = configure_logging("INFO", None)
 
 
 @register_entity_types("companies", "tempo_companies")

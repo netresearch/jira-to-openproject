@@ -64,6 +64,10 @@ rich_handler = RichHandler(
     log_time_format="[%X.%f]",
 )
 
+# Idempotent logging configuration guard
+_LOGGING_CONFIGURED: bool = False
+_LOGGER: logging.Logger | None = None
+
 
 def configure_logging(
     level: str = "INFO",
@@ -79,6 +83,11 @@ def configure_logging(
         Configured logger instance
 
     """
+    # If already configured, return the existing logger without reconfiguring
+    global _LOGGING_CONFIGURED, _LOGGER
+    if _LOGGING_CONFIGURED and _LOGGER is not None:
+        return cast("ExtendedLogger", _LOGGER)
+
     # Define custom log levels first
     # Create a special success level (between INFO and WARNING)
     logging.addLevelName(25, "SUCCESS")
@@ -119,7 +128,7 @@ def configure_logging(
         format="%(message)s",
         datefmt="[%X.%f]",
         handlers=handlers,
-        force=True,  # Ensure we can reconfigure logging if needed
+        force=True,  # First configuration only
     )
 
     # Get the logger and report configuration
@@ -158,6 +167,10 @@ def configure_logging(
     logger.info("Rich logging configured")
     if log_file:
         logger.info("Log file: %s", log_file)
+
+    # Mark as configured and cache instance
+    _LOGGING_CONFIGURED = True
+    _LOGGER = logger
 
     return cast("ExtendedLogger", logger)
 

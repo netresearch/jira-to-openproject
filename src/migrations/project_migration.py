@@ -20,8 +20,10 @@ from src.models import ComponentResult
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
 
-# Get logger from config
-logger = configure_logging("INFO", None)
+try:
+    from src.config import logger as logger  # type: ignore
+except Exception:
+    logger = configure_logging("INFO", None)
 
 # Constants for filenames
 JIRA_PROJECTS_FILE = "jira_projects.json"
