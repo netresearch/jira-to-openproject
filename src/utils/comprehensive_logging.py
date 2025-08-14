@@ -211,24 +211,23 @@ class StructuredLogger:
                 ),
             )
 
-        # Add to root logger
-        logging.getLogger().addHandler(handler)
-        logging.getLogger().setLevel(getattr(logging, self.config.log_level.upper()))
+        # Attach to the named 'migration' logger only; let it propagate to root
+        std_logger = logging.getLogger("migration")
+        std_logger.addHandler(handler)
+        std_logger.setLevel(getattr(logging, self.config.log_level.upper()))
 
     def _setup_console_handler(self) -> None:
         """Set up console handler for development."""
-        handler = logging.StreamHandler(sys.stdout)
-
-        if self.config.log_format == "json":
-            handler.setFormatter(logging.Formatter("%(message)s"))
-        else:
+        # Avoid adding a second console handler to prevent duplicate output with RichHandler
+        # When log_format is JSON, rely on file handler + root RichHandler for console rendering
+        if self.config.log_format != "json":
+            handler = logging.StreamHandler(sys.stdout)
             handler.setFormatter(
                 logging.Formatter(
                     "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
                 ),
             )
-
-        logging.getLogger().addHandler(handler)
+            logging.getLogger("migration").addHandler(handler)
 
     def log(self, level: str, message: str, **kwargs) -> None:
         """Log a message with structured data."""
@@ -484,7 +483,7 @@ class MonitoringSystem:
             return
 
         self.is_running = True
-        self.logger.info("Monitoring system starting")
+        self.logger.debug("Monitoring system starting")
 
         # Add default health checks
         self.health_checker.add_system_checks()
@@ -493,7 +492,7 @@ class MonitoringSystem:
         if self.config.enable_health_checks:
             self.monitoring_task = asyncio.create_task(self._monitoring_loop())
 
-        self.logger.info("Monitoring system started")
+        self.logger.debug("Monitoring system started")
 
     async def stop(self) -> None:
         """Stop the monitoring system."""
@@ -501,14 +500,14 @@ class MonitoringSystem:
             return
 
         self.is_running = False
-        self.logger.info("Monitoring system stopping")
+        self.logger.debug("Monitoring system stopping")
 
         if self.monitoring_task:
             self.monitoring_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self.monitoring_task
 
-        self.logger.info("Monitoring system stopped")
+        self.logger.debug("Monitoring system stopped")
 
     async def _monitoring_loop(self) -> None:
         """Main monitoring loop."""
@@ -620,7 +619,7 @@ def get_logger() -> StructuredLogger:
 def log_migration_start(migration_id: str, components: list[str], **kwargs) -> None:
     """Log migration start event."""
     logger = get_logger()
-    logger.info(
+    logger.debug(
         "Migration started",
         migration_id=migration_id,
         components=components,
