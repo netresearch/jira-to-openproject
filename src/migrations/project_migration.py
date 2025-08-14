@@ -452,27 +452,7 @@ class ProjectMigration(BaseMigration):
         # Prepare project data for bulk creation
         projects_data = []
         for i, jira_project in enumerate(self.jira_projects):
-            # Refresh OpenProject projects list every 10 projects to catch newly created ones
-            if i > 0 and i % 10 == 0:
-                logger.debug(
-                    "Refreshing OpenProject projects list after %d projects",
-                    i,
-                )
-                # Use explicit refresh to bypass in-memory cache but still avoid disabling caching globally
-                self.extract_openproject_projects(refresh=True)
-
-                # Rebuild lookup dictionaries after refresh
-                op_projects_by_name = {}
-                op_projects_by_identifier = {}
-
-                for op_project in self.op_projects:
-                    op_name = op_project.get("name", "").lower()
-                    op_identifier = op_project.get("identifier", "")
-
-                    if op_name:
-                        op_projects_by_name[op_name] = op_project
-                    if op_identifier:
-                        op_projects_by_identifier[op_identifier] = op_project
+            # Note: no refresh here; we haven't written anything yet. Reuse cached list during analysis.
 
             jira_key = jira_project.get("key", "")
             jira_name = jira_project.get("name", "")
@@ -896,6 +876,14 @@ class ProjectMigration(BaseMigration):
                     "failed": True,
                     "error": ", ".join(error.get("errors", [])),
                 }
+
+        # After writes, refresh OpenProject projects once to update in-run cache
+        if created_projects:
+            try:
+                self.extract_openproject_projects(refresh=True)
+            except Exception as _e:
+                # Non-fatal: cache will be rebuilt on next component run
+                logger.debug("Deferred project cache refresh failed; will rebuild later")
 
         # Save the mapping
         self.project_mapping = mapping
