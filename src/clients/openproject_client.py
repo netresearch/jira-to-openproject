@@ -565,7 +565,16 @@ class OpenProjectClient:
         )
 
         # Execute via persistent tmux Rails console (faster than rails runner)
-        self.rails_client.execute(ruby_script, timeout=timeout or 90, suppress_output=True)
+        _console_output = self.rails_client.execute(
+            ruby_script,
+            timeout=timeout or 90,
+            suppress_output=True,
+        )
+        # Defensive: detect silent console errors even if markers went missing
+        self._check_console_output_for_errors(
+            _console_output or "",
+            context="execute_large_query_to_json_file",
+        )
 
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"
@@ -601,6 +610,19 @@ class OpenProjectClient:
             return json.loads(stdout.strip())
         except Exception as e:  # Normalize JSON parse errors
             raise JsonParseError(str(e)) from e
+
+    def _check_console_output_for_errors(self, output: str, context: str) -> None:
+        """Raise a QueryExecutionError if console output indicates a Ruby error.
+
+        This catches cases where start/end markers were missing and the console client
+        returned raw lines, including SystemStackError or other Ruby exceptions.
+        """
+        if not output:
+            return
+        suspicious = ("SystemStackError" in output) or ("Ruby error:" in output) or ("--EXEC_ERROR--" in output)
+        if suspicious:
+            snippet = output.strip().splitlines()[:3]
+            raise QueryExecutionError(f"Console error during {context}: {' | '.join(snippet)}")
 
     # Removed rails runner helper; all scripts go through persistent tmux console
 
@@ -1744,7 +1766,8 @@ class OpenProjectClient:
             )
 
             # Execute the write command - fail immediately if Rails console fails
-            self.rails_client.execute(write_query, suppress_output=True)
+            output = self.rails_client.execute(write_query, suppress_output=True)
+            self._check_console_output_for_errors(output or "", context="get_work_package_types")
             logger.debug("Successfully executed custom fields write command")
 
             # Read the JSON directly from the Docker container file system via SSH
@@ -1818,7 +1841,8 @@ class OpenProjectClient:
                 f'{file_path} (#{{statuses.count}} statuses)"; nil'
             )
 
-            self.rails_client.execute(write_query, suppress_output=True)
+            output = self.rails_client.execute(write_query, suppress_output=True)
+            self._check_console_output_for_errors(output or "", context="get_projects")
             logger.debug("Successfully executed statuses write command")
 
             try:
