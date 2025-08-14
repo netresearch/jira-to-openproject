@@ -237,6 +237,7 @@ class RailsConsoleClient:
             f"COMMAND EXECUTION START: {time.strftime('%Y-%m-%d %H:%M:%S')}\nCommand: {command}\n",
         )
 
+        # Construct markers with single literal strings to avoid IRB concatenation artifacts
         start_marker_cmd = f'puts "--EXEC_START--{marker_id}"'
         start_marker_out = f"--EXEC_START--{marker_id}"
 
@@ -294,84 +295,69 @@ class RailsConsoleClient:
             f"TMUX OUTPUT RECEIVED: {time.strftime('%Y-%m-%d %H:%M:%S')}\nSize: {len(tmux_output)} bytes\n",
         )
 
-        start_idx = tmux_output.find(start_marker_out)
-        if start_idx == -1:
-            # If we can't find the start marker, but the output shows the command execution already happened,
-            # we can try to parse what's available
+        # Robust, line-anchored marker parsing to avoid false positives from echoed source lines
+        all_lines = tmux_output.split("\n")
+        start_line_index = -1
+        for idx, line in enumerate(all_lines):
+            if line.strip() == start_marker_out:
+                start_line_index = idx
+                break
+        if start_line_index == -1:
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
                 logger.error(
                     "Console appears ready despite missing start marker - attempting to extract output",
                 )
-
-                # Look for any output that resembles our command's expected output
-                if "load" in tmux_output:
-                    logger.info(
-                        "Found load command execution in output, proceeding with extraction",
-                    )
-
-                    # Try to find the result in the output directly
-                    return tmux_output
-
-            # If we can't extract anything useful, we have to fail
+                return tmux_output
             msg = f"Start marker '{start_marker_out}' not found in output"
             raise CommandExecutionError(msg)
 
-        start_idx += len(start_marker_out)
-        remainder = tmux_output[start_idx:]
-
-        end_idx = remainder.find(end_marker_out)
-        if end_idx == -1:
+        end_line_index = -1
+        for idx in range(start_line_index + 1, len(all_lines)):
+            if all_lines[idx].strip() == end_marker_out:
+                end_line_index = idx
+                break
+        if end_line_index == -1:
             logger.error("End marker '%s' not found in output", end_marker_out)
-
-            # Check if the console is in a ready state, which indicates the command may have completed
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
                 logger.error(
                     "Console appears ready despite missing end marker - attempting to extract output",
                 )
-
-                # Try to find the result in the output - it usually appears between the start marker and the prompt
-                # Look for either a nil, a hash output like {:key=>value}, or other standard Ruby output formats
-                lines = remainder.split("\n")
-                filtered_lines = []
-                for line in lines:
-                    line = line.strip()
-                    # Skip empty lines and lines containing our potential markers
-                    if not line or "--EXEC_" in line:
-                        continue
-                    # Keep lines that look like command output
-                    filtered_lines.append(line)
-
-                if filtered_lines:
+                candidate_lines = [
+                    ln.strip()
+                    for ln in all_lines[start_line_index + 1 :]
+                    if ln.strip() and not ln.strip().startswith("--EXEC_")
+                ]
+                if candidate_lines:
                     logger.info(
                         "Extracted %s lines of output despite missing end marker",
-                        len(filtered_lines),
+                        len(candidate_lines),
                     )
-                    return "\n".join(filtered_lines)
-                # If we can't extract useful output, we'll have to fail
-                msg = f"End marker '{end_marker_out}' not found in output and no clear output could be extracted"
-                raise CommandExecutionError(
-                    msg,
+                    return "\n".join(candidate_lines)
+                msg = (
+                    f"End marker '{end_marker_out}' not found in output and no clear output could be extracted"
                 )
-            # Console is not ready, command execution might be stuck
+                raise CommandExecutionError(msg)
             msg = f"End marker '{end_marker_out}' not found in output"
             raise CommandExecutionError(msg)
 
-        command_output = remainder[:end_idx].strip()
-
-        error_idx = remainder.find(error_marker_out)
-        if error_idx != -1 and error_idx < end_idx:
+        between_lines = all_lines[start_line_index + 1 : end_line_index]
+        # If Ruby printed our error marker, prefer it over other patterns
+        if any(ln.strip() == error_marker_out for ln in between_lines):
             logger.error("Error marker found in output, indicating a Ruby error")
-
             error_message = "Ruby error detected"
-            if "Ruby error:" in command_output:
-                for line in command_output.split("\n"):
-                    if "Ruby error:" in line:
-                        error_message = line.strip()
-                        break
-
+            for ln in between_lines:
+                if "Ruby error:" in ln:
+                    error_message = ln.strip()
+                    break
             raise RubyError(error_message)
+
+        # Build command output from lines strictly between markers, excluding any marker lines
+        out_lines = [
+            ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")
+        ]
+        command_output = "\n".join(out_lines).strip()
 
         error_patterns = [
             "SyntaxError:",
