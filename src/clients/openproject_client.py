@@ -566,7 +566,11 @@ class OpenProjectClient:
         )
 
         # Prefer running via rails runner to avoid IRB/tmux output quirks
-        self._exec_rails_runner(ruby_script, timeout=timeout or 90)
+        try:
+            self._exec_rails_runner(ruby_script, timeout=timeout or 90)
+        except AttributeError:
+            # Backward compatibility if helper is missing: fall back to console execute
+            self.rails_client.execute(ruby_script, timeout=timeout or 90, suppress_output=True)
 
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"
