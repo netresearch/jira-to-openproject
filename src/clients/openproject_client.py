@@ -1865,12 +1865,31 @@ class OpenProjectClient:
 
             try:
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
-                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                stdout = ""
+                stderr = ""
+                returncode = 1
+                # Small retry loop to handle race where file may not be written yet
+                for _ in range(8):  # ~2 seconds total
+                    try:
+                        stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                    except Exception as e:
+                        if "No such file or directory" in str(e):
+                            time.sleep(0.25)
+                            continue
+                        raise
+                    if returncode == 0:
+                        break
+                    if stderr and "No such file or directory" in stderr:
+                        time.sleep(0.25)
+                        continue
+                    raise QueryExecutionError(
+                        f"Failed to read work package types file: {stderr or 'unknown error'}",
+                    )
                 if returncode != 0:
                     raise QueryExecutionError(
                         f"Failed to read work package types file: {stderr or 'unknown error'}",
                     )
-                parsed = json.loads(stdout)
+                parsed = json.loads(stdout.strip())
                 logger.info(
                     "Successfully loaded %d work package types from container file",
                     len(parsed) if isinstance(parsed, list) else 0,
