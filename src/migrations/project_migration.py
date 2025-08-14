@@ -106,14 +106,30 @@ class ProjectMigration(BaseMigration):
 
         return self.jira_projects
 
-    def extract_openproject_projects(self) -> list[dict[str, Any]]:
-        """Extract projects from OpenProject.
+    def extract_openproject_projects(self, refresh: bool = False) -> list[dict[str, Any]]:
+        """Extract projects from OpenProject with in-run caching.
+
+        Behavior:
+        - In-memory cache: if refresh=False and self.op_projects is populated, reuse it
+          regardless of --force (so repeated calls in the same run are cheap).
+        - Disk cache: only used when --force is NOT set. With --force we skip loading
+          from previous runs, but still populate and reuse in-memory cache.
+
+        Args:
+            refresh: Force refresh from source, bypassing in-memory cache.
 
         Returns:
             List of OpenProject project dictionaries
 
         """
-        if not config.migration_config.get("force", False):
+        if not refresh and getattr(self, "op_projects", None):
+            logger.debug(
+                "Using in-memory cached OpenProject projects (%d)",
+                len(self.op_projects),
+            )
+            return self.op_projects
+
+        if not refresh and not config.migration_config.get("force", False):
             cached_projects = self._load_from_json(OP_PROJECTS_FILE, default=None)
             if cached_projects:
                 logger.info(
@@ -123,12 +139,16 @@ class ProjectMigration(BaseMigration):
                 self.op_projects = cached_projects
                 return self.op_projects
 
-        logger.info("Extracting projects from OpenProject...")
+        if refresh:
+            logger.debug("Refreshing OpenProject projects list from source…")
+        else:
+            logger.info("Extracting projects from OpenProject…")
 
         self.op_projects = self.op_client.get_projects()
 
         logger.info("Extracted %s projects from OpenProject", len(self.op_projects))
 
+        # Always write the latest snapshot for observability
         self._save_to_json(self.op_projects, OP_PROJECTS_FILE)
 
         return self.op_projects
@@ -438,7 +458,8 @@ class ProjectMigration(BaseMigration):
                     "Refreshing OpenProject projects list after %d projects",
                     i,
                 )
-                self.extract_openproject_projects()
+                # Use explicit refresh to bypass in-memory cache but still avoid disabling caching globally
+                self.extract_openproject_projects(refresh=True)
 
                 # Rebuild lookup dictionaries after refresh
                 op_projects_by_name = {}
