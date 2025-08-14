@@ -237,13 +237,13 @@ class RailsConsoleClient:
             f"COMMAND EXECUTION START: {time.strftime('%Y-%m-%d %H:%M:%S')}\nCommand: {command}\n",
         )
 
-        start_marker_cmd = f'puts "--EXEC_START--" "{marker_id}"'
+        start_marker_cmd = f'puts "--EXEC_START--{marker_id}"'
         start_marker_out = f"--EXEC_START--{marker_id}"
 
-        end_marker_cmd = f'puts "--EXEC_END--" "{marker_id}"'
+        end_marker_cmd = f'puts "--EXEC_END--{marker_id}"'
         end_marker_out = f"--EXEC_END--{marker_id}"
 
-        error_marker_cmd = f'puts "--EXEC_ERROR--" "{marker_id}"'
+        error_marker_cmd = f'puts "--EXEC_ERROR--{marker_id}"'
         error_marker_out = f"--EXEC_ERROR--{marker_id}"
 
         # Conditionally include result printing based on suppress_output flag

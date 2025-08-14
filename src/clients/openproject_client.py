@@ -560,14 +560,13 @@ class OpenProjectClient:
         # Build Ruby script; ensure the file path is a Ruby string literal safely
         ruby_path_literal = container_file_quoted.replace("'", "\\'")
         ruby_script = (
-            "require 'json'; "
-            f"data = {ruby_json_expr}; "
-            f"File.write('{ruby_path_literal}', JSON.generate(data)); "
-            "nil"
+            "require 'json'\n"
+            f"data = {ruby_json_expr}\n"
+            f"File.write('{ruby_path_literal}', JSON.generate(data))\n"
         )
 
-        # Execute with suppressed output to keep console quiet (allow generous timeout)
-        self.rails_client.execute(ruby_script, timeout=timeout or 90, suppress_output=True)
+        # Prefer running via rails runner to avoid IRB/tmux output quirks
+        self._exec_rails_runner(ruby_script, timeout=timeout or 90)
 
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"
