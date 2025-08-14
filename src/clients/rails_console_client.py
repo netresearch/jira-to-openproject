@@ -394,7 +394,6 @@ class RailsConsoleClient:
             trailing_output = remainder[end_idx:]
             if (
                 "SystemStackError" in trailing_output
-                or "Ruby error:" in trailing_output
                 or "full_message':" in trailing_output
             ):
                 snippet_lines = [ln.strip() for ln in trailing_output.split("\n") if ln.strip()][:5]
@@ -413,7 +412,6 @@ class RailsConsoleClient:
             tail_out = capture.stdout
             if (
                 "SystemStackError" in tail_out
-                or "Ruby error:" in tail_out
                 or "full_message':" in tail_out
             ):
                 snippet_lines = [ln.strip() for ln in tail_out.split("\n") if ln.strip()][-8:]
