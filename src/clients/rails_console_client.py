@@ -247,6 +247,10 @@ class RailsConsoleClient:
         error_marker_cmd = f'puts "--EXEC_ERROR--{marker_id}"'
         error_marker_out = f"--EXEC_ERROR--{marker_id}"
 
+        # Final script completion marker printed after the begin/rescue block completes
+        script_end_marker_cmd = f'puts "--SCRIPT_END--{marker_id}"'
+        script_end_marker_out = f"--SCRIPT_END--{marker_id}"
+
         # Conditionally include result printing based on suppress_output flag
         result_print_line = "" if suppress_output else "puts result.inspect"
 
@@ -269,6 +273,7 @@ class RailsConsoleClient:
           puts e.backtrace.join("\\n")[0..500] rescue nil  # Print limited backtrace
           %s
         end
+        %s
         """
 
         wrapped_command = template % (
@@ -278,6 +283,7 @@ class RailsConsoleClient:
             end_marker_cmd,
             error_marker_cmd,
             end_marker_cmd,
+            script_end_marker_cmd,
         )
 
         command_path = self.file_manager.join(debug_session_dir, "ruby_command.rb")
@@ -303,12 +309,6 @@ class RailsConsoleClient:
                 start_line_index = idx
                 break
         if start_line_index == -1:
-            console_state = self._get_console_state(tmux_output[-50:])
-            if console_state["ready"]:
-                logger.error(
-                    "Console appears ready despite missing start marker - attempting to extract output",
-                )
-                return tmux_output
             msg = f"Start marker '{start_marker_out}' not found in output"
             raise CommandExecutionError(msg)
 
@@ -375,9 +375,21 @@ class RailsConsoleClient:
                     if pattern in line:
                         raise RubyError(line.strip())
 
-        # Defensive: detect late Ruby errors printed by IRB after our end marker
+        # Find explicit script end marker (stronger delimiter for command completion)
+        script_end_line_index = -1
+        for idx in range(end_line_index + 1, len(all_lines)):
+            if all_lines[idx].strip() == script_end_marker_out:
+                script_end_line_index = idx
+                break
+
+        # Defensive: detect late Ruby errors printed by IRB after our end marker, but before script end
         try:
-            trailing_output = remainder[end_idx:]
+            trailing_segment_lines = (
+                all_lines[end_line_index + 1 : script_end_line_index]
+                if script_end_line_index != -1
+                else all_lines[end_line_index + 1 :]
+            )
+            trailing_output = "\n".join(trailing_segment_lines)
             if (
                 "SystemStackError" in trailing_output
                 or "full_message':" in trailing_output
@@ -386,7 +398,7 @@ class RailsConsoleClient:
                 snippet = " | ".join(snippet_lines)
                 raise RubyError(f"Ruby console reported error after end marker: {snippet}")
 
-            # Small grace window to catch lines that appear just after we captured the end marker
+            # Small grace window to catch lines that appear just after we captured the end/script_end markers
             time.sleep(0.2)
             target = self._get_target()
             capture = subprocess.run(
