@@ -352,7 +352,8 @@ class HealthChecker:
     def register_check(self, name: str, check_func: Callable) -> None:
         """Register a health check function."""
         self.checks[name] = check_func
-        self.logger.info("Health check registered", check_name=name)
+        # Reduce console noise: registration is a DEBUG event, not INFO
+        self.logger.debug("Health check registered", check_name=name)
 
     def add_system_checks(self) -> None:
         """Add default system health checks."""
