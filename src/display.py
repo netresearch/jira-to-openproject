@@ -128,7 +128,7 @@ def configure_logging(
         format="%(message)s",
         datefmt="[%X.%f]",
         handlers=handlers,
-        force=False,  # Do not reset existing handlers; we guard with _LOGGING_CONFIGURED
+        force=True,  # Ensure we replace pre-existing handlers to avoid duplicates
     )
 
     # Get the logger and report configuration
