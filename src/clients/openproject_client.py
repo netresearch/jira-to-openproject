@@ -621,7 +621,7 @@ class OpenProjectClient:
         if not output:
             return
         lines = [ln.strip() for ln in output.strip().splitlines()]
-        has_error_marker = any(ln.startswith("--EXEC_ERROR--") for ln in lines)
+        has_error_marker = any(ln == "--EXEC_ERROR--" or ln.startswith("--EXEC_ERROR--") for ln in lines)
         severe_pattern = ("SystemStackError" in output) or ("full_message':" in output)
         if has_error_marker or severe_pattern:
             snippet = lines[:3]
