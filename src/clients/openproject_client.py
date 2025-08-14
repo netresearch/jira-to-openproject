@@ -572,10 +572,10 @@ class OpenProjectClient:
         )
         # Defensive: detect console errors; rails_console_client will raise RubyError on late errors
         # If it returns a string with hints of failure, surface as QueryExecutionError
-        try:
-            self._check_console_output_for_errors(_console_output or "", context="execute_large_query_to_json_file")
-        except Exception as e:
-            raise QueryExecutionError(str(e)) from e
+        self._check_console_output_for_errors(
+            _console_output or "",
+            context="execute_large_query_to_json_file",
+        )
 
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"
@@ -628,8 +628,19 @@ class OpenProjectClient:
             or ("stack level too deep" in output)
         )
         if has_error_marker or severe_pattern:
-            snippet = lines[:3]
-            raise QueryExecutionError(f"Console error during {context}: {' | '.join(snippet)}")
+            # Preserve the most informative lines to aid diagnosis
+            informative = [
+                ln
+                for ln in lines
+                if ("SystemStackError" in ln)
+                or ("stack level too deep" in ln)
+                or ("full_message':" in ln)
+                or ln.startswith("--EXEC_ERROR--")
+            ]
+            snippet = informative or lines[:6]
+            raise QueryExecutionError(
+                f"Console error during {context}: {' | '.join(snippet[:8])}"
+            )
 
     # Removed rails runner helper; all scripts go through persistent tmux console
 

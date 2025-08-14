@@ -383,10 +383,12 @@ class CustomFieldMigration(BaseMigration):
 
         """
         self.logger.info("Creating custom field mapping...")
+        # Avoid re-extracting if `run()` or callers already populated caches
+        if not self.jira_custom_fields:
+            self.extract_jira_custom_fields()
 
-        self.extract_jira_custom_fields()
-
-        self.extract_openproject_custom_fields()
+        if not self.op_custom_fields:
+            self.extract_openproject_custom_fields()
 
         mapping = {}
 

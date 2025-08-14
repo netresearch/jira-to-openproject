@@ -220,6 +220,37 @@ class TestQueryExecution:
         # Assert: pagination helper invoked for model
         op_client._execute_batched_query.assert_called_once_with("Project", timeout=None)
 
+    def test_console_error_detection_strict_patterns(self, op_client) -> None:
+        """Ensure only EXEC_ERROR lines or severe patterns trigger QueryExecutionError."""
+        # Arrange: benign output with TMUX_CMD_END echo
+        benign_output = """
+open-project(prod)>         # Execute the actual command
+--EXEC_START--xyz
+open-project(prod)*         begin
+open-project(prod)*           result = 1
+open-project(prod)*           puts "--EXEC_END--xyz"
+open-project(prod)*         rescue => e
+open-project(prod)*           puts "--EXEC_ERROR--xyz"
+open-project(prod)>         end # --SCRIPT_END--xyz
+=> nil
+open-project(prod)> puts 'TMUX_CMD_END_123'
+TMUX_CMD_END_123
+=> nil
+"""
+        op_client._check_console_output_for_errors(benign_output, context="execute_large_query_to_json_file")
+
+        # Arrange: severe output with SystemStackError and missing end marker
+        severe_output = """
+open-project(prod)>         # Execute the actual command
+open-project(prod)*         begin
+/tmp/openproject_script.rb:6:in '<top (required)>': stack level too deep (SystemStackError)
+open-project(prod)>
+"""
+        from src.clients.openproject_client import QueryExecutionError
+        import pytest as _pytest
+        with _pytest.raises(QueryExecutionError):
+            op_client._check_console_output_for_errors(severe_output, context="execute_large_query_to_json_file")
+
     @pytest.mark.parametrize(
         ("original_query", "expected_modified_query"),
         [

@@ -3,11 +3,28 @@
 from typing import Any
 from unittest.mock import MagicMock
 
-from src.clients.docker_client import DockerClient
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
-from src.clients.rails_console_client import RailsConsoleClient
-from src.clients.ssh_client import SSHClient
+try:
+    from src.clients.docker_client import DockerClient
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+    from src.clients.rails_console_client import RailsConsoleClient
+    from src.clients.ssh_client import SSHClient
+except ModuleNotFoundError:
+    # Provide lightweight stubs so unit tests can run without heavy optional deps
+    class DockerClient:  # type: ignore[no-redef]
+        pass
+
+    class JiraClient:  # type: ignore[no-redef]
+        pass
+
+    class OpenProjectClient:  # type: ignore[no-redef]
+        pass
+
+    class RailsConsoleClient:  # type: ignore[no-redef]
+        pass
+
+    class SSHClient:  # type: ignore[no-redef]
+        pass
 
 
 def create_mock_jira_client() -> JiraClient:

@@ -78,6 +78,60 @@ class RailsConsoleClient:
         except Exception as e:
             logger.warning("Failed to configure IRB settings: %s", e)
 
+    @staticmethod
+    def _extract_error_summary(text: str) -> str:
+        """Extract a concise, high-signal Ruby error summary from tmux output.
+
+        Prefer specific exception lines like SystemStackError or 'stack level too deep'.
+        Falls back to last non-marker lines.
+        """
+        try:
+            lines = [ln.strip() for ln in text.split("\n")]
+            # Filter out prompts, markers, and Ruby nil/inspects
+            def is_noise(ln: str) -> bool:
+                return (
+                    not ln
+                    or ln.startswith("--EXEC_")
+                    or ln.startswith("TMUX_CMD_")
+                    or ln.startswith("=> ")
+                    or ln.startswith("irb(main):")
+                    or ln.startswith("open-project(")
+                )
+
+            candidates = [ln for ln in lines if not is_noise(ln)]
+
+            # Targeted patterns
+            key_preds = [
+                lambda s: "SystemStackError" in s,
+                lambda s: "stack level too deep" in s,
+                lambda s: "full_message':" in s,
+                lambda s: s.startswith("Ruby error:"),
+            ]
+
+            matched: list[str] = []
+            for pred in key_preds:
+                for ln in candidates:
+                    if pred(ln):
+                        matched.append(ln)
+            # Also include preceding file/line if available
+            enriched: list[str] = []
+            for ln in matched:
+                enriched.append(ln)
+            if not enriched:
+                # Fallback to last few non-noise lines
+                enriched = [ln for ln in candidates[-5:]]
+            # Deduplicate and clip
+            seen: set[str] = set()
+            unique = []
+            for ln in enriched:
+                if ln not in seen:
+                    seen.add(ln)
+                    unique.append(ln)
+            summary = " | ".join(unique)[:500]
+            return summary or text.strip()[:300]
+        except Exception:
+            return text.strip()[:300]
+
     def _session_exists(self) -> bool:
         """Check if the specified tmux session exists locally.
 
@@ -316,9 +370,7 @@ class RailsConsoleClient:
                 or "Ruby error:" in severe_output
                 or "full_message':" in severe_output
             ):
-                snippet = " | ".join(
-                    [ln.strip() for ln in severe_output.split("\n") if ln.strip()][:5]
-                )
+                snippet = self._extract_error_summary(severe_output)
                 raise RubyError(f"Ruby console reported error with no markers: {snippet}")
             msg = f"Start marker '{start_marker_out}' not found in output"
             raise CommandExecutionError(msg)
@@ -338,9 +390,7 @@ class RailsConsoleClient:
                 or "Ruby error:" in severe_output
                 or "full_message':" in severe_output
             ):
-                snippet = " | ".join(
-                    [ln.strip() for ln in severe_output.split("\n") if ln.strip()][:5]
-                )
+                snippet = self._extract_error_summary(severe_output)
                 raise RubyError(f"Ruby console reported error before end marker: {snippet}")
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
@@ -415,8 +465,7 @@ class RailsConsoleClient:
                 or "full_message':" in trailing_output
                 or "stack level too deep" in trailing_output
             ):
-                snippet_lines = [ln.strip() for ln in trailing_output.split("\n") if ln.strip()][:5]
-                snippet = " | ".join(snippet_lines)
+                snippet = self._extract_error_summary(trailing_output)
                 raise RubyError(f"Ruby console reported error after end marker: {snippet}")
         except RubyError:
             raise

@@ -19,11 +19,29 @@ from tests.utils.mock_factory import (
     create_mock_ssh_client,
 )
 
-from src.clients.docker_client import DockerClient
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
-from src.clients.rails_console_client import RailsConsoleClient
-from src.clients.ssh_client import SSHClient
+# Import real client classes when available; fall back to simple stubs to keep
+# unit tests runnable without optional third-party deps (e.g., jira library)
+try:  # pragma: no cover - exercised via import path, not logic
+    from src.clients.docker_client import DockerClient
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+    from src.clients.rails_console_client import RailsConsoleClient
+    from src.clients.ssh_client import SSHClient
+except ModuleNotFoundError:  # lightweight stubs for unit-only runs
+    class DockerClient:  # type: ignore[no-redef]
+        pass
+
+    class JiraClient:  # type: ignore[no-redef]
+        pass
+
+    class OpenProjectClient:  # type: ignore[no-redef]
+        pass
+
+    class RailsConsoleClient:  # type: ignore[no-redef]
+        pass
+
+    class SSHClient:  # type: ignore[no-redef]
+        pass
 
 
 def pytest_configure(config: Config) -> None:
@@ -197,6 +215,25 @@ def pytest_addoption(parser) -> None:
 def _is_test_environment() -> bool:
     """Detect if code is running in a pytest environment."""
     return "PYTEST_CURRENT_TEST" in os.environ
+
+
+def pytest_ignore_collect(path, config):  # type: ignore[override]
+    """Optionally ignore most tests to allow minimal, dependency-light runs.
+
+    Set J2O_TEST_MINIMAL=1 to collect only a small allowlist of fast tests,
+    avoiding imports that require optional external deps (jira, structlog).
+    """
+    if os.environ.get("J2O_TEST_MINIMAL", "0") != "1":
+        return False
+    try:
+        p = Path(str(path))
+        allow = {
+            Path("tests/integration/test_rails_console_client.py").name,
+            Path("tests/unit/clients/test_openproject_client_enhanced.py").name,
+        }
+        return p.name not in allow
+    except Exception:
+        return False
 
 
 # Cache for environment file loading to avoid repeated disk I/O

@@ -254,6 +254,63 @@ irb(main):002:0>
 
             assert "End marker" in str(context.value)
 
+    def test_missing_end_marker_with_systemstackerror_raises(self) -> None:
+        """If IRB prints a SystemStackError and no end marker, raise RubyError."""
+        marker_id = "abcd1234"
+        output = f"""
+open-project(prod)>         # Execute the actual command
+open-project(prod)*         begin
+open-project(prod)*           result = nil
+open-project(prod)*           puts "--EXEC_END--{marker_id}"
+open-project(prod)*         rescue => e
+open-project(prod)*           puts "--EXEC_ERROR--{marker_id}"
+open-project(prod)>         end
+/tmp/openproject_script.rb:6:in '<top (required)>': stack level too deep (SystemStackError)
+open-project(prod)>
+"""
+        with (
+            patch.object(
+                self.rails_client.file_manager,
+                "generate_unique_id",
+                return_value=marker_id,
+            ),
+            patch.object(
+                self.rails_client,
+                "_send_command_to_tmux",
+                return_value=output,
+            ),
+        ):
+            with pytest.raises(RubyError) as ctx:
+                self.rails_client.execute("some failing command")
+            assert "SystemStackError" in str(ctx.value) or "stack level too deep" in str(ctx.value)
+
+    def test_trailing_tmux_cmd_end_is_ignored(self) -> None:
+        """Trailing TMUX_CMD_END echoes after end marker must not be treated as errors."""
+        marker_id = "abcd1234"
+        output = f"""
+open-project(prod)>         # Execute the actual command
+--EXEC_START--{marker_id}
+open-project(prod)*         begin
+open-project(prod)*           result = 1
+open-project(prod)*           puts "--EXEC_END--{marker_id}"
+open-project(prod)*         rescue => e
+open-project(prod)*           puts "--EXEC_ERROR--{marker_id}"
+open-project(prod)*           puts "Ruby error: "
+open-project(prod)>         end # --SCRIPT_END--{marker_id}
+open-project(prod)>
+=> nil
+open-project(prod)> puts 'TMUX_CMD_END_123'
+TMUX_CMD_END_123
+=> nil
+"""
+        with patch.object(
+            self.rails_client,
+            "_send_command_to_tmux",
+            return_value=output,
+        ):
+            # Should not raise; returns output between markers ("1")
+            res = self.rails_client.execute("no-op")
+            assert res is not None
     def test_ruby_error_pattern_detection(self) -> None:
         """Test detection of Ruby error patterns in output."""
         marker_id = "abcd1234"
