@@ -1261,7 +1261,8 @@ async def run_migration(
 
         # Log security audit completion
         try:
-            security_manager.audit_logger.log_migration_event(
+            if security_manager and hasattr(security_manager, "audit_logger"):
+                security_manager.audit_logger.log_migration_event(
                 migration_id=migration_timestamp,
                 event_type=AuditEventType.MIGRATION_COMPLETE,
                 user_id="system",
@@ -1274,8 +1275,10 @@ async def run_migration(
                     ),
                     "total_seconds": total_seconds,
                 },
-            )
-            config.logger.info("Security audit logging completed")
+                )
+                config.logger.info("Security audit logging completed")
+            else:
+                config.logger.debug("Security audit logger not initialized; skipping audit log write")
         except Exception as e:
             config.logger.warning(f"Security audit logging failed: {e}")
 
@@ -1288,7 +1291,7 @@ async def run_migration(
 
         # Log security audit for migration failure
         try:
-            if "security_manager" in locals():
+            if "security_manager" in locals() and security_manager and hasattr(security_manager, "audit_logger"):
                 security_manager.audit_logger.log_migration_event(
                     event_type="MIGRATION_FAILED",
                     migration_id=migration_timestamp,
