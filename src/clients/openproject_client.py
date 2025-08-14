@@ -557,7 +557,6 @@ class OpenProjectClient:
         container_file_quoted = quote(container_file)
 
         # Build Ruby that writes JSON to file without printing large output to console
-        # Build Ruby script; ensure the file path is a Ruby string literal safely
         ruby_path_literal = container_file_quoted.replace("'", "\\'")
         ruby_script = (
             "require 'json'\n"
@@ -565,8 +564,8 @@ class OpenProjectClient:
             f"File.write('{ruby_path_literal}', JSON.generate(data))\n"
         )
 
-        # Run via rails runner inside the container to avoid IRB/tmux quirks
-        self._exec_rails_runner(ruby_script, timeout=timeout or 90)
+        # Execute via persistent tmux Rails console (faster than rails runner)
+        self.rails_client.execute(ruby_script, timeout=timeout or 90, suppress_output=True)
 
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"
@@ -603,35 +602,7 @@ class OpenProjectClient:
         except Exception as e:  # Normalize JSON parse errors
             raise JsonParseError(str(e)) from e
 
-    def _exec_rails_runner(self, ruby_script: str, timeout: int | None = None) -> None:
-        """Execute the given Ruby script via rails runner inside the container.
-
-        This writes the script to a temp file in the container using a heredoc,
-        runs it with `bundle exec rails runner`, then removes the temp file.
-
-        Args:
-            ruby_script: Ruby code to execute
-            timeout: Optional timeout for remote command
-
-        Raises:
-            QueryExecutionError: If the remote execution fails
-        """
-        script_id = self.file_manager.generate_unique_id()
-        remote_script_path = f"/tmp/j2o_runner_{script_id}.rb"
-
-        # Build a single docker exec that writes, runs, and cleans up the script
-        command = (
-            f"docker exec {self.container_name} bash -lc \"cat > {remote_script_path} <<'RUBY'\n"
-            f"{ruby_script}\n"
-            "RUBY\n"
-            f"bundle exec rails runner {remote_script_path}; rm -f {remote_script_path}\""
-        )
-
-        try:
-            # Will raise SSHCommandError on non-zero exit when check=True (default)
-            self.ssh_client.execute_command(command, timeout=timeout or self.command_timeout)
-        except Exception as e:
-            raise QueryExecutionError(f"Rails runner execution failed: {e}") from e
+    # Removed rails runner helper; all scripts go through persistent tmux console
 
     def _execute_batched_query(
         self,

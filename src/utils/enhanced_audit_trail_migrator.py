@@ -511,7 +511,7 @@ class EnhancedAuditTrailMigrator:
             completed = subprocess.run([
                 "bash",
                 "-lc",
-                f"cat <<'RUBY' | rails runner\n{ruby_script}\nRUBY\n",
+                ruby_script,
             ], capture_output=True, text=True)
             if completed.returncode == 0:
                 self.logger.success("Successfully executed audit event operations")
