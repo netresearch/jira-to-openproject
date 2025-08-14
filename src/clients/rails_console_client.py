@@ -400,7 +400,29 @@ class RailsConsoleClient:
                 snippet_lines = [ln.strip() for ln in trailing_output.split("\n") if ln.strip()][:5]
                 snippet = " | ".join(snippet_lines)
                 raise RubyError(f"Ruby console reported error after end marker: {snippet}")
-        except Exception as _e:  # If detection itself fails, ignore and continue
+
+            # Small grace window to catch lines that appear just after we captured the end marker
+            time.sleep(0.2)
+            target = self._get_target()
+            capture = subprocess.run(
+                ["tmux", "capture-pane", "-p", "-S", "-200", "-t", target],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            tail_out = capture.stdout
+            if (
+                "SystemStackError" in tail_out
+                or "Ruby error:" in tail_out
+                or "full_message':" in tail_out
+            ):
+                snippet_lines = [ln.strip() for ln in tail_out.split("\n") if ln.strip()][-8:]
+                snippet = " | ".join(snippet_lines[-5:])
+                raise RubyError(f"Ruby console reported error after end marker (delayed): {snippet}")
+        except RubyError:
+            raise
+        except Exception:
+            # If detection itself fails, ignore and continue
             pass
 
         return command_output
