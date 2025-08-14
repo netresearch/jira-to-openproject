@@ -1553,11 +1553,45 @@ class OpenProjectClient:
             return self._users_cache
 
         try:
-            # Use pure file-based approach - write to file and read directly from filesystem
-            # Tests expect a static filename to document a race; use that here
+            # Use persistent tmux console for speed: write JSON to a container file via console
             file_path = "/tmp/users.json"
+            ruby_script = (
+                "require 'json'\n"
+                "data = User.all.as_json\n"
+                f"File.write('{file_path}', JSON.generate(data))\n"
+            )
+            # Execute in console without printing result
+            self.rails_client.execute(ruby_script, timeout=60, suppress_output=True)
 
-            json_data = self.execute_large_query_to_json_file("User.all", container_file=file_path, timeout=60)
+            # Read file back from container via SSH (with a short retry to handle write race)
+            ssh_command = f"docker exec {self.container_name} cat {file_path}"
+            stdout = ""
+            stderr = ""
+            returncode = 1
+            for _ in range(8):  # ~2s total
+                try:
+                    stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                except Exception as e:
+                    if "No such file or directory" in str(e):
+                        time.sleep(0.25)
+                        continue
+                    raise
+                if returncode == 0:
+                    break
+                if stderr and "No such file or directory" in stderr:
+                    time.sleep(0.25)
+                    continue
+                msg = f"SSH command failed with code {returncode}: {stderr}"
+                raise QueryExecutionError(msg)
+
+            if returncode != 0:
+                msg = f"SSH command failed with code {returncode}: {stderr}"
+                raise QueryExecutionError(msg)
+
+            try:
+                json_data = json.loads(stdout.strip())
+            except Exception as e:
+                raise JsonParseError(str(e)) from e
 
             # Validate that we got a list
             if not isinstance(json_data, list):
