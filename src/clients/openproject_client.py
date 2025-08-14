@@ -624,7 +624,7 @@ class OpenProjectClient:
             f"docker exec {self.container_name} bash -lc \"cat > {remote_script_path} <<'RUBY'\n"
             f"{ruby_script}\n"
             "RUBY\n"
-            f"bundle exec rails runner {remote_script_path}; \\n+rm -f {remote_script_path}\""
+            f"bundle exec rails runner {remote_script_path}; rm -f {remote_script_path}\""
         )
 
         try:
