@@ -1546,45 +1546,9 @@ class OpenProjectClient:
             return self._users_cache
 
         try:
-            # Use persistent tmux console for speed: write JSON to a container file via console
-            file_path = "/tmp/users.json"
-            ruby_script = (
-                "require 'json'\n"
-                "data = User.all.as_json\n"
-                f"File.write('{file_path}', JSON.generate(data))\n"
-            )
-            # Execute in console without printing result
-            self.rails_client.execute(ruby_script, timeout=60, suppress_output=True)
-
-            # Read file back from container via SSH (with a short retry to handle write race)
-            ssh_command = f"docker exec {self.container_name} cat {file_path}"
-            stdout = ""
-            stderr = ""
-            returncode = 1
-            for _ in range(8):  # ~2s total
-                try:
-                    stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
-                except Exception as e:
-                    if "No such file or directory" in str(e):
-                        time.sleep(0.25)
-                        continue
-                    raise
-                if returncode == 0:
-                    break
-                if stderr and "No such file or directory" in stderr:
-                    time.sleep(0.25)
-                    continue
-                msg = f"SSH command failed with code {returncode}: {stderr}"
-                raise QueryExecutionError(msg)
-
-            if returncode != 0:
-                msg = f"SSH command failed with code {returncode}: {stderr}"
-                raise QueryExecutionError(msg)
-
-            try:
-                json_data = json.loads(stdout.strip())
-            except Exception as e:
-                raise JsonParseError(str(e)) from e
+            # Route through centralized helper for uniform behavior
+            file_path = self._generate_unique_temp_filename("users")
+            json_data = self.execute_large_query_to_json_file("User.all", container_file=file_path, timeout=60)
 
             # Validate that we got a list
             if not isinstance(json_data, list):
@@ -1753,69 +1717,19 @@ class OpenProjectClient:
             return self._custom_fields_cache
 
         try:
-            # Use pure file-based approach - write to file and read directly from filesystem
+            # Centralized execution path
             file_path = self._generate_unique_temp_filename("custom_fields")
-
-            # Execute command to write JSON to file - use a simple command that returns minimal output
-            # Split into Python variable interpolation (f-string) and Ruby script (raw string)
-            file_path_interpolated = f"'{file_path}'"
-            write_query = (
-                f"custom_fields = CustomField.all.as_json; File.write({file_path_interpolated}, "
-                f'JSON.pretty_generate(custom_fields)); puts "Custom fields data written to '
-                f'{file_path} (#{{custom_fields.count}} fields)"; nil'
+            custom_fields = self.execute_large_query_to_json_file(
+                "CustomField.all",
+                container_file=file_path,
+                timeout=90,
             )
 
-            # Execute the write command - fail immediately if Rails console fails
-            output = self.rails_client.execute(write_query, suppress_output=True)
-            self._check_console_output_for_errors(output or "", context="get_work_package_types")
-            logger.debug("Successfully executed custom fields write command")
+            # Update cache
+            self._custom_fields_cache = custom_fields or []
+            self._custom_fields_cache_time = current_time
 
-            # Read the JSON directly from the Docker container file system via SSH
-            try:
-                # Use SSH to read the file from the Docker container
-                ssh_command = f"docker exec {self.container_name} cat {file_path}"
-                stdout, stderr, returncode = self.ssh_client.execute_command(
-                    ssh_command,
-                )
-
-                if returncode != 0:
-                    logger.error(
-                        "Failed to read file from container, stderr: %s",
-                        stderr,
-                    )
-                    msg = f"SSH command failed with code {returncode}: {stderr}"
-                    raise QueryExecutionError(
-                        msg,
-                    )
-
-                file_content = stdout.strip()
-                logger.debug(
-                    "Successfully read custom fields file from container, content length: %d",
-                    len(file_content),
-                )
-
-                # Parse the JSON content
-                custom_fields = json.loads(file_content)
-                logger.info(
-                    "Successfully loaded %d custom fields from container file",
-                    len(custom_fields) if isinstance(custom_fields, list) else 0,
-                )
-
-                # Update cache
-                self._custom_fields_cache = custom_fields or []
-                self._custom_fields_cache_time = current_time
-
-                return custom_fields
-
-            except (json.JSONDecodeError, Exception) as e:
-                logger.exception(
-                    "Failed to read custom fields from container file: %s",
-                    e,
-                )
-                msg = f"Failed to read/parse custom fields from file: {e}"
-                raise QueryExecutionError(
-                    msg,
-                )
+            return custom_fields if isinstance(custom_fields, list) else []
 
         except Exception as e:
             msg = "Failed to get custom fields."

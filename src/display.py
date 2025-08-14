@@ -67,6 +67,7 @@ rich_handler = RichHandler(
 # Idempotent logging configuration guard
 _LOGGING_CONFIGURED: bool = False
 _LOGGER: logging.Logger | None = None
+_LOG_LEVEL_NUM: int | None = None
 
 
 def configure_logging(
@@ -86,6 +87,31 @@ def configure_logging(
     # If already configured, return the existing logger without reconfiguring
     global _LOGGING_CONFIGURED, _LOGGER
     if _LOGGING_CONFIGURED and _LOGGER is not None:
+        # If already configured but requested level differs, upgrade/downgrade levels dynamically
+        # This fixes cases where an early import configured INFO before config sets DEBUG
+        try:
+            current_root = logging.getLogger()
+            current_level = current_root.getEffectiveLevel()
+        except Exception:
+            current_level = logging.INFO
+
+        # Compute requested numeric level (including custom levels)
+        if level.upper() == "NOTICE":
+            requested_level = 21
+        elif level.upper() == "SUCCESS":
+            requested_level = 25
+        else:
+            requested_level = getattr(logging, level.upper(), logging.INFO)
+
+        if requested_level != current_level:
+            current_root.setLevel(requested_level)
+            for h in current_root.handlers:
+                try:
+                    h.setLevel(requested_level)
+                except Exception:
+                    pass
+            global _LOG_LEVEL_NUM
+            _LOG_LEVEL_NUM = requested_level
         return cast("ExtendedLogger", _LOGGER)
 
     # Define custom log levels first
@@ -170,6 +196,8 @@ def configure_logging(
 
     # Mark as configured and cache instance
     _LOGGING_CONFIGURED = True
+    global _LOG_LEVEL_NUM
+    _LOG_LEVEL_NUM = numeric_level
     _LOGGER = logger
 
     return cast("ExtendedLogger", logger)
