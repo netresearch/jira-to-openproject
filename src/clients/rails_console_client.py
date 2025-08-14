@@ -308,6 +308,18 @@ class RailsConsoleClient:
                 start_line_index = idx
                 break
         if start_line_index == -1:
+            # If markers are missing, still detect obvious Ruby failures
+            severe_output = tmux_output
+            if (
+                "SystemStackError" in severe_output
+                or "stack level too deep" in severe_output
+                or "Ruby error:" in severe_output
+                or "full_message':" in severe_output
+            ):
+                snippet = " | ".join(
+                    [ln.strip() for ln in severe_output.split("\n") if ln.strip()][:5]
+                )
+                raise RubyError(f"Ruby console reported error with no markers: {snippet}")
             msg = f"Start marker '{start_marker_out}' not found in output"
             raise CommandExecutionError(msg)
 
@@ -318,6 +330,18 @@ class RailsConsoleClient:
                 break
         if end_line_index == -1:
             logger.error("End marker '%s' not found in output", end_marker_out)
+            # First, detect obvious Ruby failures even when end marker is missing
+            severe_output = tmux_output
+            if (
+                "SystemStackError" in severe_output
+                or "stack level too deep" in severe_output
+                or "Ruby error:" in severe_output
+                or "full_message':" in severe_output
+            ):
+                snippet = " | ".join(
+                    [ln.strip() for ln in severe_output.split("\n") if ln.strip()][:5]
+                )
+                raise RubyError(f"Ruby console reported error before end marker: {snippet}")
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
                 logger.error(
@@ -381,7 +405,7 @@ class RailsConsoleClient:
                 script_echo_end_index = idx
                 break
 
-        # Defensive: detect late Ruby errors printed by IRB after our end marker; start after echo end
+        # Defensive: detect Ruby errors when end marker may be missing (e.g., SystemStackError in IRB)
         try:
             scan_start = max(end_line_index, script_echo_end_index)
             trailing_segment_lines = all_lines[scan_start + 1 :]
@@ -389,6 +413,7 @@ class RailsConsoleClient:
             if (
                 "SystemStackError" in trailing_output
                 or "full_message':" in trailing_output
+                or "stack level too deep" in trailing_output
             ):
                 snippet_lines = [ln.strip() for ln in trailing_output.split("\n") if ln.strip()][:5]
                 snippet = " | ".join(snippet_lines)

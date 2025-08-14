@@ -622,7 +622,11 @@ class OpenProjectClient:
             return
         lines = [ln.strip() for ln in output.strip().splitlines()]
         has_error_marker = any(ln == "--EXEC_ERROR--" or ln.startswith("--EXEC_ERROR--") for ln in lines)
-        severe_pattern = ("SystemStackError" in output) or ("full_message':" in output)
+        severe_pattern = (
+            ("SystemStackError" in output)
+            or ("full_message':" in output)
+            or ("stack level too deep" in output)
+        )
         if has_error_marker or severe_pattern:
             snippet = lines[:3]
             raise QueryExecutionError(f"Console error during {context}: {' | '.join(snippet)}")
