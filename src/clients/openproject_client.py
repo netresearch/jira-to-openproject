@@ -566,12 +566,35 @@ class OpenProjectClient:
             "nil"
         )
 
-        # Execute with suppressed output to keep console quiet
-        self.rails_client.execute(ruby_script, timeout=timeout or 60, suppress_output=True)
+        # Execute with suppressed output to keep console quiet (allow generous timeout)
+        self.rails_client.execute(ruby_script, timeout=timeout or 90, suppress_output=True)
 
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"
-        stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+
+        # Small retry loop to handle race where file write completes slightly after command returns
+        stdout = ""
+        stderr = ""
+        returncode = 1
+        for attempt in range(8):  # ~2 seconds total with 0.25s sleeps
+            try:
+                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+            except Exception as e:
+                # If file not present yet, wait and retry
+                if "No such file or directory" in str(e):
+                    time.sleep(0.25)
+                    continue
+                raise
+
+            if returncode == 0:
+                break
+            if stderr and "No such file or directory" in stderr:
+                time.sleep(0.25)
+                continue
+            # Other non-zero error: fail fast
+            msg = f"SSH command failed with code {returncode}: {stderr}"
+            raise QueryExecutionError(msg)
+
         if returncode != 0:
             msg = f"SSH command failed with code {returncode}: {stderr}"
             raise QueryExecutionError(msg)
