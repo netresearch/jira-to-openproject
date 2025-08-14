@@ -620,9 +620,11 @@ class OpenProjectClient:
         """
         if not output:
             return
-        suspicious = ("SystemStackError" in output) or ("Ruby error:" in output) or ("--EXEC_ERROR--" in output)
-        if suspicious:
-            snippet = output.strip().splitlines()[:3]
+        lines = [ln.strip() for ln in output.strip().splitlines()]
+        has_error_marker = any(ln.startswith("--EXEC_ERROR--") for ln in lines)
+        severe_pattern = ("SystemStackError" in output) or ("full_message':" in output)
+        if has_error_marker or severe_pattern:
+            snippet = lines[:3]
             raise QueryExecutionError(f"Console error during {context}: {' | '.join(snippet)}")
 
     # Removed rails runner helper; all scripts go through persistent tmux console
