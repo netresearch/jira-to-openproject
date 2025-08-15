@@ -363,7 +363,7 @@ class StatusMigration(BaseMigration):
           puts "EXCEPTION: #{e.class.name}: #{e.message}"
           puts "Backtrace: #{e.backtrace.join('\\n')}"
           puts "JSON_OUTPUT_START"
-          puts {error: e.message}.to_json
+          puts({ error: e.message }.to_json)
           puts "JSON_OUTPUT_END"
         end
         """

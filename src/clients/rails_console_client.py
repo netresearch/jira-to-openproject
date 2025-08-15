@@ -316,24 +316,29 @@ class RailsConsoleClient:
           result = nil  # Initialize result variable
           result = %s  # Assign the actual result
 
-          # Print the result and end marker (conditionally)
-          %s
+          # Print the result (conditionally)
           %s
         rescue => e
-          # Print error marker and details
-          %s
-          puts "Ruby error: #{e.class}: #{e.message}"
-          puts e.backtrace.join("\\n")[0..500] rescue nil  # Print limited backtrace
-          %s
-        %s
+          # Guard all error prints to avoid secondary exceptions that can cause IRB recursion
+          begin; %s; rescue; end
+          begin; puts "Ruby error: #{e.class}: #{e.message}"; rescue; end
+          begin
+            bt = e.backtrace || []
+            puts bt.join("\\n")[0..2000]
+          rescue
+            # ignore any error while printing backtrace
+          end
+        ensure
+          # Always print end marker even if any of the above fails
+          begin; %s; rescue; end
+        end # %s
         """
 
-        end_with_comment = f"end # {script_end_comment_out}"
+        end_with_comment = script_end_comment_out
         wrapped_command = template % (
             start_marker_cmd,
             command,
             result_print_line,
-            end_marker_cmd,
             error_marker_cmd,
             end_marker_cmd,
             end_with_comment,
@@ -358,7 +363,8 @@ class RailsConsoleClient:
         all_lines = tmux_output.split("\n")
         start_line_index = -1
         for idx, line in enumerate(all_lines):
-            if line.strip() == start_marker_out:
+            stripped = line.strip()
+            if stripped == start_marker_out or stripped.endswith(start_marker_out):
                 start_line_index = idx
                 break
         if start_line_index == -1:
@@ -377,7 +383,8 @@ class RailsConsoleClient:
 
         end_line_index = -1
         for idx in range(start_line_index + 1, len(all_lines)):
-            if all_lines[idx].strip() == end_marker_out:
+            stripped = all_lines[idx].strip()
+            if stripped == end_marker_out or stripped.endswith(end_marker_out):
                 end_line_index = idx
                 break
         if end_line_index == -1:
@@ -417,7 +424,7 @@ class RailsConsoleClient:
 
         between_lines = all_lines[start_line_index + 1 : end_line_index]
         # If Ruby printed our error marker, prefer it over other patterns
-        if any(ln.strip() == error_marker_out for ln in between_lines):
+        if any((ln.strip() == error_marker_out) or (ln.strip().endswith(error_marker_out)) for ln in between_lines):
             logger.error("Error marker found in output, indicating a Ruby error")
             error_message = "Ruby error detected"
             for ln in between_lines:
@@ -574,12 +581,13 @@ class RailsConsoleClient:
         logger.error("Marker '%s' not found after %ss", marker, timeout)
         return False, current_output
 
-    def _wait_for_console_ready(self, target: str, timeout: int = 5) -> bool:
+    def _wait_for_console_ready(self, target: str, timeout: int = 5, reset_on_stall: bool = True) -> bool:
         """Wait for the console to be in a ready state.
 
         Args:
             target: tmux target (session:window.pane)
             timeout: Maximum time to wait in seconds
+            reset_on_stall: When True, may send Ctrl+C on stalled/awaiting input states to recover
 
         Returns:
             bool: True if console is ready, False if timed out
@@ -608,7 +616,7 @@ class RailsConsoleClient:
                     logger.debug("Console ready after %.2fs", time.time() - start_time)
                     return True
 
-                if console_state["state"] in ["awaiting_input", "multiline_string"]:
+                if reset_on_stall and console_state["state"] in ["awaiting_input", "multiline_string"]:
                     logger.debug(
                         "Console in %s state, sending Ctrl+C to reset",
                         console_state["state"],
@@ -696,7 +704,8 @@ class RailsConsoleClient:
             # Give the command time to execute before checking if console is ready
             # This prevents sending the end marker before the command output appears
             time.sleep(0.5)
-            self._wait_for_console_ready(target, timeout)
+            # After sending the command, do not interrupt the running code. Only wait for readiness.
+            self._wait_for_console_ready(target, timeout, reset_on_stall=False)
 
             logger.debug("Sending end marker to tmux session: %s", end_marker)
             subprocess.run(
