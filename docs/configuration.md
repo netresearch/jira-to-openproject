@@ -55,7 +55,15 @@ All environment variables use the `J2O_` prefix. Key variables:
 |----------|------------|-------------|
 | `--dry-run` | `migration_config['dry_run']` | Run without making changes |
 | `--no-backup` | `migration_config['no_backup']` | Skip backup creation |
-| `--force` | `migration_config['force']` | Force data extraction |
+| `--force` | `migration_config['force']` | Force fresh extraction and mapping re-generation (skip disk caches); does not force OpenProject writes; overrides validation/security gating |
+
+### Force flag semantics
+
+- **Fresh local data**: Skips disk caches and previous-run artifacts under `var/data/*` and re-extracts from Jira.
+- **Mapping re-generation**: Rebuilds mapping JSONs (for example, `*_mapping.json`) instead of loading existing ones.
+- **In-memory caches unchanged**: Does not disable within-run in-memory caches; component APIs may offer a `refresh=True` parameter to bypass those when needed.
+- **Remote idempotence preserved**: Does not force re-writing into OpenProject; entity pre-checks still prevent duplicate creation/updates.
+- **Validation override**: Allows migration to continue despite pre-migration validation/security gating failures.
 
 ## Configuration Structure
 

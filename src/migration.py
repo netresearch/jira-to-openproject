@@ -983,6 +983,30 @@ async def run_migration(
                 op_client=op_client,
             )
 
+        # Preflight: if work_packages is requested but critical mappings are missing
+        if "work_packages" in components:
+            try:
+                required = {
+                    "project": bool(config.mappings.get_mapping("project")),
+                    "issue_type": bool(config.mappings.get_mapping("issue_type")),
+                    "status": bool(config.mappings.get_mapping("status")),
+                }
+                missing = [k for k, ok in required.items() if not ok]
+                if missing:
+                    config.logger.error(
+                        "Preflight failed: missing mappings for %s. Run prerequisite components first.",
+                        ", ".join(missing),
+                    )
+                    if stop_on_error:
+                        return MigrationResult(
+                            overall={
+                                "status": "failed",
+                                "message": f"Missing required mappings: {', '.join(missing)}",
+                            },
+                        )
+            except Exception as e:
+                config.logger.warning("Preflight mapping check error: %s", e)
+
         # Run each component in order
         try:
             for component_name in components:
@@ -1016,6 +1040,8 @@ async def run_migration(
 
                         # Store result in the results dictionary
                         results.components[component_name] = component_result
+
+                        # Mapping controller now handles consistency; no ad-hoc reloads needed
 
                         # Update overall status if component failed OR has errors
                         if (not component_result.success) or _component_has_errors(component_result):
@@ -1347,7 +1373,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Force extraction of data even if it already exists",
+        help=(
+            "Force fresh extraction and mapping re-generation (skip disk caches). "
+            "Does not force re-writing into OpenProject; keeps in-run in-memory caches; "
+            "also overrides pre-migration validation/security gating."
+        ),
     )
     parser.add_argument(
         "--setup-tmux",

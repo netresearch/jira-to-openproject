@@ -79,7 +79,11 @@ def main() -> None:
     migrate_parser.add_argument(
         "--force",
         action="store_true",
-        help="Force extraction of data even if it already exists",
+        help=(
+            "Force fresh extraction and mapping re-generation (skip disk caches). "
+            "Does not force re-writing into OpenProject; keeps in-run in-memory caches; "
+            "also overrides pre-migration validation/security gating."
+        ),
     )
     migrate_parser.add_argument(
         "--restore",
