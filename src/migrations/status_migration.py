@@ -473,7 +473,8 @@ class StatusMigration(BaseMigration):
                 }
 
         self.status_mapping = mapping
-        self._save_to_json(mapping, "status_mapping.json")
+        from src import config as _cfg
+        _cfg.mappings.set_mapping("status", mapping)
 
         return mapping
 
@@ -544,8 +545,9 @@ class StatusMigration(BaseMigration):
                 if not isinstance(jira_id, str):
                     status_mapping[str(jira_id)] = status_mapping.pop(jira_id)
 
-            # Save status mapping
-            self._save_to_json(status_mapping, "status_mapping.json")
+            # Save status mapping via controller only
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("status", status_mapping)
             logger.info(
                 f"[DRY RUN] Found {already_exists_count} existing statuses, would create {created_count} new statuses",
             )
@@ -662,9 +664,8 @@ class StatusMigration(BaseMigration):
 
         # Save status mapping
         if status_mapping:
-            mapping_file_path = Path(self.data_dir) / "status_mapping.json"
-            self._save_to_json(status_mapping, "status_mapping.json")
-            logger.info("Saved status mapping to %s", mapping_file_path)
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("status", status_mapping)
 
             # Update the mappings instance
             if self.mappings is not None:
@@ -699,7 +700,8 @@ class StatusMigration(BaseMigration):
         logger.info("Analyzing status mapping...")
 
         if not self.status_mapping:
-            self.status_mapping = self._load_from_json(Path("status_mapping.json"), {})
+            from src import config as _cfg
+            self.status_mapping = _cfg.mappings.get_mapping("status") or {}
 
         if not self.status_mapping:
             return {
@@ -803,8 +805,9 @@ class StatusMigration(BaseMigration):
                             "openproject_name": name,
                         }
 
-                # Save the mapping
-                self._save_to_json(self.status_mapping, "status_mapping.json")
+                # Save the mapping via controller
+                from src import config as _cfg
+                _cfg.mappings.set_mapping("status", self.status_mapping)
 
                 # If we have a mappings object, update it
                 if self.mappings:

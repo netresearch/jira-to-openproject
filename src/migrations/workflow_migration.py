@@ -240,7 +240,8 @@ class WorkflowMigration:
                 tracker.increment()
 
         self.status_mapping = mapping
-        self._save_to_json(mapping, "status_mapping.json")
+        from src import config as _cfg
+        _cfg.mappings.set_mapping("status", mapping)
 
         total_statuses = len(mapping)
         matched_statuses = sum(
@@ -373,7 +374,8 @@ class WorkflowMigration:
 
                 tracker.increment()
 
-        self._save_to_json(self.status_mapping, "status_mapping.json")
+        from src import config as _cfg
+        _cfg.mappings.set_mapping("status", self.status_mapping)
 
         total_statuses = len(self.status_mapping)
         matched_statuses = sum(

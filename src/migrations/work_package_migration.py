@@ -121,36 +121,41 @@ class WorkPackageMigration(BaseMigration):
         """Load all required mappings from files."""
         from src.utils import data_handler
 
-        # Load mappings from disk
-        self.project_mapping = data_handler.load_dict(
-            filename="project_mapping.json",
-            directory=self.data_dir,
-            default={},
-        )
-
-        self.user_mapping = data_handler.load_dict(
-            filename="user_mapping.json",
-            directory=self.data_dir,
-            default={},
-        )
-
-        self.issue_type_mapping = data_handler.load_dict(
-            filename="issue_type_mapping.json",
-            directory=self.data_dir,
-            default={},
-        )
-
-        self.issue_type_id_mapping = data_handler.load_dict(
-            filename="issue_type_id_mapping.json",
-            directory=self.data_dir,
-            default={},
-        )
-
-        self.status_mapping = data_handler.load_dict(
-            filename="status_mapping.json",
-            directory=self.data_dir,
-            default={},
-        )
+        # Load mappings via controller to ensure single source of truth
+        try:
+            from src import config as _cfg
+            self.project_mapping = _cfg.mappings.get_mapping("project") or {}
+            self.user_mapping = _cfg.mappings.get_mapping("user") or {}
+            self.issue_type_mapping = _cfg.mappings.get_mapping("issue_type") or {}
+            self.issue_type_id_mapping = _cfg.mappings.get_mapping("issue_type_id") or {}
+            self.status_mapping = _cfg.mappings.get_mapping("status") or {}
+        except Exception:
+            # Fallback to direct file reads
+            self.project_mapping = data_handler.load_dict(
+                filename="project_mapping.json",
+                directory=self.data_dir,
+                default={},
+            )
+            self.user_mapping = data_handler.load_dict(
+                filename="user_mapping.json",
+                directory=self.data_dir,
+                default={},
+            )
+            self.issue_type_mapping = data_handler.load_dict(
+                filename="issue_type_mapping.json",
+                directory=self.data_dir,
+                default={},
+            )
+            self.issue_type_id_mapping = data_handler.load_dict(
+                filename="issue_type_id_mapping.json",
+                directory=self.data_dir,
+                default={},
+            )
+            self.status_mapping = data_handler.load_dict(
+                filename="status_mapping.json",
+                directory=self.data_dir,
+                default={},
+            )
 
         # Update markdown converter with loaded mappings
         self._update_markdown_converter_mappings()
@@ -2170,7 +2175,8 @@ class WorkPackageMigration(BaseMigration):
                     f"Missing critical mappings: {', '.join(missing_mappings)}. "
                     f"Migration may fail or create incomplete data."
                 )
-                self.logger.warning(warning_message)
+                # Escalate severity: these are hard prerequisites for meaningful WP migration
+                self.logger.error(warning_message)
 
                 # Create the var/data directory if it doesn't exist
                 if not Path(self.data_dir).exists():
@@ -2197,7 +2203,7 @@ class WorkPackageMigration(BaseMigration):
                 issues_data["work_package_migration"].append(
                     {
                         "timestamp": timestamp,
-                        "type": "warning",
+                        "type": "error",
                         "message": warning_message,
                         "missing_mappings": missing_mappings,
                     },
@@ -2210,6 +2216,16 @@ class WorkPackageMigration(BaseMigration):
                     self.logger.warning(
                         f"Error writing to migration issues file: {e}",
                     )
+
+                # Abort the component early: without these mappings, migrating work packages makes no sense
+                return ComponentResult(
+                    success=False,
+                    message=warning_message,
+                    details={
+                        "status": "failed",
+                        "missing_mappings": missing_mappings,
+                    },
+                )
 
             # Run the migration with additional error handling
             migration_results = {}

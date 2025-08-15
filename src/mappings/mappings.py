@@ -20,6 +20,7 @@ class Mappings:
     ACCOUNT_MAPPING_FILE = Path("account_mapping.json")  # For parent project ID info
     COMPANY_MAPPING_FILE = Path("company_mapping.json")
     ISSUE_TYPE_MAPPING_FILE = Path("issue_type_mapping.json")
+    ISSUE_TYPE_ID_MAPPING_FILE = Path("issue_type_id_mapping.json")
     STATUS_MAPPING_FILE = Path("status_mapping.json")
     LINK_TYPE_MAPPING_FILE = Path("link_type_mapping.json")
     CUSTOM_FIELD_MAPPING_FILE = Path("custom_field_mapping.json")
@@ -48,7 +49,7 @@ class Mappings:
         self.custom_field_mapping = self._load_mapping(self.CUSTOM_FIELD_MAPPING_FILE)
 
         # Additional mappings that might be added during runtime
-        self.issue_type_id_mapping = {}
+        self.issue_type_id_mapping = self._load_mapping(self.ISSUE_TYPE_ID_MAPPING_FILE)
 
         # Check essential mappings
         if not self.project_mapping:

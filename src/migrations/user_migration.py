@@ -69,7 +69,8 @@ class UserMigration(BaseMigration):
         # Load existing data if available
         self.jira_users = self._load_from_json(Path("jira_users.json")) or []
         self.op_users = self._load_from_json(Path("op_users.json")) or []
-        self.user_mapping = self._load_from_json(Path("user_mapping.json")) or {}
+        from src import config as _cfg
+        self.user_mapping = _cfg.mappings.get_mapping("user") or {}
 
     def extract_jira_users(self) -> list[dict[str, Any]]:
         """Extract users from Jira.
@@ -252,8 +253,9 @@ class UserMigration(BaseMigration):
                 tracker.add_log_item(f"No match found: {jira_display_name}")
                 tracker.increment()
 
-        # Save the mapping
-        self._save_to_json(mapping, Path("user_mapping.json"))
+        # Save the mapping via controller only
+        from src import config as _cfg
+        _cfg.mappings.set_mapping("user", mapping)
         self.user_mapping = mapping
 
         return mapping

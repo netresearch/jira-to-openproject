@@ -122,7 +122,7 @@ class LinkTypeMigration(BaseMigration):
             result.details["failed_count"] = 0
             result.details["status"] = "pending"
 
-            # 3. Create custom fields for unmapped link types if needed
+            # 3. Create custom fields for unmapped link types if needed (idempotent)
             if not unmapped_link_types:
                 self.logger.info(
                     "All link types are mapped to default OpenProject relation types",
@@ -149,6 +149,7 @@ class LinkTypeMigration(BaseMigration):
                     result.details["status"] = "success"
                 else:
                     # Create custom fields for unmapped link types
+                    # The implementation pre-checks existing OP fields to avoid re-creation
                     cf_result = self.create_custom_fields_for_link_types(
                         unmapped_link_types,
                     )
@@ -326,7 +327,8 @@ class LinkTypeMigration(BaseMigration):
             # No link types available; return empty mapping and treat as success
             self.logger.info("No Jira link types available; creating empty mapping")
             self.link_type_mapping = {}
-            self._save_to_json(self.link_type_mapping, Path("link_type_mapping.json"))
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
             self._build_id_mapping()
             self.analyze_link_type_mapping()
             return self.link_type_mapping
@@ -491,7 +493,8 @@ class LinkTypeMigration(BaseMigration):
                 mapping[jira_id] = match_info
 
         self.link_type_mapping = mapping
-        self._save_to_json(mapping, Path("link_type_mapping.json"))
+        from src import config as _cfg
+        _cfg.mappings.set_mapping("link_type", mapping)
         self._build_id_mapping()
         self.analyze_link_type_mapping()
         return mapping
@@ -511,11 +514,9 @@ class LinkTypeMigration(BaseMigration):
 
         """
         if not self.link_type_mapping:
-            mapping_path = self.data_dir / "link_type_mapping.json"
-            if mapping_path.exists():
-                with mapping_path.open() as f:
-                    self.link_type_mapping = json.load(f)
-            else:
+            from src import config as _cfg
+            self.link_type_mapping = _cfg.mappings.get_mapping("link_type") or {}
+            if not self.link_type_mapping:
                 self.logger.error(
                     "No link type mapping found. Run create_link_type_mapping() first.",
                 )
@@ -734,11 +735,14 @@ class LinkTypeMigration(BaseMigration):
 
         # If nothing to create, persist mapping and return
         if not to_create:
-            self._save_to_json(self.link_type_mapping, Path("link_type_mapping.json"))
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
             return {
                 "success": True,
                 "success_count": success_count,
                 "failure_count": 0,
+                "created_now": 0,
+                "preexisting_count": success_count,
                 "errors": error_details,
                 "message": f"Mapped {success_count} link types to existing custom fields",
             }
@@ -784,16 +788,21 @@ class LinkTypeMigration(BaseMigration):
                     },
                 )
 
+        # success_count currently counts pre-existing; add newly created
+        preexisting_count = success_count
         success_count += created_now
 
         # Save the updated mapping if any fields are now mapped
         if success_count > 0 or error_details:
-            self._save_to_json(self.link_type_mapping, Path("link_type_mapping.json"))
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
 
         return {
             "success": failure_count == 0,
             "success_count": success_count,
             "failure_count": failure_count,
+            "created_now": created_now,
+            "preexisting_count": preexisting_count,
             "errors": error_details,
             "message": f"Resolved {success_count} link types via custom fields ({failure_count} errors)",
         }

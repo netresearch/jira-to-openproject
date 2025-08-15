@@ -90,14 +90,11 @@ class IssueTypeMigration(BaseMigration):
             Path("op_work_package_types.json"),
             [],
         )
-        self.issue_type_mapping = self._load_from_json(
-            Path("issue_type_mapping.json"),
-            {},
-        )
-        self.issue_type_id_mapping = self._load_from_json(
-            Path("issue_type_id_mapping.json"),
-            {},
-        )
+        # Load via mapping controller to keep cache authoritative
+        from src import config as _cfg
+        self.issue_type_mapping = _cfg.mappings.get_mapping("issue_type") or {}
+        from src import config as _cfg
+        self.issue_type_id_mapping = _cfg.mappings.get_mapping("issue_type_id") or {}
         self.logger.info("Loaded %s Jira issue types", len(self.jira_issue_types))
         self.logger.info(
             "Loaded %s OpenProject work package types",
@@ -1282,8 +1279,9 @@ class IssueTypeMigration(BaseMigration):
                         created_type.get("id"),
                     )
 
-            # Save updated mapping
-            self._save_to_json(self.issue_type_mapping, Path("issue_type_mapping.json"))
+            # Save via mapping controller
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
 
             # Update ID mapping
             final_mapping = {}
@@ -1294,7 +1292,9 @@ class IssueTypeMigration(BaseMigration):
                 if op_id:
                     final_mapping[jira_id] = op_id
 
-            self._save_to_json(final_mapping, Path("issue_type_id_mapping.json"))
+            # Persist id mapping through controller as well
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("issue_type_id", final_mapping)
 
             # Report errors
             if error_count > 0:
@@ -1369,7 +1369,8 @@ class IssueTypeMigration(BaseMigration):
             if op_id:
                 final_mapping[jira_id] = op_id
 
-        self._save_to_json(final_mapping, Path("issue_type_id_mapping.json"))
+        from src import config as _cfg
+        _cfg.mappings.set_mapping("issue_type_id", final_mapping)
 
         return self.analyze_issue_type_mapping()
 
@@ -1562,9 +1563,10 @@ class IssueTypeMigration(BaseMigration):
                 )
                 missing_count += 1
 
-        # Save the updated mapping
+        # Save the updated mapping through controller
         if updated_count > 0:
-            self._save_to_json(self.issue_type_mapping, Path("issue_type_mapping.json"))
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
             self.logger.info("Updated mapping for %s work package types", updated_count)
         else:
             self.logger.info("No mapping updates needed")

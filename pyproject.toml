@@ -147,3 +147,11 @@ select = ["ALL"]
 ]
 "scripts/**/*.py" = ["T201", "T203"]  # Allow (p)print in scripts
 "examples/**/*.py" = ["T201", "T203"]  # Allow (p)print in examples
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+    "pytest-ansible>=25.6.3",
+    "pytest-mock>=3.14.1",
+    "pytest-xdist>=3.8.0",
+]

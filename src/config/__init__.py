@@ -3,7 +3,9 @@ Provides a centralized configuration interface using ConfigLoader.
 """
 
 import threading
+import logging
 from pathlib import Path
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from src.config_loader import ConfigLoader
@@ -59,9 +61,27 @@ for dir_path in var_dirs.values():
 
 # Set up logging with rich
 LOG_LEVEL: LogLevel = migration_config.get("log_level", "DEBUG")
-log_file = var_dirs["logs"] / "migration.log"
-# Configure rich logging instead of standard logging
-logger = configure_logging(LOG_LEVEL, log_file)
+
+# Always keep a stable, aggregate log as before
+latest_log_file = var_dirs["logs"] / "migration.log"
+logger = configure_logging(LOG_LEVEL, latest_log_file)
+
+# Additionally, attach a per-run log file handler for easier analysis/rotation
+try:
+    _timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S")
+    per_run_log_file = var_dirs["logs"] / f"migration_{_timestamp}.log"
+
+    _file_formatter = logging.Formatter(
+        "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
+    )
+    _file_handler = logging.FileHandler(per_run_log_file)
+    _file_handler.setFormatter(_file_formatter)
+    _file_handler.setLevel(getattr(logging, str(LOG_LEVEL).upper(), logging.INFO))
+    logging.getLogger().addHandler(_file_handler)
+    logger.info("Per-run log file: %s", per_run_log_file)
+except Exception:
+    # Do not fail initialization if per-run handler cannot be attached
+    logger.exception("Failed to attach per-run log handler")
 
 # Now log the directory creation messages
 for message in created_dirs:

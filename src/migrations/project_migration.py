@@ -75,12 +75,8 @@ class ProjectMigration(BaseMigration):
         # Load existing data if available
         self.jira_projects = self._load_from_json(JIRA_PROJECTS_FILE) or []
         self.op_projects = self._load_from_json(OP_PROJECTS_FILE) or []
-        self.project_mapping = config.mappings.get_mapping(
-            Mappings.PROJECT_MAPPING_FILE,
-        )
-        self.company_mapping = config.mappings.get_mapping(
-            Mappings.COMPANY_MAPPING_FILE,
-        )
+        self.project_mapping = config.mappings.get_mapping("project")
+        self.company_mapping = config.mappings.get_mapping("company")
 
     def extract_jira_projects(self) -> list[dict[str, Any]]:
         """Extract projects from Jira.
@@ -604,7 +600,7 @@ class ProjectMigration(BaseMigration):
                 }
 
             self.project_mapping = mapping
-            self._save_to_json(mapping, Mappings.PROJECT_MAPPING_FILE)
+            config.mappings.set_mapping("project", mapping)
             logger.info("DRY RUN: Would have created %s projects", len(projects_data))
             return ComponentResult(
                 success=True,
@@ -885,9 +881,9 @@ class ProjectMigration(BaseMigration):
                 # Non-fatal: cache will be rebuilt on next component run
                 logger.debug("Deferred project cache refresh failed; will rebuild later")
 
-        # Save the mapping
+        # Save the mapping via controller
         self.project_mapping = mapping
-        self._save_to_json(mapping, Mappings.PROJECT_MAPPING_FILE)
+        config.mappings.set_mapping("project", mapping)
 
         logger.info(
             "Bulk project migration completed: %s created, %s errors",

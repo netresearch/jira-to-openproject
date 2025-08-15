@@ -64,7 +64,9 @@ class CustomFieldMigration(BaseMigration):
             [],
         )
         self.op_custom_fields = self._load_from_json(Path("op_custom_fields.json"), [])
-        self.mapping = self._load_from_json(Path("custom_field_mapping.json"), {})
+        # Load via mapping controller when available to keep in-memory state canonical
+        from src import config as _cfg
+        self.mapping = _cfg.mappings.get_mapping("custom_field") or {}
 
         analysis_data = self._load_from_json(Path("custom_field_analysis.json"), {})
         self.analysis = {} if analysis_data is None else analysis_data
@@ -461,10 +463,9 @@ class CustomFieldMigration(BaseMigration):
 
                 tracker.increment()
 
-        mapping_file = self.data_dir / "custom_field_mapping.json"
-        with mapping_file.open("w") as f:
-            json.dump(mapping, f, indent=2)
-        self.logger.info("Saved custom field mapping to %s", mapping_file)
+        # Persist via mapping controller only
+        from src import config as _cfg
+        _cfg.mappings.set_mapping("custom_field", mapping)
 
         total_fields = len(mapping)
         matched_fields = sum(
@@ -957,11 +958,9 @@ puts "Custom field migration completed. Results written to #{output_file}"
         self._last_analysis_time = time.time()
 
         if not self.mapping:
-            mapping_path = self.data_dir / "custom_field_mapping.json"
-            if mapping_path.exists():
-                with mapping_path.open() as f:
-                    self.mapping = json.load(f)
-            else:
+            from src import config as _cfg
+            self.mapping = _cfg.mappings.get_mapping("custom_field") or {}
+            if not self.mapping:
                 self.logger.error(
                     "No custom field mapping found. Run create_custom_field_mapping() first.",
                 )
