@@ -965,6 +965,17 @@ class IssueTypeMigration(BaseMigration):
 
         if not types_to_create:
             self.logger.info("No new work package types to create")
+            # Persist the current in-memory mapping so orchestrator can see it
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
+            # Also persist the ID mapping for downstream components
+            final_mapping: dict[int, int] = {}
+            for type_name, mapping in self.issue_type_mapping.items():
+                jira_id = mapping.get("jira_id")
+                op_id = mapping.get("openproject_id")
+                if jira_id is not None and op_id:
+                    final_mapping[jira_id] = op_id
+            _cfg.mappings.set_mapping("issue_type_id", final_mapping)
             return
 
         self.logger.info(
