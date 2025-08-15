@@ -23,7 +23,6 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.rails_console_client import RailsConsoleClient
 from src.clients.ssh_client import SSHClient
-from src.mappings.mappings import Mappings
 from src.migrations.account_migration import AccountMigration
 from src.migrations.company_migration import CompanyMigration
 from src.migrations.custom_field_migration import CustomFieldMigration
@@ -698,6 +697,10 @@ async def run_migration(
                     "tmux_session_name",
                     None,
                 ),
+                # Reuse previously initialized clients to avoid duplicate init/logging
+                ssh_client=ssh_client,
+                docker_client=docker_client,
+                rails_client=rails_client,
                 **op_performance_config,
             )
 
@@ -814,8 +817,9 @@ async def run_migration(
             config.logger.warning("Continuing without automated testing")
             test_suite = None
 
-        # Initialize mappings
-        config.mappings = Mappings(data_dir=config.get_path("data"))
+        # Initialize mappings once via config accessor to avoid double loads
+        # Accessing any attribute on config.mappings triggers lazy init via proxy
+        _ = config.mappings.get_all_mappings()
 
         # Run pre-migration validation
         config.logger.info("Running pre-migration validation...")
@@ -976,36 +980,10 @@ async def run_migration(
             components,
         )
 
-        # Initialize work package migration if it's in the components list
-        if "work_packages" in components:
-            available_components["work_packages"] = WorkPackageMigration(
-                jira_client=jira_client,
-                op_client=op_client,
-            )
+        # WorkPackageMigration is already constructed in available_components above
+        # Avoid re-instantiation here to prevent duplicate initializer side-effects
 
-        # Preflight: if work_packages is requested but critical mappings are missing
-        if "work_packages" in components:
-            try:
-                required = {
-                    "project": bool(config.mappings.get_mapping("project")),
-                    "issue_type": bool(config.mappings.get_mapping("issue_type")),
-                    "status": bool(config.mappings.get_mapping("status")),
-                }
-                missing = [k for k, ok in required.items() if not ok]
-                if missing:
-                    config.logger.error(
-                        "Preflight failed: missing mappings for %s. Run prerequisite components first.",
-                        ", ".join(missing),
-                    )
-                    if stop_on_error:
-                        return MigrationResult(
-                            overall={
-                                "status": "failed",
-                                "message": f"Missing required mappings: {', '.join(missing)}",
-                            },
-                        )
-            except Exception as e:
-                config.logger.warning("Preflight mapping check error: %s", e)
+        # Note: Order-aware preflight for work_packages moved to just-in-time before execution
 
         # Run each component in order
         try:
@@ -1018,6 +996,40 @@ async def run_migration(
 
                 # Track timing
                 component_start_time = time.time()
+
+                # Just-in-time preflight for work_packages before execution
+                if component_name == "work_packages":
+                    try:
+                        required = {
+                            "project": bool(config.mappings.get_mapping("project")),
+                            "issue_type": bool(config.mappings.get_mapping("issue_type")),
+                            "status": bool(config.mappings.get_mapping("status")),
+                        }
+                        missing = [k for k, ok in required.items() if not ok]
+                        if missing:
+                            config.logger.error(
+                                "Preflight failed: missing mappings for %s. Run prerequisite components first.",
+                                ", ".join(missing),
+                            )
+                            # Record a failed component result and honor --stop-on-error
+                            failed_result = ComponentResult(
+                                success=False,
+                                message=f"Missing required mappings: {', '.join(missing)}",
+                                errors=[f"missing_mapping:{m}" for m in missing],
+                                details={
+                                    "status": "failed",
+                                    "failed_reason": "missing_required_mappings",
+                                    "missing": missing,
+                                },
+                            )
+                            results.components[component_name] = failed_result
+                            results.overall["status"] = "failed"
+                            if stop_on_error:
+                                break
+                            # Skip executing this component but continue with others
+                            continue
+                    except Exception as e:
+                        config.logger.warning("Preflight mapping check error: %s", e)
 
                 # Run the component
                 try:
