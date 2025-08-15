@@ -419,6 +419,155 @@ class OpenProjectClient:
         except (json.JSONDecodeError, TypeError):
             return {"result": result}
 
+    def execute_script_with_data(
+        self,
+        script_content: str,
+        data: Any,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        """Execute a Ruby script in the Rails console with structured input data.
+
+        The data is serialized to JSON, transferred to the container under /tmp,
+        and made available to the Ruby script as the variable `input_data`.
+        The script is also written to a temporary file and executed via:
+        load "/tmp/<script>.rb"
+
+        The Ruby script should print a JSON payload between the markers
+        JSON_OUTPUT_START and JSON_OUTPUT_END, which will be parsed and returned
+        as `data` in the result dict.
+
+        Args:
+            script_content: Ruby code that expects `input_data` to be defined
+            data: Arbitrary JSON-serializable input for the script
+            timeout: Optional Rails console timeout
+
+        Returns:
+            Dict with keys: status ("success"|"error"), message, data (parsed JSON), output (raw snippet)
+        """
+        # Prepare local temp paths
+        temp_dir = Path(self.file_manager.data_dir) / "temp_scripts"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        local_data_path = temp_dir / f"openproject_input_{os.urandom(4).hex()}.json"
+        try:
+            with local_data_path.open("w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception as e:
+            raise QueryExecutionError(f"Failed to serialize input data: {e}") from e
+
+        # Compose Ruby script with a small header that loads JSON into `input_data`
+        container_data_path = Path("/tmp") / local_data_path.name
+        header = (
+            "require 'json'\n"
+            f"input_data = JSON.parse(File.read('{container_data_path.as_posix()}'))\n"
+        )
+        full_script = header + script_content
+
+        local_script_path: Path | None = None
+        container_script_path: Path | None = None
+        try:
+            # Create local script file and transfer both script and data
+            local_script_path = self._create_script_file(full_script)
+            container_script_path = self._transfer_rails_script(local_script_path)
+
+            # Transfer the input JSON to container
+            self.transfer_file_to_container(local_data_path, container_data_path)
+
+            # Execute the script inside Rails console. Suppress wrapper result.inspect noise.
+            load_cmd = f'load "{container_script_path.as_posix()}"'
+            output = self.rails_client.execute(load_cmd, timeout=timeout, suppress_output=True)
+
+            # Extract JSON payload between JSON_OUTPUT_START / JSON_OUTPUT_END
+            start_marker = "JSON_OUTPUT_START"
+            end_marker = "JSON_OUTPUT_END"
+            start_idx = output.find(start_marker)
+            end_idx = output.find(end_marker)
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                json_str = output[start_idx + len(start_marker) : end_idx].strip()
+                # Fallback parsing with sanitization to guard against stray control chars from IRB/tmux
+                def _try_parse(s: str) -> Any:
+                    return json.loads(s)
+
+                def _sanitize_control_chars(s: str) -> str:
+                    # Remove ASCII control chars except standard whitespace
+                    return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
+
+                def _extract_first_json_block(s: str) -> str | None:
+                    # Attempt to isolate the first balanced JSON object/array
+                    start_pos = None
+                    for i, ch in enumerate(s):
+                        if ch in "{[":
+                            start_pos = i
+                            opening = ch
+                            closing = '}' if ch == '{' else ']'
+                            depth = 0
+                            in_str = False
+                            esc = False
+                            for j in range(i, len(s)):
+                                c = s[j]
+                                if in_str:
+                                    if esc:
+                                        esc = False
+                                    elif c == "\\":
+                                        esc = True
+                                    elif c == '"':
+                                        in_str = False
+                                else:
+                                    if c == '"':
+                                        in_str = True
+                                    elif c == opening:
+                                        depth += 1
+                                    elif c == closing:
+                                        depth -= 1
+                                        if depth == 0:
+                                            return s[i : j + 1]
+                            break
+                    return None
+
+                try:
+                    parsed = _try_parse(json_str)
+                except Exception:
+                    try:
+                        parsed = _try_parse(_sanitize_control_chars(json_str))
+                    except Exception:
+                        candidate = _extract_first_json_block(json_str)
+                        if candidate is None:
+                            candidate = _extract_first_json_block(_sanitize_control_chars(json_str)) or json_str
+                        try:
+                            parsed = _try_parse(candidate)
+                        except Exception as e:
+                            raise QueryExecutionError(f"Failed to parse JSON output: {e}") from e
+
+                # Return a structured success response
+                return {
+                    "status": "success",
+                    "message": "Script executed successfully",
+                    "data": parsed,
+                    "output": output[:2000],
+                }
+
+            # No JSON markers found - return an error envelope for callers
+            return {
+                "status": "error",
+                "message": "JSON markers not found in Rails output",
+                "output": output[:2000],
+            }
+
+        except Exception:
+            # Let caller handle detailed exception; still attempt cleanup in finally
+            raise
+        finally:
+            # Best-effort cleanup of local + remote files
+            try:
+                if local_script_path is not None and container_script_path is not None:
+                    self._cleanup_script_files(local_script_path, container_script_path)
+            except Exception:
+                pass
+            try:
+                self._cleanup_script_files(local_data_path, container_data_path)
+            except Exception:
+                pass
+
     def transfer_file_to_container(
         self,
         local_path: Path,
@@ -1807,13 +1956,16 @@ class OpenProjectClient:
 
         """
         try:
-            # Use file-based JSON to avoid tmux/console artifacts
+            # Use file-based JSON to avoid tmux/console artifacts and project only minimal fields
             file_path = self._generate_unique_temp_filename("work_package_types")
             file_path_interpolated = f"'{file_path}'"
+            # Avoid Type#as_json on full AR models to prevent recursion/stack overflows in IRB
+            # Only extract minimal attributes we actually need for mapping
             write_query = (
-                f"types = Type.all.as_json; File.write({file_path_interpolated}, "
-                f'JSON.pretty_generate(types)); puts "Types data written to '
-                f'{file_path} (#{{types.count}} types)"; nil'
+                "require 'json'; "
+                "types = Type.select(:id, :name).map { |t| { id: t.id, name: t.name } }; "
+                f"File.write({file_path_interpolated}, JSON.pretty_generate(types)); "
+                f'puts "Types data written to {file_path} (#{{types.count}} types)"; nil'
             )
 
             self.rails_client.execute(write_query, suppress_output=True)
