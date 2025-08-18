@@ -446,6 +446,16 @@ class IssueTypeMigration(BaseMigration):
             "Checking existing work package types in OpenProject via Rails...",
         )
 
+        # Delegate to OpenProjectClient helper for consistent retrieval; avoid ad-hoc Ruby here
+        try:
+            types = self.op_client.get_work_package_types()
+            self.logger.info("Found %s work package types", len(types))
+            return types
+        except Exception as e:
+            msg = f"Error checking existing work package types: {e}"
+            self.logger.exception(msg)
+            raise MigrationError(msg) from e
+
         temp_file_path = "/tmp/op_work_package_types.json"
 
         command = f"""
