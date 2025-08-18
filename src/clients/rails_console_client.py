@@ -167,6 +167,17 @@ class RailsConsoleClient:
         IRB.conf[:USE_COLORIZE] = false
         IRB.conf[:INSPECT_MODE] = :to_s
 
+        # Minimize reliance on cursor position / interactive editing features
+        begin
+          IRB.conf[:USE_MULTILINE] = false
+          IRB.conf[:PROMPT_MODE] = :SIMPLE
+          if IRB.conf.key?(:USE_AUTOCOMPLETE)
+            IRB.conf[:USE_AUTOCOMPLETE] = false
+          end
+        rescue => e
+          puts "IRB basic config error: #{e.message}"
+        end
+
         # Handle non-interactive terminals better
         begin
           if defined?(Reline)
