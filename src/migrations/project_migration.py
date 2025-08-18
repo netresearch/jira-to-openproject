@@ -70,6 +70,11 @@ class ProjectMigration(BaseMigration):
         self.company_mapping: dict[str, Any] = {}
         self._created_projects = 0
 
+        # IDs for project-level custom fields used as source of truth
+        self.cf_jira_project_key_id: int | None = None
+        self.cf_jira_project_id_id: int | None = None
+        self.cf_jira_base_url_id: int | None = None
+
         self.account_custom_field_id = None
 
         # Load existing data if available
@@ -141,6 +146,25 @@ class ProjectMigration(BaseMigration):
             logger.info("Extracting projects from OpenProject…")
 
         self.op_projects = self.op_client.get_projects()
+
+        # Ensure presence (or cache IDs) of project custom fields for Jira linkage
+        try:
+            cf_names = [
+                "Jira Project Key",
+                "Jira Project ID",
+                "Jira Base URL",
+            ]
+            existing = self.op_client.batch_get_custom_fields_by_names(cf_names)
+            def _get_cf_id(name: str) -> int | None:
+                rec = existing.get(name)
+                return rec.get("id") if isinstance(rec, dict) else None
+
+            self.cf_jira_project_key_id = _get_cf_id("Jira Project Key")
+            self.cf_jira_project_id_id = _get_cf_id("Jira Project ID")
+            self.cf_jira_base_url_id = _get_cf_id("Jira Base URL")
+        except Exception as _e:
+            # Non-fatal: creation will be attempted later if needed
+            pass
 
         logger.info("Extracted %s projects from OpenProject", len(self.op_projects))
 
@@ -568,6 +592,52 @@ class ProjectMigration(BaseMigration):
 
         if not projects_data:
             logger.info("No new projects to create")
+            # Build and persist full project mapping even when nothing is created.
+            # This ensures downstream components (work_packages) have 'openproject_id' for Jira projects.
+            try:
+                mapping: dict[str, dict[str, Any]] = {}
+                for jira_project in self.jira_projects:
+                    jira_key = jira_project.get("key", "")
+                    jira_name = jira_project.get("name", "")
+                    identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
+                    if identifier and not identifier[0].isalpha():
+                        identifier = "p-" + identifier
+                    identifier = identifier[:100]
+
+                    jira_name_lower = jira_name.lower()
+                    existing_by_name = op_projects_by_name.get(jira_name_lower)
+                    existing_by_identifier = op_projects_by_identifier.get(identifier)
+                    existing = existing_by_name or existing_by_identifier
+
+                    if existing:
+                        mapping[jira_key] = {
+                            "jira_key": jira_key,
+                            "jira_name": jira_name,
+                            "openproject_id": existing.get("id"),
+                            "openproject_identifier": existing.get("identifier"),
+                            "openproject_name": existing.get("name"),
+                            "created_new": False,
+                        }
+                    else:
+                        # Record unmapped project explicitly
+                        mapping[jira_key] = {
+                            "jira_key": jira_key,
+                            "jira_name": jira_name,
+                            "openproject_id": None,
+                            "openproject_identifier": None,
+                            "openproject_name": None,
+                            "created_new": False,
+                            "failed": True,
+                            "error": "OpenProject project not found by name or identifier",
+                        }
+
+                # Persist mapping for downstream usage
+                self.project_mapping = mapping
+                config.mappings.set_mapping("project", mapping)
+                logger.info("Saved project mapping with %d entries", len(mapping))
+            except Exception as map_err:
+                logger.warning("Failed to persist project mapping: %s", map_err)
+
             return ComponentResult(
                 success=True,
                 message="No new projects to create",
@@ -708,12 +778,19 @@ class ProjectMigration(BaseMigration):
 
                 # Use a Rails command with proper exception handling that returns JSON in all cases
                 # SECURITY: All dynamic fields are now properly escaped to prevent command injection
+                jira_base = config.jira_config.get("url", "").replace("'", "\\'")
+                cf_key_id = self.cf_jira_project_key_id or 'nil'
+                cf_id_id = self.cf_jira_project_id_id or 'nil'
+                cf_url_id = self.cf_jira_base_url_id or 'nil'
                 create_script = (
                     f"p = Project.create!(name: '{name_escaped}', "
                     f"identifier: '{identifier_escaped}', "
                     f"description: '{desc_escaped}', public: false); "
                     f"p.enabled_module_names = ['work_package_tracking', 'wiki']; "
                     f"p.save!; "
+                    f"if {cf_key_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_key_id}); cv.value = '{jira_key}'; cv.save; end; "
+                    f"if {cf_id_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_id_id}); cv.value = '{jira_project.get('id', '')}'; cv.save; end; "
+                    f"if {cf_url_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_url_id}); cv.value = '{jira_base}'; cv.save; end; "
                     f"p.as_json"
                 )
 

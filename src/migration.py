@@ -13,7 +13,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Callable, TypedDict
 
 from rich.console import Console
 
@@ -32,6 +32,7 @@ from src.migrations.project_migration import ProjectMigration
 from src.migrations.status_migration import StatusMigration
 from src.migrations.user_migration import UserMigration
 from src.migrations.work_package_migration import WorkPackageMigration
+from src.migrations.time_entry_migration import TimeEntryMigration
 from src.models import ComponentResult, MigrationResult
 from src.performance.migration_performance_manager import (
     MigrationPerformanceManager,
@@ -120,18 +121,27 @@ class Migration:
         )
 
 
-class AvailableComponents(TypedDict):
-    """Available components for the migration."""
+def _build_component_factories(
+    jira_client: JiraClient,
+    op_client: OpenProjectClient,
+) -> dict[str, Callable[[], "BaseMigration"]]:
+    """Return lazy factories for all available components.
 
-    users: UserMigration
-    custom_fields: CustomFieldMigration
-    companies: CompanyMigration
-    projects: ProjectMigration
-    link_types: LinkTypeMigration
-    issue_types: IssueTypeMigration
-    status_types: StatusMigration
-    work_packages: WorkPackageMigration
-    accounts: AccountMigration
+    This avoids side-effects and log spam from constructing every component
+    when only a subset was requested.
+    """
+    return {
+        "users": lambda: UserMigration(jira_client=jira_client, op_client=op_client),
+        "custom_fields": lambda: CustomFieldMigration(jira_client=jira_client, op_client=op_client),
+        "companies": lambda: CompanyMigration(jira_client=jira_client, op_client=op_client),
+        "projects": lambda: ProjectMigration(jira_client=jira_client, op_client=op_client),
+        "link_types": lambda: LinkTypeMigration(jira_client=jira_client, op_client=op_client),
+        "issue_types": lambda: IssueTypeMigration(jira_client=jira_client, op_client=op_client),
+        "status_types": lambda: StatusMigration(jira_client=jira_client, op_client=op_client),
+        "work_packages": lambda: WorkPackageMigration(jira_client=jira_client, op_client=op_client),
+        "time_entries": lambda: TimeEntryMigration(jira_client=jira_client, op_client=op_client),
+        "accounts": lambda: AccountMigration(jira_client=jira_client, op_client=op_client),
+    }
 
 
 def print_component_header(component_name: str) -> None:
@@ -929,26 +939,10 @@ async def run_migration(
                 "Continuing despite security validation failure due to --force flag",
             )
 
-        # Define all available migration components
-        available_components = AvailableComponents(
-            users=UserMigration(jira_client=jira_client, op_client=op_client),
-            custom_fields=CustomFieldMigration(
-                jira_client=jira_client,
-                op_client=op_client,
-            ),
-            companies=CompanyMigration(jira_client=jira_client, op_client=op_client),
-            projects=ProjectMigration(jira_client=jira_client, op_client=op_client),
-            link_types=LinkTypeMigration(jira_client=jira_client, op_client=op_client),
-            issue_types=IssueTypeMigration(
-                jira_client=jira_client,
-                op_client=op_client,
-            ),
-            status_types=StatusMigration(jira_client=jira_client, op_client=op_client),
-            work_packages=WorkPackageMigration(
-                jira_client=jira_client,
-                op_client=op_client,
-            ),
-            accounts=AccountMigration(jira_client=jira_client, op_client=op_client),
+        # Define lazy factories for all migration components
+        available_component_factories = _build_component_factories(
+            jira_client=jira_client,
+            op_client=op_client,
         )
 
         # If components parameter is not provided, use default component order
@@ -962,17 +956,18 @@ async def run_migration(
                 "issue_types",
                 "status_types",
                 "work_packages",
+                "time_entries",
             ]
 
             # Add accounts only if it's available
-            if "accounts" in available_components:
+            if "accounts" in available_component_factories:
                 # Add accounts after companies and before projects
                 default_components.insert(3, "accounts")
 
             components = default_components
 
         # Filter to keep only supported components
-        components = [c for c in components if c in available_components]
+        components = [c for c in components if c in available_component_factories]
 
         # Show which components will be run
         config.logger.info(
@@ -988,8 +983,12 @@ async def run_migration(
         # Run each component in order
         try:
             for component_name in components:
-                # Get the component instance
-                component: BaseMigration = available_components.get(component_name)
+                # Lazily construct the component instance
+                factory = available_component_factories.get(component_name)
+                if factory is None:
+                    config.logger.warning("Unknown component '%s' - skipping", component_name)
+                    continue
+                component: BaseMigration = factory()
 
                 # Header for this component in logs
                 print_component_header(component_name)

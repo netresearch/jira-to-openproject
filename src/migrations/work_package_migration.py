@@ -101,12 +101,7 @@ class WorkPackageMigration(BaseMigration):
             op_client=op_client,
         )
 
-        # Initialize time entry migrator
-        self.time_entry_migrator = TimeEntryMigrator(
-            jira_client=jira_client,
-            op_client=op_client,
-            data_dir=self.data_dir,
-        )
+        # Time entry migration is now a separate component. Do not initialize here.
 
         # Load existing mappings
         self._load_mappings()
@@ -381,12 +376,14 @@ class WorkPackageMigration(BaseMigration):
             # Use the new generator to process issues efficiently
             for issue in self.iter_project_issues(project_key):
                 # Convert Issue object to dictionary format expected by rest of code
+                # Ensure JSON-serializable structures (avoid PropertyHolder)
+                raw = getattr(issue, "raw", {}) if hasattr(issue, "raw") else {}
                 issue_dict = {
-                    "key": issue.key,
-                    "id": issue.id,
-                    "self": issue.self,
-                    "fields": issue.fields,
-                    "changelog": getattr(issue, "changelog", None),
+                    "key": getattr(issue, "key", raw.get("key")),
+                    "id": getattr(issue, "id", raw.get("id")),
+                    "self": getattr(issue, "self", raw.get("self")),
+                    "fields": raw.get("fields", {}),
+                    "changelog": raw.get("changelog"),
                 }
                 all_issues.append(issue_dict)
                 issue_count += 1
@@ -416,21 +413,46 @@ class WorkPackageMigration(BaseMigration):
                 )
             except Exception as e:
                 self.logger.exception("Failed to save issues to file: %s", e)
-                # Try to save to alternate location as backup
+                # Try to save to alternate location as backup with a serializable fallback
                 backup_path = self.data_dir / (
                     f"jira_issues_{project_key}_backup_"
                     f"{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}.json"
                 )
                 try:
+                    serializable: list[dict[str, Any]] = []
+                    for it in all_issues:
+                        if hasattr(it, "raw") and isinstance(it.raw, dict):
+                            serializable.append(it.raw)
+                        elif isinstance(it, dict):
+                            serializable.append(it)
+                        else:
+                            serializable.append(
+                                {
+                                    "id": getattr(it, "id", None),
+                                    "key": getattr(it, "key", None),
+                                    "fields": getattr(getattr(it, "raw", {}), "get", lambda *_: {})
+                                    ("fields", {}),
+                                },
+                            )
                     with backup_path.open("w") as f:
-                        json.dump(all_issues, f, indent=2)
+                        json.dump(serializable, f, indent=2)
                     self.logger.info(
-                        f"Saved backup of issues to {backup_path}",
+                        f"Saved backup (fallback-serialized) of issues to {backup_path}",
                     )
                 except Exception as backup_err:
                     self.logger.warning(
                         f"Failed to create backup of state file: {backup_err}",
                     )
+                # Honor stop-on-error: abort on serialization failure
+                if config.migration_config.get("stop_on_error", False):
+                    try:
+                        from src.models.migration_error import MigrationError
+                    except Exception:  # pragma: no cover
+                        class MigrationError(Exception):
+                            pass
+                    raise MigrationError(
+                        f"Stopping due to JSON serialization failure for project {project_key}: {e}",
+                    ) from e
 
             return all_issues
 
@@ -896,12 +918,23 @@ class WorkPackageMigration(BaseMigration):
             return {}
 
         # Get list of Jira projects to process
+        # Log mapping overview to make behavior transparent
+        self.logger.info(
+            "Project mapping entries: %d",
+            len(self.project_mapping or {}),
+        )
         jira_projects = list(
             {
                 entry.get("jira_key")
                 for entry in self.project_mapping.values()
                 if entry.get("jira_key")
             },
+        )
+
+        self.logger.info(
+            "Discovered %d Jira project keys from mapping: %s",
+            len(jira_projects),
+            jira_projects,
         )
 
         if not jira_projects:
@@ -915,39 +948,53 @@ class WorkPackageMigration(BaseMigration):
         processed_projects = set()
         last_processed_project = None
 
-        if Path(migration_state_file).exists():
-            try:
-                with Path(migration_state_file).open() as f:
-                    migration_state = json.load(f)
-                    processed_projects = set(
-                        migration_state.get("processed_projects", []),
-                    )
-                    last_processed_project = migration_state.get(
-                        "last_processed_project",
-                    )
-
-                self.logger.info(
-                    f"Found migration state - {len(processed_projects)} projects already processed",
+        if config.migration_config.get("force", False):
+            # Honor --force to ignore prior state and reprocess all projects
+            if Path(migration_state_file).exists():
+                self.logger.warning(
+                    "--force specified: ignoring prior migration state in %s",
+                    str(migration_state_file),
                 )
-                if last_processed_project and last_processed_project in jira_projects:
+            else:
+                self.logger.info("--force specified: no prior state file present to ignore")
+        else:
+            if Path(migration_state_file).exists():
+                try:
+                    with Path(migration_state_file).open() as f:
+                        migration_state = json.load(f)
+                        processed_projects = set(
+                            migration_state.get("processed_projects", []),
+                        )
+                        last_processed_project = migration_state.get(
+                            "last_processed_project",
+                        )
+
                     self.logger.info(
-                        f"Last processed project was {last_processed_project} - will resume from there",
+                        f"Found migration state - {len(processed_projects)} projects already processed",
                     )
-            except Exception as e:
-                self.logger.warning("Error loading migration state: %s", e)
-                # Create a backup of the corrupted state file if it exists
-                if Path(migration_state_file).exists():
-                    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
-                    backup_file = f"{migration_state_file}.bak.{timestamp}"
-                    try:
-                        shutil.copy2(migration_state_file, backup_file)
+                    self.logger.info(
+                        "Processed projects from state: %s",
+                        list(processed_projects),
+                    )
+                    if last_processed_project:
                         self.logger.info(
-                            f"Created backup of corrupted state file: {backup_file}",
+                            f"Last processed project was {last_processed_project}",
                         )
-                    except Exception as backup_err:
-                        self.logger.warning(
-                            f"Failed to create backup of state file: {backup_err}",
-                        )
+                except Exception as e:
+                    self.logger.warning("Error loading migration state: %s", e)
+                    # Create a backup of the corrupted state file if it exists
+                    if Path(migration_state_file).exists():
+                        timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+                        backup_file = f"{migration_state_file}.bak.{timestamp}"
+                        try:
+                            shutil.copy2(migration_state_file, backup_file)
+                            self.logger.info(
+                                f"Created backup of corrupted state file: {backup_file}",
+                            )
+                        except Exception as backup_err:
+                            self.logger.warning(
+                                f"Failed to create backup of state file: {backup_err}",
+                            )
 
         # Filter unprocessed projects or start from the interrupted project
         remaining_projects = []
@@ -962,6 +1009,12 @@ class WorkPackageMigration(BaseMigration):
         self.logger.info(
             f"Found {len(jira_projects)} Jira projects, will process {len(remaining_projects)} remaining projects",
         )
+        if not remaining_projects and jira_projects:
+            self.logger.warning(
+                "No remaining projects to process. All projects appear in state as processed. "
+                "Use --force to ignore state, or remove %s to reset.",
+                str(migration_state_file),
+            )
 
         # Initialize counters
         total_issues = 0
@@ -1126,7 +1179,8 @@ class WorkPackageMigration(BaseMigration):
 
                             # Prepare work package data
                         try:
-                            wp_data = self._prepare_work_package(issue, op_project_id)
+                            # Use the public wrapper that supports both jira.Issue and dict inputs
+                            wp_data = self.prepare_work_package(issue, op_project_id)
                             if wp_data:
                                 work_packages_data.append(wp_data)
 
@@ -1164,7 +1218,17 @@ class WorkPackageMigration(BaseMigration):
                             )
                             self.logger.debug("Issue type: %s", type(issue))
                             preparation_errors += 1
-                            # Continue with the next issue
+                            # Honor --stop-on-error: abort immediately on first preparation error
+                            try:
+                                from src.models.migration_error import MigrationError
+                            except Exception:  # pragma: no cover - import safety
+                                class MigrationError(Exception):
+                                    pass
+                            if config.migration_config.get("stop_on_error", False):
+                                raise MigrationError(
+                                    f"Stopping due to preparation error for {issue_key}: {e}",
+                                ) from e
+                            # Otherwise continue with the next issue
                             continue
 
                     except Exception as e:
@@ -1394,17 +1458,18 @@ class WorkPackageMigration(BaseMigration):
                     f"Saved debug copy of work packages data to {debug_json_path}",
                 )
 
-                # Copy the file to the container
-                if self.op_client.rails_client.transfer_file_to_container(
-                    temp_file_path,
-                    container_temp_path,
-                ):
+                # Copy the file to the container using OpenProjectClient (raises on failure)
+                try:
+                    self.op_client.transfer_file_to_container(
+                        temp_file_path,
+                        Path(container_temp_path),
+                    )
                     self.logger.success(
                         "Successfully copied work packages data to container",
                     )
-                else:
+                except Exception as transfer_err:
                     self.logger.error(
-                        "Failed to transfer work packages file to container",
+                        f"Failed to transfer work packages file to container: {transfer_err}",
                     )
                     project_tracker.add_log_item(
                         f"Error: {project_key} (file transfer failed)",
@@ -1414,6 +1479,11 @@ class WorkPackageMigration(BaseMigration):
                     failed_projects.append(
                         {"project_key": project_key, "reason": "file_transfer_failed"},
                     )
+                    if config.migration_config.get("stop_on_error", False):
+                        from src.models.migration_error import MigrationError
+                        raise MigrationError(
+                            f"Stopping due to file transfer failure for {project_key}: {transfer_err}",
+                        ) from transfer_err
                     continue
 
                 # Create a simple Ruby script based on the example
@@ -1743,7 +1813,7 @@ class WorkPackageMigration(BaseMigration):
                                 "error_type": error.get("error_type"),
                             }
                 # If direct output doesn't work, try to get the result file
-                elif self.op_client.rails_client.transfer_file_from_container(
+                elif self.op_client.docker_client.transfer_file_from_container(
                     result_file_container,
                     result_file_local,
                 ):
@@ -2320,18 +2390,7 @@ class WorkPackageMigration(BaseMigration):
             except Exception as meta_e:
                 self.logger.debug("Meta operations failed: %s", meta_e)
 
-            # Optionally execute time entry migration
-            try:
-                time_entry_result = self._execute_time_entry_migration()
-                if isinstance(result.data, dict):
-                    result.data["time_entry_migration"] = time_entry_result
-            except MigrationError as te:
-                self.logger.exception("Time entry migration failed: %s", te)
-                if isinstance(result.data, dict):
-                    result.data["time_entry_migration"] = {
-                        "status": "failed",
-                        "error": str(te),
-                    }
+            # Time entry migration moved to standalone component 'time_entries'
 
             return result
 
