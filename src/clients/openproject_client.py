@@ -700,6 +700,10 @@ class OpenProjectClient:
             # Surface parse errors directly to callers so orchestrator can stop on error
             logger.error("JSON parsing failed for Rails output: %s", e)
             raise
+        except RubyError as e:
+            # Preserve RubyError context for higher layers to classify
+            logger.error("Ruby error during execute_query_to_json_file: %s", e)
+            raise
         except Exception as e:
             # Normalize any other errors to QueryExecutionError
             logger.exception("Error in execute_query_to_json_file: %s", e)
@@ -2023,8 +2027,37 @@ class OpenProjectClient:
                 f"File.write({file_path_interpolated}, JSON.pretty_generate(types)); nil"
             )
 
-            self.rails_client.execute(write_query, suppress_output=True)
-            logger.debug("Successfully executed work package types write command")
+            try:
+                self.rails_client.execute(write_query, suppress_output=True)
+                logger.debug("Successfully executed work package types write command")
+            except Exception as e:
+                from src.clients.rails_console_client import (
+                    ConsoleNotReadyError,
+                    CommandExecutionError,
+                    RubyError,
+                )
+                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
+                    logger.warning("Rails console failed for work package types (%s); falling back to rails runner", type(e).__name__)
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+                    local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+                    local_tmp.parent.mkdir(parents=True, exist_ok=True)
+                    ruby_runner = (
+                        "require 'json'\n" +
+                        "types = Type.select(:id, :name).map { |t| { id: t.id, name: t.name } }\n" +
+                        f"File.write('{file_path}', JSON.pretty_generate(types))\n"
+                    )
+                    with open(local_tmp, "w", encoding="utf-8") as f:
+                        f.write(ruby_runner)
+                    self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
+                    runner_cmd = (
+                        f'(cd /app || cd /opt/openproject) && '
+                        f'bundle exec rails runner {runner_script_path}'
+                    )
+                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                    if rc != 0:
+                        raise QueryExecutionError(f"rails runner failed (rc={rc}): {stderr[:500]}") from e
+                else:
+                    raise
 
             try:
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"

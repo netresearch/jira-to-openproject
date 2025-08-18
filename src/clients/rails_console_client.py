@@ -593,7 +593,7 @@ class RailsConsoleClient:
     def _wait_for_console_output(
         self,
         target: str,
-        marker: str,
+        marker: str | None,
         timeout: int,
     ) -> tuple[bool, str]:
         """Wait for specific marker to appear in the console output.
@@ -614,7 +614,10 @@ class RailsConsoleClient:
         poll_interval = 0.05
         max_interval = 0.5
 
-        logger.debug("Waiting for marker '%s' in console output", marker)
+        if marker is None:
+            logger.debug("Waiting for console output without specific marker (polling only)")
+        else:
+            logger.debug("Waiting for marker '%s' in console output", marker)
 
         while time.time() - start_time < timeout:
             try:
@@ -631,7 +634,7 @@ class RailsConsoleClient:
                     logger.error("Fatal console error detected while waiting for marker")
                     return False, current_output
 
-                if marker in current_output:
+                if marker is not None and marker in current_output:
                     logger.debug("Marker found after %.2fs", time.time() - start_time)
                     return True, current_output
 
@@ -646,7 +649,10 @@ class RailsConsoleClient:
                 msg = f"Error capturing tmux pane: {e}"
                 raise CommandExecutionError(msg) from e
 
-        logger.error("Marker '%s' not found after %ss", marker, timeout)
+        if marker is not None:
+            logger.error("Marker '%s' not found after %ss", marker, timeout)
+        else:
+            logger.error("Console output wait timed out after %ss without marker", timeout)
         return False, current_output
 
     def _wait_for_console_ready(self, target: str, timeout: int = 5, reset_on_stall: bool = True) -> bool:
@@ -819,19 +825,17 @@ class RailsConsoleClient:
                     if not line.strip().startswith("irb(main):")
                 ],
             )
-            # extract lines between markers (tolerate interleaved puts)
-            # Use the strict line-based indices from earlier when possible
-            start_pos = last_output.find(start_marker)
-            end_pos = last_output.rfind(end_marker)
-            if start_pos != -1 and end_pos != -1 and end_pos > start_pos:
-                last_output = last_output[start_pos + len(start_marker) : end_pos]
-            else:
-                # If we saw a fatal console error, surface that explicitly
-                if self._has_fatal_console_error(last_output):
-                    snippet = self._extract_error_summary(last_output)
-                    raise ConsoleNotReadyError(f"Rails console crashed: {snippet}")
-                msg = "Start or end marker not found in tmux output"
-                raise CommandExecutionError(msg)
+            # We already waited for wait_for_line (EXEC_END). Extract between EXEC_START and EXEC_END if present
+            # Fallback: return full last_output (prompt-stripped) to avoid NameError
+            try:
+                start_token = "--EXEC_START--"
+                end_token = "--EXEC_END--"
+                sp = last_output.find(start_token)
+                ep = last_output.rfind(end_token)
+                if sp != -1 and ep != -1 and ep > sp:
+                    last_output = last_output[sp + len(start_token) : ep]
+            except Exception:
+                pass
 
             return last_output.strip()
 

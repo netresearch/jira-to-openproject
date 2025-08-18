@@ -1737,6 +1737,11 @@ class WorkPackageMigration(BaseMigration):
                             "error": str(e),
                         },
                     )
+                    if config.migration_config.get("stop_on_error", False):
+                        from src.models.migration_error import MigrationError
+                        raise MigrationError(
+                            f"Stopping due to Rails execution failure for {project_key}: {e}",
+                        ) from e
                     continue
 
                 except Exception as e:
@@ -1755,6 +1760,11 @@ class WorkPackageMigration(BaseMigration):
                             "error": str(e),
                         },
                     )
+                    if config.migration_config.get("stop_on_error", False):
+                        from src.models.migration_error import MigrationError
+                        raise MigrationError(
+                            f"Stopping due to unexpected error for {project_key}: {e}",
+                        ) from e
                     continue
 
                 # Try to get the result file from the container
