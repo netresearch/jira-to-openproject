@@ -851,6 +851,24 @@ class OpenProjectClient:
                 f"Console error during {context}: {' | '.join(snippet[:8])}"
             )
 
+    def _assert_expected_console_notice(self, output: str, expected_prefix: str, context: str) -> None:
+        """Treat any unexpected console response as error in strict file-write flows.
+
+        For file-based JSON writes we expect a specific notice line like
+        "Statuses data written to /tmp/...". If it's missing or output contains
+        unrelated content, flag as error to avoid silently accepting partial/garbled output.
+        """
+        if not output:
+            # When suppress_output is used we still expect our explicit puts notice
+            raise QueryExecutionError(f"No console output during {context}; expected '{expected_prefix}...'")
+        # Normalize
+        lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
+        if not any(expected_prefix in ln for ln in lines):
+            sample = " | ".join(lines[:5])
+            raise QueryExecutionError(
+                f"Unexpected console output during {context}; expected '{expected_prefix}...'. Got: {sample[:300]}"
+            )
+
     # Removed rails runner helper; all scripts go through persistent tmux console
 
     def _execute_batched_query(
@@ -1983,7 +2001,9 @@ class OpenProjectClient:
             )
 
             output = self.rails_client.execute(write_query, suppress_output=True)
-            self._check_console_output_for_errors(output or "", context="get_projects")
+            # Treat unexpected output as error (strict mode)
+            self._check_console_output_for_errors(output or "", context="get_statuses")
+            self._assert_expected_console_notice(output or "", "Statuses data written to", context="get_statuses")
             logger.debug("Successfully executed statuses write command")
 
             try:
@@ -2096,9 +2116,42 @@ class OpenProjectClient:
                 f'{file_path} (#{{projects.count}} projects)"; nil'
             )
 
-            # Execute the write command - fail immediately if Rails console fails
-            self.rails_client.execute(write_query, suppress_output=True)
-            logger.debug("Successfully executed projects write command")
+            # Execute the write command - verify console output and fallback if needed
+            try:
+                out = self.rails_client.execute(write_query, suppress_output=True)
+                self._check_console_output_for_errors(out or "", context="get_projects")
+                self._assert_expected_console_notice(out or "", "Projects data written to", context="get_projects")
+                logger.debug("Successfully executed projects write command")
+            except Exception as e:
+                from src.clients.rails_console_client import (
+                    ConsoleNotReadyError,
+                    CommandExecutionError,
+                    RubyError,
+                )
+                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
+                    logger.warning("Rails console failed for projects (%s); falling back to rails runner", type(e).__name__)
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+                    local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+                    local_tmp.parent.mkdir(parents=True, exist_ok=True)
+                    # Reuse identical Ruby logic
+                    ruby_runner = (
+                        "require 'json'\n" +
+                        f"projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n" +
+                        f"File.write('{file_path}', JSON.pretty_generate(projects))\n" +
+                        f"puts \"Projects data written to {file_path} (#{{projects.count}} projects)\"\n"
+                    )
+                    with open(local_tmp, "w", encoding="utf-8") as f:
+                        f.write(ruby_runner)
+                    self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
+                    runner_cmd = (
+                        f'(cd /app || cd /opt/openproject) && '
+                        f'bundle exec rails runner {runner_script_path}'
+                    )
+                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                    if rc != 0:
+                        raise QueryExecutionError(f"rails runner failed (rc={rc}): {stderr[:500]}") from e
+                else:
+                    raise
 
             # Read the JSON directly from the Docker container file system via SSH
             try:
