@@ -195,6 +195,21 @@ class RailsConsoleClient:
             msg = f"Failed to configure IRB settings: {e}"
             raise TmuxSessionError(msg) from e
 
+    @staticmethod
+    def _has_fatal_console_error(output: str) -> bool:
+        """Detect fatal IRB/Reline/console errors in tmux output."""
+        if not output:
+            return False
+        fatal_terms = [
+            "ungetbyte failed (IOError)",
+            "Reline::ANSI#cursor_pos",
+            "Reline::Core#readmultiline",
+            "IRB::Irb#run",
+            "SystemStackError",
+            "stack level too deep",
+        ]
+        return any(term in output for term in fatal_terms)
+
     def _clear_pane(self) -> None:
         """Clear the tmux pane to prepare for command output.
 
@@ -567,6 +582,11 @@ class RailsConsoleClient:
                     logger.debug("Marker found after %.2fs", time.time() - start_time)
                     return True, current_output
 
+                # Detect fatal console errors early
+                if self._has_fatal_console_error(current_output):
+                    logger.error("Fatal console error detected while waiting for marker")
+                    return False, current_output
+
                 console_state = self._get_console_state(current_output)
                 if console_state["ready"] and time.time() - start_time > 3:
                     logger.debug("Console ready but marker not found yet")
@@ -610,6 +630,11 @@ class RailsConsoleClient:
                     check=True,
                 )
                 current_output = capture.stdout
+
+                # Hard fail on fatal console errors
+                if self._has_fatal_console_error(current_output):
+                    logger.error("Fatal console error detected while waiting for ready state")
+                    return False
 
                 console_state = self._get_console_state(current_output)
                 if console_state["ready"]:
@@ -722,6 +747,10 @@ class RailsConsoleClient:
             )
 
             if not found_end:
+                # If we saw a fatal console error, surface that explicitly
+                if self._has_fatal_console_error(last_output):
+                    snippet = self._extract_error_summary(last_output)
+                    raise ConsoleNotReadyError(f"Rails console crashed: {snippet}")
                 msg = "End marker not found in tmux output"
                 raise CommandExecutionError(msg)
 
@@ -747,6 +776,10 @@ class RailsConsoleClient:
             if start_idx != -1 and end_idx != -1:
                 last_output = last_output[start_idx:end_idx]
             else:
+                # If we saw a fatal console error, surface that explicitly
+                if self._has_fatal_console_error(last_output):
+                    snippet = self._extract_error_summary(last_output)
+                    raise ConsoleNotReadyError(f"Rails console crashed: {snippet}")
                 msg = "Start or end marker not found in tmux output"
                 raise CommandExecutionError(msg)
 
