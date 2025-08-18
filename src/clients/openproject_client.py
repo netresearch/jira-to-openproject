@@ -475,7 +475,34 @@ class OpenProjectClient:
 
             # Execute the script inside Rails console. Suppress wrapper result.inspect noise.
             load_cmd = f'load "{container_script_path.as_posix()}"'
-            output = self.rails_client.execute(load_cmd, timeout=timeout, suppress_output=True)
+            try:
+                output = self.rails_client.execute(load_cmd, timeout=timeout, suppress_output=True)
+            except Exception as e:
+                # Fallback: if Rails console crashed or is unstable (e.g., Reline/IRB errors),
+                # execute via non-interactive runner to avoid TTY/Reline issues.
+                from src.clients.rails_console_client import (
+                    ConsoleNotReadyError,
+                    CommandExecutionError,
+                    RubyError,
+                )
+                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
+                    logger.warning(
+                        "Rails console execution failed (%s). Falling back to rails runner.",
+                        type(e).__name__,
+                    )
+                    # Try common app roots: /app (official) then /opt/openproject (legacy)
+                    runner_cmd = (
+                        f'(cd /app || cd /opt/openproject) && '
+                        f'bundle exec rails runner {container_script_path.as_posix()}'
+                    )
+                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                    if rc != 0:
+                        raise QueryExecutionError(
+                            f"rails runner failed (rc={rc}): {stderr[:500]}",
+                        ) from e
+                    output = stdout
+                else:
+                    raise
 
             # Extract JSON payload between JSON_OUTPUT_START / JSON_OUTPUT_END
             start_marker = "JSON_OUTPUT_START"
