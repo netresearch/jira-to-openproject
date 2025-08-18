@@ -741,17 +741,50 @@ class OpenProjectClient:
         )
 
         # Execute via persistent tmux Rails console (faster than rails runner)
-        _console_output = self.rails_client.execute(
-            ruby_script,
-            timeout=timeout or 90,
-            suppress_output=True,
-        )
-        # Defensive: detect console errors; rails_console_client will raise RubyError on late errors
-        # If it returns a string with hints of failure, surface as QueryExecutionError
-        self._check_console_output_for_errors(
-            _console_output or "",
-            context="execute_large_query_to_json_file",
-        )
+        try:
+            _console_output = self.rails_client.execute(
+                ruby_script,
+                timeout=timeout or 90,
+                suppress_output=True,
+            )
+            # Defensive: detect console errors; rails_console_client will raise RubyError on late errors
+            # If it returns a string with hints of failure, surface as QueryExecutionError
+            self._check_console_output_for_errors(
+                _console_output or "",
+                context="execute_large_query_to_json_file",
+            )
+        except Exception as e:
+            # On console instability (IRB/Reline crash, marker loss), fall back to non-interactive rails runner
+            from src.clients.rails_console_client import (
+                ConsoleNotReadyError,
+                CommandExecutionError,
+                RubyError,
+            )
+            if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
+                logger.warning(
+                    "Rails console failed during large query (%s); falling back to rails runner",
+                    type(e).__name__,
+                )
+                runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+                # Write the same Ruby to the runner script in the container
+                # Reuse existing transfer mechanism via docker client
+                local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+                local_tmp.parent.mkdir(parents=True, exist_ok=True)
+                with open(local_tmp, "w", encoding="utf-8") as f:
+                    f.write(ruby_script)
+                self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
+                # Execute with rails runner, then continue to read file as below
+                runner_cmd = (
+                    f'(cd /app || cd /opt/openproject) && '
+                    f'bundle exec rails runner {runner_script_path}'
+                )
+                stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                if rc != 0:
+                    raise QueryExecutionError(
+                        f"rails runner failed (rc={rc}): {stderr[:500]}",
+                    ) from e
+            else:
+                raise
 
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"
