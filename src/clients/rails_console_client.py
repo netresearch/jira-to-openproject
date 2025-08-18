@@ -418,6 +418,38 @@ class RailsConsoleClient:
                 end_line_index = idx
                 break
         if end_line_index == -1:
+            # One more try: recapture a larger slice in case the marker landed after our first capture
+            try:
+                recapture = subprocess.run(
+                    ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                rec_output = recapture.stdout
+                rec_lines = rec_output.split("\n")
+                new_start = -1
+                new_end = -1
+                for idx, line in enumerate(rec_lines):
+                    s = line.strip()
+                    if s == start_marker_out or s.endswith(start_marker_out):
+                        new_start = idx
+                        break
+                if new_start != -1:
+                    for idx in range(new_start + 1, len(rec_lines)):
+                        s = rec_lines[idx].strip()
+                        if s == end_marker_out or s.endswith(end_marker_out):
+                            new_end = idx
+                            break
+                if new_start != -1 and new_end != -1:
+                    # Use recaptured range
+                    between_lines = rec_lines[new_start + 1 : new_end]
+                    out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
+                    return "\n".join(out_lines).strip()
+            except Exception:
+                # Fall through to existing error handling
+                pass
+
             logger.error("End marker '%s' not found in output", end_marker_out)
             # First, detect obvious Ruby failures even when end marker is missing
             severe_output = tmux_output
@@ -798,11 +830,12 @@ class RailsConsoleClient:
                     if not line.strip().startswith("irb(main):")
                 ],
             )
-            # extract lines between markers
-            start_idx = last_output.find(start_marker) + len(start_marker)
-            end_idx = last_output.find(end_marker)
-            if start_idx != -1 and end_idx != -1:
-                last_output = last_output[start_idx:end_idx]
+            # extract lines between markers (tolerate interleaved puts)
+            # Use the strict line-based indices from earlier when possible
+            start_pos = last_output.find(start_marker)
+            end_pos = last_output.rfind(end_marker)
+            if start_pos != -1 and end_pos != -1 and end_pos > start_pos:
+                last_output = last_output[start_pos + len(start_marker) : end_pos]
             else:
                 # If we saw a fatal console error, surface that explicitly
                 if self._has_fatal_console_error(last_output):
