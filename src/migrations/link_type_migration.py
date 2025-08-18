@@ -132,6 +132,8 @@ class LinkTypeMigration(BaseMigration):
                     f"All {total_link_types} link types were successfully mapped."
                 )
                 result.details["status"] = "success"
+                result.details["created_now"] = 0
+                result.details["preexisting_count"] = total_link_types
             else:
                 self.logger.info(
                     "Found %s link types that need custom fields",
@@ -211,6 +213,8 @@ class LinkTypeMigration(BaseMigration):
                     result.details["success_count"] = mapped_count + success_count
                     result.details["custom_field_count"] = success_count
                     result.details["failed_count"] = failure_count
+                    result.details["created_now"] = cf_result.get("created_now", 0)
+                    result.details["preexisting_count"] = cf_result.get("preexisting_count", 0)
                     result.details["status"] = status
 
             # Update overall status string based on success flag

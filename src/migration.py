@@ -999,10 +999,17 @@ async def run_migration(
                 # Just-in-time preflight for work_packages before execution
                 if component_name == "work_packages":
                     try:
+                        # Critical prerequisites for WP migration
                         required = {
                             "project": bool(config.mappings.get_mapping("project")),
+                            "user": bool(config.mappings.get_mapping("user")),
                             "issue_type": bool(config.mappings.get_mapping("issue_type")),
+                            "issue_type_id": bool(config.mappings.get_mapping("issue_type_id")),
                             "status": bool(config.mappings.get_mapping("status")),
+                            # Some configs may enable link/custom field enrichment
+                            "custom_field": bool(config.mappings.get_mapping("custom_field")),
+                            # link_type mapping is optional at runtime; include if present in pipeline
+                            # "link_type": bool(config.mappings.get_mapping("link_type")),
                         }
                         missing = [k for k, ok in required.items() if not ok]
                         if missing:

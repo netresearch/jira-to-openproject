@@ -79,6 +79,26 @@ try:
     _file_handler.setLevel(getattr(logging, str(LOG_LEVEL).upper(), logging.INFO))
     logging.getLogger().addHandler(_file_handler)
     logger.info("Per-run log file: %s", per_run_log_file)
+
+    # Simple retention: keep only the most recent N per-run log files
+    retention_count = int(migration_config.get("log_retention_count", 20))
+    if retention_count > 0:
+        per_run_logs = sorted(var_dirs["logs"].glob("migration_*.log"))
+        if len(per_run_logs) > retention_count:
+            to_delete = per_run_logs[: len(per_run_logs) - retention_count]
+            pruned = 0
+            for old_log in to_delete:
+                try:
+                    old_log.unlink()
+                    pruned += 1
+                except Exception:
+                    logger.debug("Failed to remove old per-run log: %s", old_log)
+            if pruned:
+                logger.info(
+                    "Per-run log rotation: kept %d, pruned %d",
+                    retention_count,
+                    pruned,
+                )
 except Exception:
     # Do not fail initialization if per-run handler cannot be attached
     logger.exception("Failed to attach per-run log handler")
