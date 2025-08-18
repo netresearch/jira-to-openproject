@@ -378,7 +378,8 @@ class RailsConsoleClient:
         with command_path.open("w") as f:
             f.write(wrapped_command)
 
-        tmux_output = self._send_command_to_tmux(wrapped_command, timeout)
+        # Wait for EXEC_END submarker before sending the tmux end marker to reduce interleaving
+        tmux_output = self._send_command_to_tmux(wrapped_command, timeout, wait_for_line=end_marker_out)
 
         tmux_output_path = self.file_manager.join(debug_session_dir, "tmux_output.txt")
         with tmux_output_path.open("w") as f:
@@ -724,7 +725,7 @@ class RailsConsoleClient:
         logger.error("Console not ready after %ss", timeout)
         return False
 
-    def _send_command_to_tmux(self, command: str, timeout: int) -> str:
+    def _send_command_to_tmux(self, command: str, timeout: int, wait_for_line: str | None = None) -> str:
         """Send a command to the local tmux session and capture output.
 
         Args:
@@ -753,25 +754,7 @@ class RailsConsoleClient:
         escaped_command = self._escape_command(command)
 
         try:
-            marker_id = self.file_manager.generate_unique_id()
-            start_marker = f"TMUX_CMD_START_{marker_id}"
-            end_marker = f"TMUX_CMD_END_{marker_id}"
-
-            logger.debug("Sending start marker to tmux session: %s", start_marker)
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, f"puts '{start_marker}'", "Enter"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
-            # Confirm start marker appears and detect immediate fatal errors before sending actual command
-            _found_start, _start_out = self._wait_for_console_output(target, start_marker, timeout=2)
-            if not _found_start:
-                if self._has_fatal_console_error(_start_out):
-                    snippet = self._extract_error_summary(_start_out)
-                    raise ConsoleNotReadyError(f"Rails console crashed after start marker: {snippet}")
-                logger.warning("Start marker not observed promptly; continuing")
+            # Removed TMUX_CMD_* markers; rely solely on EXEC_* markers from the script
 
             logger.debug("Sending command (length: %s bytes)", len(escaped_command))
             subprocess.run(
@@ -781,23 +764,29 @@ class RailsConsoleClient:
                 check=True,
             )
 
-            # Give the command time to execute before checking if console is ready
-            # This prevents sending the end marker before the command output appears
-            time.sleep(0.5)
-            # After sending the command, do not interrupt the running code. Only wait for readiness.
+            # Give the command a brief moment to start producing output
+            time.sleep(0.2)
+
+            # If the caller provided a specific line to wait for (e.g., EXEC_END), prefer that
+            if wait_for_line:
+                found_exec_end, after_cmd_output = self._wait_for_console_output(
+                    target,
+                    wait_for_line,
+                    timeout,
+                )
+                if not found_exec_end:
+                    if self._has_fatal_console_error(after_cmd_output):
+                        snippet = self._extract_error_summary(after_cmd_output)
+                        raise ConsoleNotReadyError(f"Rails console crashed while waiting for submarker: {snippet}")
+                    logger.debug("Submarker '%s' not observed within timeout; proceeding", wait_for_line)
+
+            # Now ensure prompt is ready before sending tmux end marker
             self._wait_for_console_ready(target, timeout, reset_on_stall=False)
 
-            logger.debug("Sending end marker to tmux session: %s", end_marker)
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, f"puts '{end_marker}'", "Enter"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
+            # After script completes, just capture output to include final lines
             found_end, last_output = self._wait_for_console_output(
                 target,
-                end_marker,
+                wait_for_line,
                 timeout,
             )
 

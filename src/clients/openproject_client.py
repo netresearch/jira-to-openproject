@@ -1041,23 +1041,7 @@ class OpenProjectClient:
                 except json.JSONDecodeError as e:  # type: ignore[name-defined]
                     raise JsonParseError(str(e)) from e
 
-            # Extract segment between TMUX markers if present
-            if "TMUX_CMD_START" in text and "TMUX_CMD_END" in text:
-                seg = text.split("TMUX_CMD_START", 1)[1].split("TMUX_CMD_END", 1)[0]
-                seg = seg.strip()
-                # Clean control characters and ANSI codes inside TMUX segment as well
-                try:
-                    ansi_re = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
-                    seg = ansi_re.sub("", seg)
-                    seg = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", seg)
-                except Exception:
-                    pass
-                if seg.startswith("[") or seg.startswith("{"):
-                    try:
-                        return json.loads(seg)
-                    except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                        raise JsonParseError(str(e)) from e
-                text = seg
+            # TMUX_CMD_* markers removed; rely on EXEC_* markers and direct JSON
 
             # Drop Rails prompt lines, but preserve following JSON
             lines_in = text.split("\n")
