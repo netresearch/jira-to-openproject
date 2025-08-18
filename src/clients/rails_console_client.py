@@ -180,6 +180,10 @@ class RailsConsoleClient:
 
         # Handle non-interactive terminals better
         begin
+          # Environment mitigations for Reline in non-interactive contexts
+          begin; ENV['RELINE_OUTPUT_ESCAPES'] = 'false'; rescue; end
+          begin; ENV['RELINE_INPUTRC'] = '/dev/null'; rescue; end
+
           if defined?(Reline)
             Reline.output_modifier_proc = nil
             Reline.completion_proc = nil
@@ -589,14 +593,14 @@ class RailsConsoleClient:
                 )
                 current_output = capture.stdout
 
-                if marker in current_output:
-                    logger.debug("Marker found after %.2fs", time.time() - start_time)
-                    return True, current_output
-
-                # Detect fatal console errors early
+                # Detect fatal console errors early (prefer fatal over marker)
                 if self._has_fatal_console_error(current_output):
                     logger.error("Fatal console error detected while waiting for marker")
                     return False, current_output
+
+                if marker in current_output:
+                    logger.debug("Marker found after %.2fs", time.time() - start_time)
+                    return True, current_output
 
                 console_state = self._get_console_state(current_output)
                 if console_state["ready"] and time.time() - start_time > 3:
@@ -729,6 +733,14 @@ class RailsConsoleClient:
                 check=True,
             )
 
+            # Confirm start marker appears and detect immediate fatal errors before sending actual command
+            _found_start, _start_out = self._wait_for_console_output(target, start_marker, timeout=2)
+            if not _found_start:
+                if self._has_fatal_console_error(_start_out):
+                    snippet = self._extract_error_summary(_start_out)
+                    raise ConsoleNotReadyError(f"Rails console crashed after start marker: {snippet}")
+                logger.warning("Start marker not observed promptly; continuing")
+
             logger.debug("Sending command (length: %s bytes)", len(escaped_command))
             subprocess.run(
                 ["tmux", "send-keys", "-t", target, escaped_command, "Enter"],
@@ -756,6 +768,11 @@ class RailsConsoleClient:
                 end_marker,
                 timeout,
             )
+
+            # Detect fatal even if end marker is present
+            if self._has_fatal_console_error(last_output):
+                snippet = self._extract_error_summary(last_output)
+                raise ConsoleNotReadyError(f"Rails console crashed: {snippet}")
 
             if not found_end:
                 # If we saw a fatal console error, surface that explicitly
