@@ -804,6 +804,12 @@ class OpenProjectClient:
                 raise
 
             if returncode == 0:
+                if attempt > 0:
+                    logger.debug(
+                        "Recovered after %d attempts reading container file %s",
+                        attempt + 1,
+                        container_file,
+                    )
                 break
             if stderr and "No such file or directory" in stderr:
                 time.sleep(0.25)
@@ -1774,8 +1780,14 @@ class OpenProjectClient:
 
         try:
             # Route through centralized helper for uniform behavior
+            # Include the 'mail' attribute and the 'Jira user key' custom field if present
             file_path = self._generate_unique_temp_filename("users")
-            json_data = self.execute_large_query_to_json_file("User.all", container_file=file_path, timeout=60)
+            ruby_query = (
+                "cf = CustomField.find_by(type: 'UserCustomField', name: 'Jira user key'); "
+                "User.all.map do |u| v = (cf ? u.custom_value_for(cf)&.value : nil); "
+                "u.as_json.merge({'mail' => u.mail, 'jira_user_key' => v}) end"
+            )
+            json_data = self.execute_large_query_to_json_file(ruby_query, container_file=file_path, timeout=60)
 
             # Validate that we got a list
             if not isinstance(json_data, list):
@@ -2027,7 +2039,7 @@ class OpenProjectClient:
                 stderr = ""
                 returncode = 1
                 # Small retry loop to handle race where file may not be written yet
-                for _ in range(8):  # ~2 seconds total
+                for attempt in range(8):  # ~2 seconds total
                     try:
                         stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
                     except Exception as e:
@@ -2036,6 +2048,12 @@ class OpenProjectClient:
                             continue
                         raise
                     if returncode == 0:
+                        if attempt > 0:
+                            logger.debug(
+                                "Recovered after %d attempts reading container file %s",
+                                attempt + 1,
+                                file_path,
+                            )
                         break
                     if stderr and "No such file or directory" in stderr:
                         time.sleep(0.25)

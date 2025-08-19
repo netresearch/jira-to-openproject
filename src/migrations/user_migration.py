@@ -179,11 +179,17 @@ class UserMigration(BaseMigration):
         op_users_by_username = {
             user.get("login", "").lower(): user for user in self.op_users
         }
-        op_users_by_email = {
-            user.get("email", "").lower(): user
-            for user in self.op_users
-            if user.get("email")
-        }
+        # Prefer deterministic mapping via custom field 'Jira user key'
+        op_users_by_jira_key = {}
+        # OpenProject user email field is 'mail'; fall back to 'email' if present
+        op_users_by_email = {}
+        for user in self.op_users:
+            jira_key_cf = (user.get("jira_user_key") or "").lower()
+            if jira_key_cf:
+                op_users_by_jira_key[jira_key_cf] = user
+            op_mail = (user.get("mail") or user.get("email") or "").lower()
+            if op_mail:
+                op_users_by_email[op_mail] = user
 
         mapping: dict[str, Any] = {}
 
@@ -204,6 +210,26 @@ class UserMigration(BaseMigration):
 
                 tracker.update_description(f"Mapping user: {jira_display_name}")
 
+                # 1) Custom field match (strongest)
+                if jira_key and jira_key.lower() in op_users_by_jira_key:
+                    op_user = op_users_by_jira_key[jira_key.lower()]
+                    mapping[jira_key] = {
+                        "jira_key": jira_key,
+                        "jira_name": jira_name,
+                        "jira_email": jira_email,
+                        "jira_display_name": jira_display_name,
+                        "openproject_id": op_user.get("id"),
+                        "openproject_login": op_user.get("login"),
+                        "openproject_email": op_user.get("mail") or op_user.get("email"),
+                        "matched_by": "jira_user_key_cf",
+                    }
+                    tracker.add_log_item(
+                        f"Matched by Jira user key CF: {jira_display_name} → {op_user.get('login')}",
+                    )
+                    tracker.increment()
+                    continue
+
+                # 2) Username match
                 if jira_name in op_users_by_username:
                     op_user = op_users_by_username[jira_name]
                     mapping[jira_key] = {
@@ -213,7 +239,7 @@ class UserMigration(BaseMigration):
                         "jira_display_name": jira_display_name,
                         "openproject_id": op_user.get("id"),
                         "openproject_login": op_user.get("login"),
-                        "openproject_email": op_user.get("email"),
+                        "openproject_email": op_user.get("mail") or op_user.get("email"),
                         "matched_by": "username",
                     }
                     tracker.add_log_item(
@@ -222,6 +248,7 @@ class UserMigration(BaseMigration):
                     tracker.increment()
                     continue
 
+                # 3) Email match
                 if jira_email and jira_email in op_users_by_email:
                     op_user = op_users_by_email[jira_email]
                     mapping[jira_key] = {
@@ -231,7 +258,7 @@ class UserMigration(BaseMigration):
                         "jira_display_name": jira_display_name,
                         "openproject_id": op_user.get("id"),
                         "openproject_login": op_user.get("login"),
-                        "openproject_email": op_user.get("email"),
+                        "openproject_email": op_user.get("mail") or op_user.get("email"),
                         "matched_by": "email",
                     }
                     tracker.add_log_item(
@@ -354,6 +381,28 @@ class UserMigration(BaseMigration):
             len(missing_users),
             "Recent User Creations",
         ) as tracker:
+            # Ensure the 'Jira user key' custom field exists for users
+            try:
+                cf_name = "Jira user key"
+                ensure_cf_script = f"""
+                cf = CustomField.find_by(type: 'UserCustomField', name: '{cf_name}')
+                if !cf
+                  cf = CustomField.new(
+                    name: '{cf_name}',
+                    field_format: 'string',
+                    is_required: false,
+                    is_for_all: true,
+                    type: 'UserCustomField'
+                  )
+                  cf.save
+                end
+                nil
+                """
+                # Execute once per run; ignore errors (field may already exist)
+                self.op_client.execute_query(ensure_cf_script, timeout=30)
+            except Exception:
+                # Non-fatal
+                pass
             for i in range(0, len(missing_users), batch_size):
                 batch = missing_users[i : i + batch_size]
 
@@ -396,6 +445,8 @@ class UserMigration(BaseMigration):
                             "mail": email,
                             "admin": False,
                             "status": "active",
+                            # Provide Jira user key so the Ruby side can set CF
+                            "jira_user_key": user["jira_key"],
                         },
                     )
 
@@ -468,6 +519,23 @@ class UserMigration(BaseMigration):
                             )
 
                             if user.save
+                              # Set custom field 'Jira user key' if it exists
+                              begin
+                                cf = CustomField.find_by(type: 'UserCustomField', name: 'Jira user key')
+                                if cf && user_data['jira_user_key']
+                                  cv = user.custom_value_for(cf)
+                                  if cv
+                                    cv.value = user_data['jira_user_key']
+                                    cv.save
+                                  else
+                                    # Fallback: direct assignment pattern if available
+                                    user.custom_field_values = { cf.id => user_data['jira_user_key'] }
+                                    user.save
+                                  end
+                                end
+                              rescue => _
+                                # Ignore CF set errors to avoid failing batch
+                              end
                               created_users << {
                                 status: 'success',
                                 login: user.login,
@@ -567,6 +635,15 @@ class UserMigration(BaseMigration):
         # Update user mapping after creating new users
         self.extract_openproject_users()
         self.create_user_mapping()
+
+        # Summarize creation results clearly
+        total = len(missing_users)
+        self.logger.info(
+            "User creation summary: created=%s failed=%s total=%s",
+            created,
+            failed,
+            total,
+        )
 
         return {
             "created": created,

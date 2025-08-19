@@ -295,7 +295,15 @@ class SSHClient:
                 raise last_exception from None
 
             except Exception as e:
-                logger.exception("Unexpected error executing SSH command: %s", e)
+                if attempt < max_attempts - 1:
+                    logger.debug(
+                        "SSH command error (attempt %d/%d): %s",
+                        attempt + 1,
+                        max_attempts,
+                        e,
+                    )
+                else:
+                    logger.exception("Unexpected error executing SSH command: %s", e)
                 last_exception = e
                 if attempt < max_attempts - 1:
                     continue

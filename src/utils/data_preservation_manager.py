@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from src.utils.advanced_config_manager import ConfigurationManager
+from src.utils.file_manager import FileManager
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -87,8 +88,16 @@ class DataPreservationManager:
         except Exception:
             # In unit tests environment a full ConfigurationManager may not be necessary
             self.config = config_manager  # may be None; methods that need it should guard
-        self.preservation_dir = preservation_dir or Path("data_preservation")
-        self.preservation_dir.mkdir(exist_ok=True)
+
+        # Default preservation directory under var/data for consistency
+        if preservation_dir is None:
+            fm = FileManager()
+            default_preservation_dir = fm.data_dir / "data_preservation"
+        else:
+            default_preservation_dir = preservation_dir
+
+        self.preservation_dir = default_preservation_dir
+        self.preservation_dir.mkdir(parents=True, exist_ok=True)
         # Optional clients kept for helper methods exercised in tests
         self.jira_client = jira_client
         self.openproject_client = openproject_client
