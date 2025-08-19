@@ -378,8 +378,13 @@ class RailsConsoleClient:
         with command_path.open("w") as f:
             f.write(wrapped_command)
 
-        # Wait for EXEC_END submarker before sending the tmux end marker to reduce interleaving
-        tmux_output = self._send_command_to_tmux(wrapped_command, timeout, wait_for_line=end_marker_out)
+        # Use state-machine semantics: wait for script-end echo, then ensure tail contains EXEC_END
+        tmux_output = self._send_command_to_tmux(
+            wrapped_command,
+            timeout,
+            wait_for_line=end_marker_out,
+            script_end_marker=script_end_comment_out,
+        )
 
         tmux_output_path = self.file_manager.join(debug_session_dir, "tmux_output.txt")
         with tmux_output_path.open("w") as f:
@@ -395,7 +400,7 @@ class RailsConsoleClient:
         start_line_index = -1
         for idx, line in enumerate(all_lines):
             stripped = line.strip()
-            if stripped == start_marker_out or stripped.endswith(start_marker_out):
+            if (start_marker_out in stripped):
                 start_line_index = idx
                 break
         if start_line_index == -1:
@@ -415,14 +420,14 @@ class RailsConsoleClient:
         end_line_index = -1
         for idx in range(start_line_index + 1, len(all_lines)):
             stripped = all_lines[idx].strip()
-            if stripped == end_marker_out or stripped.endswith(end_marker_out):
+            if (end_marker_out in stripped):
                 end_line_index = idx
                 break
         if end_line_index == -1:
             # One more try: recapture a larger slice in case the marker landed after our first capture
             try:
                 recapture = subprocess.run(
-                    ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
+                    ["tmux", "capture-pane", "-p", "-S", "-200", "-t", self._get_target()],
                     capture_output=True,
                     text=True,
                     check=True,
@@ -433,13 +438,13 @@ class RailsConsoleClient:
                 new_end = -1
                 for idx, line in enumerate(rec_lines):
                     s = line.strip()
-                    if s == start_marker_out or s.endswith(start_marker_out):
+                    if start_marker_out in s:
                         new_start = idx
                         break
                 if new_start != -1:
                     for idx in range(new_start + 1, len(rec_lines)):
                         s = rec_lines[idx].strip()
-                        if s == end_marker_out or s.endswith(end_marker_out):
+                        if end_marker_out in s:
                             new_end = idx
                             break
                 if new_start != -1 and new_end != -1:
@@ -731,7 +736,13 @@ class RailsConsoleClient:
         logger.error("Console not ready after %ss", timeout)
         return False
 
-    def _send_command_to_tmux(self, command: str, timeout: int, wait_for_line: str | None = None) -> str:
+    def _send_command_to_tmux(
+        self,
+        command: str,
+        timeout: int,
+        wait_for_line: str | None = None,
+        script_end_marker: str | None = None,
+    ) -> str:
         """Send a command to the local tmux session and capture output.
 
         Args:
@@ -773,41 +784,51 @@ class RailsConsoleClient:
             # Give the command a brief moment to start producing output
             time.sleep(0.2)
 
-            # If the caller provided a specific line to wait for (e.g., EXEC_END), prefer that
-            if wait_for_line:
-                found_exec_end, after_cmd_output = self._wait_for_console_output(
+            # State-machine: first observe script-end echo, then require post-script output to contain EXEC_END
+            if script_end_marker:
+                found_script_end, pane_output = self._wait_for_console_output(
                     target,
-                    wait_for_line,
+                    script_end_marker,
                     timeout,
                 )
-                if not found_exec_end:
-                    if self._has_fatal_console_error(after_cmd_output):
-                        snippet = self._extract_error_summary(after_cmd_output)
-                        raise ConsoleNotReadyError(f"Rails console crashed while waiting for submarker: {snippet}")
-                    logger.debug("Submarker '%s' not observed within timeout; proceeding", wait_for_line)
+                if not found_script_end:
+                    if self._has_fatal_console_error(pane_output):
+                        snippet = self._extract_error_summary(pane_output)
+                        raise ConsoleNotReadyError(f"Rails console crashed before script-end echo: {snippet}")
+                    raise CommandExecutionError("Script end echo not observed in console output")
 
-            # Now ensure prompt is ready before sending tmux end marker
+                # Wait for any new output beyond script-end echo
+                baseline = pane_output
+                start_wait = time.time()
+                while time.time() - start_wait < max(2, min(timeout, 10)):
+                    cap = subprocess.run(
+                        ["tmux", "capture-pane", "-p", "-S", "-200", "-t", target],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    cur = cap.stdout
+                    if cur != baseline:
+                        break
+                    time.sleep(0.1)
+
+                # Inspect only the tail window for the end marker
+                tail_lines = cur.strip().split("\n")[-20:]
+                if wait_for_line and not any(wait_for_line in ln for ln in tail_lines):
+                    # No further output with EXEC_END → error (nothing should print after EXEC_END)
+                    raise CommandExecutionError("End marker not found in tail after post-script output")
+
+            # Now ensure prompt is ready before final capture
             self._wait_for_console_ready(target, timeout, reset_on_stall=False)
 
-            # After script completes, just capture output to include final lines
-            found_end, last_output = self._wait_for_console_output(
-                target,
-                wait_for_line,
-                timeout,
+            # After script completes, capture a compact tail; outer parser will locate markers
+            cap = subprocess.run(
+                ["tmux", "capture-pane", "-p", "-S", "-200", "-t", target],
+                capture_output=True,
+                text=True,
+                check=True,
             )
-
-            # Detect fatal even if end marker is present
-            if self._has_fatal_console_error(last_output):
-                snippet = self._extract_error_summary(last_output)
-                raise ConsoleNotReadyError(f"Rails console crashed: {snippet}")
-
-            if not found_end:
-                # If we saw a fatal console error, surface that explicitly
-                if self._has_fatal_console_error(last_output):
-                    snippet = self._extract_error_summary(last_output)
-                    raise ConsoleNotReadyError(f"Rails console crashed: {snippet}")
-                msg = "End marker not found in tmux output"
-                raise CommandExecutionError(msg)
+            last_output = cap.stdout
 
             # drop all return lines from last_output
             last_output = "\n".join(
@@ -825,17 +846,7 @@ class RailsConsoleClient:
                     if not line.strip().startswith("irb(main):")
                 ],
             )
-            # We already waited for wait_for_line (EXEC_END). Extract between EXEC_START and EXEC_END if present
-            # Fallback: return full last_output (prompt-stripped) to avoid NameError
-            try:
-                start_token = "--EXEC_START--"
-                end_token = "--EXEC_END--"
-                sp = last_output.find(start_token)
-                ep = last_output.rfind(end_token)
-                if sp != -1 and ep != -1 and ep > sp:
-                    last_output = last_output[sp + len(start_token) : ep]
-            except Exception:
-                pass
+            # Do not slice out EXEC markers here; higher-level parser relies on them
 
             return last_output.strip()
 

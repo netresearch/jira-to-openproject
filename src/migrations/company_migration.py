@@ -201,7 +201,8 @@ class CompanyMigration(BaseMigration):
         self.logger.info("Extracting projects from OpenProject...")
 
         try:
-            self.op_projects = self.op_client.get_projects()
+            # Fetch only top-level company projects to avoid unnecessary load
+            self.op_projects = self.op_client.get_projects(top_level_only=True)
 
             # It's OK if there are no projects yet - this might be the initial migration
             if self.op_projects is None:

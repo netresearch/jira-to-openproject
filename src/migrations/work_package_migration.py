@@ -1421,18 +1421,39 @@ class WorkPackageMigration(BaseMigration):
                             .replace("'", "\\'")
                         )
 
-                    # Store Jira IDs for mapping
-                    jira_id = wp.get("jira_id")
+                    # Sanitize OpenProject API-style links that are not valid AR attributes
+                    links = wp.get("_links")
+                    if isinstance(links, dict):
+                        # Extract type_id from links if present and not already provided
+                        try:
+                            if "type_id" not in wp and isinstance(links.get("type"), dict):
+                                href = links["type"].get("href")
+                                if isinstance(href, str) and href.strip():
+                                    type_id_str = href.rstrip("/").split("/")[-1]
+                                    if type_id_str.isdigit():
+                                        wp["type_id"] = int(type_id_str)
+                        except Exception:
+                            # Best-effort sanitization; continue without failing the batch
+                            pass
 
-                    # Remove fields not needed by OpenProject
-                    wp_copy = wp.copy()
-                    if "jira_id" in wp_copy:
-                        del wp_copy["jira_id"]
-                    if "jira_key" in wp_copy:
-                        del wp_copy["jira_key"]
+                        # Extract status_id from links if present and not already provided
+                        try:
+                            if "status_id" not in wp and isinstance(links.get("status"), dict):
+                                href = links["status"].get("href")
+                                if isinstance(href, str) and href.strip():
+                                    status_id_str = href.rstrip("/").split("/")[-1]
+                                    if status_id_str.isdigit():
+                                        wp["status_id"] = int(status_id_str)
+                        except Exception:
+                            # Best-effort sanitization; continue without failing the batch
+                            pass
 
-                    # Add to the final data
-                    wp.update(wp_copy)
+                        # Remove _links entirely to avoid AR unknown attribute errors
+                        wp.pop("_links", None)
+
+                    # Remove fields not valid for AR mass-assignment
+                    wp.pop("jira_id", None)
+                    wp.pop("jira_key", None)
 
                 # Write the JSON file
                 with temp_file_path.open("w") as f:
@@ -1690,36 +1711,14 @@ class WorkPackageMigration(BaseMigration):
                     f"Saved debug copy of Ruby script to {debug_script_path}",
                 )
 
-                # Execute the Ruby script
+                # Execute the Ruby script via Rails console (no wrapping with puts)
                 try:
-                    result = self.op_client.execute_query(
+                    _exec_output = self.op_client.rails_client.execute(
                         header_script + main_script,
-                        timeout=90,
+                        timeout=120,
+                        suppress_output=True,
                     )
-
-                    # Validate that we got a proper result
-                    if (
-                        not isinstance(result, dict)
-                        or result.get("status") != "success"
-                    ):
-                        error_msg = (
-                            f"Invalid result format or unsuccessful execution: {result}"
-                        )
-                        self.logger.error(
-                            f"Rails error during work package creation: {error_msg}",
-                        )
-                        project_tracker.add_log_item(
-                            f"Error: {project_key} (Invalid result format)",
-                        )
-                        project_tracker.increment()
-                        processed_projects.add(project_key)
-                        failed_projects.append(
-                            {
-                                "project_key": project_key,
-                                "reason": "invalid_result_format",
-                            },
-                        )
-                        continue
+                    # We rely on the script writing the results file; ignore console output
 
                 except QueryExecutionError as e:
                     self.logger.exception(
@@ -1767,7 +1766,7 @@ class WorkPackageMigration(BaseMigration):
                         ) from e
                     continue
 
-                # Try to get the result file from the container
+                # Try to get the result file from the container (poll until it appears)
                 result_file_container = f"/tmp/wp_result_{project_key}.json"
                 result_file_local = (
                     Path(self.data_dir) / f"wp_result_{project_key}.json"
@@ -1777,8 +1776,8 @@ class WorkPackageMigration(BaseMigration):
                 created_count = 0
                 errors = []
 
-                # Try to get results from direct output first
-                output = result.get("output")
+                # Try to get results from direct output first (only when result is a dict)
+                output = result.get("output") if isinstance(result, dict) else None
                 if isinstance(output, dict) and output.get("status") == "success":
                     created_wps = output.get("created", [])
                     created_count = len(created_wps)
@@ -1822,12 +1821,39 @@ class WorkPackageMigration(BaseMigration):
                                 "error": ", ".join(error.get("errors", [])),
                                 "error_type": error.get("error_type"),
                             }
+                    # Honor --stop-on-error if any errors were returned
+                    if errors and config.migration_config.get("stop_on_error", False):
+                        try:
+                            from src.models.migration_error import MigrationError
+                        except Exception:  # pragma: no cover - import safety
+                            class MigrationError(Exception):
+                                pass
+                        first_err = errors[0]
+                        raise MigrationError(
+                            f"Stopping due to work package creation errors for {project_key}: "
+                            f"{first_err.get('errors') or first_err}"
+                        )
                 # If direct output doesn't work, try to get the result file
-                elif self.op_client.docker_client.transfer_file_from_container(
-                    result_file_container,
-                    result_file_local,
-                ):
-                    try:
+                else:
+                    # Poll for file presence to accommodate delayed writes from Rails
+                    max_wait_seconds = 30
+                    poll_interval = 1.0
+                    waited = 0.0
+                    copied = False
+                    while waited < max_wait_seconds:
+                        try:
+                            if self.op_client.transfer_file_from_container(
+                                Path(result_file_container),
+                                result_file_local,
+                            ):
+                                copied = True
+                                break
+                        except Exception:
+                            # Ignore and retry
+                            pass
+                        time.sleep(poll_interval)
+                        waited += poll_interval
+                    if copied:
                         # Also save a debug copy with timestamp
                         debug_result_path = Path(
                             self.data_dir,
@@ -1886,25 +1912,34 @@ class WorkPackageMigration(BaseMigration):
                                             "error": ", ".join(error.get("errors", [])),
                                             "error_type": error.get("error_type"),
                                         }
-                    except Exception as e:
-                        self.logger.exception(
-                            f"Error processing result file: {e}",
+                                # Honor --stop-on-error if any errors were returned
+                                if errors and config.migration_config.get("stop_on_error", False):
+                                    try:
+                                        from src.models.migration_error import MigrationError
+                                    except Exception:  # pragma: no cover - import safety
+                                        class MigrationError(Exception):
+                                            pass
+                                    first_err = errors[0]
+                                    raise MigrationError(
+                                        f"Stopping due to work package creation errors for {project_key}: "
+                                        f"{first_err.get('errors') or first_err}"
+                                    )
+                        # End processing of result file
+                    else:
+                        # Last resort - try to parse the console output
+                        self.logger.warning(
+                            "Could not get result file - parsing console output",
                         )
-                else:
-                    # Last resort - try to parse the console output
-                    self.logger.warning(
-                        "Could not get result file - parsing console output",
-                    )
-                    if isinstance(output, str):
-                        created_matches = re.findall(
-                            r"Created work package #(\d+): (.+?)$",
-                            output,
-                            re.MULTILINE,
-                        )
-                        created_count = len(created_matches)
-                        self.logger.info(
-                            f"Found {created_count} created work packages in console output",
-                        )
+                        if isinstance(output, str):
+                            created_matches = re.findall(
+                                r"Created work package #(\d+): (.+?)$",
+                                output,
+                                re.MULTILINE,
+                            )
+                            created_count = len(created_matches)
+                            self.logger.info(
+                                f"Found {created_count} created work packages in console output",
+                            )
 
                 self.logger.success(
                     f"Created {created_count} work packages for project {project_key} (errors: {len(errors)})",

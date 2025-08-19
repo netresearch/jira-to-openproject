@@ -754,26 +754,26 @@ class OpenProjectClient:
                 context="execute_large_query_to_json_file",
             )
         except Exception as e:
-            # On console instability (IRB/Reline crash, marker loss), fall back to non-interactive rails runner
+            # On console instability (IRB/Reline crash, marker loss), optionally fall back to rails runner
             from src.clients.rails_console_client import (
                 ConsoleNotReadyError,
                 CommandExecutionError,
                 RubyError,
             )
             if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
+                if not config.migration_config.get("enable_runner_fallback", False):
+                    # Respect user's preference to avoid per-request rails runner fallback
+                    raise
                 logger.warning(
                     "Rails console failed during large query (%s); falling back to rails runner",
                     type(e).__name__,
                 )
                 runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
-                # Write the same Ruby to the runner script in the container
-                # Reuse existing transfer mechanism via docker client
                 local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                 local_tmp.parent.mkdir(parents=True, exist_ok=True)
                 with open(local_tmp, "w", encoding="utf-8") as f:
                     f.write(ruby_script)
                 self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-                # Execute with rails runner, then continue to read file as below
                 runner_cmd = (
                     f'(cd /app || cd /opt/openproject) && '
                     f'bundle exec rails runner {runner_script_path}'
@@ -1977,19 +1977,69 @@ class OpenProjectClient:
             file_path = self._generate_unique_temp_filename("statuses")
             file_path_interpolated = f"'{file_path}'"
             write_query = (
+                "require 'json'; "
                 f"statuses = Status.all.as_json; File.write({file_path_interpolated}, "
-                f"JSON.pretty_generate(statuses)); nil"
+                "JSON.pretty_generate(statuses)); nil"
             )
 
-            output = self.rails_client.execute(write_query, suppress_output=True)
-            # Treat unexpected output as error (strict mode)
-            self._check_console_output_for_errors(output or "", context="get_statuses")
-            logger.debug("Successfully executed statuses write command")
+            try:
+                output = self.rails_client.execute(write_query, suppress_output=True)
+                self._check_console_output_for_errors(output or "", context="get_statuses")
+                logger.debug("Successfully executed statuses write command")
+            except Exception as e:
+                from src.clients.rails_console_client import (
+                    ConsoleNotReadyError,
+                    CommandExecutionError,
+                    RubyError,
+                )
+                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
+                    if not config.migration_config.get("enable_runner_fallback", False):
+                        # Respect user's preference to avoid per-request rails runner fallback
+                        raise
+                    logger.warning(
+                        "Rails console failed for statuses (%s); falling back to rails runner",
+                        type(e).__name__,
+                    )
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+                    local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+                    local_tmp.parent.mkdir(parents=True, exist_ok=True)
+                    ruby_runner = (
+                        "require 'json'\n" +
+                        "statuses = Status.all.as_json\n" +
+                        f"File.write('{file_path}', JSON.pretty_generate(statuses))\n"
+                    )
+                    with open(local_tmp, "w", encoding="utf-8") as f:
+                        f.write(ruby_runner)
+                    self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
+                    runner_cmd = (
+                        f'(cd /app || cd /opt/openproject) && '
+                        f'bundle exec rails runner {runner_script_path}'
+                    )
+                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                    if rc != 0:
+                        raise QueryExecutionError(f"rails runner failed (rc={rc}): {stderr[:500]}") from e
+                else:
+                    raise
 
             try:
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
-                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
-                if returncode != 0:
+                stdout = ""
+                stderr = ""
+                returncode = 1
+                # Small retry loop to handle race where file may not be written yet
+                for _ in range(8):  # ~2 seconds total
+                    try:
+                        stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                    except Exception as e:
+                        if "No such file or directory" in str(e):
+                            time.sleep(0.25)
+                            continue
+                        raise
+                    if returncode == 0:
+                        break
+                    if stderr and "No such file or directory" in stderr:
+                        time.sleep(0.25)
+                        continue
                     raise QueryExecutionError(
                         f"Failed to read statuses file: {stderr or 'unknown error'}",
                     )
@@ -2037,6 +2087,8 @@ class OpenProjectClient:
                     RubyError,
                 )
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
+                    if not config.migration_config.get("enable_runner_fallback", False):
+                        raise
                     logger.warning("Rails console failed for work package types (%s); falling back to rails runner", type(e).__name__)
                     runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
@@ -2100,8 +2152,11 @@ class OpenProjectClient:
             msg = "Failed to get work package types."
             raise QueryExecutionError(msg) from e
 
-    def get_projects(self) -> list[dict[str, Any]]:
-        """Get all projects from OpenProject using direct tmux approach.
+    def get_projects(self, *, top_level_only: bool = False) -> list[dict[str, Any]]:
+        """Get projects from OpenProject using file-based approach.
+
+        Args:
+            top_level_only: When True, returns only top-level (company) projects with no parent
 
         Returns:
             List of OpenProject projects as dictionaries
@@ -2117,9 +2172,13 @@ class OpenProjectClient:
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
             file_path_interpolated = f"'{file_path}'"
+            selector = (
+                "Project.where(parent_id: nil).select(:id, :name, :identifier, :description, :status_code)"
+                if top_level_only
+                else "Project.all.select(:id, :name, :identifier, :description, :status_code)"
+            )
             write_query = (
-                f"projects = Project.all.select(:id, :name, :identifier, :description, "
-                f":status_code).as_json; File.write({file_path_interpolated}, "
+                f"projects = {selector}.as_json; File.write({file_path_interpolated}, "
                 f"JSON.pretty_generate(projects)); nil"
             )
 
@@ -2135,14 +2194,17 @@ class OpenProjectClient:
                     RubyError,
                 )
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
+                    if not config.migration_config.get("enable_runner_fallback", False):
+                        raise
                     logger.warning("Rails console failed for projects (%s); falling back to rails runner", type(e).__name__)
                     runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
-                    # Reuse identical Ruby logic
                     ruby_runner = (
                         "require 'json'\n" +
-                        f"projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n" +
+                        ("projects = Project.where(parent_id: nil).select(:id, :name, :identifier, :description, :status_code).as_json\n"
+                         if top_level_only else
+                         "projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n") +
                         f"File.write('{file_path}', JSON.pretty_generate(projects))\n"
                     )
                     with open(local_tmp, "w", encoding="utf-8") as f:

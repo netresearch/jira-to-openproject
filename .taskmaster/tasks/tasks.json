@@ -1250,11 +1250,22 @@
         ],
         "priority": "high",
         "subtasks": []
+      },
+      {
+        "id": 114,
+        "title": "Introduce TmuxClient abstraction for tmux interactions",
+        "description": "Encapsulate all tmux interactions (send-keys, capture-pane, wait-for-line, readiness) in a dedicated TmuxClient to replace ad-hoc subprocess calls and centralize error handling, retries, and logging.",
+        "details": "Goals:\n- Create `src/clients/tmux_client.py` with a clear API:\n  - send_keys(target, keys)\n  - capture_pane(target, start_offset=-200)\n  - wait_for_line(target, token, timeout, tail_only=True)\n  - is_ready(target) with state detection (prompt/awaiting input/multiline)\n- Centralize retry/backoff, subprocess errors, and timeouts. Surface typed exceptions (TmuxSessionError, TmuxCommandTimeoutError).\n- Structured logging with context (session, window.pane, cmd length) and optional debug capture to files (reusing FileManager where applicable).\n- Provide small tail-only capture helpers to align with EXEC marker semantics.\n- Add environment detection (tmux session existence) and a clear error when session missing.\n- Make offsets/timeouts configurable via OpenProject config.\n- Non-goals: changing business logic; focus on encapsulation and reliability.\n\nIntegration:\n- Refactor `RailsConsoleClient` to use `TmuxClient` for all tmux ops.\n- Remove duplicated capture/wait code from `RailsConsoleClient`.\n\nDeliverables:\n- New module with full docstrings/type hints (Py 3.13+ style)\n- Unit tests (mock subprocess)\n- Light integration test behind marker to avoid CI flakiness\n- Short developer doc in `docs/` and updated AGENT.md notes",
+        "testStrategy": "- Unit-test each TmuxClient method with subprocess.run patched; simulate success, timeouts, and failures.\n- Contract tests for tail-only end-marker detection behavior.\n- Integration smoke test guarded by marker: requires tmux session named in config; skip in CI.\n- Regression test in RailsConsoleClient ensuring end-marker detection relies on TmuxClient tail window.",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": []
       }
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-08-11T10:49:36.908Z",
+      "updated": "2025-08-18T15:14:41.392Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
