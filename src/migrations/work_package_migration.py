@@ -533,6 +533,10 @@ class WorkPackageMigration(BaseMigration):
         jira_id = jira_issue.id
         jira_key = jira_issue.key
 
+        # Ensure subject is non-empty; fall back to Jira key if missing
+        if not subject or not str(subject).strip():
+            subject = jira_key or f"Untitled-{jira_id}"
+
         # Map the issue type
         type_id = None
 
@@ -561,7 +565,7 @@ class WorkPackageMigration(BaseMigration):
             type_display = issue_type_name or "Unknown"
             warning_msg = f"No mapping found for issue type {type_display} (ID: {issue_type_id}), defaulting to Task"
             self.logger.warning(warning_msg)
-            return 1
+            type_id = 1
 
         # Map the status
         status_op_id = None
@@ -697,37 +701,40 @@ class WorkPackageMigration(BaseMigration):
             # Format the description to include the Jira key
             formatted_description = f"Jira Issue: {jira_key}\n\n{description}"
 
+            # Subject with fallback to Jira key
+            subject_val = (jira_issue.get("summary", "") or "").strip()
+            if not subject_val:
+                subject_val = jira_key or f"Untitled-{jira_issue.get('id', '')}"
+
             # Convert the dictionary format used in tests to work package format
             work_package = {
                 "project_id": project_id,
-                "subject": jira_issue.get("summary", ""),
+                "subject": subject_val,
                 "description": formatted_description,
                 "jira_key": jira_key,
                 "jira_id": jira_issue.get("id", ""),
                 "_links": {},
             }
 
-            # Add type if available
+            # Add type if available (explicit type_id and _links for compatibility)
             issue_type = jira_issue.get("issue_type", {})
             if issue_type:
                 type_id_value = issue_type.get("id")
                 type_name_value = issue_type.get("name")
                 if type_id_value or type_name_value:
-                    type_id = self._map_issue_type(type_id_value, type_name_value)
-                    work_package["_links"]["type"] = {
-                        "href": f"/api/v3/types/{type_id}",
-                    }
+                    mapped_type_id = self._map_issue_type(type_id_value, type_name_value)
+                    work_package["type_id"] = mapped_type_id
+                    work_package["_links"]["type"] = {"href": f"/api/v3/types/{mapped_type_id}"}
 
-            # Add status if available
+            # Add status if available (explicit status_id and _links)
             status = jira_issue.get("status", {})
             if status:
                 status_id_value = status.get("id")
                 status_name_value = status.get("name")
                 if status_id_value or status_name_value:
-                    status_id = self._map_status(status_id_value, status_name_value)
-                    work_package["_links"]["status"] = {
-                        "href": f"/api/v3/statuses/{status_id}",
-                    }
+                    mapped_status_id = self._map_status(status_id_value, status_name_value)
+                    work_package["status_id"] = mapped_status_id
+                    work_package["_links"]["status"] = {"href": f"/api/v3/statuses/{mapped_status_id}"}
 
             return work_package
         # It's a Jira issue object, use the internal method
@@ -1596,8 +1603,36 @@ class WorkPackageMigration(BaseMigration):
                         wp_attrs['watcher_ids'] = valid_watcher_ids
                       end
 
-                      # Create work package object
-                      wp = WorkPackage.new(wp_attrs)
+                      # Create work package object (set required attributes explicitly first)
+                      project_id_val = wp_attrs['project_id']
+                      subject_val = wp_attrs['subject']
+                      type_id_val = wp_attrs['type_id']
+                      type_name_val = wp_attrs['type_name']
+
+                      wp = WorkPackage.new
+                      wp.project = Project.find(project_id_val) if project_id_val
+
+                      # Resolve type by id or name if present
+                      if type_id_val
+                        wp.type = Type.find_by(id: type_id_val)
+                      elsif type_name_val
+                        wp.type = Type.find_by(name: type_name_val)
+                      end
+
+                      # Subject (required)
+                      wp.subject = subject_val if subject_val
+
+                      # Fallbacks: ensure required fields are present
+                      if !wp.type
+                        wp.type = (Type.where(is_default: true).first || Type.find_by(name: 'Task') || Type.first)
+                      end
+                      if !wp.subject || wp.subject.to_s.strip.empty?
+                        fallback_subject = jira_key || 'Untitled'
+                        wp.subject = fallback_subject
+                      end
+
+                      # Apply remaining attributes after requireds
+                      wp.assign_attributes(wp_attrs.except('project_id', 'type_id', 'type_name', 'subject'))
 
                       # Add required fields if missing
                       wp.priority = IssuePriority.default unless wp.priority_id
@@ -1644,7 +1679,15 @@ class WorkPackageMigration(BaseMigration):
                              end
 
                              # Refresh the work package for the next attempt
-                             wp = WorkPackage.new(wp_attrs)
+                             wp = WorkPackage.new
+                             wp.project = Project.find(project_id_val) if project_id_val
+                             if type_id_val
+                               wp.type = Type.find_by(id: type_id_val)
+                             elsif type_name_val
+                               wp.type = Type.find_by(name: type_name_val)
+                             end
+                             wp.subject = subject_val if subject_val
+                             wp.assign_attributes(wp_attrs.except('project_id', 'type_id', 'type_name', 'subject'))
                              wp.priority = IssuePriority.default unless wp.priority_id
                              wp.author = User.where(admin: true).first unless wp.author_id
                              wp.status = Status.default unless wp.status_id
@@ -1673,36 +1716,36 @@ class WorkPackageMigration(BaseMigration):
                          }
                          puts "Error creating work package: #{wp.errors.full_messages.join(', ')}"
                        end
-                     rescue => e
-                       errors << {
-                         'jira_id' => wp_attrs['jira_id'],
-                         'jira_key' => wp_attrs['jira_key'],
-                         'subject' => wp_attrs['subject'],
-                         'errors' => [e.message],
-                         'error_type' => 'exception'
-                       }
-                       puts "Exception: #{e.message}"
-                     end
-                   end
+                    rescue => e
+                      errors << {
+                        'jira_id' => wp_attrs['jira_id'],
+                        'jira_key' => wp_attrs['jira_key'],
+                        'subject' => wp_attrs['subject'],
+                        'errors' => [e.message],
+                        'error_type' => 'exception'
+                      }
+                      puts "Exception: #{e.message}"
+                    end
+                  end
 
-                   # Write results to result file
-                   result = {
-                     'status' => 'success',
-                     'created' => created_packages,
-                     'errors' => errors,
-                     'created_count' => created_packages.length,
-                     'error_count' => errors.length,
-                     'total' => wp_data.length,
-                     'updated_custom_fields' => updated_custom_fields.keys
-                   }
+                  # Write results to result file
+                  result = {
+                    'status' => 'success',
+                    'created' => created_packages,
+                    'errors' => errors,
+                    'created_count' => created_packages.length,
+                    'error_count' => errors.length,
+                    'total' => wp_data.length,
+                    'updated_custom_fields' => updated_custom_fields.keys
+                  }
 
-                   File.write(result_file_path, result.to_json)
-                   puts "Results written to #{result_file_path}"
+                  File.write(result_file_path, result.to_json)
+                  puts "Results written to #{result_file_path}"
 
-                   # Return the result for direct capture
-                   result
-                 end
-                 """
+                  # Return the result for direct capture
+                  result
+                end
+                """
 
                 # Save the Ruby script for debugging
                 with debug_script_path.open("w") as f:

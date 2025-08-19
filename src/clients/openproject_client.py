@@ -482,6 +482,9 @@ class OpenProjectClient:
                     RubyError,
                 )
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
+                    # Respect configuration: only fall back to rails runner when explicitly enabled
+                    if not config.migration_config.get("enable_runner_fallback", False):
+                        raise
                     logger.warning(
                         "Rails console execution failed (%s). Falling back to rails runner.",
                         type(e).__name__,
