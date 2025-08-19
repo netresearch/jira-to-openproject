@@ -1370,8 +1370,6 @@ class WorkPackageMigration(BaseMigration):
                                 break
 
                             # Exponential backoff
-                            import time
-
                             wait_time = 2**retry_count
                             self.logger.info(
                                 f"Retrying in {wait_time} seconds...",
