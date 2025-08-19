@@ -1817,6 +1817,84 @@ class OpenProjectClient:
             msg = "Failed to retrieve users."
             raise QueryExecutionError(msg) from e
 
+    def get_user(self, user_identifier: int | str) -> dict[str, Any]:
+        """Get a single user by id, email, or login.
+
+        This is a convenience wrapper over ``find_record`` and existing helpers,
+        with light cache lookups to reduce Rails console round-trips.
+
+        Args:
+            user_identifier: An integer id, numeric string id, email, or login
+
+        Returns:
+            User data as a dictionary
+
+        Raises:
+            RecordNotFoundError: If the user cannot be found
+            QueryExecutionError: If the lookup fails
+        """
+        try:
+            # Normalize identifier
+            identifier: str | int
+            if isinstance(user_identifier, str):
+                identifier = user_identifier.strip()
+                if not identifier:
+                    msg = "Empty user identifier"
+                    raise ValueError(msg)
+            else:
+                identifier = int(user_identifier)
+
+            # If numeric string, treat as id
+            if isinstance(identifier, str) and identifier.isdigit():
+                identifier = int(identifier)
+
+            # Try cache fast-paths when possible
+            if isinstance(identifier, int):
+                # Check cached users first
+                if getattr(self, "_users_cache", None):
+                    for user in self._users_cache or []:
+                        try:
+                            uid = user.get("id")
+                            if isinstance(uid, int) and uid == identifier:
+                                return user
+                            if isinstance(uid, str) and uid.isdigit() and int(uid) == identifier:
+                                return user
+                        except Exception:
+                            # Ignore malformed cache entries
+                            continue
+
+                # Fallback to direct lookup by id
+                return self.find_record("User", identifier)
+
+            # Email lookup
+            if isinstance(identifier, str) and "@" in identifier:
+                return self.get_user_by_email(identifier)
+
+            # Login lookup (try cache first)
+            login = identifier  # type: ignore[assignment]
+            if getattr(self, "_users_cache", None):
+                for user in self._users_cache or []:
+                    if user.get("login") == login:
+                        # Opportunistically cache by email for future lookups
+                        email = (user.get("mail") or user.get("email"))
+                        if isinstance(email, str):
+                            self._users_by_email_cache[email.lower()] = user
+                        return user
+
+            # Fallback to direct lookup by login
+            user = self.find_record("User", {"login": login})
+            # Opportunistically cache by email for future lookups
+            email = (user.get("mail") or user.get("email"))
+            if isinstance(email, str):
+                self._users_by_email_cache[email.lower()] = user
+            return user
+
+        except RecordNotFoundError:
+            raise
+        except Exception as e:
+            msg = "Error getting user."
+            raise QueryExecutionError(msg) from e
+
     def get_user_by_email(self, email: str) -> dict[str, Any]:
         """Get a user by email address.
 
