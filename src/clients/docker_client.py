@@ -265,6 +265,13 @@ class DockerClient:
         )
         local_path = Path(local_path) if isinstance(local_path, str) else local_path
 
+        # Fast-path: If the file doesn't exist yet in the container, avoid invoking
+        # `docker cp` which would surface noisy ERROR logs from the SSH layer.
+        # This is common during polling for Rails to finish writing the file.
+        if not self.check_file_exists_in_container(container_path):
+            # Do not log at error level here; caller may be polling.
+            raise FileNotFoundError(f"File not found in container: {container_path}")
+
         try:
             # Use a temporary file on the remote server for intermediate storage
             import uuid
