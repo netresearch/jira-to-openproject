@@ -404,7 +404,8 @@ class RailsConsoleClient:
                 start_line_index = idx
                 break
         if start_line_index == -1:
-            # If markers are missing, still detect obvious Ruby failures
+            # If start marker is missing, attempt a tolerant recovery:
+            # 1) Detect obvious Ruby failures first
             severe_output = tmux_output
             if (
                 "SystemStackError" in severe_output
@@ -414,6 +415,58 @@ class RailsConsoleClient:
             ):
                 snippet = self._extract_error_summary(severe_output)
                 raise RubyError(f"Ruby console reported error with no markers: {snippet}")
+
+            # 2) Recapture a larger pane slice to find markers
+            try:
+                recapture = subprocess.run(
+                    ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                rec_output = recapture.stdout
+                rec_lines = rec_output.split("\n")
+                new_start = -1
+                new_end = -1
+                for i, ln in enumerate(rec_lines):
+                    s = ln.strip()
+                    if start_marker_out in s:
+                        new_start = i
+                        break
+                if new_start != -1:
+                    for j in range(new_start + 1, len(rec_lines)):
+                        s = rec_lines[j].strip()
+                        if end_marker_out in s:
+                            new_end = j
+                            break
+                if new_start != -1 and new_end != -1:
+                    between_lines = rec_lines[new_start + 1 : new_end]
+                    out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
+                    return "\n".join(out_lines).strip()
+
+                # 3) If start marker still missing, but we have end marker and the script-echo comment,
+                #    extract output between the echoed script end and the end marker as a fallback.
+                rec_end = -1
+                for j in range(len(rec_lines)):
+                    if end_marker_out in rec_lines[j]:
+                        rec_end = j
+                        break
+                rec_script_echo = -1
+                if script_end_comment_out:
+                    for j in range(len(rec_lines) - 1, -1, -1):
+                        if script_end_comment_out in rec_lines[j]:
+                            rec_script_echo = j
+                            break
+                if rec_script_echo != -1 and rec_end != -1 and rec_end > rec_script_echo:
+                    between_lines = rec_lines[rec_script_echo + 1 : rec_end]
+                    out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
+                    if out_lines:
+                        return "\n".join(out_lines).strip()
+            except Exception:
+                # Fall through to strict error below
+                pass
+
+            # 4) Strict failure when no safe fallback was possible
             msg = f"Start marker '{start_marker_out}' not found in output"
             raise CommandExecutionError(msg)
 
@@ -427,7 +480,7 @@ class RailsConsoleClient:
             # One more try: recapture a larger slice in case the marker landed after our first capture
             try:
                 recapture = subprocess.run(
-                    ["tmux", "capture-pane", "-p", "-S", "-200", "-t", self._get_target()],
+                    ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
                     capture_output=True,
                     text=True,
                     check=True,
@@ -813,7 +866,7 @@ class RailsConsoleClient:
                     time.sleep(0.1)
 
                 # Inspect only the tail window for the end marker
-                tail_lines = cur.strip().split("\n")[-20:]
+                tail_lines = cur.strip().split("\n")[-200:]
                 if wait_for_line and not any(wait_for_line in ln for ln in tail_lines):
                     # No further output with EXEC_END → error (nothing should print after EXEC_END)
                     raise CommandExecutionError("End marker not found in tail after post-script output")
@@ -823,7 +876,7 @@ class RailsConsoleClient:
 
             # After script completes, capture a compact tail; outer parser will locate markers
             cap = subprocess.run(
-                ["tmux", "capture-pane", "-p", "-S", "-200", "-t", target],
+                ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", target],
                 capture_output=True,
                 text=True,
                 check=True,

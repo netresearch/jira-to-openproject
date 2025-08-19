@@ -1519,6 +1519,7 @@ class WorkPackageMigration(BaseMigration):
                 # Ruby variables from Python
                 wp_file_path = '{container_temp_path}'
                 result_file_path = '/tmp/wp_result_{project_key}.json'
+                log_file_path = '/tmp/j2o_wp_migration_{project_key}.log'
                 """
 
                 # Note: The following script contains Ruby variables (like 'values_added' and 'cf')
@@ -1527,10 +1528,34 @@ class WorkPackageMigration(BaseMigration):
                 main_script = """
                 begin
                   require 'json'
+                  require 'logger'
+
+                  # Silence Rails/ActiveRecord/GoodJob INFO noise during batch creation
+                  begin
+                    if defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
+                      Rails.logger.level = Logger::WARN
+                    end
+                    if defined?(ActiveRecord) && ActiveRecord::Base.respond_to?(:logger) && ActiveRecord::Base.logger
+                      ActiveRecord::Base.logger.level = Logger::WARN
+                    end
+                    if defined?(GoodJob) && GoodJob.respond_to?(:logger) && GoodJob.logger
+                      GoodJob.logger.level = Logger::WARN
+                    end
+                  rescue => e
+                    # ignore logger setup errors
+                  end
+
+                  def log_line(path, msg)
+                    begin
+                      File.open(path, 'a') { |f| f.puts(msg) }
+                    rescue
+                      # ignore file logging errors
+                    end
+                  end
 
                   # Load the data from the JSON file
                   wp_data = JSON.parse(File.read(wp_file_path))
-                  puts "Loaded #{wp_data.length} work packages from JSON file"
+                  log_line(log_file_path, "Loaded #{wp_data.length} work packages from JSON file")
 
                   created_packages = []
                   errors = []
@@ -1559,11 +1584,11 @@ class WorkPackageMigration(BaseMigration):
 
                     # Save and return result
                     if custom_field.save
-                      puts "Updated custom field '#{field_name}' with new value: '#{new_value}'"
+                      log_line(log_file_path, "Updated custom field '#{field_name}' with new value: '#{new_value}'")
                       return true
                     else
-                      puts "Failed to update custom field '#{field_name}': " +
-                      "#{custom_field.errors.full_messages.join(', ')}"
+                      log_line(log_file_path, "Failed to update custom field '#{field_name}': " +
+                      "#{custom_field.errors.full_messages.join(', ')}")
                       return false
                     end
                   end
@@ -1671,8 +1696,8 @@ class WorkPackageMigration(BaseMigration):
                                    unless updated_custom_fields[cache_key]
                                      updated = update_custom_field_allowed_values(field_name, value)
                                      updated_custom_fields[cache_key] = true if updated
-                                     puts "Updated custom field '#{field_name}' with value '#{value}': " +
-                                       "#{updated ? 'success' : 'failed'}"
+                                     log_line(log_file_path, "Updated custom field '#{field_name}' with value '#{value}': " +
+                                       "#{updated ? 'success' : 'failed'}")
                                    end
                                  end
                                end
@@ -1705,7 +1730,7 @@ class WorkPackageMigration(BaseMigration):
                            'openproject_id' => wp.id,
                            'subject' => wp.subject
                          }
-                         puts "Created work package ##{wp.id}: #{wp.subject}"
+                         log_line(log_file_path, "Created work package ##{wp.id}: #{wp.subject}")
                        else
                          errors << {
                            'jira_id' => jira_id,
@@ -1714,7 +1739,7 @@ class WorkPackageMigration(BaseMigration):
                            'errors' => wp.errors.full_messages,
                            'error_type' => 'validation_error'
                          }
-                         puts "Error creating work package: #{wp.errors.full_messages.join(', ')}"
+                         log_line(log_file_path, "Error creating work package: #{wp.errors.full_messages.join(', ')}")
                        end
                     rescue => e
                       errors << {
@@ -1724,7 +1749,7 @@ class WorkPackageMigration(BaseMigration):
                         'errors' => [e.message],
                         'error_type' => 'exception'
                       }
-                      puts "Exception: #{e.message}"
+                      log_line(log_file_path, "Exception: #{e.message}")
                     end
                   end
 
@@ -1740,7 +1765,7 @@ class WorkPackageMigration(BaseMigration):
                   }
 
                   File.write(result_file_path, result.to_json)
-                  puts "Results written to #{result_file_path}"
+                  log_line(log_file_path, "Results written to #{result_file_path}")
 
                   # Return the result for direct capture
                   result
