@@ -1453,8 +1453,8 @@ class WorkPackageMigration(BaseMigration):
                             # Best-effort sanitization; continue without failing the batch
                             pass
 
-                        # Remove _links entirely to avoid AR unknown attribute errors
-                        wp.pop("_links", None)
+                    # Remove _links entirely to avoid AR unknown attribute errors (regardless of type)
+                    wp.pop("_links", None)
 
                     # Remove fields not valid for AR mass-assignment
                     wp.pop("jira_id", None)
@@ -1655,7 +1655,7 @@ class WorkPackageMigration(BaseMigration):
                       end
 
                       # Apply remaining attributes after requireds
-                      wp.assign_attributes(wp_attrs.except('project_id', 'type_id', 'type_name', 'subject'))
+                      wp.assign_attributes(wp_attrs.except('project_id', 'type_id', 'type_name', 'subject', '_links'))
 
                       # Add required fields if missing
                       wp.priority = IssuePriority.default unless wp.priority_id
@@ -1710,7 +1710,7 @@ class WorkPackageMigration(BaseMigration):
                                wp.type = Type.find_by(name: type_name_val)
                              end
                              wp.subject = subject_val if subject_val
-                             wp.assign_attributes(wp_attrs.except('project_id', 'type_id', 'type_name', 'subject'))
+                             wp.assign_attributes(wp_attrs.except('project_id', 'type_id', 'type_name', 'subject', '_links'))
                              wp.priority = IssuePriority.default unless wp.priority_id
                              wp.author = User.where(admin: true).first unless wp.author_id
                              wp.status = Status.default unless wp.status_id
