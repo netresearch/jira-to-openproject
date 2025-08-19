@@ -376,21 +376,25 @@ class IssueTypeMigration(BaseMigration):
                     base_type_name,
                 )
             else:
-                # If no corresponding normal type found, map it to a generic Task
+                # If no corresponding normal type is found, propose creating a new
+                # work package type using the base type name instead of falling back to Task
                 normalized_mapping[jira_type_name].update(
                     {
-                        "openproject_name": "Task",
-                        "color": "#1A67A3",
+                        "openproject_id": None,
+                        "openproject_name": base_type_name,
+                        "color": type_data.get("color", "#1A67A3"),
                         "is_milestone": False,
-                        "matched_by": "fallback_to_task",
+                        # Keep the prefix so dry-run summaries still count this as a normalization
+                        "matched_by": f"normalized_to_{base_type_name}",
                         "normalized_from": jira_type_name,
-                        "normalized_to": "Task",
+                        "normalized_to": base_type_name,
                     },
                 )
                 normalizations_applied += 1
                 self.logger.info(
-                    "Could not find matching normal type for '%s', mapping to 'Task'",
+                    "Could not find matching normal type for '%s', proposing new type '%s'",
                     jira_type_name,
+                    base_type_name,
                 )
 
         # Save the normalized mapping
