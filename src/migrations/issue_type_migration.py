@@ -747,14 +747,18 @@ class IssueTypeMigration(BaseMigration):
         # Create a temporary file to store the results
         results_file = self.data_dir / "work_package_types_created.json"
 
-        # Transfer the file to the container
-        if not self.op_client.transfer_file_to_container(
-            temp_file,
-            container_temp_path,
-        ):
-            msg = f"Failed to transfer types file to container from {temp_file} to {container_temp_path}"
+        # Transfer the file to the container (raises on failure)
+        try:
+            self.op_client.transfer_file_to_container(
+                temp_file,
+                container_temp_path,
+            )
+        except Exception as e:
+            msg = (
+                f"Failed to transfer types file to container from {temp_file} to {container_temp_path}: {e}"
+            )
             self.logger.error(msg)
-            raise MigrationError(msg)
+            raise MigrationError(msg) from e
 
         # Generate Rails script to create all types at once with proper separation
         # SECURITY FIX: Escape container paths to prevent Rails injection
@@ -943,27 +947,19 @@ class IssueTypeMigration(BaseMigration):
         # Combine the scripts
         bulk_create_script = header_script + main_script
 
-        # Execute the bulk creation script
+        # Execute the bulk creation script via the interactive console wrapper.
+        # We only need the raw console output; the script writes results to a file.
         self.logger.info(
             "Executing bulk creation of work package types via Rails console...",
         )
-        result = self.op_client.execute_query(bulk_create_script, timeout=60)
-        self.logger.debug(
-            f"bulk_create_script result type: {type(result)}, value: {result}",
+        output = self.op_client.rails_client.execute(
+            bulk_create_script,
+            timeout=90,
+            suppress_output=True,
         )
-        if not isinstance(result, dict):
-            msg = f"Expected dict from execute_query, got {type(result)}: {result}"
-            self.logger.error(msg)
-            raise MigrationError(msg)
-
-        if result["status"] != "success":
-            error_msg = result.get("error", "Unknown error")
-            msg = f"Failed to execute bulk creation script: {error_msg}"
-            self.logger.error(msg)
-            raise MigrationError(msg)
-
-        # Check for specific error markers in the output
-        output = result.get("output", "")
+        self.logger.debug(
+            "bulk_create_script output captured (%s bytes)", len(output or ""),
+        )
         if output is None:
             msg = "No output returned from Rails console"
             self.logger.error(msg)
@@ -979,15 +975,19 @@ class IssueTypeMigration(BaseMigration):
         # Parse results
         try:
             # Try to get the result file from the container
-            if not self.op_client.transfer_file_from_container(
-                container_results_path,
-                results_file,
-            ):
-                msg = f"Failed to retrieve results file from container: {container_results_path}"
+            try:
+                self.op_client.transfer_file_from_container(
+                    Path(container_results_path),
+                    results_file,
+                )
+            except Exception as e:
+                msg = (
+                    f"Failed to retrieve results file from container: {container_results_path}: {e}"
+                )
                 self.logger.error(msg)
                 # Dump the entire output for debugging
                 self.logger.debug("Rails console output: %s", output)
-                raise MigrationError(msg)
+                raise MigrationError(msg) from e
 
             if not results_file.exists():
                 msg = f"Results file {results_file} was not created"

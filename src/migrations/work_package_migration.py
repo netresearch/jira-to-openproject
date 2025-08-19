@@ -1711,14 +1711,15 @@ class WorkPackageMigration(BaseMigration):
                     f"Saved debug copy of Ruby script to {debug_script_path}",
                 )
 
-                # Execute the Ruby script via Rails console (no wrapping with puts)
+                # Execute the Ruby script with fallback: use high-level client that
+                # automatically falls back to `rails runner` if the interactive console crashes.
                 try:
-                    _exec_output = self.op_client.rails_client.execute(
-                        header_script + main_script,
+                    execution_result = self.op_client.execute_script_with_data(
+                        script_content=header_script + main_script,
+                        data={},
                         timeout=120,
-                        suppress_output=True,
                     )
-                    # We rely on the script writing the results file; ignore console output
+                    # We rely on the script writing the results file; ignore returned envelope
 
                 except QueryExecutionError as e:
                     self.logger.exception(
@@ -1776,8 +1777,8 @@ class WorkPackageMigration(BaseMigration):
                 created_count = 0
                 errors = []
 
-                # Try to get results from direct output first (only when result is a dict)
-                output = result.get("output") if isinstance(result, dict) else None
+                # Try to get results from direct output first (only when execution_result has a payload)
+                output = execution_result.get("output") if isinstance(execution_result, dict) else None
                 if isinstance(output, dict) and output.get("status") == "success":
                     created_wps = output.get("created", [])
                     created_count = len(created_wps)
