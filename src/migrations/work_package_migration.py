@@ -348,6 +348,44 @@ class WorkPackageMigration(BaseMigration):
                 raise JiraApiError(error_msg) from e
         return None
 
+    def _get_project_total_issues(self, project_key: str) -> int | None:
+        """Return total number of issues in a Jira project using search metadata.
+
+        Performs a lightweight search with maxResults=1 to read the `total` count
+        from Jira's search API response. Falls back to None if unavailable.
+
+        Args:
+            project_key: Jira project key
+
+        Returns:
+            Integer total if available, otherwise None
+        """
+        try:
+            jql = f'project = "{project_key}"'
+            # Request minimal payload but ensure we get metadata
+            resp: Any = self.jira_client.jira.search_issues(
+                jql,
+                startAt=0,
+                maxResults=1,
+                fields="id",
+                expand=None,
+                json_result=True,
+            )
+            # python-jira returns a dict when json_result=True
+            if isinstance(resp, dict):
+                total_val = resp.get("total")
+                if isinstance(total_val, int):
+                    return total_val
+            # Some versions may return a ResultList with `.total`
+            if hasattr(resp, "total"):
+                try:
+                    return int(getattr(resp, "total"))
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug("Unable to get total issues for %s: %s", project_key, e)
+        return None
+
     def _extract_jira_issues(
         self,
         project_key: str,
@@ -373,10 +411,29 @@ class WorkPackageMigration(BaseMigration):
             all_issues = []
             issue_count = 0
 
-            # Use the new generator to process issues efficiently
-            for issue in self.iter_project_issues(project_key):
-                # Convert Issue object to dictionary format expected by rest of code
-                # Ensure JSON-serializable structures (avoid PropertyHolder)
+            # Attempt to read total upfront to drive an issue-level progress bar
+            total_estimate = self._get_project_total_issues(project_key)
+            if total_estimate:
+                self.logger.info(
+                    "Jira reports %s total issues for project %s",
+                    total_estimate,
+                    project_key,
+                )
+                if project_tracker:
+                    project_tracker.update_description(
+                        f"Processing project {project_key} ({total_estimate} issues)",
+                    )
+                    project_tracker.add_log_item(
+                        f"Total issues: {total_estimate}",
+                    )
+            else:
+                if project_tracker:
+                    project_tracker.update_description(
+                        f"Processing project {project_key} (estimating issues)",
+                    )
+
+            def _process_issue(issue: Issue) -> None:
+                nonlocal issue_count, all_issues
                 raw = getattr(issue, "raw", {}) if hasattr(issue, "raw") else {}
                 issue_dict = {
                     "key": getattr(issue, "key", raw.get("key")),
@@ -387,14 +444,33 @@ class WorkPackageMigration(BaseMigration):
                 }
                 all_issues.append(issue_dict)
                 issue_count += 1
-
-                # Log progress periodically for large projects
                 if issue_count % 500 == 0:
                     self.logger.info(
                         f"Processed {issue_count} issues from {project_key}",
                     )
                     if project_tracker:
-                        project_tracker.add_log_item(f"Processed {issue_count} issues")
+                        project_tracker.add_log_item(
+                            f"Processed {issue_count} issues",
+                        )
+
+            # Drive an issue-level progress bar if we know the total
+            if total_estimate and total_estimate > 0:
+                with ProgressTracker(
+                    f"Issues for {project_key}",
+                    total_estimate,
+                    "Recent Issues",
+                ) as issue_tracker:
+                    for issue in self.iter_project_issues(project_key):
+                        _process_issue(issue)
+                        issue_tracker.increment()
+                        # Occasionally mirror into the issue log
+                        if issue_count % 500 == 0:
+                            issue_tracker.add_log_item(
+                                f"Processed {issue_count} issues",
+                            )
+            else:
+                for issue in self.iter_project_issues(project_key):
+                    _process_issue(issue)
 
             # Final logging
             self.logger.info(
