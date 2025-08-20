@@ -30,6 +30,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jira_migration}
+      - PYTHONPATH=/app
     depends_on:
       - redis
       - postgres

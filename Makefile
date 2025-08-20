@@ -163,10 +163,10 @@ pre-commit: ## Run pre-commit hooks
 
 install-irbrc: ## Install contrib/openproject.irbrc into remote OpenProject container
 	@echo "Installing .irbrc into remote OpenProject container..."
-	docker compose exec app python scripts/install_irbrc.py
+	docker compose exec app env PYTHONPATH=/app python scripts/install_irbrc.py
 
 start-rails: install-irbrc ## Start local tmux session connected to the remote Rails console
-	python scripts/start_rails_tmux.py --attach=$(ATTACH)
+	python scripts/start_rails_tmux.py $(if $(ATTACH),--attach,)
 
 attach-rails: ## Attach to the tmux Rails console session
 	tmux attach -t $${J2O_OPENPROJECT_TMUX_SESSION_NAME:-rails_console}
