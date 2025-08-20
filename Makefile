@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs shell test clean dev status ps exec install lint format type-check pre-commit
+.PHONY: help build up down restart logs shell test clean dev status ps exec install lint format type-check pre-commit install-irbrc start-rails attach-rails
 
 # Default target
 help: ## Show this help message
@@ -22,6 +22,11 @@ help: ## Show this help message
 	@echo '  format         Format code (black, isort)'
 	@echo '  type-check     Run type checking'
 	@echo '  pre-commit     Run pre-commit hooks'
+	@echo ''
+	@echo 'Remote Ops:'
+	@echo '  install-irbrc  Install contrib/openproject.irbrc into remote OpenProject container'
+	@echo '  start-rails    Start local tmux session connected to remote Rails console'
+	@echo '  attach-rails   Attach to the tmux Rails console session'
 	@echo ''
 	@echo 'Maintenance:'
 	@echo '  clean          Clean up containers, volumes, and cache'
@@ -151,6 +156,20 @@ type-check: ## Run type checking
 
 pre-commit: ## Run pre-commit hooks
 	docker compose exec app pre-commit run --all-files
+
+# =============================================================================
+# Remote Operations (OpenProject Host/Container)
+# =============================================================================
+
+install-irbrc: ## Install contrib/openproject.irbrc into remote OpenProject container
+	@echo "Installing .irbrc into remote OpenProject container..."
+	docker compose exec app python scripts/install_irbrc.py
+
+start-rails: install-irbrc ## Start local tmux session connected to the remote Rails console
+	python scripts/start_rails_tmux.py --attach=$(ATTACH)
+
+attach-rails: ## Attach to the tmux Rails console session
+	tmux attach -t $${J2O_OPENPROJECT_TMUX_SESSION_NAME:-rails_console}
 
 # =============================================================================
 # Local Development (when not using containers)

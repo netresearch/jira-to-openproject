@@ -62,6 +62,8 @@ The project uses `uv` for dependency management and Docker Compose for dev/test 
 - Logs: `make logs` or `make logs-app`
 - Shell into app: `make shell`
 - Execute command: `make exec CMD="python --version"`
+- Install IRB config into remote OpenProject container: `make install-irbrc`
+- Start/attach Rails tmux session: `make start-rails` / `make attach-rails`
 
 ### Testing (Compose-managed test container)
 
@@ -267,6 +269,32 @@ References used while composing this file: [AGENT.md RFC](https://ampcode.com/AG
 - Prefer actionable rules with real code examples; keep docs and AGENT.md in sync.
 
 ## Configuration & Environment Rules
+
+## Rails Console IRB Configuration
+
+To stabilize the tmux-backed Rails console session used by `RailsConsoleClient`, install an `.irbrc` into the OpenProject container. This disables multiline and relines interactive features which can break non-interactive execution flows:
+
+- Source file: `contrib/openproject.irbrc`
+- Install command: `make install-irbrc`
+- Destination in container: `/app/.irbrc`
+
+This uses `J2O_OPENPROJECT_SERVER`, `J2O_OPENPROJECT_USER`, and `J2O_OPENPROJECT_CONTAINER` from environment to perform an SSH → docker cp transfer.
+
+### Rails Console tmux Session
+
+Create a local tmux session that runs a remote Rails console inside the OpenProject container with IRB stabilized via `/app/.irbrc`:
+
+- Start and attach: `make start-rails ATTACH=true`
+- Start only: `make start-rails`
+- Attach later: `make attach-rails`
+
+Under the hood this mirrors:
+
+```bash
+tmux new-session -s rails_console \; \
+  pipe-pane -o 'cat >>~/tmux.log' \; \
+  send-keys 'ssh -t $J2O_OPENPROJECT_USER@$J2O_OPENPROJECT_SERVER "docker exec -e IRBRC=/app/.irbrc -e RELINE_OUTPUT_ESCAPES=false -e RELINE_INPUTRC=/dev/null -ti $J2O_OPENPROJECT_CONTAINER bundle exec rails console"' C-m
+```
 
 - Load order: CLI args → env vars → `.env.local` → `.env` → `config/config.yaml`. Access configuration via `src/config.py` helper.
 - Keep secrets out of VCS. Use `.env.local` or Docker secrets in production. See `docs/configuration.md` and `.env.example`.

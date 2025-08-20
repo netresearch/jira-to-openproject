@@ -52,6 +52,10 @@ make test
 # Code quality checks
 make lint
 make type-check
+
+# Start and attach to a local tmux session linked to remote Rails console
+make start-rails ATTACH=true
+``` 
 ```
 
 ### Migration Execution
@@ -264,6 +268,12 @@ python scripts/validate_config.py
 
 # Debug specific migration
 python src/main.py migrate --debug --components users --limit 10
+
+# Install .irbrc into remote OpenProject container (stabilizes Rails console IRB)
+make install-irbrc
+
+# Start tmux session for Rails console (uses J2O_OPENPROJECT_* env)
+python scripts/start_rails_tmux.py --attach
 ```
 
 ## License
