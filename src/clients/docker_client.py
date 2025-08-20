@@ -273,6 +273,11 @@ class DockerClient:
             raise FileNotFoundError(f"File not found in container: {container_path}")
 
         try:
+            # Fast existence check to avoid noisy docker cp errors while caller polls
+            if not self.check_file_exists_in_container(container_path):
+                logger.debug("Container file not yet present: %s", container_path)
+                raise FileNotFoundError(f"File not found in container: {container_path}")
+
             # Use a temporary file on the remote server for intermediate storage
             import uuid
 
@@ -350,16 +355,13 @@ class DockerClient:
         container_path_str = str(container_path)
 
         try:
-            # Use stat to check if file exists
-            # SECURITY FIX: Quote container name to prevent injection
+            # SECURITY: Quote container name; quote the entire bash script once
             safe_container_name = quote(self.container_name)
-            cmd = (
-                f"docker exec {safe_container_name} bash -c "
-                f'\'test -e {quote(container_path_str)} && echo "EXISTS" || echo "NOT_EXISTS"\''
-            )
+            script = f'test -e "{container_path_str}" && echo EXISTS || echo NOT_EXISTS'
+            cmd = f"docker exec {safe_container_name} bash -c {quote(script)}"
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
 
-            return "EXISTS" in stdout and returncode == 0
+            return stdout.strip() == "EXISTS" and returncode == 0
         except Exception as e:
             logger.warning("Error checking if file exists in container: %s", e)
             return False
@@ -377,13 +379,10 @@ class DockerClient:
         container_path_str = str(container_path)
 
         try:
-            # Use stat to get file size
-            # SECURITY FIX: Quote container name to prevent injection
+            # SECURITY: Quote container name; quote the entire bash script once
             safe_container_name = quote(self.container_name)
-            cmd = (
-                f"docker exec {safe_container_name} bash -c "
-                f"'stat -c %s {quote(container_path_str)} 2>/dev/null || echo \"NOT_EXISTS\"'"
-            )
+            script = f'stat -c %s "{container_path_str}" 2>/dev/null || echo NOT_EXISTS'
+            cmd = f"docker exec {safe_container_name} bash -c {quote(script)}"
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
 
             if "NOT_EXISTS" in stdout or returncode != 0:

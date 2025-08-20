@@ -736,6 +736,9 @@ class WorkPackageMigration(BaseMigration):
                     work_package["status_id"] = mapped_status_id
                     work_package["_links"]["status"] = {"href": f"/api/v3/statuses/{mapped_status_id}"}
 
+            # Sanitize for AR compatibility (extract ids, drop _links)
+            self._sanitize_wp_dict(work_package)
+
             return work_package
         # It's a Jira issue object, use the internal method
         return self._prepare_work_package(jira_issue, project_id)
@@ -797,6 +800,55 @@ class WorkPackageMigration(BaseMigration):
             f"No mapping found for status {status_display} (ID: {status_id}), defaulting to New",
         )
         return 1
+
+    def _sanitize_wp_dict(self, wp: dict[str, Any]) -> None:
+        """Sanitize a prepared work package dict in-place for AR compatibility.
+
+        - Extract type_id and status_id from API-style _links if provided
+        - Remove the _links key entirely to avoid unknown attribute errors
+        - Ensure string fields are properly escaped
+        """
+        # Ensure string values for certain fields
+        if "subject" in wp:
+            try:
+                wp["subject"] = str(wp["subject"]).replace('"', '\\"').replace("'", "\\'")
+            except Exception:
+                wp["subject"] = str(wp.get("subject", ""))
+        if "description" in wp:
+            try:
+                wp["description"] = (
+                    str(wp["description"]).replace('"', '\\"').replace("'", "\\'")
+                )
+            except Exception:
+                wp["description"] = str(wp.get("description", ""))
+
+        # Sanitize OpenProject API-style links that are not valid AR attributes
+        links = wp.get("_links")
+        if isinstance(links, dict):
+            # Extract type_id from links if present and not already provided
+            try:
+                if "type_id" not in wp and isinstance(links.get("type"), dict):
+                    href = links["type"].get("href")
+                    if isinstance(href, str) and href.strip():
+                        type_id_str = href.rstrip("/").split("/")[-1]
+                        if type_id_str.isdigit():
+                            wp["type_id"] = int(type_id_str)
+            except Exception:
+                pass
+
+            # Extract status_id from links if present and not already provided
+            try:
+                if "status_id" not in wp and isinstance(links.get("status"), dict):
+                    href = links["status"].get("href")
+                    if isinstance(href, str) and href.strip():
+                        status_id_str = href.rstrip("/").split("/")[-1]
+                        if status_id_str.isdigit():
+                            wp["status_id"] = int(status_id_str)
+            except Exception:
+                pass
+
+        # Remove _links entirely to avoid AR unknown attribute errors
+        wp.pop("_links", None)
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
         """Load custom field mapping from disk.
@@ -1414,47 +1466,8 @@ class WorkPackageMigration(BaseMigration):
 
                 # Ensure each work package has all required fields
                 for wp in work_packages_data:
-                    # Ensure string values for certain fields
-                    if "subject" in wp:
-                        wp["subject"] = (
-                            str(wp["subject"]).replace('"', '\\"').replace("'", "\\'")
-                        )
-                    if "description" in wp:
-                        wp["description"] = (
-                            str(wp["description"])
-                            .replace('"', '\\"')
-                            .replace("'", "\\'")
-                        )
-
-                    # Sanitize OpenProject API-style links that are not valid AR attributes
-                    links = wp.get("_links")
-                    if isinstance(links, dict):
-                        # Extract type_id from links if present and not already provided
-                        try:
-                            if "type_id" not in wp and isinstance(links.get("type"), dict):
-                                href = links["type"].get("href")
-                                if isinstance(href, str) and href.strip():
-                                    type_id_str = href.rstrip("/").split("/")[-1]
-                                    if type_id_str.isdigit():
-                                        wp["type_id"] = int(type_id_str)
-                        except Exception:
-                            # Best-effort sanitization; continue without failing the batch
-                            pass
-
-                        # Extract status_id from links if present and not already provided
-                        try:
-                            if "status_id" not in wp and isinstance(links.get("status"), dict):
-                                href = links["status"].get("href")
-                                if isinstance(href, str) and href.strip():
-                                    status_id_str = href.rstrip("/").split("/")[-1]
-                                    if status_id_str.isdigit():
-                                        wp["status_id"] = int(status_id_str)
-                        except Exception:
-                            # Best-effort sanitization; continue without failing the batch
-                            pass
-
-                    # Remove _links entirely to avoid AR unknown attribute errors (regardless of type)
-                    wp.pop("_links", None)
+                    # Centralized sanitation to avoid AR unknown attribute errors
+                    self._sanitize_wp_dict(wp)
 
                     # Remove fields not valid for AR mass-assignment
                     wp.pop("jira_id", None)
@@ -1633,13 +1646,38 @@ class WorkPackageMigration(BaseMigration):
                       type_name_val = wp_attrs['type_name']
 
                       wp = WorkPackage.new
-                      wp.project = Project.find(project_id_val) if project_id_val
+                      # Ensure project exists; skip early if not
+                      if project_id_val
+                        project_obj = Project.find_by(id: project_id_val)
+                        unless project_obj
+                          errors << {
+                            'jira_id' => jira_id,
+                            'jira_key' => jira_key,
+                            'subject' => wp_attrs['subject'],
+                            'errors' => ["Project not found for ID #{project_id_val}"],
+                            'error_type' => 'validation_error'
+                          }
+                          log_line(log_file_path, "Skipping WP for #{jira_key}: Project #{project_id_val} not found")
+                          next
+                        end
+                        wp.project = project_obj
+                      end
 
                       # Resolve type by id or name if present
+                      candidate_type = nil
                       if type_id_val
-                        wp.type = Type.find_by(id: type_id_val)
+                        candidate_type = Type.find_by(id: type_id_val)
                       elsif type_name_val
-                        wp.type = Type.find_by(name: type_name_val)
+                        candidate_type = Type.find_by(name: type_name_val)
+                      end
+                      # Ensure the type is allowed/enabled for the project; fallback to default/Task
+                      if candidate_type && defined?(project_obj) && project_obj
+                        allowed_type_ids = project_obj.types.pluck(:id)
+                        if allowed_type_ids.include?(candidate_type.id)
+                          wp.type = candidate_type
+                        end
+                      else
+                        wp.type = candidate_type
                       end
 
                       # Subject (required)
@@ -1647,7 +1685,12 @@ class WorkPackageMigration(BaseMigration):
 
                       # Fallbacks: ensure required fields are present
                       if !wp.type
-                        wp.type = (Type.where(is_default: true).first || Type.find_by(name: 'Task') || Type.first)
+                        # Pick a valid type for the project if possible
+                        if defined?(project_obj) && project_obj && project_obj.types.any?
+                          wp.type = project_obj.types.where(is_default: true).first || project_obj.types.find_by(name: 'Task') || project_obj.types.first
+                        else
+                          wp.type = (Type.where(is_default: true).first || Type.find_by(name: 'Task') || Type.first)
+                        end
                       end
                       if !wp.subject || wp.subject.to_s.strip.empty?
                         fallback_subject = jira_key || 'Untitled'
@@ -1655,7 +1698,11 @@ class WorkPackageMigration(BaseMigration):
                       end
 
                       # Apply remaining attributes after requireds
-                      wp.assign_attributes(wp_attrs.except('project_id', 'type_id', 'type_name', 'subject', '_links'))
+                      # Drop non-AR keys proactively and build sanitized attributes map
+                      wp_attrs.delete('_links')
+                      wp_attrs.delete('watcher_ids')
+                      sanitized_attrs = wp_attrs.reject { |k,_| k == "_links" || k == "watcher_ids" }
+                      wp.assign_attributes(sanitized_attrs.except('project_id', 'type_id', 'type_name', 'subject'))
 
                       # Add required fields if missing
                       wp.priority = IssuePriority.default unless wp.priority_id
@@ -1710,7 +1757,11 @@ class WorkPackageMigration(BaseMigration):
                                wp.type = Type.find_by(name: type_name_val)
                              end
                              wp.subject = subject_val if subject_val
-                             wp.assign_attributes(wp_attrs.except('project_id', 'type_id', 'type_name', 'subject', '_links'))
+                             # Drop non-AR keys again on retry and build sanitized attributes map
+                             wp_attrs.delete('_links')
+                             wp_attrs.delete('watcher_ids')
+                             sanitized_attrs = wp_attrs.reject { |k,_| k == "_links" || k == "watcher_ids" }
+                             wp.assign_attributes(sanitized_attrs.except('project_id', 'type_id', 'type_name', 'subject'))
                              wp.priority = IssuePriority.default unless wp.priority_id
                              wp.author = User.where(admin: true).first unless wp.author_id
                              wp.status = Status.default unless wp.status_id

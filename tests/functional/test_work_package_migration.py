@@ -238,6 +238,29 @@ class TestWorkPackageMigration(unittest.TestCase):
 
         # Verify the method exists
         assert hasattr(migration, "migrate_work_packages")
+
+    def test_sanitize_wp_dict_removes_links_and_extracts_ids(self) -> None:
+        migration = WorkPackageMigration(jira_client=MagicMock(), op_client=MagicMock())
+
+        wp = {
+            "project_id": 1,
+            "subject": "S",
+            "description": "D",
+            "_links": {
+                "type": {"href": "/api/v3/types/1"},
+                "status": {"href": "/api/v3/statuses/2"},
+            },
+        }
+
+        # Precondition
+        assert "_links" in wp
+
+        migration._sanitize_wp_dict(wp)
+
+        # _links removed, ids extracted
+        assert "_links" not in wp
+        assert wp.get("type_id") == 1
+        assert wp.get("status_id") == 2
         assert callable(migration.migrate_work_packages)
 
     @patch("src.migrations.work_package_migration.JiraClient")
