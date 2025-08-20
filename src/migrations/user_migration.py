@@ -645,6 +645,18 @@ class UserMigration(BaseMigration):
             total,
         )
 
+        # Backfill custom field for matched users missing Jira key
+        try:
+            backfill_stats = self.backfill_jira_user_key_cf()
+            self.logger.info(
+                "Backfilled Jira user key CF: updated=%s skipped=%s errors=%s",
+                backfill_stats.get("updated", 0),
+                backfill_stats.get("skipped", 0),
+                backfill_stats.get("errors", 0),
+            )
+        except Exception as e:
+            self.logger.warning("Failed to backfill Jira user key CF: %s", e)
+
         return {
             "created": created,
             "failed": failed,
@@ -652,6 +664,144 @@ class UserMigration(BaseMigration):
             "created_count": created,  # Add for test compatibility
             "created_users": created_users,
         }
+
+    def backfill_jira_user_key_cf(self) -> dict[str, int]:
+        """Backfill the 'Jira user key' custom field for existing matched users.
+
+        Returns:
+            Dict with counts of updated, skipped, errors
+        """
+        # Ensure we have the latest OP users and mapping
+        if not self.op_users:
+            self.extract_openproject_users()
+        if not self.user_mapping:
+            self.create_user_mapping()
+
+        # Build OP user lookup by id
+        op_users_by_id: dict[int, dict[str, Any]] = {}
+        for u in self.op_users:
+            uid = u.get("id")
+            if isinstance(uid, int):
+                op_users_by_id[uid] = u
+
+        # Determine which users need backfill
+        to_update: list[dict[str, Any]] = []
+        skipped = 0
+        for m in self.user_mapping.values():
+            op_id = m.get("openproject_id")
+            jira_key = m.get("jira_key")
+            matched_by = m.get("matched_by")
+            if not op_id or not jira_key:
+                skipped += 1
+                continue
+            # Only backfill for matched existing users (username/email mapping)
+            if matched_by not in {"username", "email", "jira_user_key_cf"}:
+                # For 'none', either created already (set during creation) or not existing
+                skipped += 1
+                continue
+            op_user = op_users_by_id.get(op_id)
+            if not isinstance(op_user, dict):
+                skipped += 1
+                continue
+            current_cf = (op_user.get("jira_user_key") or "").strip()
+            if not current_cf:
+                to_update.append({"id": op_id, "jira_user_key": jira_key})
+            else:
+                skipped += 1
+
+        if not to_update:
+            self.logger.info("No users require Jira user key CF backfill")
+            return {"updated": 0, "skipped": skipped, "errors": 0}
+
+        # Prepare file-based transfer
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            try:
+                # Ensure CF exists
+                cf_name = "Jira user key"
+                ensure_cf_script = f"""
+                cf = CustomField.find_by(type: 'UserCustomField', name: '{cf_name}')
+                if !cf
+                  cf = CustomField.new(
+                    name: '{cf_name}',
+                    field_format: 'string',
+                    is_required: false,
+                    is_for_all: true,
+                    type: 'UserCustomField'
+                  )
+                  cf.save
+                end
+                nil
+                """
+                try:
+                    self.op_client.execute_query(ensure_cf_script, timeout=30)
+                except Exception:
+                    pass
+
+                # Write updates to JSON
+                temp_file_path = Path(self.data_dir) / "users_jira_key_backfill.json"
+                result_local_path = Path(self.data_dir) / "users_jira_key_backfill_result.json"
+                stack.callback(lambda: temp_file_path.unlink(missing_ok=True))
+                stack.callback(lambda: result_local_path.unlink(missing_ok=True))
+
+                with temp_file_path.open("w", encoding="utf-8") as f:
+                    json.dump(to_update, f, ensure_ascii=False, indent=2)
+
+                # Transfer to container
+                container_input = "/tmp/users_jira_key_backfill.json"
+                container_output = "/tmp/users_jira_key_backfill_result.json"
+                self.op_client.transfer_file_to_container(temp_file_path, Path(container_input))
+
+                # Header
+                script_header = f"""
+                require 'json'
+                input_file = '{container_input}'
+                output_file = '{container_output}'
+                rows = JSON.parse(File.read(input_file))
+                """
+                # Body
+                script_body = """
+                cf = CustomField.find_by(type: 'UserCustomField', name: 'Jira user key')
+                updated = 0
+                errors = []
+                rows.each do |row|
+                  begin
+                    user = User.find_by(id: row['id'])
+                    next unless user && cf
+                    current = user.custom_value_for(cf)&.value
+                    if !current || current.strip.empty?
+                      cv = user.custom_value_for(cf)
+                      if cv
+                        cv.value = row['jira_user_key']
+                        cv.save
+                      else
+                        user.custom_field_values = { cf.id => row['jira_user_key'] }
+                        user.save
+                      end
+                      updated += 1
+                    end
+                  rescue => e
+                    errors << { id: row['id'], error: e.message }
+                  end
+                end
+                result = { updated: updated, errors: errors.length }
+                File.write(output_file, result.to_json)
+                """
+                script = script_header + script_body
+                self.op_client.execute_query(script, timeout=config.USER_CREATION_TIMEOUT)
+
+                # Retrieve result
+                result_path = self.op_client.transfer_file_from_container(Path(container_output), result_local_path)
+                with result_path.open("r", encoding="utf-8") as f:
+                    res = json.load(f)
+                return {
+                    "updated": int(res.get("updated", 0)),
+                    "skipped": skipped,
+                    "errors": int(res.get("errors", 0)),
+                }
+            except Exception as e:
+                self.logger.exception("Backfill of Jira user key CF failed: %s", e)
+                return {"updated": 0, "skipped": skipped, "errors": 1}
 
     def analyze_user_mapping(self) -> dict[str, Any]:
         """Analyze the user mapping for statistics and potential issues.
