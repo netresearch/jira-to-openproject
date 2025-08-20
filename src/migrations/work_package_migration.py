@@ -411,8 +411,33 @@ class WorkPackageMigration(BaseMigration):
             all_issues = []
             issue_count = 0
 
-            # Attempt to read total upfront to drive an issue-level progress bar
-            total_estimate = self._get_project_total_issues(project_key)
+            # Match pagination parameters used by iter_project_issues
+            start_at = 0
+            batch_size = config.migration_config.get("batch_size", 100)
+            jql = f'project = "{project_key}" ORDER BY created ASC'
+            fields = None
+            expand = "changelog"
+
+            # Fetch first page to read `total` metadata directly from the response
+            first_batch = self._fetch_issues_with_retry(
+                jql=jql,
+                start_at=start_at,
+                max_results=batch_size,
+                fields=fields,
+                expand=expand,
+                project_key=project_key,
+            )
+
+            total_estimate: int | None = None
+            if first_batch is not None and hasattr(first_batch, "total"):
+                try:
+                    total_estimate = int(getattr(first_batch, "total"))
+                except Exception:
+                    total_estimate = None
+            if total_estimate is None:
+                # Fallback to separate metadata query only if `.total` missing
+                total_estimate = self._get_project_total_issues(project_key)
+
             if total_estimate:
                 self.logger.info(
                     "Jira reports %s total issues for project %s",
@@ -426,11 +451,10 @@ class WorkPackageMigration(BaseMigration):
                     project_tracker.add_log_item(
                         f"Total issues: {total_estimate}",
                     )
-            else:
-                if project_tracker:
-                    project_tracker.update_description(
-                        f"Processing project {project_key} (estimating issues)",
-                    )
+            elif project_tracker:
+                project_tracker.update_description(
+                    f"Processing project {project_key} (estimating issues)",
+                )
 
             def _process_issue(issue: Issue) -> None:
                 nonlocal issue_count, all_issues
@@ -453,24 +477,50 @@ class WorkPackageMigration(BaseMigration):
                             f"Processed {issue_count} issues",
                         )
 
-            # Drive an issue-level progress bar if we know the total
+            # Process all pages, with an issue-level progress bar when total is known
             if total_estimate and total_estimate > 0:
                 with ProgressTracker(
                     f"Issues for {project_key}",
                     total_estimate,
                     "Recent Issues",
                 ) as issue_tracker:
-                    for issue in self.iter_project_issues(project_key):
-                        _process_issue(issue)
-                        issue_tracker.increment()
-                        # Occasionally mirror into the issue log
-                        if issue_count % 500 == 0:
-                            issue_tracker.add_log_item(
-                                f"Processed {issue_count} issues",
-                            )
+                    current_batch = first_batch or []
+                    while current_batch:
+                        for issue in current_batch:
+                            _process_issue(issue)
+                            issue_tracker.increment()
+                            if issue_count % 500 == 0:
+                                issue_tracker.add_log_item(
+                                    f"Processed {issue_count} issues",
+                                )
+                        if len(current_batch) < batch_size:
+                            break
+                        start_at += len(current_batch)
+                        current_batch = self._fetch_issues_with_retry(
+                            jql=jql,
+                            start_at=start_at,
+                            max_results=batch_size,
+                            fields=fields,
+                            expand=expand,
+                            project_key=project_key,
+                        ) or []
             else:
-                for issue in self.iter_project_issues(project_key):
-                    _process_issue(issue)
+                # No total available: process without an inner issue progress bar
+                current_batch = first_batch or []
+                while current_batch:
+                    for issue in current_batch:
+                        _process_issue(issue)
+                    if len(current_batch) < batch_size:
+                        break
+                    start_at += len(current_batch)
+                    current_batch = self._fetch_issues_with_retry(
+                        jql=jql,
+                        start_at=start_at,
+                        max_results=batch_size,
+                        fields=fields,
+                        expand=expand,
+                        project_key=project_key,
+                    ) or []
 
             # Final logging
             self.logger.info(
