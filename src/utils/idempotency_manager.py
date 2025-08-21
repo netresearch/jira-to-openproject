@@ -24,8 +24,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-import redis
-from redis.exceptions import RedisError
+try:  # Optional dependency: tests may run without redis installed
+    import redis  # type: ignore
+    from redis.exceptions import RedisError  # type: ignore
+except Exception:  # pragma: no cover - test environment without redis
+    class RedisError(Exception):
+        pass
+
+    redis = None  # type: ignore
 
 from src.utils.performance_optimizer import PerformanceCache
 
@@ -152,7 +158,7 @@ class IdempotencyKeyManager:
         self._lock = threading.RLock()
 
         # Initialize Redis client
-        self._redis_client: redis.Redis | None = None
+        self._redis_client: Any | None = None
         self._redis_available = False
         self._lua_script = None
 
@@ -197,6 +203,8 @@ class IdempotencyKeyManager:
                 if self.redis_ssl_ca_certs:
                     redis_params["ssl_ca_certs"] = self.redis_ssl_ca_certs
 
+            if redis is None:
+                raise RuntimeError("redis module not available")
             self._redis_client = redis.Redis.from_url(self.redis_url, **redis_params)
 
             # Test connection

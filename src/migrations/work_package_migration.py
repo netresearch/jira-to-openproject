@@ -9,6 +9,7 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from src.migrations.wp_defaults import apply_required_defaults
 from typing import Any
 
 import requests
@@ -981,6 +982,87 @@ class WorkPackageMigration(BaseMigration):
         wp.pop("jira_key", None)
         wp.pop("type_name", None)
 
+
+def _choose_default_type_id(op_client: Any) -> int:
+    """Pick a default Type ID, preferring the first by position, else 1.
+
+    This helper is isolated for testability.
+    """
+    try:
+        type_ids = op_client.execute_large_query_to_json_file(
+            "Type.order(:position).pluck(:id)",
+            timeout=30,
+        )
+        if isinstance(type_ids, list) and type_ids:
+            return int(type_ids[0])
+    except Exception:
+        pass
+    return 1
+
+
+def _apply_required_defaults(
+    records: list[dict[str, Any]],
+    *,
+    project_id: int | None,
+    op_client: Any,
+    fallback_admin_user_id: int | str | None,
+) -> None:
+    """Fill in missing required fields on WorkPackage records.
+
+    Sets type_id, status_id, priority_id, author_id if missing.
+    """
+    # Defaults via file-based queries
+    default_type_id = _choose_default_type_id(op_client)
+
+    default_status_id = 1
+    try:
+        status_ids = op_client.execute_large_query_to_json_file(
+            "Status.order(:position).pluck(:id)",
+            timeout=30,
+        )
+        if isinstance(status_ids, list) and status_ids:
+            default_status_id = int(status_ids[0])
+    except Exception:
+        pass
+
+    default_priority_id = None
+    try:
+        pr_ids = op_client.execute_large_query_to_json_file(
+            "IssuePriority.order(:position).pluck(:id)",
+            timeout=30,
+        )
+        if isinstance(pr_ids, list) and pr_ids:
+            default_priority_id = int(pr_ids[0])
+    except Exception:
+        default_priority_id = None
+
+    default_author_id = None
+    if fallback_admin_user_id:
+        try:
+            default_author_id = int(fallback_admin_user_id)
+        except Exception:
+            default_author_id = fallback_admin_user_id
+    if not default_author_id:
+        try:
+            admin_ids = op_client.execute_large_query_to_json_file(
+                "User.where(admin: true).limit(1).pluck(:id)",
+                timeout=30,
+            )
+            if isinstance(admin_ids, list) and admin_ids:
+                default_author_id = int(admin_ids[0])
+        except Exception:
+            default_author_id = None
+
+    for wp in records:
+        if not wp.get("type_id"):
+            wp["type_id"] = default_type_id
+        if not wp.get("status_id") and default_status_id:
+            wp["status_id"] = default_status_id
+        if not wp.get("author_id") and default_author_id:
+            wp["author_id"] = default_author_id
+        if not wp.get("priority_id") and default_priority_id:
+            wp["priority_id"] = default_priority_id
+
     def _load_custom_field_mapping(self) -> dict[str, Any]:
         """Load custom field mapping from disk.
 
@@ -1695,6 +1777,18 @@ class WorkPackageMigration(BaseMigration):
                         self.op_client.execute_query(enable_types_header + enable_types_script, timeout=45)
                     except Exception:
                         pass
+
+                # Apply defaults after sanitation
+                apply_required_defaults(
+                    work_packages_data,
+                    project_id=op_project_id,
+                    op_client=self.op_client,
+                    fallback_admin_user_id=(
+                        config.migration_config.get("fallback_admin_user_id")
+                        if hasattr(config, "migration_config")
+                        else None
+                    ),
+                )
 
                 # Save a timestamped debug copy of the sanitized payload
                 debug_timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
