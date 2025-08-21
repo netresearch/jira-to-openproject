@@ -163,7 +163,14 @@ pre-commit: ## Run pre-commit hooks
 
 install-irbrc: ## Install contrib/openproject.irbrc into remote OpenProject container
 	@echo "Installing .irbrc into remote OpenProject container..."
-	docker compose exec app env PYTHONPATH=/app python scripts/install_irbrc.py
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+		if [ -z "$$J2O_OPENPROJECT_SERVER" ] || [ -z "$$J2O_OPENPROJECT_CONTAINER" ]; then \
+			echo "Missing env: J2O_OPENPROJECT_SERVER and/or J2O_OPENPROJECT_CONTAINER"; \
+			exit 1; \
+		fi; \
+		target=$${J2O_OPENPROJECT_USER:+$$J2O_OPENPROJECT_USER@}$$J2O_OPENPROJECT_SERVER; \
+		scp contrib/openproject.irbrc "$$target:/tmp/.irbrc" && \
+		ssh -t "$$target" "docker cp /tmp/.irbrc $$J2O_OPENPROJECT_CONTAINER:/app/.irbrc && rm -f /tmp/.irbrc && docker exec -u root -t $$J2O_OPENPROJECT_CONTAINER chmod 644 /app/.irbrc"
 
 start-rails: install-irbrc ## Start local tmux session connected to the remote Rails console
 	python scripts/start_rails_tmux.py $(if $(ATTACH),--attach,)
