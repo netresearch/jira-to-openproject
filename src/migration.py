@@ -1066,6 +1066,29 @@ async def run_migration(
                                     has_own,
                                     sorted(list(component.__class__.__dict__.keys()))[:12],
                                 )
+                                # Fallback: if this is the work_packages component and subclass didn't override run,
+                                # directly call its migrate_work_packages() wrapper to proceed.
+                                if (component_name == 'work_packages' and not has_own and
+                                        hasattr(component, 'migrate_work_packages')):
+                                    config.logger.warning(
+                                        "Falling back to migrate_work_packages() because run() is not overridden",
+                                    )
+                                    data = component.migrate_work_packages()
+                                    component_result = ComponentResult(
+                                        success=(data.get('status') == 'success'),
+                                        details={
+                                            'status': data.get('status', 'unknown'),
+                                            'total_count': data.get('total', 0),
+                                            'failed_count': data.get('error_count', 0),
+                                        },
+                                        data=data,
+                                    )
+                                    # Store and continue to next component
+                                    results.components[component_name] = component_result
+                                    if (not component_result.success) or _component_has_errors(component_result):
+                                        results.overall['status'] = 'failed'
+                                    # Skip the normal run() call
+                                    continue
                             except Exception:
                                 pass
                     except Exception:
