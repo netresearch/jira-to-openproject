@@ -1607,8 +1607,17 @@ class WorkPackageMigration(BaseMigration):
                     wp.pop("jira_key", None)
 
                 # Provide defaults for required fields if missing (policy: Python-side completeness)
-                # Defaults without console JSON roundtrips
+                # Defaults via JSON-file queries (stable, no console parsing)
                 default_status_id = 1
+                try:
+                    status_ids = self.op_client.execute_large_query_to_json_file(
+                        "Status.order(:position).pluck(:id)",
+                        timeout=30,
+                    )
+                    if isinstance(status_ids, list) and status_ids:
+                        default_status_id = status_ids[0]
+                except Exception:
+                    pass
                 default_priority_id = None
                 try:
                     pr_ids = self.op_client.execute_large_query_to_json_file(
@@ -1655,6 +1664,37 @@ class WorkPackageMigration(BaseMigration):
                             wp["priority_id"] = int(default_priority_id)
                         except Exception:
                             wp["priority_id"] = default_priority_id
+
+                # Recompute required types including injected defaults and enable on project
+                required_type_ids = {wp["type_id"] for wp in work_packages_data if wp.get("type_id")}
+                if op_project_id and required_type_ids:
+                    self.logger.info(
+                        f"Ensuring types {list(required_type_ids)} are enabled for project {op_project_id}",
+                    )
+                    enable_types_header = f"""
+                    project_id = {op_project_id}
+                    type_ids = {list(required_type_ids)}
+                    """
+                    enable_types_script = """
+                    project = Project.find_by(id: project_id)
+                    if project
+                      current_type_ids = project.types.pluck(:id)
+                      types_to_add = []
+                      type_ids.each do |tid|
+                        t = Type.find_by(id: tid)
+                        types_to_add << t if t && !current_type_ids.include?(tid)
+                      end
+                      if types_to_add.any?
+                        project.types = (project.types + types_to_add).uniq
+                        project.save
+                      end
+                    end
+                    nil
+                    """
+                    try:
+                        self.op_client.execute_query(enable_types_header + enable_types_script, timeout=45)
+                    except Exception:
+                        pass
 
                 # Save a timestamped debug copy of the sanitized payload
                 debug_timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
