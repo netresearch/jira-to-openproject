@@ -4,6 +4,7 @@ This script orchestrates the complete migration process with performance optimiz
 """
 
 import argparse
+import inspect
 import asyncio
 import json
 import os
@@ -1046,8 +1047,21 @@ async def run_migration(
                     except Exception as e:
                         config.logger.warning("Preflight mapping check error: %s", e)
 
-                # Run the component
+                # Run the component (diagnose if base run is invoked)
                 try:
+                    try:
+                        from src.migrations.base_migration import BaseMigration  # local import to avoid cycles
+                        if component.__class__.run is BaseMigration.run:
+                            src_file = inspect.getsourcefile(component.__class__) or '<unknown>'
+                            config.logger.warning(
+                                "Component '%s' (%s) is using BaseMigration.run; override likely missing. Class file: %s",
+                                component_name,
+                                component.__class__.__name__,
+                                src_file,
+                            )
+                    except Exception:
+                        # Non-fatal: continue
+                        pass
                     component_result = component.run()
 
                     if component_result:
