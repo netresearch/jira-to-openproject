@@ -966,8 +966,17 @@ async def run_migration(
 
             components = default_components
 
-        # Filter to keep only supported components
-        components = [c for c in components if c in available_component_factories]
+        # Validate requested components and filter to supported ones
+        requested_components = components or []
+        available_names = set(available_component_factories.keys())
+        unknown_components = [c for c in requested_components if c not in available_names]
+        if unknown_components:
+            config.logger.warning(
+                "Unknown component(s) requested: %s. Valid components: %s",
+                unknown_components,
+                sorted(available_names),
+            )
+        components = [c for c in requested_components if c in available_component_factories]
 
         # Show which components will be run
         config.logger.info(
