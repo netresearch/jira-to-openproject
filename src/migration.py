@@ -1059,6 +1059,15 @@ async def run_migration(
                                 component.__class__.__name__,
                                 src_file,
                             )
+                            try:
+                                has_own = 'run' in component.__class__.__dict__
+                                config.logger.warning(
+                                    "Class __dict__ has own 'run': %s; available keys (truncated): %s",
+                                    has_own,
+                                    sorted(list(component.__class__.__dict__.keys()))[:12],
+                                )
+                            except Exception:
+                                pass
                     except Exception:
                         # Non-fatal: continue
                         pass
