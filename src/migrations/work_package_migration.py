@@ -1606,6 +1606,56 @@ class WorkPackageMigration(BaseMigration):
                     wp.pop("jira_id", None)
                     wp.pop("jira_key", None)
 
+                # Provide defaults for required fields if missing (policy: Python-side completeness)
+                # Defaults without console JSON roundtrips
+                default_status_id = 1
+                default_priority_id = None
+                try:
+                    pr_ids = self.op_client.execute_large_query_to_json_file(
+                        "IssuePriority.order(:position).pluck(:id)",
+                        timeout=30,
+                    )
+                    if isinstance(pr_ids, list) and pr_ids:
+                        default_priority_id = pr_ids[0]
+                except Exception:
+                    default_priority_id = None
+
+                # Prefer configured fallback admin if available
+                default_author_id = None
+                try:
+                    default_author_id = config.migration_config.get("fallback_admin_user_id")
+                except Exception:
+                    default_author_id = None
+                if not default_author_id:
+                    try:
+                        admin_ids = self.op_client.execute_large_query_to_json_file(
+                            "User.where(admin: true).limit(1).pluck(:id)",
+                            timeout=30,
+                        )
+                        if isinstance(admin_ids, list) and admin_ids:
+                            default_author_id = admin_ids[0]
+                    except Exception:
+                        default_author_id = None
+
+                for wp in work_packages_data:
+                    if not wp.get("type_id"):
+                        wp["type_id"] = 1
+                    if not wp.get("status_id") and default_status_id:
+                        try:
+                            wp["status_id"] = int(default_status_id)
+                        except Exception:
+                            wp["status_id"] = default_status_id
+                    if not wp.get("author_id") and default_author_id:
+                        try:
+                            wp["author_id"] = int(default_author_id)
+                        except Exception:
+                            wp["author_id"] = default_author_id
+                    if not wp.get("priority_id") and default_priority_id:
+                        try:
+                            wp["priority_id"] = int(default_priority_id)
+                        except Exception:
+                            wp["priority_id"] = default_priority_id
+
                 # Save a timestamped debug copy of the sanitized payload
                 debug_timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
                 debug_json_path = (
