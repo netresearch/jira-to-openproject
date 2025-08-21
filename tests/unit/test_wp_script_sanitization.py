@@ -16,14 +16,12 @@ def test_ruby_script_deletes_links_before_assign() -> None:
     assert end != -1
     ruby = text[start_content:end]
 
-    assert "wp_attrs.delete('_links')" in ruby
-    assert "sanitized_attrs = wp_attrs.reject { |k,_| k == \"_links\" || k == \"watcher_ids\" }" in ruby
-    assert "wp.assign_attributes(sanitized_attrs.except('project_id', 'type_id', 'type_name', 'subject'))" in ruby
+    # Ruby script should be minimal now; use WorkPackage.create and no assign_attributes
+    assert "WorkPackage.create(" in ruby
+    assert "assign_attributes" not in ruby
 
     retry_idx = ruby.find("# Refresh the work package for the next attempt")
     assert retry_idx != -1
     sub = ruby[retry_idx:]
-    assert "wp_attrs.delete('_links')" in sub
-    assert "sanitized_attrs = wp_attrs.reject { |k,_| k == \"_links\" || k == \"watcher_ids\" }" in sub
-    assert "wp.assign_attributes(sanitized_attrs.except('project_id', 'type_id', 'type_name', 'subject'))" in sub
+    assert "WorkPackage.create(" in sub
 

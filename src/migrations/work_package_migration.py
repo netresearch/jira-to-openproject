@@ -975,6 +975,11 @@ class WorkPackageMigration(BaseMigration):
 
         # Remove _links entirely to avoid AR unknown attribute errors
         wp.pop("_links", None)
+        # Remove non-AR/meta keys that must not reach Rails mass-assignment
+        wp.pop("watcher_ids", None)
+        wp.pop("jira_id", None)
+        wp.pop("jira_key", None)
+        wp.pop("type_name", None)
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
         """Load custom field mapping from disk.
@@ -1582,389 +1587,46 @@ class WorkPackageMigration(BaseMigration):
                 if custom_field_values_to_add:
                     self._update_custom_field_allowed_values(custom_field_values_to_add)
 
-                # First, write the work packages data to a JSON file that Rails can read
-                temp_file_path = (
-                    Path(self.data_dir) / f"work_packages_{project_key}.json"
-                )
-                self.logger.info(
-                    f"Writing {len(work_packages_data)} work packages to {temp_file_path}",
-                )
-
                 # Ensure each work package has all required fields
+                work_packages_meta: list[dict[str, Any]] = []
                 for wp in work_packages_data:
+                    # Preserve Jira linkage for result mapping by index
+                    work_packages_meta.append(
+                        {
+                            "jira_id": wp.get("jira_id"),
+                            "jira_key": wp.get("jira_key"),
+                            "subject": wp.get("subject"),
+                        }
+                    )
+
                     # Centralized sanitation to avoid AR unknown attribute errors
                     self._sanitize_wp_dict(wp)
 
-                    # Remove fields not valid for AR mass-assignment
+                    # Remove fields not valid for AR mass-assignment (defensive)
                     wp.pop("jira_id", None)
                     wp.pop("jira_key", None)
 
-                # Write the JSON file
-                with temp_file_path.open("w") as f:
-                    json.dump(work_packages_data, f, indent=2)
-
-                # Define the path for the file inside the container
-                container_temp_path = f"/tmp/work_packages_{project_key}.json"
-
-                # Also save a timestamped copy for debugging
+                # Save a timestamped debug copy of the sanitized payload
                 debug_timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
                 debug_json_path = (
                     Path(self.data_dir)
                     / f"work_packages_{project_key}_{debug_timestamp}.json"
                 )
-                debug_script_path = (
-                    Path(self.data_dir)
-                    / f"ruby_script_{project_key}_{debug_timestamp}.rb"
-                )
-
-                # Copy the file for debugging
-                shutil.copy2(temp_file_path, debug_json_path)
+                with debug_json_path.open("w") as f:
+                    json.dump(work_packages_data, f, indent=2)
                 self.logger.info(
                     f"Saved debug copy of work packages data to {debug_json_path}",
                 )
 
-                # Copy the file to the container using OpenProjectClient (raises on failure)
+                # Bulk create via generic OpenProject client helper (minimal Ruby)
                 try:
-                    self.op_client.transfer_file_to_container(
-                        temp_file_path,
-                        Path(container_temp_path),
-                    )
-                    self.logger.success(
-                        "Successfully copied work packages data to container",
-                    )
-                except Exception as transfer_err:
-                    self.logger.error(
-                        f"Failed to transfer work packages file to container: {transfer_err}",
-                    )
-                    project_tracker.add_log_item(
-                        f"Error: {project_key} (file transfer failed)",
-                    )
-                    project_tracker.increment()
-                    processed_projects.add(project_key)
-                    failed_projects.append(
-                        {"project_key": project_key, "reason": "file_transfer_failed"},
-                    )
-                    if config.migration_config.get("stop_on_error", False):
-                        from src.models.migration_error import MigrationError
-                        raise MigrationError(
-                            f"Stopping due to file transfer failure for {project_key}: {transfer_err}",
-                        ) from transfer_err
-                    continue
-
-                # Create a simple Ruby script based on the example
-                header_script = f"""
-                # Ruby variables from Python
-                wp_file_path = '{container_temp_path}'
-                result_file_path = '/tmp/wp_result_{project_key}.json'
-                log_file_path = '/tmp/j2o_wp_migration_{project_key}.log'
-                """
-
-                # Note: The following script contains Ruby variables (like 'values_added' and 'cf')
-                # which may trigger Python linter warnings but are valid in the Ruby context.
-                # These can be safely ignored.
-                main_script = """
-                begin
-                  require 'json'
-                  require 'logger'
-
-                  # Silence Rails/ActiveRecord/GoodJob INFO noise during batch creation
-                  begin
-                    if defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
-                      Rails.logger.level = Logger::WARN
-                    end
-                    if defined?(ActiveRecord) && ActiveRecord::Base.respond_to?(:logger) && ActiveRecord::Base.logger
-                      ActiveRecord::Base.logger.level = Logger::WARN
-                    end
-                    if defined?(GoodJob) && GoodJob.respond_to?(:logger) && GoodJob.logger
-                      GoodJob.logger.level = Logger::WARN
-                    end
-                  rescue => e
-                    # ignore logger setup errors
-                  end
-
-                  def log_line(path, msg)
-                    begin
-                      File.open(path, 'a') { |f| f.puts(msg) }
-                    rescue
-                      # ignore file logging errors
-                    end
-                  end
-
-                  # Load the data from the JSON file
-                  wp_data = JSON.parse(File.read(wp_file_path))
-                  log_line(log_file_path, "Loaded #{wp_data.length} work packages from JSON file")
-
-                  created_packages = []
-                  errors = []
-
-                  # Cache for custom fields we've already updated
-                  updated_custom_fields = {}
-
-                  # Helper method to update custom field allowed values
-                  def update_custom_field_allowed_values(field_name, new_value)
-                    return false unless new_value.present?
-
-                    # Find the custom field by name
-                    custom_field = CustomField.find_by(name: field_name)
-                    return false unless custom_field
-
-                    # Skip if not a list type field
-                    return false unless custom_field.field_format == "list"
-
-                    # Get current values and add the new one if not present
-                    current_values = custom_field.possible_values || []
-                    return true if current_values.include?(new_value)
-
-                    # Add the new value
-                    current_values << new_value
-                    custom_field.possible_values = current_values
-
-                    # Save and return result
-                    if custom_field.save
-                      log_line(log_file_path, "Updated custom field '#{field_name}' with new value: '#{new_value}'")
-                      return true
-                    else
-                      log_line(log_file_path, "Failed to update custom field '#{field_name}': " +
-                      "#{custom_field.errors.full_messages.join(', ')}")
-                      return false
-                    end
-                  end
-
-                  # Helper to extract field name and value from validation error
-                  def extract_field_and_value_from_error(error_message)
-                    # Pattern matches errors like "Field Name is not set to one of the allowed values."
-                    match = error_message.match(/^(.*?) is not set to one of the allowed values/)
-                    return match ? match[1] : nil
-                  end
-
-                  # Create each work package
-                  wp_data.each do |wp_attrs|
-                    begin
-                      # Store Jira data for mapping
-                      jira_id = wp_attrs['jira_id']
-                      jira_key = wp_attrs['jira_key']
-
-                      # Remove Jira fields not needed by OpenProject
-                      wp_attrs.delete('jira_id')
-                      wp_attrs.delete('jira_key')
-
-                      # Handle watchers - validate watcher IDs
-                      if wp_attrs['watcher_ids'].is_a?(Array)
-                        # Filter out nil values
-                        wp_attrs['watcher_ids'].compact!
-
-                        # Verify each watcher exists
-                        valid_watcher_ids = []
-                        wp_attrs['watcher_ids'].each do |watcher_id|
-                          if User.find_by(id: watcher_id)
-                            valid_watcher_ids << watcher_id
-                          else
-                            puts "Warning: Watcher ID #{watcher_id} does not exist for work package #{jira_key}"
-                          end
-                        end
-                        wp_attrs['watcher_ids'] = valid_watcher_ids
-                      end
-
-                      # Create work package object (set required attributes explicitly first)
-                      project_id_val = wp_attrs['project_id']
-                      subject_val = wp_attrs['subject']
-                      type_id_val = wp_attrs['type_id']
-                      type_name_val = wp_attrs['type_name']
-
-                      wp = WorkPackage.new
-                      # Ensure project exists; skip early if not
-                      if project_id_val
-                        project_obj = Project.find_by(id: project_id_val)
-                        unless project_obj
-                          errors << {
-                            'jira_id' => jira_id,
-                            'jira_key' => jira_key,
-                            'subject' => wp_attrs['subject'],
-                            'errors' => ["Project not found for ID #{project_id_val}"],
-                            'error_type' => 'validation_error'
-                          }
-                          log_line(log_file_path, "Skipping WP for #{jira_key}: Project #{project_id_val} not found")
-                          next
-                        end
-                        wp.project = project_obj
-                      end
-
-                      # Resolve type by id or name if present
-                      candidate_type = nil
-                      if type_id_val
-                        candidate_type = Type.find_by(id: type_id_val)
-                      elsif type_name_val
-                        candidate_type = Type.find_by(name: type_name_val)
-                      end
-                      # Ensure the type is allowed/enabled for the project; fallback to default/Task
-                      if candidate_type && defined?(project_obj) && project_obj
-                        allowed_type_ids = project_obj.types.pluck(:id)
-                        if allowed_type_ids.include?(candidate_type.id)
-                          wp.type = candidate_type
-                        end
-                      else
-                        wp.type = candidate_type
-                      end
-
-                      # Subject (required)
-                      wp.subject = subject_val if subject_val
-
-                      # Fallbacks: ensure required fields are present
-                      if !wp.type
-                        # Pick a valid type for the project if possible
-                        if defined?(project_obj) && project_obj && project_obj.types.any?
-                          wp.type = project_obj.types.where(is_default: true).first || project_obj.types.find_by(name: 'Task') || project_obj.types.first
-                        else
-                          wp.type = (Type.where(is_default: true).first || Type.find_by(name: 'Task') || Type.first)
-                        end
-                      end
-                      if !wp.subject || wp.subject.to_s.strip.empty?
-                        fallback_subject = jira_key || 'Untitled'
-                        wp.subject = fallback_subject
-                      end
-
-                      # Apply remaining attributes after requireds
-                      # Drop non-AR keys proactively and build sanitized attributes map
-                      wp_attrs.delete('_links')
-                      wp_attrs.delete('watcher_ids')
-                      sanitized_attrs = wp_attrs.reject { |k,_| k == "_links" || k == "watcher_ids" }
-                      wp.assign_attributes(sanitized_attrs.except('project_id', 'type_id', 'type_name', 'subject'))
-
-                      # Add required fields if missing
-                      wp.priority = IssuePriority.default unless wp.priority_id
-                      wp.author = User.where(admin: true).first unless wp.author_id
-                      wp.status = Status.default unless wp.status_id
-
-                      # Try saving the work package
-                      created = false
-                      retry_attempts = 0
-                      max_retries = 3
-
-                      until created || retry_attempts >= max_retries
-                        if wp.save
-                          created = true
-                        else
-                          retry_attempts += 1
-
-                          # Check for custom field validation errors
-                          custom_field_errors = wp.errors.full_messages.select { |msg|
-                            msg.include?('is not set to one of the allowed values')
-                          }
-
-                           if custom_field_errors.any? && retry_attempts < max_retries
-                             # Try to update custom fields and retry
-                             custom_field_errors.each do |error|
-                               field_name = extract_field_and_value_from_error(error)
-
-                               # Get the value attempted from custom values
-                               if field_name && wp.custom_field_values.present?
-                                 cf = CustomField.find_by(name: field_name)
-                                 if cf
-                                   value = wp.custom_value_for(cf).try(:value)
-
-                                   # Update custom field if needed and not already updated
-                                   cache_key = "#{field_name}:#{value}"
-                                   unless updated_custom_fields[cache_key]
-                                     updated = update_custom_field_allowed_values(field_name, value)
-                                     updated_custom_fields[cache_key] = true if updated
-                                     log_line(log_file_path, "Updated custom field '#{field_name}' with value '#{value}': " +
-                                       "#{updated ? 'success' : 'failed'}")
-                                   end
-                                 end
-                               end
-                             end
-
-                             # Refresh the work package for the next attempt
-                             wp = WorkPackage.new
-                             wp.project = Project.find(project_id_val) if project_id_val
-                             if type_id_val
-                               wp.type = Type.find_by(id: type_id_val)
-                             elsif type_name_val
-                               wp.type = Type.find_by(name: type_name_val)
-                             end
-                             wp.subject = subject_val if subject_val
-                             # Drop non-AR keys again on retry and build sanitized attributes map
-                             wp_attrs.delete('_links')
-                             wp_attrs.delete('watcher_ids')
-                             sanitized_attrs = wp_attrs.reject { |k,_| k == "_links" || k == "watcher_ids" }
-                             wp.assign_attributes(sanitized_attrs.except('project_id', 'type_id', 'type_name', 'subject'))
-                             wp.priority = IssuePriority.default unless wp.priority_id
-                             wp.author = User.where(admin: true).first unless wp.author_id
-                             wp.status = Status.default unless wp.status_id
-                           else
-                             # Not fixable with retries or max retries reached
-                             break
-                           end
-                         end
-                       end
-
-                       if created
-                         created_packages << {
-                           'jira_id' => jira_id,
-                           'jira_key' => jira_key,
-                           'openproject_id' => wp.id,
-                           'subject' => wp.subject
-                         }
-                         log_line(log_file_path, "Created work package ##{wp.id}: #{wp.subject}")
-                       else
-                         errors << {
-                           'jira_id' => jira_id,
-                           'jira_key' => jira_key,
-                           'subject' => wp_attrs['subject'],
-                           'errors' => wp.errors.full_messages,
-                           'error_type' => 'validation_error'
-                         }
-                         log_line(log_file_path, "Error creating work package: #{wp.errors.full_messages.join(', ')}")
-                       end
-                    rescue => e
-                      errors << {
-                        'jira_id' => wp_attrs['jira_id'],
-                        'jira_key' => wp_attrs['jira_key'],
-                        'subject' => wp_attrs['subject'],
-                        'errors' => [e.message],
-                        'error_type' => 'exception'
-                      }
-                      log_line(log_file_path, "Exception: #{e.message}")
-                    end
-                  end
-
-                  # Write results to result file
-                  result = {
-                    'status' => 'success',
-                    'created' => created_packages,
-                    'errors' => errors,
-                    'created_count' => created_packages.length,
-                    'error_count' => errors.length,
-                    'total' => wp_data.length,
-                    'updated_custom_fields' => updated_custom_fields.keys
-                  }
-
-                  File.write(result_file_path, result.to_json)
-                  log_line(log_file_path, "Results written to #{result_file_path}")
-
-                  # Return the result for direct capture
-                  result
-                end
-                """
-
-                # Save the Ruby script for debugging
-                with debug_script_path.open("w") as f:
-                    f.write(header_script + main_script)
-                self.logger.info(
-                    f"Saved debug copy of Ruby script to {debug_script_path}",
-                )
-
-                # Execute the Ruby script with fallback: use high-level client that
-                # automatically falls back to `rails runner` if the interactive console crashes.
-                try:
-                    execution_result = self.op_client.execute_script_with_data(
-                        script_content=header_script + main_script,
-                        data={},
+                    result = self.op_client.bulk_create_records(
+                        model="WorkPackage",
+                        records=work_packages_data,
                         timeout=120,
+                        result_basename=f"wp_result_{project_key}.json",
                     )
-                    # We rely on the script writing the results file; ignore returned envelope
-
-                except QueryExecutionError as e:
+                except Exception as e:
                     self.logger.exception(
                         f"Rails execution error during work package creation: {e}",
                     )
@@ -1974,11 +1636,7 @@ class WorkPackageMigration(BaseMigration):
                     project_tracker.increment()
                     processed_projects.add(project_key)
                     failed_projects.append(
-                        {
-                            "project_key": project_key,
-                            "reason": "rails_execution_failed",
-                            "error": str(e),
-                        },
+                        {"project_key": project_key, "reason": "rails_execution_failed", "error": str(e)},
                     )
                     if config.migration_config.get("stop_on_error", False):
                         from src.models.migration_error import MigrationError
@@ -1987,203 +1645,51 @@ class WorkPackageMigration(BaseMigration):
                         ) from e
                     continue
 
-                except Exception as e:
-                    self.logger.exception(
-                        f"Unexpected error during work package creation for {project_key}: {e}",
-                    )
-                    project_tracker.add_log_item(
-                        f"Error: {project_key} (Unexpected error)",
-                    )
-                    project_tracker.increment()
-                    processed_projects.add(project_key)
-                    failed_projects.append(
-                        {
-                            "project_key": project_key,
-                            "reason": "unexpected_error",
-                            "error": str(e),
-                        },
-                    )
-                    if config.migration_config.get("stop_on_error", False):
-                        from src.models.migration_error import MigrationError
-                        raise MigrationError(
-                            f"Stopping due to unexpected error for {project_key}: {e}",
-                        ) from e
-                    continue
-
-                # Try to get the result file from the container (poll until it appears)
-                result_file_container = f"/tmp/wp_result_{project_key}.json"
-                result_file_local = (
-                    Path(self.data_dir) / f"wp_result_{project_key}.json"
-                )
-
-                # Initialize variables
+                # Persist raw console output
                 created_count = 0
                 errors = []
+                output_snippet = result.get("output") if isinstance(result, dict) else None
+                if isinstance(output_snippet, str) and output_snippet:
+                    debug_output_path = Path(self.data_dir) / f"rails_output_{project_key}_{debug_timestamp}.log"
+                    try:
+                        with debug_output_path.open("w", encoding="utf-8") as f:
+                            f.write(output_snippet)
+                        self.logger.info(f"Saved raw Rails output to {debug_output_path}")
+                    except Exception:
+                        pass
 
-                # Try to get results from direct output first (only when execution_result has a payload)
-                output = execution_result.get("output") if isinstance(execution_result, dict) else None
-                if isinstance(output, dict) and output.get("status") == "success":
-                    created_wps = output.get("created", [])
-                    created_count = len(created_wps)
-                    errors = output.get("errors", [])
-                    updated_custom_fields = output.get("updated_custom_fields", [])
-
-                    # Log any custom fields that were updated
-                    self.log_custom_field_updates(updated_custom_fields)
-
-                    # Update the mapping
-                    for wp in created_wps:
-                        jira_id = wp.get("jira_id")
-                        if jira_id:
-                            self.work_package_mapping[jira_id] = wp
-                            # Enhanced Meta Information Migration (Task 17)
-                            try:
-                                # Recover minimal issue payload if available from audit cache; fallback empty
-                                issue_payload = {
-                                    "id": jira_id,
-                                    "key": wp.get("jira_key"),
-                                    "fields": {},
+                # Map results back by index using preserved meta
+                if isinstance(result, dict) and result.get("status") == "success":
+                    created_list = result.get("created", []) or []
+                    error_list = result.get("errors", []) or []
+                    created_count = len(created_list)
+                    for item in created_list:
+                        idx = item.get("index")
+                        if isinstance(idx, int) and 0 <= idx < len(work_packages_meta):
+                            meta = work_packages_meta[idx]
+                            jira_id = meta.get("jira_id")
+                            if jira_id:
+                                self.work_package_mapping[jira_id] = {
+                                    **meta,
+                                    "openproject_id": item.get("id"),
                                 }
-                                self._migrate_user_associations(issue_payload, wp)
-                                self._migrate_timestamps(issue_payload, wp)
-                                self._migrate_watchers(issue_payload, wp)
-                                self._migrate_history(issue_payload, wp)
-                            except Exception as meta_err:
-                                self.logger.debug(
-                                    f"Meta migration skipped for {wp.get('jira_key')} -> WP {wp.get('openproject_id')}: {meta_err}",
-                                )
+                    for err in error_list:
+                        idx = err.get("index")
+                        if isinstance(idx, int) and 0 <= idx < len(work_packages_meta):
+                            meta = work_packages_meta[idx]
+                            errors.append({**meta, "errors": err.get("errors", []), "error_type": "validation_error"})
 
-                    # Handle errors
-                    for error in errors:
-                        jira_id = error.get("jira_id")
-                        if jira_id:
-                            self.work_package_mapping[jira_id] = {
-                                "jira_id": jira_id,
-                                "jira_key": error.get("jira_key"),
-                                "openproject_id": None,
-                                "subject": error.get("subject"),
-                                "error": ", ".join(error.get("errors", [])),
-                                "error_type": error.get("error_type"),
-                            }
-                    # Honor --stop-on-error if any errors were returned
-                    if errors and config.migration_config.get("stop_on_error", False):
-                        try:
-                            from src.models.migration_error import MigrationError
-                        except Exception:  # pragma: no cover - import safety
-                            class MigrationError(Exception):
-                                pass
-                        first_err = errors[0]
-                        raise MigrationError(
-                            f"Stopping due to work package creation errors for {project_key}: "
-                            f"{first_err.get('errors') or first_err}"
-                        )
-                # If direct output doesn't work, try to get the result file
-                else:
-                    # Poll for file presence to accommodate delayed writes from Rails
-                    max_wait_seconds = 30
-                    poll_interval = 1.0
-                    waited = 0.0
-                    copied = False
-                    while waited < max_wait_seconds:
-                        try:
-                            if self.op_client.transfer_file_from_container(
-                                Path(result_file_container),
-                                result_file_local,
-                            ):
-                                copied = True
-                                break
-                        except Exception:
-                            # Ignore and retry
+                if errors and config.migration_config.get("stop_on_error", False):
+                    try:
+                        from src.models.migration_error import MigrationError
+                    except Exception:  # pragma: no cover - import safety
+                        class MigrationError(Exception):
                             pass
-                        time.sleep(poll_interval)
-                        waited += poll_interval
-                    if copied:
-                        # Also save a debug copy with timestamp
-                        debug_result_path = Path(
-                            self.data_dir,
-                            f"wp_result_{project_key}_{debug_timestamp}.json",
-                        )
-                        shutil.copy2(result_file_local, debug_result_path)
-                        self.logger.info(
-                            f"Saved debug copy of result file to {debug_result_path}",
-                        )
-
-                        with result_file_local.open() as f:
-                            result_data = json.load(f)
-
-                            if result_data.get("status") == "success":
-                                created_wps = result_data.get("created", [])
-                                created_count = len(created_wps)
-                                errors = result_data.get("errors", [])
-                                updated_custom_fields = result_data.get(
-                                    "updated_custom_fields",
-                                    [],
-                                )
-
-                                # Log any custom fields that were updated
-                                self.log_custom_field_updates(updated_custom_fields)
-
-                                # Update the mapping
-                                for wp in created_wps:
-                                    jira_id = wp.get("jira_id")
-                                    if jira_id:
-                                        self.work_package_mapping[jira_id] = wp
-                                        # Enhanced Meta Information Migration (Task 17)
-                                        try:
-                                            issue_payload = {
-                                                "id": jira_id,
-                                                "key": wp.get("jira_key"),
-                                                "fields": {},
-                                            }
-                                            self._migrate_user_associations(issue_payload, wp)
-                                            self._migrate_timestamps(issue_payload, wp)
-                                            self._migrate_watchers(issue_payload, wp)
-                                            self._migrate_history(issue_payload, wp)
-                                        except Exception as meta_err:
-                                            self.logger.debug(
-                                                f"Meta migration skipped for {wp.get('jira_key')} -> WP {wp.get('openproject_id')}: {meta_err}",
-                                            )
-
-                                # Handle errors
-                                for error in errors:
-                                    jira_id = error.get("jira_id")
-                                    if jira_id:
-                                        self.work_package_mapping[jira_id] = {
-                                            "jira_id": jira_id,
-                                            "jira_key": error.get("jira_key"),
-                                            "openproject_id": None,
-                                            "subject": error.get("subject"),
-                                            "error": ", ".join(error.get("errors", [])),
-                                            "error_type": error.get("error_type"),
-                                        }
-                                # Honor --stop-on-error if any errors were returned
-                                if errors and config.migration_config.get("stop_on_error", False):
-                                    try:
-                                        from src.models.migration_error import MigrationError
-                                    except Exception:  # pragma: no cover - import safety
-                                        class MigrationError(Exception):
-                                            pass
-                                    first_err = errors[0]
-                                    raise MigrationError(
-                                        f"Stopping due to work package creation errors for {project_key}: "
-                                        f"{first_err.get('errors') or first_err}"
-                                    )
-                        # End processing of result file
-                    else:
-                        # Last resort - try to parse the console output
-                        self.logger.warning(
-                            "Could not get result file - parsing console output",
-                        )
-                        if isinstance(output, str):
-                            created_matches = re.findall(
-                                r"Created work package #(\d+): (.+?)$",
-                                output,
-                                re.MULTILINE,
-                            )
-                            created_count = len(created_matches)
-                            self.logger.info(
-                                f"Found {created_count} created work packages in console output",
-                            )
+                    first_err = errors[0]
+                    raise MigrationError(
+                        f"Stopping due to work package creation errors for {project_key}: "
+                        f"{first_err.get('errors') or first_err}"
+                    )
 
                 self.logger.success(
                     f"Created {created_count} work packages for project {project_key} (errors: {len(errors)})",

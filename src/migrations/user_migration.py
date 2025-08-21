@@ -453,182 +453,71 @@ class UserMigration(BaseMigration):
                 batch_users = [user["jira_name"] for user in batch]
                 tracker.update_description(f"Creating users: {', '.join(batch_users)}")
 
-                # Use context manager for proper file cleanup
-                with contextlib.ExitStack() as stack:
-                    try:
-                        # Use file-based transfer approach (like other migrations)
-                        self.logger.info(
-                            f"Creating {len(users_to_create)} users via file transfer",
-                        )
+                # Use generic bulk create helper
+                try:
+                    self.logger.info(f"Creating {len(users_to_create)} users via bulk_create_records")
+                    # Build records for User model
+                    records: list[dict[str, Any]] = []
+                    meta: list[dict[str, Any]] = []
+                    for u in users_to_create:
+                        meta.append({"login": u.get("login"), "mail": u.get("mail")})
+                        records.append({
+                            "login": u.get("login"),
+                            "firstname": u.get("firstname"),
+                            "lastname": u.get("lastname"),
+                            "mail": u.get("mail"),
+                            "admin": bool(u.get("admin", False)),
+                            "status": (u.get("status") or "active"),
+                        })
 
-                        # Create temporary file for user data
-                        batch_num = tracker.processed_count // batch_size
-                        temp_file_path = (
-                            Path(self.data_dir) / f"users_batch_{batch_num}.json"
-                        )
-                        result_local_path = (
-                            Path(self.data_dir) / f"users_result_{batch_num}.json"
-                        )
+                    result = self.op_client.bulk_create_records(
+                        model="User",
+                        records=records,
+                        timeout=getattr(config, "USER_CREATION_TIMEOUT", 120),
+                        result_basename="j2o_user_bulk_result.json",
+                    )
 
-                        # Register files for cleanup
-                        stack.callback(lambda: temp_file_path.unlink(missing_ok=True))
-                        stack.callback(
-                            lambda: result_local_path.unlink(missing_ok=True),
-                        )
+                    if not isinstance(result, dict) or result.get("status") != "success":
+                        raise MigrationError(result.get("message", "Bulk user creation failed"))
 
-                        # Write users data to JSON file
-                        with temp_file_path.open("w", encoding="utf-8") as f:
-                            json.dump(users_to_create, f, ensure_ascii=False, indent=2)
+                    created_list = result.get("created", []) or []
+                    error_list = result.get("errors", []) or []
 
-                        # Transfer file to container
-                        container_temp_path = f"/tmp/users_batch_{batch_num}.json"
-                        self.op_client.transfer_file_to_container(
-                            temp_file_path,
-                            Path(container_temp_path),
-                        )
+                    batch_created = len(created_list)
+                    batch_failed = len(error_list)
+                    created += batch_created
+                    failed += batch_failed
 
-                        # Header: f-string interpolation for file paths and variables
-                        result_file_path = f"/tmp/users_result_{batch_num}.json"
-                        script_header = f"""
-                        require 'json'
+                    # Build created_users payload to retain for summary (limited fields, no PII beyond login/mail)
+                    for item in created_list:
+                        idx = item.get("index")
+                        if isinstance(idx, int) and 0 <= idx < len(meta):
+                            m = meta[idx]
+                            created_users.append({
+                                "status": "success",
+                                "login": m.get("login"),
+                                "mail": m.get("mail"),
+                                "id": item.get("id"),
+                            })
 
-                        # File paths
-                        input_file = '{container_temp_path}'
-                        output_file = '{result_file_path}'
+                    # Log a few errors safely
+                    if error_list and self.logger.isEnabledFor(logging.DEBUG):
+                        for err in error_list[:3]:
+                            idx = err.get("index")
+                            safe_login = meta[idx]["login"] if isinstance(idx, int) and 0 <= idx < len(meta) else "unknown"
+                            self.logger.debug("User creation error: %s -> %s", safe_login, err.get("errors", []))
 
-                        # Load the data from the JSON file
-                        users_data = JSON.parse(File.read(input_file))
-                        puts "Loaded " + users_data.length.to_s + " users from JSON file"
-                        """
-
-                        # Body: pure Ruby code without Python interpolation
-                        script_body = """
-                        created_users = []
-                        errors = []
-
-                        users_data.each do |user_data|
-                          begin
-                            # Create user with the provided data
-                            user = User.new(
-                              login: user_data['login'],
-                              firstname: user_data['firstname'],
-                              lastname: user_data['lastname'],
-                              mail: user_data['mail'],
-                              admin: user_data['admin'] || false,
-                              status: User.statuses.key(user_data['status']) || User.statuses['active']
-                            )
-
-                            if user.save
-                              # Set custom field 'Jira user key' if it exists
-                              begin
-                                cf = CustomField.find_by(type: 'UserCustomField', name: 'Jira user key')
-                                if cf && user_data['jira_user_key']
-                                  cv = user.custom_value_for(cf)
-                                  if cv
-                                    cv.value = user_data['jira_user_key']
-                                    cv.save
-                                  else
-                                    # Fallback: direct assignment pattern if available
-                                    user.custom_field_values = { cf.id => user_data['jira_user_key'] }
-                                    user.save
-                                  end
-                                end
-                              rescue => _
-                                # Ignore CF set errors to avoid failing batch
-                              end
-                              created_users << {
-                                status: 'success',
-                                login: user.login,
-                                mail: user.mail,
-                                id: user.id
-                              }
-                            else
-                              errors << {
-                                status: 'error',
-                                login: user_data['login'],
-                                mail: user_data['mail'],
-                                errors: user.errors.full_messages
-                              }
-                            end
-                          rescue => e
-                            errors << {
-                              status: 'error',
-                              login: user_data['login'],
-                              mail: user_data['mail'],
-                              errors: [e.message]
-                            }
-                          end
-                        end
-
-                        # Write results to file
-                        result = {
-                          created: created_users.length,
-                          failed: errors.length,
-                          total: users_data.length,
-                          created_users: created_users,
-                          errors: errors
-                        }
-
-                        puts "User creation completed: " + created_users.length.to_s + " created, " + errors.length.to_s + " failed"  # noqa: E501
-                        File.write(output_file, result.to_json)
-                        puts "Results written to " + output_file
-                        """
-
-                        script = script_header + script_body
-
-                        # Debug: Log the script being executed
-                        self.logger.debug(f"Executing Ruby script:\n{script}")
-
-                        # Execute the Ruby script with configurable timeout for user creation
-                        script_result = self.op_client.execute_query(
-                            script,
-                            timeout=config.USER_CREATION_TIMEOUT,
-                        )
-                        self.logger.debug(f"Ruby script output: {script_result}")
-
-                        # Transfer result file back and read it
-                        container_result_path = f"/tmp/users_result_{batch_num}.json"
-
-                        result_path = self.op_client.transfer_file_from_container(
-                            Path(container_result_path),
-                            result_local_path,
-                        )
-
-                        # Read the result
-                        with result_path.open("r", encoding="utf-8") as f:
-                            result = json.load(f)
-
-                        # Extract result stats
-                        batch_created = result.get("created", 0)
-                        batch_failed = result.get("failed", 0)
-                        batch_created_users = result.get("created_users", [])
-                        batch_errors = result.get("errors", [])
-
-                        created += batch_created
-                        failed += batch_failed
-                        created_users.extend(batch_created_users)
-
-                        # Improved error logging - avoid PII exposure
-                        if batch_errors and self.logger.isEnabledFor(logging.DEBUG):
-                            for error in batch_errors[:3]:  # Show first 3 errors
-                                # Log only login and error messages, not full user data
-                                safe_error = {
-                                    "login": error.get("login", "unknown"),
-                                    "errors": error.get("errors", []),
-                                }
-                                self.logger.debug(f"User creation error: {safe_error}")
-
-                        tracker.add_log_item(
-                            f"Created {batch_created}/{len(batch)} users in batch",
-                        )
-                    except Exception as e:
-                        error_msg = f"Exception during bulk user creation: {e!s}"
-                        self.logger.exception(error_msg)
-                        failed += len(batch)
-                        tracker.add_log_item(
-                            f"Exception during creation: {', '.join(batch_users)}",
-                        )
-                        raise MigrationError(error_msg) from e
+                    tracker.add_log_item(
+                        f"Created {batch_created}/{len(batch)} users in batch",
+                    )
+                except Exception as e:
+                    error_msg = f"Exception during bulk user creation: {e!s}"
+                    self.logger.exception(error_msg)
+                    failed += len(batch)
+                    tracker.add_log_item(
+                        f"Exception during creation: {', '.join(batch_users)}",
+                    )
+                    raise MigrationError(error_msg) from e
 
                 tracker.increment(len(batch))
 

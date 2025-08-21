@@ -285,129 +285,64 @@ class StatusMigration(BaseMigration):
             len(statuses_to_create),
         )
 
-        # Create Ruby script that processes the data passed in
-        ruby_script = """
-        begin
-          puts "Starting bulk status creation..."
-
-          # Results will be stored here
-          results = {}
-
-          # Process each status definition
-          input_data.each do |status_def|
-            jira_id = status_def["jira_id"]
-            name = status_def["name"]
-            is_closed = status_def["is_closed"] || false
-            is_default = status_def["is_default"] || false
-            color = status_def["color"]
-
-            puts "Processing status '#{name}' (Jira ID: #{jira_id})..."
-
-            # Check if status already exists
-            existing_status = Status.find_by(name: name)
-
-            if existing_status
-              puts "Status '#{name}' already exists with ID: #{existing_status.id}"
-              results[jira_id] = {
-                "id" => existing_status.id,
-                "name" => existing_status.name,
-                "is_closed" => existing_status.is_closed,
-                "already_existed" => true
-              }
-            else
-              # Create new status
-              new_status = Status.new(
-                name: name,
-                is_closed: is_closed,
-                is_default: is_default
-              )
-
-              # Set position as the highest existing position + 1
-              new_status.position = Status.maximum(:position).to_i + 1
-
-              # Set color if provided
-              new_status.color = color if color
-
-              if new_status.save
-                puts "SUCCESS: Created status '#{name}' with ID: #{new_status.id}"
-                results[jira_id] = {
-                  "id" => new_status.id,
-                  "name" => new_status.name,
-                  "is_closed" => new_status.is_closed,
-                  "already_existed" => false
-                }
-              else
-                puts "ERROR: Failed to create status '#{name}'. Validation errors:"
-                new_status.errors.full_messages.each do |msg|
-                  puts "  - #{msg}"
-                end
-                results[jira_id] = {
-                  "error" => new_status.errors.full_messages.join("; "),
-                  "already_existed" => false
-                }
-              end
-            end
-          end
-
-          # Output the results for validation
-          puts "Bulk status creation completed."
-          puts "Created or found #{results.size} statuses"
-
-          # Return results in JSON format
-          puts "JSON_OUTPUT_START"
-          puts results.to_json
-          puts "JSON_OUTPUT_END"
-
-          results
-        rescue => e
-          puts "EXCEPTION: #{e.class.name}: #{e.message}"
-          puts "Backtrace: #{e.backtrace.join('\\n')}"
-          puts "JSON_OUTPUT_START"
-          puts({ error: e.message }.to_json)
-          puts "JSON_OUTPUT_END"
-        end
-        """
+        # Minimal Ruby policy: Ruby creation now handled by bulk_create_records
 
         try:
-            # Execute the script with the statuses data
-            logger.debug("Executing bulk status creation via Rails with data")
-            result = self.op_client.execute_script_with_data(
-                script_content=ruby_script,
-                data=statuses_to_create,
+            # Use generic bulk create helper with minimal Ruby
+            logger.debug("Executing bulk status creation via generic bulk_create_records")
+            records: list[dict[str, Any]] = []
+            meta: list[dict[str, Any]] = []
+            for st in statuses_to_create:
+                # Preserve Jira linkage
+                meta.append({"jira_id": str(st.get("jira_id")), "name": st.get("name")})
+                # Sanitize attrs for Status model
+                attrs = {
+                    "name": st.get("name"),
+                    "is_closed": bool(st.get("is_closed", False)),
+                    "is_default": bool(st.get("is_default", False)),
+                }
+                records.append(attrs)
+
+            result = self.op_client.bulk_create_records(
+                model="Status",
+                records=records,
+                timeout=90,
+                result_basename="j2o_status_bulk_result.json",
             )
 
-            if result.get("status") == "success" and "data" in result:
-                created_statuses = result["data"]
-                logger.info(
-                    "Successfully processed %s statuses via Rails",
-                    len(created_statuses),
-                )
-                # Ensure the return value has the expected type
-                typed_statuses: dict[str, dict[str, Any]] = {}
-                for jira_id, status_info in created_statuses.items():
-                    # Ensure jira_id is a string key
-                    str_jira_id = str(jira_id)
-                    # Ensure status_info is a dictionary
-                    if isinstance(status_info, dict):
-                        typed_statuses[str_jira_id] = status_info
-                    else:
-                        try:
-                            typed_statuses[str_jira_id] = dict(status_info)
-                        except (TypeError, ValueError):
-                            typed_statuses[str_jira_id] = {
-                                "error": "Invalid status format",
-                            }
+            if not isinstance(result, dict) or result.get("status") != "success":
+                raise MigrationError(result.get("message", "Bulk creation failed"))
 
-                return typed_statuses
-            error_msg = result.get("message", "Unknown error")
-            msg = f"Failed to create statuses: {error_msg}"
-            logger.error(msg)
-            if "output" in result:
-                logger.debug("Rails output: %s...", result["output"][:500])
-            raise MigrationError(msg)
+            created = result.get("created", []) or []
+            errors = result.get("errors", []) or []
+
+            # Build mapping back by index
+            typed_statuses: dict[str, dict[str, Any]] = {}
+            for item in created:
+                idx = item.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(meta):
+                    m = meta[idx]
+                    jira_id = str(m.get("jira_id"))
+                    typed_statuses[jira_id] = {
+                        "id": item.get("id"),
+                        "name": m.get("name"),
+                        "already_existed": False,
+                    }
+            for err in errors:
+                idx = err.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(meta):
+                    m = meta[idx]
+                    jira_id = str(m.get("jira_id"))
+                    typed_statuses[jira_id] = {
+                        "error": "; ".join(err.get("errors", [])),
+                        "already_existed": False,
+                    }
+
+            logger.info("Successfully processed %s statuses via bulk_create_records", len(typed_statuses))
+            return typed_statuses
 
         except Exception as e:
-            msg = f"Exception during Rails bulk execution: {e}"
+            msg = f"Exception during bulk status creation: {e}"
             logger.exception(msg)
             raise MigrationError(msg) from e
 

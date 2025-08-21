@@ -611,9 +611,7 @@ class CustomFieldMigration(BaseMigration):
         self,
         fields_to_migrate: list[dict[str, Any]],
     ) -> bool:
-        """Migrate custom fields by creating a JSON file and processing it in a Ruby script.
-
-        This is a more efficient approach than creating fields one by one via API calls.
+        """Migrate custom fields using minimal Ruby bulk create helper.
 
         Args:
             fields_to_migrate: List of custom field definitions to migrate
@@ -623,271 +621,88 @@ class CustomFieldMigration(BaseMigration):
 
         """
         self.logger.info(
-            "Migrating %d custom fields using batch migration",
+            "Migrating %d custom fields using generic bulk_create_records",
             len(fields_to_migrate),
         )
 
-        # Convert the fields to the format expected by the Ruby script
-        custom_fields_data = []
+        # Prepare sanitized records and meta for index mapping
+        records: list[dict[str, Any]] = []
+        meta: list[dict[str, Any]] = []
         for field in fields_to_migrate:
-            if not field.get("jira_name"):
+            jira_name = field.get("jira_name")
+            if not jira_name:
                 self.logger.warning("Skipping field without name: %s", field)
                 continue
 
-            field_data = {
-                "name": field.get("jira_name"),
-                "field_format": field.get("openproject_type", "text"),
-                "is_required": field.get("is_required", False),
-                "is_for_all": field.get("is_for_all", True),
+            field_format = field.get("openproject_type", "text")
+            attrs: dict[str, Any] = {
+                "name": jira_name,
+                "field_format": field_format,
+                "is_required": bool(field.get("is_required", False)),
+                "is_for_all": bool(field.get("is_for_all", True)),
                 "type": field.get("openproject_field_type", "WorkPackageCustomField"),
-                "jira_id": field.get("jira_id"),  # For mapping back
             }
-
-            # Add possible values for list fields
-            if field_data["field_format"] == "list":
+            if field_format == "list":
                 possible_values = field.get("possible_values", [])
-                # Ensure there's at least one default option if none exist
                 if not possible_values or not isinstance(possible_values, list):
                     possible_values = ["Default option"]
-                field_data["possible_values"] = possible_values
+                attrs["possible_values"] = [str(v).strip() for v in possible_values]
 
-            custom_fields_data.append(field_data)
+            records.append(attrs)
+            meta.append({
+                "jira_id": field.get("jira_id"),
+                "name": jira_name,
+            })
 
-        # Generate a timestamp for uniqueness
-        import time as time_module
+        if not records:
+            self.logger.info("No custom fields to create")
+            return True
 
-        timestamp = int(time_module.time())
-
-        # Write the custom fields data to a JSON file
-        data_file_path = self.data_dir / f"custom_fields_batch_{timestamp}.json"
-        with data_file_path.open("w", encoding="utf-8") as f:
-            json.dump(custom_fields_data, f, indent=2, ensure_ascii=False)
-
-        self.logger.info(
-            "Writing %d custom fields to %s",
-            len(custom_fields_data),
-            data_file_path,
-        )
-
-        # Transfer the file to the container
-        container_data_path = Path(f"/tmp/custom_fields_batch_{timestamp}.json")
-        container_result_path = Path(f"/tmp/custom_fields_result_{timestamp}.json")
-
-        # Use op_client for file transfers
         try:
-            self.op_client.transfer_file_to_container(
-                data_file_path,
-                container_data_path,
+            result = self.op_client.bulk_create_records(
+                model="CustomField",
+                records=records,
+                timeout=180,
+                result_basename="j2o_custom_fields_bulk_result.json",
             )
-        except Exception as e:
-            self.logger.exception(
-                "Failed to transfer custom fields data to container: %s",
-                str(e),
-            )
-            return False
 
-        # Split Ruby script into f-string header and static body
-        # F-string header for dynamic paths
-        ruby_header = f"""
-require 'json'
-
-# File paths
-input_file = '{container_data_path}'
-output_file = '{container_result_path}'
-
-# Load the JSON data
-json_data = File.read(input_file)
-custom_fields_data = JSON.parse(json_data)
-"""
-
-        # Static Ruby body
-        ruby_body = """
-# Initialize counters
-created_fields = []
-existing_fields = []
-error_fields = []
-
-# Process each custom field
-custom_fields_data.each do |field_data|
-  begin
-    field_name = field_data['name']
-    field_format = field_data['field_format']
-    jira_id = field_data['jira_id']
-
-    # Check if field already exists
-    existing_field = CustomField.find_by(name: field_name)
-
-    if existing_field
-      existing_fields << {
-        name: field_name,
-        id: existing_field.id,
-        jira_id: jira_id,
-        status: 'existing'
-      }
-      next
-    end
-
-    # Create new custom field
-    cf = CustomField.new(
-      name: field_name,
-      field_format: field_format,
-      is_required: field_data['is_required'] || false,
-      is_for_all: field_data['is_for_all'] || true,
-      type: field_data['type'] || 'WorkPackageCustomField'
-    )
-
-    # Set possible values for list fields
-    if field_format == 'list'
-      if field_data['possible_values'] && !field_data['possible_values'].empty?
-        values = field_data['possible_values']
-        cf.possible_values = values.map { |value| value.to_s.strip }
-      else
-        cf.possible_values = ['Default option']
-      end
-
-      # Ensure field has at least one value
-      if cf.possible_values.nil? || cf.possible_values.empty?
-        cf.possible_values = ['Default option']
-      end
-    end
-
-    # Save the custom field
-    if cf.save
-      # Make it available for all work package types if is_for_all
-      if cf.is_for_all?
-        Type.all.each do |type|
-          type.custom_fields << cf unless type.custom_fields.include?(cf)
-          type.save!
-        end
-      end
-
-      created_fields << {
-        name: field_name,
-        id: cf.id,
-        jira_id: jira_id,
-        status: 'created'
-      }
-    else
-      error_fields << {
-        name: field_name,
-        jira_id: jira_id,
-        status: 'error',
-        errors: cf.errors.full_messages
-      }
-    end
-  rescue => e
-    error_fields << {
-      name: field_data['name'],
-      jira_id: field_data['jira_id'],
-      status: 'error',
-      errors: [e.message]
-    }
-  end
-end
-
-# Write the result as JSON to file
-result = {
-  status: 'success',
-  created: created_fields,
-  existing: existing_fields,
-  errors: error_fields,
-  created_count: created_fields.length,
-  existing_count: existing_fields.length,
-  error_count: error_fields.length
-}
-
-File.write(output_file, result.to_json)
-puts "Custom field migration completed. Results written to #{output_file}"
-"""
-
-        # Combine header and body
-        ruby_query = ruby_header + ruby_body
-
-        # Execute the Ruby query
-        self.logger.info("Executing Ruby script for custom field creation")
-        try:
-            # Execute the script (we don't need the return value since results are written to file)
-            self.op_client.execute_query(ruby_query)
-
-            # Transfer the result file back and read it
-            local_result_path = self.data_dir / f"custom_fields_result_{timestamp}.json"
-
-            try:
-                self.op_client.transfer_file_from_container(
-                    container_result_path,
-                    local_result_path,
-                )
-            except Exception as e:
-                self.logger.exception(
-                    "Failed to transfer result file from container: %s",
-                    str(e),
-                )
+            if not isinstance(result, dict) or result.get("status") != "success":
+                self.logger.error("Bulk custom field creation failed: %s", result)
                 return False
 
-            # Read and parse the result file
-            if not local_result_path.exists():
-                self.logger.error("Result file was not created: %s", local_result_path)
-                return False
+            created = result.get("created", []) or []
+            errors = result.get("errors", []) or []
 
-            with local_result_path.open("r", encoding="utf-8") as f:
-                result = json.load(f)
+            # Attempt to classify errors due to existing fields by name
+            existing: list[dict[str, Any]] = []
+            unresolved_errors: list[dict[str, Any]] = []
+            for err in errors:
+                idx = err.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(meta):
+                    name = meta[idx]["name"]
+                    try:
+                        found = self.op_client.find_record("CustomField", {"name": name})
+                        if isinstance(found, dict) and found.get("id"):
+                            existing.append({"name": name, "id": found.get("id")})
+                            continue
+                    except Exception:
+                        pass
+                unresolved_errors.append(err)
 
-            if not isinstance(result, dict):
-                msg = f"Unexpected result type: {type(result)}"
-                raise MigrationError(msg)
+            if created:
+                self.logger.info("Created %d custom fields", len(created))
+            if existing:
+                self.logger.info("%d custom fields already existed", len(existing))
+            if unresolved_errors:
+                self.logger.error("Failed to create %d custom fields", len(unresolved_errors))
+                for e in unresolved_errors[:10]:
+                    self.logger.error("Error at index %s: %s", e.get("index"), e.get("errors"))
 
-            # Extract results
-            created_fields = result.get("created", [])
-            existing_fields = result.get("existing", [])
-            error_fields = result.get("errors", [])
-
-            if created_fields:
-                self.logger.info("Created %d custom fields", len(created_fields))
-            else:
-                self.logger.info("No custom fields created")
-
-            if existing_fields:
-                self.logger.info(
-                    "Found %d existing custom fields",
-                    len(existing_fields),
-                )
-            else:
-                self.logger.info("No existing custom fields found")
-
-            if error_fields:
-                self.logger.error(
-                    "Failed to create %d custom fields",
-                    len(error_fields),
-                )
-                for error in error_fields:
-                    self.logger.error(
-                        "Error for field '%s': %s",
-                        error["name"],
-                        error["errors"],
-                    )
-
-            # Consider it successful if either fields were created OR fields already exist (and no errors)
-            # This handles the case where custom fields from link types already exist
-            return (
-                len(created_fields) > 0 or len(existing_fields) > 0
-            ) and not error_fields
+            # Success if at least one created or found existing, and no unresolved errors
+            return (len(created) + len(existing) > 0) and not unresolved_errors
         except Exception as e:
-            self.logger.exception("Error executing Ruby script: %s", str(e))
+            self.logger.exception("Error during bulk custom field creation: %s", e)
             return False
-        finally:
-            # Clean up temporary files
-            try:
-                if data_file_path.exists():
-                    data_file_path.unlink()
-
-                # Also clean up result file
-                local_result_path = (
-                    self.data_dir / f"custom_fields_result_{timestamp}.json"
-                )
-                if local_result_path.exists():
-                    local_result_path.unlink()
-            except Exception as e:
-                self.logger.warning("Failed to clean up temporary files: %s", str(e))
 
     def migrate_custom_fields(self) -> bool:
         """Migrate custom fields from Jira to OpenProject.

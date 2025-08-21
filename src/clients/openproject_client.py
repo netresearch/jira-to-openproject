@@ -1219,6 +1219,125 @@ class OpenProjectClient:
         msg = "Unable to parse count result."
         raise QueryExecutionError(msg)
 
+    def bulk_create_records(
+        self,
+        model: str,
+        records: list[dict[str, Any]],
+        *,
+        timeout: int | None = None,
+        result_basename: str | None = None,
+    ) -> dict[str, Any]:
+        """Create many records for a given Rails model using a minimal Ruby script.
+
+        Policy: Ruby performs only create; all mapping/sanitization/defaults must be done in Python.
+
+        Args:
+            model: Rails model name (e.g., "WorkPackage")
+            records: List of sanitized attribute dicts suitable for mass-assignment
+            timeout: Optional execution timeout
+            result_basename: Optional basename used for the result file in the container
+
+        Returns:
+            Result envelope with keys: status, created, errors, created_count, error_count, total
+
+        Raises:
+            QueryExecutionError: On execution or retrieval failure
+        """
+        # Basic validation of model name to avoid code injection
+        if not isinstance(model, str) or not model or not re.match(r"^[A-Za-z_:][A-Za-z0-9_:]*$", model):
+            raise QueryExecutionError("Invalid model name for bulk_create_records")
+
+        if not isinstance(records, list):
+            raise QueryExecutionError("records must be a list of dicts")
+
+        # Prepare local JSON payload
+        temp_dir = Path(self.file_manager.data_dir) / "bulk_create"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        local_json = temp_dir / f"{model.lower()}_bulk_{os.urandom(4).hex()}.json"
+        try:
+            with local_json.open("w", encoding="utf-8") as f:
+                json.dump(records, f)
+        except Exception as e:
+            raise QueryExecutionError(f"Failed to serialize records: {e}") from e
+
+        # Transfer JSON to container
+        container_json = Path("/tmp") / local_json.name
+        self.transfer_file_to_container(local_json, container_json)
+
+        # Result file path in container and local debug path
+        result_name = result_basename or f"bulk_result_{model.lower()}_{os.urandom(3).hex()}.json"
+        container_result = Path("/tmp") / result_name
+        local_result = temp_dir / result_name
+
+        # Compose minimal Ruby script
+        header = (
+            "require 'json'\n"
+            f"model_name = '{model}'\n"
+            f"data_path = '{container_json.as_posix()}'\n"
+            f"result_path = '{container_result.as_posix()}'\n"
+        )
+        ruby = (
+            "model = Object.const_get(model_name)\n"
+            "data = JSON.parse(File.read(data_path))\n"
+            "created = []\n"
+            "errors = []\n"
+            "data.each_with_index do |attrs, idx|\n"
+            "  begin\n"
+            "    rec = model.create(attrs)\n"
+            "    if rec && rec.persisted?\n"
+            "      created << {'index' => idx, 'id' => rec.id}\n"
+            "    else\n"
+            "      errors << {'index' => idx, 'errors' => (rec ? rec.errors.full_messages : ['unknown error'])}\n"
+            "    end\n"
+            "  rescue => e\n"
+            "    errors << {'index' => idx, 'errors' => [e.message]}\n"
+            "  end\n"
+            "end\n"
+            "result = {\n"
+            "  'status' => 'success',\n"
+            "  'created' => created,\n"
+            "  'errors' => errors,\n"
+            "  'created_count' => created.length,\n"
+            "  'error_count' => errors.length,\n"
+            "  'total' => data.length\n"
+            "}\n"
+            "File.write(result_path, JSON.generate(result))\n"
+        )
+
+        # Execute via persistent Rails console (file-only flow; ignore stdout)
+        try:
+            output = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=True)
+        except Exception as e:
+            raise QueryExecutionError(f"Rails execution failed for bulk_create_records: {e}") from e
+
+        # Poll-copy result back to local
+        max_wait_seconds = 30
+        poll_interval = 1.0
+        waited = 0.0
+        copied = False
+        while waited < max_wait_seconds:
+            try:
+                self.transfer_file_from_container(container_result, local_result)
+                copied = True
+                break
+            except Exception:
+                time.sleep(poll_interval)
+                waited += poll_interval
+
+        if not copied:
+            raise QueryExecutionError("Result file not found after bulk_create_records execution")
+
+        # Parse and return result
+        try:
+            with local_result.open("r", encoding="utf-8") as f:
+                result = json.load(f)
+                # Attach raw output snippet for callers that want to persist it
+                if isinstance(output, str):
+                    result["output"] = output[:2000]
+                return result
+        except Exception as e:
+            raise QueryExecutionError(f"Failed to parse result JSON: {e}") from e
+
     def find_record(
         self,
         model: str,

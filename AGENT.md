@@ -299,3 +299,18 @@ tmux new-session -s rails_console \; \
 - Load order: CLI args → env vars → `.env.local` → `.env` → `config/config.yaml`. Access configuration via `src/config.py` helper.
 - Keep secrets out of VCS. Use `.env.local` or Docker secrets in production. See `docs/configuration.md` and `.env.example`.
 
+### Rails Console Script Handling Policy
+
+- Minimal Ruby scripts: only load JSON, instantiate ActiveRecord models, assign attributes, save. Do not implement mapping, sanitation, branching logic, or result analysis in Ruby. Keep the script small, deterministic, and side-effect free beyond record creation.
+- JSON must be fully compliant before invoking Rails:
+  - Sanitize exclusively in Python. Remove non-AR keys like `_links`, `watcher_ids`, or any OpenProject API-style link structures. Extract and flatten IDs in Python (e.g., from `_links.type.href`).
+  - Ensure required AR attributes are present (e.g., `project_id`, `type_id`, `subject`) prior to writing JSON.
+- Output and debugging handling:
+  - Use a single file-based result flow. The Ruby script writes a results JSON file in the container; the migration copies it to `var/data` and stores a timestamped copy. Prefer this file as the sole authoritative output path. Avoid parallel “direct return value” branches.
+  - Capture and persist raw console stdout/stderr for each run under `var/data` (or `var/logs`) for postmortem analysis.
+  - When unexpected AR errors arise, temporarily log `sanitized_attrs.keys` for the first failing item to pinpoint offending attributes, then remove once resolved.
+- Testing requirements:
+  - Add tests that assert generated `work_packages_*.json` contain no `_links` (payload cleanliness). Keep these tests fast and independent of Rails.
+  - Retain unit tests for Python sanitization helpers (e.g., `_sanitize_wp_dict`), ensuring extraction of IDs and removal of `_links`.
+- Simplicity principle: if the Ruby script grows beyond minimal load-and-save responsibilities, refactor logic back into Python. Prefer analyzing and classifying errors in Python, not in Ruby.
+

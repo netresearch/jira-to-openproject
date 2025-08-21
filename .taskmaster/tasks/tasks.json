@@ -1261,11 +1261,22 @@
         "dependencies": [],
         "priority": "medium",
         "subtasks": []
+      },
+      {
+        "id": 115,
+        "title": "Minimize update-style Ruby: company metadata and user Jira-key backfill",
+        "description": "Refactor remaining update flows to follow the minimal Ruby policy.\n- Company metadata update in `src/migrations/company_migration.py`: move custom field existence checks and value composition to Python; introduce a small, generic update helper in `OpenProjectClient` to set project custom field values via file-based JSON with index mapping; capture raw console output.\n- User Jira-key backfill in `src/migrations/user_migration.py`: prepare update rows fully in Python and reuse the generic update helper to set a `UserCustomField` value; ensure idempotency and classify results by index.\n- Add unit tests enforcing no control flow or sanitation in Ruby (creation/update scripts should only load JSON, call Model.create/update, collect results).\n- Update AGENT.md references if needed and ensure lints/tests pass.",
+        "details": "Deliverables:\n1) `OpenProjectClient` helper for minimal bulk updates (e.g., `bulk_update_field_values(model, records, ...)`) mirroring `bulk_create_records` style with JSON in/out and index-based result mapping.\n2) Rewrite company metadata update to use the helper and Python-prepared payloads; remove custom-field creation logic from Ruby (if CFs must be created, add a separate minimal create step handled by Python).\n3) Rewrite user Jira-key backfill using the helper; sanitize inputs and ensure only legitimate users/CF exist.\n4) Tests: verify JSON payload cleanliness (no _links), verify scripts contain only Model.create/update and not complex logic; integration smoke where feasible.\n5) Docs: short section in AGENT.md noting the new update helper and policy compliance.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": []
       }
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-08-18T15:14:41.392Z",
+      "updated": "2025-08-21T07:54:07.929Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",

@@ -591,102 +591,78 @@ class CompanyMigration(BaseMigration):
             self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
             return self.company_mapping
 
-        # First, write the companies data to a JSON file that Rails can read
-        temp_file_path = Path(self.data_dir).joinpath("tempo_companies_to_create.json")
-        self.logger.info(
-            "Writing %d companies to %s",
-            len(companies_to_create),
-            temp_file_path,
-        )
-
         try:
-            # Write the JSON file
-            with temp_file_path.open("w") as f:
-                json.dump(companies_to_create, f, indent=2)
-
-            # Define the path for the file inside the container
-            container_temp_path = Path("/tmp/tempo_companies.json")
-
-            # Copy the file to the container
-            self.op_client.transfer_file_to_container(
-                temp_file_path,
-                container_temp_path,
-            )
-
-            # Process companies in smaller batches to avoid console crashes
-            batch_size = (
-                10  # Process companies in batches of 10 to avoid large script issues
-            )
             total_companies = len(companies_to_create)
-            created_companies = []
-            errors = []
+            self.logger.info("Preparing %d companies for project creation", total_companies)
 
-            for i in range(0, total_companies, batch_size):
-                batch_end = min(i + batch_size, total_companies)
-                batch_companies = companies_to_create[i:batch_end]
-
-                self.logger.info(
-                    "Processing batch %d-%d of %d companies",
-                    i + 1,
-                    batch_end,
-                    total_companies,
+            records: list[dict[str, Any]] = []
+            meta: list[dict[str, Any]] = []
+            for c in companies_to_create:
+                meta.append(
+                    {
+                        "tempo_id": c.get("tempo_id"),
+                        "tempo_key": c.get("tempo_key"),
+                        "tempo_name": c.get("tempo_name"),
+                        "identifier": c.get("identifier"),
+                        "name": c.get("name"),
+                    }
+                )
+                records.append(
+                    {
+                        "name": c.get("name"),
+                        "identifier": c.get("identifier"),
+                        "description": c.get("description"),
+                        "public": False,
+                    }
                 )
 
-                # Create a smaller JSON file for this batch
-                batch_file_path = Path(self.data_dir).joinpath(
-                    f"tempo_companies_batch_{i}.json",
-                )
-                with batch_file_path.open("w") as f:
-                    json.dump(batch_companies, f, indent=2)
+            result = self.op_client.bulk_create_records(
+                model="Project",
+                records=records,
+                timeout=120,
+                result_basename="j2o_companies_bulk_result.json",
+            )
 
-                # Copy batch file to container
-                batch_container_path = Path(f"/tmp/tempo_companies_batch_{i}.json")
-                self.op_client.transfer_file_to_container(
-                    batch_file_path,
-                    batch_container_path,
-                )
+            if not isinstance(result, dict) or result.get("status") != "success":
+                raise MigrationError(result.get("message", "Bulk project creation failed"))
 
-                # Prepare smaller Ruby script for this batch
-                try:
-                    batch_result = self._create_companies_batch(batch_container_path, i)
-                    batch_companies = batch_result.get("created", [])
-                    created_companies.extend(batch_companies)
-                    errors.extend(batch_result.get("errors", []))
+            created_list = result.get("created", []) or []
+            error_list = result.get("errors", []) or []
 
-                    # Update company mapping with both existing and newly created companies
-                    for company in batch_companies:
-                        tempo_id = company.get("tempo_id")
-                        if tempo_id:
-                            self.company_mapping[str(tempo_id)] = {
-                                "tempo_id": tempo_id,
-                                "tempo_key": company.get("tempo_key"),
-                                "tempo_name": company.get("tempo_name"),
-                                "openproject_id": company.get("openproject_id"),
-                                "openproject_identifier": company.get(
-                                    "openproject_identifier",
-                                ),
-                                "openproject_name": company.get("openproject_name"),
-                                "matched_by": company.get(
-                                    "status",
-                                    "created",
-                                ),  # "existing" or "created"
-                            }
-                except MigrationError as e:
-                    self.logger.exception("Batch %d failed: %s", i, e)
-                    # Continue with next batch on error
-                    errors.append(
+            created_companies: list[dict[str, Any]] = []
+            errors: list[dict[str, Any]] = []
+            for item in created_list:
+                idx = item.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(meta):
+                    m = meta[idx]
+                    created_companies.append(
                         {
-                            "batch_index": i,
-                            "error": str(e),
-                            "type": "batch_processing_error",
-                        },
+                            "tempo_id": m.get("tempo_id"),
+                            "tempo_key": m.get("tempo_key"),
+                            "tempo_name": m.get("tempo_name"),
+                            "openproject_id": item.get("id"),
+                            "openproject_identifier": m.get("identifier"),
+                            "openproject_name": m.get("name"),
+                            "status": "created",
+                        }
                     )
+                    tempo_id = m.get("tempo_id")
+                    if tempo_id:
+                        self.company_mapping[str(tempo_id)] = {
+                            "tempo_id": tempo_id,
+                            "tempo_key": m.get("tempo_key"),
+                            "tempo_name": m.get("tempo_name"),
+                            "openproject_id": item.get("id"),
+                            "openproject_identifier": m.get("identifier"),
+                            "openproject_name": m.get("name"),
+                            "matched_by": "created",
+                        }
 
-                # Clean up batch file
-                with contextlib.suppress(OSError):
-                    batch_file_path.unlink()
+            for err in error_list:
+                idx = err.get("index")
+                msg = "; ".join(err.get("errors", []))
+                errors.append({"index": idx, "error": msg, "type": "create_failed"})
 
-            # Prepare summary result
             output = {
                 "status": "success",
                 "created": created_companies,
