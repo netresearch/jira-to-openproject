@@ -410,6 +410,7 @@ class TimeEntryMigrator:
             "created_time_entry_ids": [],
             "errors": [],
             "warnings": [],
+            "skipped_details": [],
         }
 
         if dry_run:
@@ -465,8 +466,25 @@ class TimeEntryMigrator:
             for entry in batch:
                 try:
                     # Validate entry has required fields
-                    if not self._validate_time_entry(entry):
+                    valid, reason = self._validate_time_entry_with_reason(entry)
+                    if not valid:
                         migration_summary["skipped_entries"] += 1
+                        # capture up to first 30 skipped entries for diagnostics
+                        if len(migration_summary["skipped_details"]) < 30:
+                            migration_summary["skipped_details"].append(
+                                {
+                                    "reason": reason,
+                                    "hours": entry.get("hours"),
+                                    "spentOn": entry.get("spentOn"),
+                                    "user": entry.get("_embedded", {})
+                                    .get("user", {})
+                                    .get("href"),
+                                    "workPackage": entry.get("_embedded", {})
+                                    .get("workPackage", {})
+                                    .get("href"),
+                                    "meta": entry.get("_meta", {}),
+                                },
+                            )
                         continue
 
                     # Attach provenance key in meta if available
@@ -534,7 +552,35 @@ class TimeEntryMigrator:
             f"{migration_summary['skipped_entries']} skipped in {processing_time:.2f}s",
         )
 
+        # Persist skipped details sample for diagnostics
+        try:
+            if migration_summary.get("skipped_details"):
+                diag_path = self.data_dir / "time_entry_skipped_samples.json"
+                with open(diag_path, "w", encoding="utf-8") as f:
+                    json.dump(migration_summary["skipped_details"], f, indent=2)
+                self.logger.info(
+                    f"Saved skipped sample diagnostics to {diag_path}",
+                )
+        except Exception as e:
+            self.logger.warning(f"Failed to save skipped diagnostics: {e}")
+
         return migration_summary
+
+    def _validate_time_entry_with_reason(self, entry: dict[str, Any]) -> tuple[bool, str]:
+        embedded = entry.get("_embedded", {})
+        if not embedded.get("workPackage") or not embedded.get("user"):
+            self.logger.warning("Skipping entry missing workPackage or user embedding")
+            return False, "missing_embedding"
+        hours_value = entry.get("hours")
+        if (
+            not isinstance(hours_value, (int, float))
+            or hours_value is None
+            or hours_value <= 0
+            or entry.get("spentOn") is None
+        ):
+            self.logger.warning("Skipping entry missing hours or spentOn")
+            return False, "invalid_hours_or_date"
+        return True, "ok"
 
     def migrate_time_entries_for_issues(
         self,
