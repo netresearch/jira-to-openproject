@@ -2820,6 +2820,25 @@ class OpenProjectClient:
             comments: {time_entry_data.get('comment', {}).get('raw', '')!r}
           )
 
+          # Provenance CF for time entries: Jira Worklog Key
+          begin
+            key = {time_entry_data.get('_meta', {}).get('jira_worklog_key')!r}
+            if key
+              cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')
+              if !cf
+                cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
+                cf.save
+              end
+              begin
+                time_entry.custom_field_values = { cf.id => key }
+              rescue => e
+                # ignore CF assignment errors
+              end
+            end
+          rescue => e
+            # ignore provenance CF errors
+          end
+
           if time_entry.save
             {{
               id: time_entry.id,
@@ -2894,7 +2913,7 @@ class OpenProjectClient:
         # Build Ruby expression (not a block) that returns the array directly
         query = (
             f"TimeEntry{where_clause}.limit({limit}).includes(:work_package, :user, :activity)"
-            
+
             ".map do |entry| "
             "{ id: entry.id, "
             "work_package_id: entry.work_package_id, "

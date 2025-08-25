@@ -420,6 +420,22 @@ class TimeEntryMigrator:
                         continue
 
                     # Create time entry in OpenProject
+                    # Attach provenance key in meta if available
+                    try:
+                        if isinstance(entry, dict):
+                            meta = entry.get("_meta") or {}
+                            if not meta:
+                                meta = {}
+                                entry["_meta"] = meta
+                            # Prefer worklog id if present; fallback to composite
+                            wl_id = entry.get("_meta", {}).get("jira_worklog_id") or entry.get("jira_worklog_id")
+                            if wl_id and not meta.get("jira_worklog_key"):
+                                meta["jira_worklog_key"] = str(wl_id)
+                            elif entry.get("jira_key") and entry.get("worklog_id") and not meta.get("jira_worklog_key"):
+                                meta["jira_worklog_key"] = f"{entry.get('jira_key')}:{entry.get('worklog_id')}"
+                    except Exception:
+                        pass
+
                     created_entry = self.op_client.create_time_entry(entry)
 
                     if created_entry and created_entry.get("id"):
