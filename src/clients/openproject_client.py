@@ -2996,6 +2996,7 @@ class OpenProjectClient:
                         "hours": entry_data.get("hours", 0),
                         "spent_on": entry_data.get("spentOn", ""),
                         "comments": entry_data.get("comment", {}).get("raw", ""),
+                        "jira_worklog_key": (entry_data.get("_meta", {}) or {}).get("jira_worklog_key"),
                     },
                 )
 
@@ -3014,7 +3015,8 @@ class OpenProjectClient:
               activity_id: {entry['activity_id']},
               hours: {entry['hours']},
               spent_on: '{entry['spent_on']}',
-              comments: {entry['comments']!r}
+              comments: {entry['comments']!r},
+              jira_worklog_key: {entry['jira_worklog_key']!r}
             }}""",
             )
 
@@ -3034,6 +3036,23 @@ class OpenProjectClient:
               spent_on: Date.parse(entry_data[:spent_on]),
               comments: entry_data[:comments]
             )
+
+            # Provenance CF for time entries in batch mode
+            begin
+              key = entry_data[:jira_worklog_key]
+              if key
+                cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')
+                if !cf
+                  cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
+                  cf.save
+                end
+                begin
+                  time_entry.custom_field_values = { cf.id => key }
+                rescue => e
+                end
+              end
+            rescue => e
+            end
 
             if time_entry.save
               created_count += 1

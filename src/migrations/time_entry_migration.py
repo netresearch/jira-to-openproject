@@ -116,10 +116,36 @@ class TimeEntryMigration(BaseMigration):
         try:
             result = self.time_entry_migrator.migrate_time_entries_for_issues(migrated_wps)
             success = result.get("status") in ("success", "partial_success")
-            errors = []
+            errors: list[str] = []
             if result.get("status") == "failed":
                 # Collect top-level errors
                 errors.append(result.get("error") or "time entry migration failed")
+
+            total_migrated = result.get("total_time_entries", {}).get("migrated", 0)
+            total_failed = result.get("total_time_entries", {}).get("failed", 0)
+            total_discovered = (
+                result.get("jira_work_logs", {}).get("discovered", 0)
+                + result.get("tempo_time_entries", {}).get("discovered", 0)
+            )
+
+            # Zero-created gating: discovered > 0 but migrated == 0 should fail
+            if total_discovered > 0 and total_migrated == 0:
+                return ComponentResult(
+                    success=False,
+                    message=(
+                        "Time entry migration discovered entries but created zero; failing per gating policy"
+                    ),
+                    details={
+                        "status": "failed",
+                        "reason": "zero_created_with_input",
+                        "total_discovered": total_discovered,
+                        "time": (datetime.now(tz=UTC) - start_time).total_seconds(),
+                    },
+                    success_count=0,
+                    failed_count=total_failed,
+                    total_count=total_failed,
+                    errors=errors,
+                )
 
             return ComponentResult(
                 success=success,
@@ -135,12 +161,9 @@ class TimeEntryMigration(BaseMigration):
                     "total_time_entries": result.get("total_time_entries", {}),
                     "time": (datetime.now(tz=UTC) - start_time).total_seconds(),
                 },
-                success_count=result.get("total_time_entries", {}).get("migrated", 0),
-                failed_count=result.get("total_time_entries", {}).get("failed", 0),
-                total_count=(
-                    result.get("total_time_entries", {}).get("migrated", 0)
-                    + result.get("total_time_entries", {}).get("failed", 0)
-                ),
+                success_count=total_migrated,
+                failed_count=total_failed,
+                total_count=total_migrated + total_failed,
                 errors=errors,
             )
 

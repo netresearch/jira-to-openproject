@@ -405,7 +405,22 @@ class TimeEntryMigrator:
             migration_summary["successful_migrations"] = len(entries_to_migrate)
             return migration_summary
 
-        # Process in batches
+        # If sufficiently large, use batch creation for performance
+        if len(entries_to_migrate) >= max(25, batch_size):
+            try:
+                batch_result = self.op_client.batch_create_time_entries(entries_to_migrate)
+                created = int(batch_result.get("created", 0))
+                failed = int(batch_result.get("failed", 0))
+                migration_summary["successful_migrations"] += created
+                migration_summary["failed_migrations"] += failed
+                # Note: collect IDs if returned
+                ids = [r.get("id") for r in batch_result.get("results", []) if r.get("success") and r.get("id")]
+                migration_summary["created_time_entry_ids"].extend(ids)
+            except Exception as e:
+                self.logger.warning(f"Batch create failed, falling back to per-entry: {e}")
+                # fall through to per-entry loop
+        
+        # Process in batches (per-entry) when not covered by batch create
         for i in range(0, len(entries_to_migrate), batch_size):
             batch = entries_to_migrate[i : i + batch_size]
             batch_num = i // batch_size + 1
@@ -419,7 +434,6 @@ class TimeEntryMigrator:
                         migration_summary["skipped_entries"] += 1
                         continue
 
-                    # Create time entry in OpenProject
                     # Attach provenance key in meta if available
                     try:
                         if isinstance(entry, dict):
@@ -436,6 +450,7 @@ class TimeEntryMigrator:
                     except Exception:
                         pass
 
+                    # Create time entry in OpenProject
                     created_entry = self.op_client.create_time_entry(entry)
 
                     if created_entry and created_entry.get("id"):
@@ -519,48 +534,34 @@ class TimeEntryMigrator:
                 dry_run=False,
             )
 
-            # Generate comprehensive report
-            self._generate_migration_report()
-
-            processing_time = (datetime.now() - overall_start_time).total_seconds()
-            self.migration_results["processing_time_seconds"] = processing_time
+            # Compose high-level stats for component gating & reporting
+            jira_discovered = self.migration_results.get("jira_work_logs_extracted", 0)
+            tempo_discovered = self.migration_results.get("tempo_entries_extracted", 0)
+            migrated_count = self.migration_results.get("successful_migrations", 0)
+            failed_count = self.migration_results.get("failed_migrations", 0)
 
             return {
-                "jira_work_logs": {
-                    "extracted": self.migration_results["jira_work_logs_extracted"],
-                    "migrated": migration_result.get("successful_migrations", 0),
-                    "errors": self.migration_results["errors"],
-                },
-                "tempo_time_entries": {
-                    "extracted": self.migration_results["tempo_entries_extracted"],
-                    "migrated": migration_result.get("successful_migrations", 0),
-                    "errors": self.migration_results["errors"],
-                },
-                "total_time_entries": {
-                    "migrated": migration_result.get("successful_migrations", 0),
-                    "failed": migration_result.get("failed_migrations", 0),
-                },
-                "processing_time_seconds": processing_time,
                 "status": (
                     "success"
-                    if not self.migration_results["errors"]
-                    else "partial_success"
+                    if failed_count == 0
+                    else ("partial_success" if migrated_count > 0 else "failed")
                 ),
+                "jira_work_logs": {
+                    "discovered": jira_discovered,
+                },
+                "tempo_time_entries": {
+                    "discovered": tempo_discovered,
+                },
+                "total_time_entries": {
+                    "migrated": migrated_count,
+                    "failed": failed_count,
+                },
+                "time": (datetime.now() - overall_start_time).total_seconds(),
             }
 
         except Exception as e:
-            self.logger.exception(f"Time entry migration failed: {e}")
+            self.logger.exception("Time entry migration failed: %s", e)
             return {
-                "jira_work_logs": {"extracted": 0, "migrated": 0, "errors": [str(e)]},
-                "tempo_time_entries": {
-                    "extracted": 0,
-                    "migrated": 0,
-                    "errors": [str(e)],
-                },
-                "total_time_entries": {"migrated": 0, "failed": 0},
-                "processing_time_seconds": (
-                    datetime.now() - overall_start_time
-                ).total_seconds(),
                 "status": "failed",
                 "error": str(e),
             }
@@ -625,56 +626,33 @@ class TimeEntryMigrator:
 
         return self.migration_results
 
+    # == Helpers ==
     def _validate_time_entry(self, entry: dict[str, Any]) -> bool:
-        """Validate a time entry before migration.
-
-        Args:
-            entry: Time entry to validate
-
-        Returns:
-            True if entry is valid for migration
-
-        """
-        # Check required fields
-        if not entry.get("hours") or entry["hours"] <= 0:
-            self.logger.debug("Skipping entry with invalid hours")
-            return False
-
-        if not entry.get("spentOn"):
-            self.logger.debug("Skipping entry without spentOn date")
-            return False
-
-        # Check for required associations
+        """Validate required fields for a time entry."""
         embedded = entry.get("_embedded", {})
-        if not embedded.get("workPackage", {}).get("href"):
-            self.logger.debug("Skipping entry without work package association")
+        if not embedded.get("workPackage") or not embedded.get("user"):
+            self.logger.warning("Skipping entry missing workPackage or user embedding")
             return False
-
-        if not embedded.get("user", {}).get("href"):
-            self.logger.debug("Skipping entry without user association")
+        if entry.get("hours") is None or entry.get("spentOn") is None:
+            self.logger.warning("Skipping entry missing hours or spentOn")
             return False
-
         return True
 
     def _save_extracted_work_logs(self) -> None:
-        """Save extracted work logs to file."""
         try:
-            work_logs_file = self.data_dir / "extracted_work_logs.json"
-            with open(work_logs_file, "w", encoding="utf-8") as f:
-                json.dump(self.extracted_work_logs, f, indent=2, ensure_ascii=False)
-            self.logger.debug(f"Saved extracted work logs to {work_logs_file}")
+            path = self.data_dir / "jira_work_logs.json"
+            with path.open("w", encoding="utf-8") as f:
+                json.dump(self.extracted_work_logs, f, indent=2)
         except Exception as e:
-            self.logger.warning(f"Failed to save extracted work logs: {e}")
+            self.logger.warning(f"Failed to save Jira work logs: {e}")
 
     def _save_extracted_tempo_entries(self) -> None:
-        """Save extracted Tempo entries to file."""
         try:
-            tempo_file = self.data_dir / "extracted_tempo_entries.json"
-            with open(tempo_file, "w", encoding="utf-8") as f:
-                json.dump(self.extracted_tempo_entries, f, indent=2, ensure_ascii=False)
-            self.logger.debug(f"Saved extracted Tempo entries to {tempo_file}")
+            path = self.data_dir / "tempo_time_entries.json"
+            with path.open("w", encoding="utf-8") as f:
+                json.dump(self.extracted_tempo_entries, f, indent=2)
         except Exception as e:
-            self.logger.warning(f"Failed to save extracted Tempo entries: {e}")
+            self.logger.warning(f"Failed to save Tempo time entries: {e}")
 
     def _generate_migration_report(self) -> None:
         """Generate a comprehensive migration report."""
