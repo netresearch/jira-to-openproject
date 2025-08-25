@@ -75,7 +75,13 @@ class TimeEntryTransformer:
         try:
             # Extract basic information
             author = work_log.get("author", {})
-            author_username = author.get("name", author.get("key", "unknown"))
+            author_username = (
+                author.get("name")
+                or author.get("key")
+                or author.get("accountId")
+                or author.get("emailAddress")
+                or "unknown"
+            )
 
             # Parse time spent (comes as seconds in Jira)
             time_spent_seconds = work_log.get("timeSpentSeconds", 0)
@@ -106,12 +112,12 @@ class TimeEntryTransformer:
             }
 
             # Map user
-            user_id = self._map_user(author_username)
+            user_id = self._map_user_multi(author)
             if user_id:
                 time_entry["_embedded"]["user"] = {"href": f"/api/v3/users/{user_id}"}
 
             # Map work package
-            work_package_id = self._map_work_package(issue_key)
+            work_package_id = self._map_work_package_multi(issue_key, work_log)
             if work_package_id:
                 time_entry["_embedded"]["workPackage"] = {
                     "href": f"/api/v3/work_packages/{work_package_id}",
@@ -155,7 +161,13 @@ class TimeEntryTransformer:
         """
         try:
             # Extract basic information
-            author_username = tempo_log.get("author", {}).get("name", "unknown")
+            author_username = (
+                tempo_log.get("author", {}).get("name")
+                or tempo_log.get("author", {}).get("key")
+                or tempo_log.get("author", {}).get("accountId")
+                or tempo_log.get("author", {}).get("emailAddress")
+                or "unknown"
+            )
             issue_key = tempo_log.get("issue", {}).get("key", "")
 
             # Parse time spent (Tempo provides in seconds)
@@ -186,12 +198,12 @@ class TimeEntryTransformer:
             }
 
             # Map user
-            user_id = self._map_user(author_username)
+            user_id = self._map_user_multi(tempo_log.get("author", {}))
             if user_id:
                 time_entry["_embedded"]["user"] = {"href": f"/api/v3/users/{user_id}"}
 
             # Map work package
-            work_package_id = self._map_work_package(issue_key)
+            work_package_id = self._map_work_package_multi(issue_key, tempo_log)
             if work_package_id:
                 time_entry["_embedded"]["workPackage"] = {
                     "href": f"/api/v3/work_packages/{work_package_id}",
@@ -369,6 +381,23 @@ class TimeEntryTransformer:
             logger.warning("No user mapping found for username: %s", username)
         return user_id
 
+    def _map_user_multi(self, author: dict[str, Any] | str) -> int | None:
+        """Try multiple identifiers to map a Jira user to OpenProject ID."""
+        if isinstance(author, str):
+            return self.user_mapping.get(author)
+        candidates = [
+            author.get("name"),
+            author.get("key"),
+            author.get("accountId"),
+            author.get("emailAddress"),
+            author.get("displayName"),
+        ]
+        for cand in candidates:
+            if cand and cand in self.user_mapping:
+                return self.user_mapping[cand]
+        logger.warning("No user mapping found for any identifier: %s", candidates)
+        return None
+
     def _map_work_package(self, issue_key: str) -> int | None:
         """Map Jira issue key to OpenProject work package ID.
 
@@ -383,6 +412,25 @@ class TimeEntryTransformer:
         if not work_package_id:
             logger.warning("No work package mapping found for issue: %s", issue_key)
         return work_package_id
+
+    def _map_work_package_multi(self, issue_key: str, log: dict[str, Any]) -> int | None:
+        """Map using issue_key or any alternative identifiers if available."""
+        # Primary: issue key
+        wp_id = self.work_package_mapping.get(issue_key)
+        if wp_id:
+            return wp_id
+        # Fallbacks: look in meta or variants
+        meta = log.get("_meta", {}) if isinstance(log, dict) else {}
+        candidates = [
+            issue_key,
+            meta.get("jira_issue_key"),
+            meta.get("issueKey"),
+        ]
+        for key in candidates:
+            if key and key in self.work_package_mapping:
+                return self.work_package_mapping[key]
+        logger.warning("No work package mapping found for identifiers: %s", candidates)
+        return None
 
     def _detect_activity(self, comment: str) -> int | None:
         """Detect activity type from work log comment.
@@ -478,7 +526,7 @@ class TimeEntryTransformer:
         Args:
             source_log: Source work log data
             time_entry: Target OpenProject time entry
-            field_mapping: Map source field names to OpenProject field names
+            field_mapping: Map source field names to OpenProject fields
 
         """
         custom_fields = {}

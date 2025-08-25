@@ -105,12 +105,24 @@ class TimeEntryMigrator:
             if user_mapping_file.exists():
                 with open(user_mapping_file, encoding="utf-8") as f:
                     user_data = json.load(f)
-                    self.user_mapping = {
-                        entry.get("jira_username", ""): entry.get("openproject_id")
-                        for entry in user_data.values()
-                        if entry.get("jira_username") and entry.get("openproject_id")
-                    }
-                self.logger.info(f"Loaded {len(self.user_mapping)} user mappings")
+                    expanded: dict[str, int] = {}
+                    for entry in user_data.values():
+                        op_id = entry.get("openproject_id")
+                        if not op_id:
+                            continue
+                        # Collect potential Jira identifiers
+                        jira_keys = [
+                            entry.get("jira_username"),
+                            entry.get("jira_name"),
+                            entry.get("jira_key"),
+                            entry.get("jira_email"),
+                            entry.get("jira_display_name"),
+                        ]
+                        for key in jira_keys:
+                            if key:
+                                expanded[str(key)] = op_id
+                    self.user_mapping = expanded
+                self.logger.info(f"Loaded {len(self.user_mapping)} user mappings (expanded)")
 
             # Load work package mapping
             wp_mapping_file = self.data_dir / "work_package_mapping.json"
