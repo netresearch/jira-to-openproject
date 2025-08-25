@@ -2874,7 +2874,7 @@ class OpenProjectClient:
         """
 
         try:
-            result = self.execute_json_query(script)
+            result = self.execute_query_to_json_file(script)
 
             if isinstance(result, dict):
                 if result.get("error"):
@@ -3096,7 +3096,7 @@ class OpenProjectClient:
         """
 
         try:
-            result = self.execute_json_query(script)
+            result = self.execute_query_to_json_file(script)
             return (
                 result
                 if isinstance(result, dict)
