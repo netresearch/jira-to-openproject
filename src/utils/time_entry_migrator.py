@@ -418,120 +418,42 @@ class TimeEntryMigrator:
             migration_summary["successful_migrations"] = len(entries_to_migrate)
             return migration_summary
 
-        # If enabled and sufficiently large, use batch creation for performance
-        use_batch = bool(config.migration_config.get("enable_time_entry_batch", False))
-        if (
-            use_batch
-            and len(entries_to_migrate) >= max(25, batch_size)
-            and hasattr(self.op_client, "batch_create_time_entries")
-        ):
-            try:
-                batch_result = self.op_client.batch_create_time_entries(entries_to_migrate)
-                created = int(batch_result.get("created", 0))
-                failed = int(batch_result.get("failed", 0))
-                migration_summary["successful_migrations"] += created
-                migration_summary["failed_migrations"] += failed
-                # Note: collect IDs if returned
-                ids = [
-                    r.get("id")
-                    for r in batch_result.get("results", [])
-                    if r.get("success") and r.get("id")
-                ]
-                migration_summary["created_time_entry_ids"].extend(ids)
-                # Update global results and return immediately to avoid double-processing
-                self.migration_results["successful_migrations"] = migration_summary[
-                    "successful_migrations"
-                ]
-                self.migration_results["failed_migrations"] = migration_summary[
-                    "failed_migrations"
-                ]
-                processing_time = (datetime.now() - start_time).total_seconds()
-                self.migration_results["processing_time_seconds"] += processing_time
-                self.logger.success(
-                    f"Migration completed (batch): {migration_summary['successful_migrations']} successful, "
-                    f"{migration_summary['failed_migrations']} failed in {processing_time:.2f}s",
-                )
-                return migration_summary
-            except Exception as e:
-                self.logger.warning(f"Batch create failed, falling back to per-entry: {e}")
-                # fall through to per-entry loop
+        # Always use batch file-based creation for stability and speed
+        try:
+            batch_result = self.op_client.batch_create_time_entries(entries_to_migrate)
+            created = int(batch_result.get("created", 0))
+            failed = int(batch_result.get("failed", 0))
+            migration_summary["successful_migrations"] += created
+            migration_summary["failed_migrations"] += failed
+            ids = [
+                r.get("id")
+                for r in batch_result.get("results", [])
+                if r.get("success") and r.get("id")
+            ]
+            migration_summary["created_time_entry_ids"].extend(ids)
+            # Update global results and return
+            self.migration_results["successful_migrations"] = migration_summary[
+                "successful_migrations"
+            ]
+            self.migration_results["failed_migrations"] = migration_summary[
+                "failed_migrations"
+            ]
+            processing_time = (datetime.now() - start_time).total_seconds()
+            self.migration_results["processing_time_seconds"] += processing_time
+            self.logger.success(
+                f"Migration completed (batch): {migration_summary['successful_migrations']} successful, "
+                f"{migration_summary['failed_migrations']} failed in {processing_time:.2f}s",
+            )
+            return migration_summary
+        except Exception as e:
+            self.logger.warning(f"Batch create failed: {e}")
+            # Return with failures recorded; don't fall back to per-entry to avoid console noise
+            self.migration_results["failed_migrations"] += len(entries_to_migrate)
+            migration_summary["failed_migrations"] += len(entries_to_migrate)
+            migration_summary["errors"].append(str(e))
+            return migration_summary
 
-        # Process in batches (per-entry) when not covered by batch create
-        for i in range(0, len(entries_to_migrate), batch_size):
-            batch = entries_to_migrate[i : i + batch_size]
-            batch_num = i // batch_size + 1
-
-            self.logger.info(f"Processing batch {batch_num} ({len(batch)} entries)")
-
-            for entry in batch:
-                try:
-                    # Validate entry has required fields
-                    valid, reason = self._validate_time_entry_with_reason(entry)
-                    if not valid:
-                        migration_summary["skipped_entries"] += 1
-                        # capture up to first 30 skipped entries for diagnostics
-                        if len(migration_summary["skipped_details"]) < 30:
-                            migration_summary["skipped_details"].append(
-                                {
-                                    "reason": reason,
-                                    "hours": entry.get("hours"),
-                                    "spentOn": entry.get("spentOn"),
-                                    "user": entry.get("_embedded", {})
-                                    .get("user", {})
-                                    .get("href"),
-                                    "workPackage": entry.get("_embedded", {})
-                                    .get("workPackage", {})
-                                    .get("href"),
-                                    "meta": entry.get("_meta", {}),
-                                },
-                            )
-                        continue
-
-                    # Attach provenance key in meta if available
-                    try:
-                        if isinstance(entry, dict):
-                            meta = entry.get("_meta") or {}
-                            if not meta:
-                                meta = {}
-                                entry["_meta"] = meta
-                            # Prefer worklog id if present; fallback to composite
-                            meta_src = entry.get("_meta", {})
-                            wl_id = (
-                                meta_src.get("jira_work_log_id")
-                                or meta_src.get("jira_worklog_id")
-                                or entry.get("jira_work_log_id")
-                                or entry.get("jira_worklog_id")
-                            )
-                            if wl_id and not meta.get("jira_worklog_key"):
-                                meta["jira_worklog_key"] = str(wl_id)
-                            elif entry.get("jira_key") and entry.get("worklog_id") and not meta.get("jira_worklog_key"):
-                                meta["jira_worklog_key"] = f"{entry.get('jira_key')}:{entry.get('worklog_id')}"
-                    except Exception:
-                        pass
-
-                    # Create time entry in OpenProject
-                    created_entry = self.op_client.create_time_entry(entry)
-
-                    if created_entry and created_entry.get("id"):
-                        migration_summary["successful_migrations"] += 1
-                        migration_summary["created_time_entry_ids"].append(
-                            created_entry["id"],
-                        )
-
-                        self.logger.debug(
-                            f"Created time entry {created_entry['id']} for work package "
-                            f"{entry.get('_embedded', {}).get('workPackage', {}).get('href', 'unknown')}",
-                        )
-                    else:
-                        migration_summary["failed_migrations"] += 1
-                        error_msg = "Failed to create time entry: No ID returned"
-                        migration_summary["errors"].append(error_msg)
-
-                except Exception as e:
-                    migration_summary["failed_migrations"] += 1
-                    error_msg = f"Failed to create time entry: {e}"
-                    migration_summary["errors"].append(error_msg)
-                    self.logger.exception(error_msg)
+        # No per-entry fallback; file-based batch is the only path
 
         # Update global results
         self.migration_results["successful_migrations"] = migration_summary[

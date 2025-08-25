@@ -2946,7 +2946,10 @@ class OpenProjectClient:
         self,
         time_entries: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Create multiple time entries in a single operation.
+        """Create multiple time entries via file-based JSON in the container.
+
+        This avoids console output parsing by writing input and results to files
+        inside the container and reading results back via docker exec.
 
         Args:
             time_entries: List of time entry data dictionaries
@@ -2961,39 +2964,28 @@ class OpenProjectClient:
         if not time_entries:
             return {"created": 0, "failed": 0, "results": []}
 
-        # Build the batch creation script
-        entries_data = []
+        # Build entries data with necessary fields and ID extraction
+        import re
+        entries_data: list[dict[str, Any]] = []
         for i, entry_data in enumerate(time_entries):
-            # Extract required data similar to create_time_entry
             embedded = entry_data.get("_embedded", {})
 
-            # Get work package ID
-            work_package_href = embedded.get("workPackage", {}).get("href", "")
-            work_package_id = None
-            if work_package_href:
-                import re
+            def extract_id(pattern: str, href: str) -> int | None:
+                m = re.search(pattern, href or "")
+                return int(m.group(1)) if m else None
 
-                match = re.search(r"/work_packages/(\d+)", work_package_href)
-                if match:
-                    work_package_id = int(match.group(1))
-
-            # Get user ID
-            user_href = embedded.get("user", {}).get("href", "")
-            user_id = None
-            if user_href:
-                match = re.search(r"/users/(\d+)", user_href)
-                if match:
-                    user_id = int(match.group(1))
-
-            # Get activity ID
-            activity_href = embedded.get("activity", {}).get("href", "")
-            activity_id = None
-            if activity_href:
-                match = re.search(r"/activities/(\d+)", activity_href)
-                if match:
-                    activity_id = int(match.group(1))
+            work_package_id = extract_id(r"/work_packages/(\d+)", embedded.get("workPackage", {}).get("href", ""))
+            user_id = extract_id(r"/users/(\d+)", embedded.get("user", {}).get("href", ""))
+            activity_id = extract_id(r"/activities/(\d+)", embedded.get("activity", {}).get("href", ""))
 
             if all([work_package_id, user_id, activity_id]):
+                # Normalize comment to string
+                comment_obj = entry_data.get("comment", "")
+                if isinstance(comment_obj, dict):
+                    comment_str = comment_obj.get("raw") or comment_obj.get("text") or str(comment_obj)
+                else:
+                    comment_str = str(comment_obj)
+
                 entries_data.append(
                     {
                         "index": i,
@@ -3002,7 +2994,7 @@ class OpenProjectClient:
                         "activity_id": activity_id,
                         "hours": entry_data.get("hours", 0),
                         "spent_on": entry_data.get("spentOn", ""),
-                        "comments": entry_data.get("comment", {}).get("raw", ""),
+                        "comments": comment_str,
                         "jira_worklog_key": (entry_data.get("_meta", {}) or {}).get("jira_worklog_key"),
                     },
                 )
@@ -3010,101 +3002,95 @@ class OpenProjectClient:
         if not entries_data:
             return {"created": 0, "failed": len(time_entries), "results": []}
 
-        # Generate Ruby script for batch creation
-        entries_ruby = []
-        for entry in entries_data:
-            entries_ruby.append(
-                f"""
-            {{
-              index: {entry['index']},
-              work_package_id: {entry['work_package_id']},
-              user_id: {entry['user_id']},
-              activity_id: {entry['activity_id']},
-              hours: {entry['hours']},
-              spent_on: '{entry['spent_on']}',
-              comments: {entry['comments']!r},
-              jira_worklog_key: {entry['jira_worklog_key']!r}
-            }}""",
-            )
+        # Prepare local JSON payload
+        temp_dir = Path(self.file_manager.data_dir) / "bulk_create"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        local_json = temp_dir / f"time_entries_bulk_{os.urandom(4).hex()}.json"
+        with local_json.open("w", encoding="utf-8") as f:
+            json.dump(entries_data, f)
 
-        script = f"""
-        entries_data = [{', '.join(entries_ruby)}]
-        results = []
-        created_count = 0
-        failed_count = 0
+        # Transfer JSON to container and define result path
+        container_json = Path("/tmp") / local_json.name
+        self.transfer_file_to_container(local_json, container_json)
 
-        entries_data.each do |entry_data|
-          begin
-            time_entry = TimeEntry.new(
-              work_package_id: entry_data[:work_package_id],
-              user_id: entry_data[:user_id],
-              activity_id: entry_data[:activity_id],
-              hours: entry_data[:hours],
-              spent_on: Date.parse(entry_data[:spent_on]),
-              comments: entry_data[:comments]
-            )
+        result_name = f"bulk_result_time_entries_{os.urandom(3).hex()}.json"
+        container_result = Path("/tmp") / result_name
+        local_result = temp_dir / result_name
 
-            # Provenance CF for time entries in batch mode
-            begin
-              key = entry_data[:jira_worklog_key]
-              if key
-                cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')
-                if !cf
-                  cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
-                  cf.save
-                end
-                begin
-                  time_entry.custom_field_values = {{ cf.id => key }}
-                rescue => e
-                end
-              end
-            rescue => e
-            end
-
-            if time_entry.save
-              created_count += 1
-              results << {{
-                index: entry_data[:index],
-                success: true,
-                id: time_entry.id,
-                work_package_id: time_entry.work_package_id,
-                hours: time_entry.hours.to_f
-              }}
-            else
-              failed_count += 1
-              results << {{
-                index: entry_data[:index],
-                success: false,
-                errors: time_entry.errors.full_messages
-              }}
-            end
-          rescue => e
-            failed_count += 1
-            results << {{
-              index: entry_data[:index],
-              success: false,
-              error: e.message
-            }}
-          end
-        end
-
-        {{
-          created: created_count,
-          failed: failed_count,
-          results: results
-        }}
-        """
+        # Build Ruby runner that writes results JSON to file
+        header = (
+            "require 'json'\n"
+            "require 'date'\n"
+            f"data_path = '{container_json.as_posix()}'\n"
+            f"result_path = '{container_result.as_posix()}'\n"
+        )
+        ruby = (
+            "entries = JSON.parse(File.read(data_path), symbolize_names: true)\n"
+            "results = []\n"
+            "created_count = 0\n"
+            "failed_count = 0\n"
+            "entries.each do |entry|\n"
+            "  begin\n"
+            "    te = TimeEntry.new(\n"
+            "      work_package_id: entry[:work_package_id],\n"
+            "      user_id: entry[:user_id],\n"
+            "      activity_id: entry[:activity_id],\n"
+            "      hours: entry[:hours],\n"
+            "      spent_on: Date.parse(entry[:spent_on]),\n"
+            "      comments: entry[:comments]\n"
+            "    )\n"
+            "    begin\n"
+            "      key = entry[:jira_worklog_key]\n"
+            "      if key\n"
+            "        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')\n"
+            "        if !cf\n"
+            "          cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')\n"
+            "          cf.save\n"
+            "        end\n"
+            "        begin\n"
+            "          te.custom_field_values = { cf.id => key }\n"
+            "        rescue => e\n"
+            "        end\n"
+            "      end\n"
+            "    rescue => e\n"
+            "    end\n"
+            "    if te.save\n"
+            "      created_count += 1\n"
+            "      results << { index: entry[:index], success: true, id: te.id }\n"
+            "    else\n"
+            "      failed_count += 1\n"
+            "      results << { index: entry[:index], success: false, errors: te.errors.full_messages }\n"
+            "    end\n"
+            "  rescue => e\n"
+            "    failed_count += 1\n"
+            "    results << { index: entry[:index], success: false, error: e.message }\n"
+            "  end\n"
+            "end\n"
+            "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))\n"
+        )
 
         try:
-            result = self.execute_query_to_json_file(script)
-            return (
-                result
-                if isinstance(result, dict)
-                else {"created": 0, "failed": len(time_entries), "results": []}
-            )
+            _ = self.rails_client.execute(header + ruby, timeout=120, suppress_output=True)
         except Exception as e:
-            msg = f"Failed to batch create time entries: {e}"
-            raise QueryExecutionError(msg) from e
+            raise QueryExecutionError("Rails execution failed for batch_create_time_entries: %s" % e) from e
+
+        # Retrieve result file
+        max_wait_seconds = 30
+        poll_interval = 1.0
+        waited = 0.0
+        while waited < max_wait_seconds:
+            try:
+                self.transfer_file_from_container(container_result, local_result)
+                break
+            except Exception:
+                time.sleep(poll_interval)
+                waited += poll_interval
+
+        if not local_result.exists():
+            raise QueryExecutionError("Result file not found after batch_create_time_entries execution")
+
+        with local_result.open("r", encoding="utf-8") as f:
+            return json.load(f)
 
     # ===== ENHANCED PERFORMANCE FEATURES =====
 
