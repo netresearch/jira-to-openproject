@@ -782,7 +782,18 @@ class ProjectMigration(BaseMigration):
                 cf_key_id = self.cf_jira_project_key_id or 'nil'
                 cf_id_id = self.cf_jira_project_id_id or 'nil'
                 cf_url_id = self.cf_jira_base_url_id or 'nil'
+                ensure_cfs = (
+                    "begin;"
+                    " k = CustomField.find_by(type: 'ProjectCustomField', name: 'Jira Project Key');"
+                    " k ||= CustomField.create(name: 'Jira Project Key', field_format: 'string', is_required: false, is_for_all: true, type: 'ProjectCustomField');"
+                    " i = CustomField.find_by(type: 'ProjectCustomField', name: 'Jira Project ID');"
+                    " i ||= CustomField.create(name: 'Jira Project ID', field_format: 'string', is_required: false, is_for_all: true, type: 'ProjectCustomField');"
+                    " u = CustomField.find_by(type: 'ProjectCustomField', name: 'Jira Base URL');"
+                    " u ||= CustomField.create(name: 'Jira Base URL', field_format: 'string', is_required: false, is_for_all: true, type: 'ProjectCustomField');"
+                    " rescue => e; end;"
+                )
                 create_script = (
+                    f"{ensure_cfs} "
                     f"p = Project.create!(name: '{name_escaped}', "
                     f"identifier: '{identifier_escaped}', "
                     f"description: '{desc_escaped}', public: false); "

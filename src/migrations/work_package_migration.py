@@ -720,6 +720,8 @@ class WorkPackageMigration(BaseMigration):
             "subject": subject,
             "jira_id": jira_id,
             "jira_key": jira_key,
+            # Provide explicit provenance key for CF assignment in Rails bulk
+            "jira_issue_key": jira_key,
         }
 
         # Use enhanced user association migrator for robust user mapping
@@ -1171,10 +1173,25 @@ def _migrate_work_packages(self) -> dict[str, Any]:
         batch: list[dict[str, Any]] = []
 
         try:
+            work_packages_meta: list[dict[str, Any]] = []
             for issue in self.iter_project_issues(project_key):
                 issues_seen += 1
                 wp = self.prepare_work_package(issue, int(op_project_id))
                 batch.append(wp)
+                # Track minimal metadata for mapping
+                try:
+                    jira_id = getattr(issue, "id", None)
+                except Exception:
+                    jira_id = None
+                try:
+                    jira_key = getattr(issue, "key", None)
+                except Exception:
+                    jira_key = None
+                work_packages_meta.append({
+                    "jira_id": jira_id,
+                    "jira_key": jira_key,
+                    "project_key": project_key,
+                })
                 if len(batch) >= batch_size:
                     try:
                         _apply_required_defaults(
@@ -1205,17 +1222,38 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                                 self.logger.info("Saved bulk result to %s", debug_path)
                             except Exception:
                                 pass
-                            c = res.get("created_count")
+                            # Always process the created list to build mapping
+                            created_list = res.get("created", [])
+                            if isinstance(created_list, list) and created_list:
+                                try:
+                                    _ = self.work_package_mapping  # ensure attribute exists
+                                except Exception:
+                                    self.work_package_mapping = {}
+                                for item in created_list:
+                                    try:
+                                        idx = item.get("index")
+                                        op_id = item.get("id")
+                                        if isinstance(idx, int) and 0 <= idx < len(work_packages_meta):
+                                            meta = work_packages_meta[idx]
+                                            jira_id = meta.get("jira_id")
+                                            if jira_id is not None:
+                                                self.work_package_mapping[str(jira_id)] = {
+                                                    **meta,
+                                                    "openproject_id": op_id,
+                                                    "openproject_project_id": int(op_project_id),
+                                                }
+                                    except Exception:
+                                        continue
+                            # Compute created count
+                            c = res.get("created_count") or res.get("total_created")
                             if c is None:
-                                c = res.get("total_created")
-                            if c is None:
-                                created_list = res.get("created", [])
                                 c = len(created_list) if isinstance(created_list, list) else 0
                             created_count += int(c or 0)
                     except Exception as e:
                         self.logger.exception("Bulk create failed for %s: %s", project_key, e)
                     finally:
                         batch = []
+                        work_packages_meta = []
 
             # Flush tail batch
             if batch:
@@ -1248,11 +1286,31 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                             self.logger.info("Saved bulk result to %s", debug_path)
                         except Exception:
                             pass
-                        c = res.get("created_count")
+                        # Always process the created list to build mapping
+                        created_list = res.get("created", [])
+                        if isinstance(created_list, list) and created_list:
+                            try:
+                                _ = self.work_package_mapping
+                            except Exception:
+                                self.work_package_mapping = {}
+                            for item in created_list:
+                                try:
+                                    idx = item.get("index")
+                                    op_id = item.get("id")
+                                    if isinstance(idx, int) and 0 <= idx < len(work_packages_meta):
+                                        meta = work_packages_meta[idx]
+                                        jira_id = meta.get("jira_id")
+                                        if jira_id is not None:
+                                            self.work_package_mapping[str(jira_id)] = {
+                                                **meta,
+                                                "openproject_id": op_id,
+                                                "openproject_project_id": int(op_project_id),
+                                            }
+                                except Exception:
+                                    continue
+                        # Compute created count
+                        c = res.get("created_count") or res.get("total_created")
                         if c is None:
-                            c = res.get("total_created")
-                        if c is None:
-                            created_list = res.get("created", [])
                             c = len(created_list) if isinstance(created_list, list) else 0
                         created_count += int(c or 0)
                 except Exception as e:
@@ -1264,6 +1322,17 @@ def _migrate_work_packages(self) -> dict[str, Any]:
         results["projects"].append({"project_key": project_key, "created": created_count, "issues": issues_seen})
         results["total_created"] += created_count
         results["total_issues"] += issues_seen
+
+    # Save the work package mapping if available (used by time_entries)
+    try:
+        if getattr(self, "work_package_mapping", None):
+            data_handler.save(
+                data=self.work_package_mapping,
+                filename="work_package_mapping.json",
+                directory=self.data_dir,
+            )
+    except Exception:
+        pass
 
     return results
 
