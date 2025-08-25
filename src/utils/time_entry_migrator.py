@@ -662,7 +662,13 @@ class TimeEntryMigrator:
         if not embedded.get("workPackage") or not embedded.get("user"):
             self.logger.warning("Skipping entry missing workPackage or user embedding")
             return False
-        if entry.get("hours") is None or entry.get("spentOn") is None:
+        hours_value = entry.get("hours")
+        if (
+            not isinstance(hours_value, (int, float))
+            or hours_value is None
+            or hours_value <= 0
+            or entry.get("spentOn") is None
+        ):
             self.logger.warning("Skipping entry missing hours or spentOn")
             return False
         return True
@@ -670,7 +676,7 @@ class TimeEntryMigrator:
     def _save_extracted_work_logs(self) -> None:
         try:
             path = self.data_dir / "jira_work_logs.json"
-            with path.open("w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(self.extracted_work_logs, f, indent=2)
         except Exception as e:
             self.logger.warning(f"Failed to save Jira work logs: {e}")
@@ -678,7 +684,7 @@ class TimeEntryMigrator:
     def _save_extracted_tempo_entries(self) -> None:
         try:
             path = self.data_dir / "tempo_time_entries.json"
-            with path.open("w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(self.extracted_tempo_entries, f, indent=2)
         except Exception as e:
             self.logger.warning(f"Failed to save Tempo time entries: {e}")
