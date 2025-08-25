@@ -2830,7 +2830,7 @@ class OpenProjectClient:
                 cf.save
               end
               begin
-                time_entry.custom_field_values = { cf.id => key }
+                time_entry.custom_field_values = {{ cf.id => key }}
               rescue => e
                 # ignore CF assignment errors
               end
@@ -3047,7 +3047,7 @@ class OpenProjectClient:
                   cf.save
                 end
                 begin
-                  time_entry.custom_field_values = { cf.id => key }
+                  time_entry.custom_field_values = {{ cf.id => key }}
                 rescue => e
                 end
               end
