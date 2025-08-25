@@ -2808,6 +2808,13 @@ class OpenProjectClient:
                 msg,
             )
 
+        # Normalize comment value (can be string or {raw,text})
+        comment_obj = time_entry_data.get("comment", "")
+        if isinstance(comment_obj, dict):
+            comment_str = comment_obj.get("raw") or comment_obj.get("text") or str(comment_obj)
+        else:
+            comment_str = str(comment_obj)
+
         # Prepare the script with proper Ruby syntax
         script = f"""
         begin
@@ -2817,7 +2824,7 @@ class OpenProjectClient:
             activity_id: {activity_id},
             hours: {time_entry_data.get('hours', 0)},
             spent_on: Date.parse('{time_entry_data.get('spentOn', '')}'),
-            comments: {time_entry_data.get('comment', {}).get('raw', '')!r}
+            comments: {comment_str!r}
           )
 
           # Provenance CF for time entries: Jira Worklog Key
