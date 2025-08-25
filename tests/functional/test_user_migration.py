@@ -4,6 +4,7 @@ import json
 import shutil
 import tempfile
 import unittest
+import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -385,6 +386,47 @@ class TestUserMigration(unittest.TestCase):
             email = migration._build_fallback_email("!@#$%")
             assert email.endswith("@noreply.migration.local")
             assert len(email.split("@")[0]) == 8  # UUID should be 8 chars
+
+    @patch("src.migrations.user_migration.OpenProjectClient")
+    @patch("src.migrations.user_migration.JiraClient")
+    @patch("src.migrations.user_migration.config.get_path")
+    @patch("os.path.exists")
+    @patch("builtins.open", new_callable=mock_open)
+    @pytest.mark.xfail(reason="Zero-created gating not yet implemented for UserMigration", strict=False)
+    def test_user_migration_fails_when_zero_created_but_users_missing(
+        self,
+        mock_file: MagicMock,
+        mock_exists: MagicMock,
+        mock_get_path: MagicMock,
+        mock_jira_client: MagicMock,
+        mock_op_client: MagicMock,
+    ) -> None:
+        """Placeholder: expect failure when there are unmatched users but zero created."""
+        mock_get_path.return_value = Path("/tmp/test_data")
+        mock_exists.return_value = True
+
+        migration = UserMigration(
+            jira_client=mock_jira_client.return_value,
+            op_client=mock_op_client.return_value,
+        )
+        # Pretend there are unmatched users
+        migration.create_user_mapping = lambda: {  # type: ignore[method-assign]
+            "missing": {
+                "jira_key": "missing",
+                "jira_name": "missing",
+                "jira_email": "missing@example.com",
+                "jira_display_name": "Missing User",
+                "openproject_id": None,
+                "openproject_login": None,
+                "openproject_email": None,
+                "matched_by": "none",
+            }
+        }
+        mock_op_client.return_value.create_users_in_bulk.return_value = json.dumps(
+            {"created_count": 0, "created": []}
+        )
+        result = migration.run()
+        assert result.success is False
 
 
 if __name__ == "__main__":

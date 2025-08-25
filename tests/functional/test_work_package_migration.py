@@ -293,6 +293,51 @@ class TestWorkPackageMigration(unittest.TestCase):
 
         # Assertions
         assert result["status"] == "success"
+
+    @patch("src.migrations.work_package_migration.WorkPackageMigration.iter_project_issues")
+    @patch("src.migrations.work_package_migration.OpenProjectClient")
+    @patch("src.migrations.work_package_migration.JiraClient")
+    def test_run_fails_when_zero_created_but_issues_discovered(
+        self,
+        mock_jira_client: MagicMock,
+        mock_op_client: MagicMock,
+        mock_iter_issues: MagicMock,
+    ) -> None:
+        """If issues are discovered but zero are created, run() should fail.
+
+        This guards against silent no-op migrations.
+        """
+
+        # Arrange minimal environment
+        mock_iter_issues.return_value = iter([
+            # Two fake issues yielded for the project
+            type("Issue", (), {"id": "1"})(),
+            type("Issue", (), {"id": "2"})(),
+        ])
+
+        migration = WorkPackageMigration(
+            jira_client=mock_jira_client.return_value,
+            op_client=mock_op_client.return_value,
+        )
+
+        # Force project filter to contain one project
+        from src import config
+        config.jira_config = config.jira_config or {}
+        config.jira_config["projects"] = ["TEST"]
+
+        # Stub prepare_work_package to avoid heavy logic
+        migration.prepare_work_package = lambda issue, project_id: {"subject": "x", "project_id": project_id}  # type: ignore
+
+        # Force bulk_create_records to return zero created
+        op_client_inst = mock_op_client.return_value
+        op_client_inst.bulk_create_records.return_value = {"created": []}
+
+        # Act
+        result = migration.run()
+
+        # Assert
+        assert result.success is False
+        assert result.details.get("reason") == "zero_created_with_input"
         assert result["work_packages_count"] == 2
         assert result["success_count"] == 2
         assert result["failed_count"] == 0

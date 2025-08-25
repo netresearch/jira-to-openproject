@@ -25,6 +25,7 @@ _config_loader = ConfigLoader()
 jira_config = _config_loader.get_jira_config()
 openproject_config = _config_loader.get_openproject_config()
 migration_config = _config_loader.get_migration_config()
+_cli_args: dict[str, Any] = {}
 
 # Set up the var directory structure
 root_dir = Path(__file__).parent.parent.parent
@@ -125,6 +126,7 @@ __all__ = [
     "mappings",
     "migration_config",
     "openproject_config",
+    "update_from_cli_args",
     "reset_mappings",
     "update_from_cli_args",
     "validate_config",
@@ -245,6 +247,26 @@ def get_path(path_type: DirType) -> Path:
     return var_dirs[path_type]
 
 
+def update_from_cli_args(args: Any) -> None:
+    """Apply CLI arguments into runtime config.
+
+    Currently supports --jira-project-filter to limit projects.
+    """
+    try:
+        # Reuse existing loader to set values so downstream views pick them up
+        if hasattr(args, "jira_project_filter") and args.jira_project_filter:
+            keys_raw = args.jira_project_filter
+            keys = [k.strip() for k in str(keys_raw).split(",") if k.strip()]
+            if keys:
+                _config_loader.set_value("jira", "projects", keys)
+                logger.info("Applied CLI Jira project filter: %s", keys)
+        if hasattr(args, "disable_wpm_shim") and args.disable_wpm_shim:
+            _config_loader.set_value("migration", "disable_wpm_shim", True)
+            logger.info("Applied CLI: disable WorkPackageMigration runtime shim")
+    except Exception as e:
+        logger.warning("Failed applying CLI args to config: %s", e)
+
+
 def ensure_subdir(parent_dir_type: DirType, subdir_name: str | None = None) -> Path:
     """Ensure a subdirectory exists under one of the var directories.
 
@@ -312,10 +334,33 @@ def validate_config() -> bool:
 def update_from_cli_args(args: Any) -> None:
     """Update migration configuration from CLI arguments.
 
+    Also applies select Jira/OpenProject overrides that must be available
+    before importing heavy migration modules (e.g., project filters).
+
     Args:
         args: An object containing CLI arguments (typically from argparse)
 
     """
+    # Apply Jira project filter early so downstream modules see it
+    if hasattr(args, "jira_project_filter") and args.jira_project_filter:
+        try:
+            keys_raw = args.jira_project_filter
+            keys = [k.strip() for k in str(keys_raw).split(",") if k.strip()]
+            if keys:
+                _config_loader.set_value("jira", "projects", keys)
+                jira_config["projects"] = keys
+                logger.info("Applied CLI Jira project filter: %s", keys)
+        except Exception as e:
+            logger.warning("Failed applying CLI jira project filter: %s", e)
+
+    # Optional: disable WorkPackageMigration shim
+    if hasattr(args, "disable_wpm_shim") and getattr(args, "disable_wpm_shim"):
+        try:
+            _config_loader.set_value("migration", "disable_wpm_shim", True)
+            migration_config["disable_wpm_shim"] = True
+            logger.info("Applied CLI: disable WorkPackageMigration runtime shim")
+        except Exception as e:
+            logger.warning("Failed applying CLI disable_wpm_shim: %s", e)
     if hasattr(args, "dry_run") and args.dry_run:
         migration_config["dry_run"] = True
         logger.debug("Setting dry_run=True from CLI arguments")

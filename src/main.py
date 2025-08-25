@@ -11,7 +11,11 @@ import sys
 from src.config import logger, update_from_cli_args
 
 # Import migration functions from the new modules
-from src.migration import restore_backup, run_migration, setup_tmux_session
+"""
+Main CLI entry for J2O. We intentionally avoid importing the heavy migration
+module at top-level so that CLI flags (e.g., project filters, shim toggles)
+can be applied to config before modules execute import-time logic.
+"""
 
 
 def validate_database_configuration() -> None:
@@ -106,13 +110,36 @@ def main() -> None:
         help="Skip the 'Continue to next component' prompt and run all components without pausing",
     )
 
+    # Project filtering (limit migration to specific Jira project keys)
+    migrate_parser.add_argument(
+        "--jira-project-filter",
+        "--jira-project_filter",
+        dest="jira_project_filter",
+        metavar="KEYS",
+        help=(
+            "Comma-separated Jira project keys to migrate (e.g., 'NRBARCAMP,ADIC'). "
+            "If omitted, all mapped projects are processed."
+        ),
+    )
+
+    # Disable the WorkPackageMigration runtime shim
+    migrate_parser.add_argument(
+        "--disable-wpm-shim",
+        action="store_true",
+        dest="disable_wpm_shim",
+        help="Disable the WorkPackageMigration runtime shim (require class run() to execute)",
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
     # Execute the appropriate command
     if args.command == "migrate":
-        # Update configuration with CLI arguments
+        # Update configuration with CLI arguments BEFORE importing migration code
         update_from_cli_args(args)
+
+        # Lazily import migration helpers now that config is updated
+        from src.migration import restore_backup, run_migration, setup_tmux_session
 
         # Check if we're restoring from a backup
         if args.restore:

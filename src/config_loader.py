@@ -391,3 +391,17 @@ class ConfigLoader:
 
         """
         return self.config[section].get(key, default)
+
+    def set_value(self, section: SectionName, key: str, value: Any) -> None:
+        """Set a specific configuration value at runtime.
+
+        Useful for applying CLI overrides.
+
+        Args:
+            section: Configuration section (jira, openproject, migration)
+            key: Configuration key
+            value: Value to set
+        """
+        if section not in self.config:
+            self.config[section] = {}
+        self.config[section][key] = value

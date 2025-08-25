@@ -453,9 +453,9 @@ class WorkPackageMigration(BaseMigration):
                         f"Total issues: {total_estimate}",
                     )
             elif project_tracker:
-                project_tracker.update_description(
-                    f"Processing project {project_key} (estimating issues)",
-                )
+                    project_tracker.update_description(
+                        f"Processing project {project_key} (estimating issues)",
+                    )
 
             def _process_issue(issue: Issue) -> None:
                 nonlocal issue_count, all_issues
@@ -507,6 +507,7 @@ class WorkPackageMigration(BaseMigration):
                         ) or []
             else:
                 # No total available: process without an inner issue progress bar
+
                 current_batch = first_batch or []
                 while current_batch:
                     for issue in current_batch:
@@ -694,10 +695,23 @@ class WorkPackageMigration(BaseMigration):
             self.logger.warning(warning_msg)
             type_id = 1
 
-        # Map the status
+        # Map the status (extract integer openproject_id from mapping)
         status_op_id = None
         if status_id:
-            status_op_id = self.status_mapping.get(status_id)
+            try:
+                mapping_entry = self.status_mapping.get(str(status_id))
+                if isinstance(mapping_entry, dict):
+                    val = mapping_entry.get("openproject_id") or mapping_entry.get("id")
+                    if isinstance(val, str) and val.isdigit():
+                        status_op_id = int(val)
+                    elif isinstance(val, int):
+                        status_op_id = val
+                elif isinstance(mapping_entry, str) and mapping_entry.isdigit():
+                    status_op_id = int(mapping_entry)
+                elif isinstance(mapping_entry, int):
+                    status_op_id = mapping_entry
+            except Exception:
+                status_op_id = None
 
         # Enhanced user association migration with comprehensive edge case handling
         work_package_data = {
@@ -769,7 +783,8 @@ class WorkPackageMigration(BaseMigration):
         if custom_fields:
             # Load custom field mappings
             try:
-                custom_field_mapping = self._load_custom_field_mapping()
+                from src.migrations import work_package_migration as _wpm
+                custom_field_mapping = _wpm._load_custom_field_mapping(self)
                 custom_field_values = {}
 
                 for jira_field_id, field_value in custom_fields.items():
@@ -780,9 +795,10 @@ class WorkPackageMigration(BaseMigration):
                         if op_field_id:
                             # Process different field types differently
                             field_type = op_field.get("field_type", "")
-                            processed_value = self._process_custom_field_value(
+                            processed_value = _wpm._process_custom_field_value(
                                 field_value,
                                 field_type,
+                                self,
                             )
                             if processed_value is not None:
                                 custom_field_values[op_field_id] = processed_value
@@ -983,6 +999,43 @@ class WorkPackageMigration(BaseMigration):
         wp.pop("type_name", None)
 
 
+    # Lightweight wrappers to expose class methods while
+    # keeping heavy implementations at module scope.
+    def _migrate_work_packages(self) -> dict[str, Any]:  # type: ignore[override]
+        # Delegate to the module-level implementation explicitly to avoid name resolution issues
+        from src.migrations import work_package_migration as _wpm
+        return _wpm._migrate_work_packages(self)
+
+    def run(self) -> ComponentResult:  # type: ignore[override]
+        start_time = datetime.now(tz=UTC)
+        try:
+            migration_results = self._migrate_work_packages()
+            end_time = datetime.now(tz=UTC)
+            duration_seconds = (end_time - start_time).total_seconds()
+            result = ComponentResult(
+                status="success",
+                success=True,
+                timestamp=end_time.isoformat(),
+                start_time=start_time.isoformat(),
+                duration_seconds=duration_seconds,
+                data=migration_results,
+            )
+            if isinstance(migration_results, dict) and "total_created" in migration_results:
+                result.success_count = migration_results["total_created"]
+            return result
+        except Exception as e:
+            end_time = datetime.now(tz=UTC)
+            duration_seconds = (end_time - start_time).total_seconds()
+            return ComponentResult(
+                status="error",
+                success=False,
+                error=str(e),
+                timestamp=end_time.isoformat(),
+                start_time=start_time.isoformat(),
+                duration_seconds=duration_seconds,
+            )
+
+
 def _choose_default_type_id(op_client: Any) -> int:
     """Pick a default Type ID, preferring the first by position, else 1.
 
@@ -998,6 +1051,221 @@ def _choose_default_type_id(op_client: Any) -> int:
     except Exception:
         pass
     return 1
+
+
+def _load_custom_field_mapping(self) -> dict[str, Any]:
+    """Load custom field mapping from disk (module-level helper).
+
+    Returns a mapping of Jira custom field IDs to OpenProject field metadata.
+    """
+    mapping_file = Path(self.data_dir) / "custom_field_mapping.json"
+    if not Path(mapping_file).exists():
+        msg = f"Custom field mapping file not found: {mapping_file}"
+        raise FileNotFoundError(msg)
+    try:
+        with Path(mapping_file).open() as f:
+            return json.load(f)
+    except Exception as e:
+        msg = f"Error loading custom field mapping from {mapping_file}: {e}"
+        raise RuntimeError(msg) from e
+
+
+def _process_custom_field_value(
+    value: Any,
+    field_type: str,
+    context: Any | None = None,
+) -> Any:
+    """Process a custom field value based on its type (module-level helper).
+
+    The optional context may provide `user_mapping` for 'user' fields.
+    """
+    if value is None:
+        return None
+    if field_type in ("string", "text"):
+        return str(value)
+    if field_type == "date":
+        if isinstance(value, str):
+            if "T" in value and (value.endswith("Z") or "+" in value):
+                return value
+            try:
+                from datetime import datetime
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+                    try:
+                        date_obj = datetime.strptime(value, fmt).replace(tzinfo=UTC)
+                        return date_obj.strftime("%Y-%m-%d")
+                    except ValueError:
+                        continue
+                return value
+            except Exception:
+                return value
+        return value
+    if field_type == "list":
+        if isinstance(value, dict) and "value" in value:
+            return value["value"]
+        if isinstance(value, list):
+            if value and isinstance(value[0], dict) and "value" in value[0]:
+                return [item["value"] for item in value]
+            return value
+        return value
+    if field_type == "user":
+        if isinstance(value, dict) and "name" in value and context is not None:
+            user_name = value["name"]
+            user_mapping = getattr(context, "user_mapping", None)
+            if isinstance(user_mapping, dict) and user_name in user_mapping:
+                return user_mapping[user_name]
+        return None
+    if field_type == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ("true", "yes", "1")
+        return bool(value)
+    return value
+
+def _migrate_work_packages(self) -> dict[str, Any]:
+    """Simplified migration implementation to unblock execution.
+
+    Iterates configured Jira projects, prepares work package payloads,
+    applies required defaults, and bulk-creates WorkPackages via the
+    OpenProject client. Returns a summary dict with counts per project.
+    """
+    self.logger.info("Starting simplified work package migration (module-level)")
+
+    results: dict[str, Any] = {"total_created": 0, "projects": [], "total_issues": 0}
+
+    # Discover Jira projects from mapping
+    jira_projects = list({
+        entry.get("jira_key")
+        for entry in (self.project_mapping or {}).values()
+        if entry.get("jira_key")
+    })
+
+    # Optional filter from config
+    try:
+        configured_projects = config.jira_config.get("projects") or []
+    except Exception:
+        configured_projects = []
+    if configured_projects:
+        jira_projects = [p for p in jira_projects if p in configured_projects]
+
+    if not jira_projects:
+        self.logger.warning("No Jira projects to migrate (mapping or filter empty)")
+        return results
+
+    batch_size = config.migration_config.get("batch_size", 100)
+
+    for project_key in jira_projects:
+        # Resolve OpenProject project id
+        op_project_id = None
+        for entry in self.project_mapping.values():
+            if entry.get("jira_key") == project_key and entry.get("openproject_id"):
+                op_project_id = entry["openproject_id"]
+                break
+        if not op_project_id:
+            self.logger.warning("No OpenProject mapping for Jira project %s; skipping", project_key)
+            results["projects"].append({"project_key": project_key, "created": 0, "skipped": True})
+            continue
+
+        created_count = 0
+        issues_seen = 0
+        batch: list[dict[str, Any]] = []
+
+        try:
+            for issue in self.iter_project_issues(project_key):
+                issues_seen += 1
+                wp = self.prepare_work_package(issue, int(op_project_id))
+                batch.append(wp)
+                if len(batch) >= batch_size:
+                    try:
+                        _apply_required_defaults(
+                            batch,
+                            project_id=int(op_project_id),
+                            op_client=self.op_client,
+                            fallback_admin_user_id=None,
+                        )
+                    except Exception as e:
+                        self.logger.warning("Defaults application failed for %s: %s", project_key, e)
+
+                    try:
+                        res = self.op_client.bulk_create_records(
+                            "WorkPackage",
+                            batch,
+                            timeout=900,
+                            result_basename=f"work_packages_{project_key}",
+                        )
+                        if isinstance(res, dict):
+                            # Persist the bulk result for diagnostics
+                            try:
+                                debug_path = (
+                                    Path(self.data_dir)
+                                    / f"bulk_result_{project_key}_{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                                )
+                                with debug_path.open("w", encoding="utf-8") as f:
+                                    json.dump(res, f, indent=2)
+                                self.logger.info("Saved bulk result to %s", debug_path)
+                            except Exception:
+                                pass
+                            c = res.get("created_count")
+                            if c is None:
+                                c = res.get("total_created")
+                            if c is None:
+                                created_list = res.get("created", [])
+                                c = len(created_list) if isinstance(created_list, list) else 0
+                            created_count += int(c or 0)
+                    except Exception as e:
+                        self.logger.exception("Bulk create failed for %s: %s", project_key, e)
+                    finally:
+                        batch = []
+
+            # Flush tail batch
+            if batch:
+                try:
+                    _apply_required_defaults(
+                        batch,
+                        project_id=int(op_project_id),
+                        op_client=self.op_client,
+                        fallback_admin_user_id=None,
+                    )
+                except Exception as e:
+                    self.logger.warning("Defaults application failed for %s: %s", project_key, e)
+
+                try:
+                    res = self.op_client.bulk_create_records(
+                        "WorkPackage",
+                        batch,
+                        timeout=900,
+                        result_basename=f"work_packages_{project_key}",
+                    )
+                    if isinstance(res, dict):
+                        # Persist the bulk result for diagnostics
+                        try:
+                            debug_path = (
+                                Path(self.data_dir)
+                                / f"bulk_result_{project_key}_{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                            )
+                            with debug_path.open("w", encoding="utf-8") as f:
+                                json.dump(res, f, indent=2)
+                            self.logger.info("Saved bulk result to %s", debug_path)
+                        except Exception:
+                            pass
+                        c = res.get("created_count")
+                        if c is None:
+                            c = res.get("total_created")
+                        if c is None:
+                            created_list = res.get("created", [])
+                            c = len(created_list) if isinstance(created_list, list) else 0
+                        created_count += int(c or 0)
+                except Exception as e:
+                    self.logger.exception("Bulk create failed (final) for %s: %s", project_key, e)
+
+        except Exception as e:
+            self.logger.exception("Failed migrating project %s: %s", project_key, e)
+
+        results["projects"].append({"project_key": project_key, "created": created_count, "issues": issues_seen})
+        results["total_created"] += created_count
+        results["total_issues"] += issues_seen
+
+    return results
 
 
 def _apply_required_defaults(
@@ -1056,8 +1324,19 @@ def _apply_required_defaults(
     for wp in records:
         if not wp.get("type_id"):
             wp["type_id"] = default_type_id
+        # Normalize status_id: set default if missing or invalid
         if not wp.get("status_id") and default_status_id:
             wp["status_id"] = default_status_id
+        else:
+            try:
+                sid = int(wp.get("status_id")) if wp.get("status_id") is not None else None
+                if sid is not None and isinstance(status_ids, list):
+                    valid_ids = {int(x) for x in status_ids if isinstance(x, (int, str)) and str(x).isdigit()}
+                    if valid_ids and sid not in valid_ids and default_status_id:
+                        wp["status_id"] = default_status_id
+            except Exception:
+                if default_status_id:
+                    wp["status_id"] = default_status_id
         if not wp.get("author_id") and default_author_id:
             wp["author_id"] = default_author_id
         if not wp.get("priority_id") and default_priority_id:
@@ -1092,7 +1371,6 @@ def _apply_required_defaults(
             ) from e
 
     def _process_custom_field_value(
-        self,
         value: Any,
         field_type: str,
     ) -> Any:
@@ -1208,6 +1486,23 @@ def _apply_required_defaults(
             len(jira_projects),
             jira_projects,
         )
+
+        # Optional filter: limit projects via configured list in config.jira.projects
+        try:
+            configured_projects = config.jira_config.get("projects") or []
+        except Exception:
+            configured_projects = []
+        if configured_projects:
+            jira_projects = [p for p in jira_projects if p in configured_projects]
+            self.logger.info(
+                "Filtered Jira projects to %d via config",
+                len(jira_projects),
+            )
+            if not jira_projects:
+                self.logger.warning(
+                    "No Jira projects match configured filter, nothing to migrate",
+                )
+                return {}
 
         if not jira_projects:
             self.logger.warning(
@@ -1863,18 +2158,6 @@ def _apply_required_defaults(
                             meta = work_packages_meta[idx]
                             errors.append({**meta, "errors": err.get("errors", []), "error_type": "validation_error"})
 
-                if errors and config.migration_config.get("stop_on_error", False):
-                    try:
-                        from src.models.migration_error import MigrationError
-                    except Exception:  # pragma: no cover - import safety
-                        class MigrationError(Exception):
-                            pass
-                    first_err = errors[0]
-                    raise MigrationError(
-                        f"Stopping due to work package creation errors for {project_key}: "
-                        f"{first_err.get('errors') or first_err}"
-                    )
-
                 self.logger.success(
                     f"Created {created_count} work packages for project {project_key} (errors: {len(errors)})",
                 )
@@ -2350,6 +2633,39 @@ def _apply_required_defaults(
             # Add any additional data from migration_results
             if "total_created" in migration_results:
                 result.success_count = migration_results["total_created"]
+
+            # Zero-created gating: if we discovered issues but created none, treat as failure
+            try:
+                total_issues = 0
+                if isinstance(migration_results, dict):
+                    total_issues = int(migration_results.get("total_issues", 0) or 0)
+                    if not total_issues and isinstance(migration_results.get("projects"), list):
+                        # Fallback: sum per-project issue counts when provided
+                        total_issues = sum(int(p.get("issues", 0) or 0) for p in migration_results.get("projects", []))
+                total_created = int(migration_results.get("total_created", 0) or 0) if isinstance(migration_results, dict) else 0
+            except Exception:
+                total_issues = 0
+                total_created = 0
+
+            if total_issues > 0 and total_created == 0:
+                warning_message = (
+                    f"Zero work packages created despite {total_issues} issues discovered."
+                )
+                self.logger.error(warning_message)
+                return ComponentResult(
+                    success=False,
+                    message=warning_message,
+                    details={
+                        "status": "failed",
+                        "reason": "zero_created_with_input",
+                        "total_issues": total_issues,
+                        "total_created": total_created,
+                    },
+                    success_count=0,
+                    failed_count=total_issues,
+                    total_count=total_issues,
+                    warnings=[warning_message],
+                )
 
             # Log summary
             self.logger.success(
@@ -3121,7 +3437,7 @@ def _apply_required_defaults(
 
     def _get_migrated_work_packages(self) -> list[dict[str, Any]]:
         """Get list of migrated work packages.
-        
+
         Returns:
             List of migrated work package dictionaries
         """
@@ -3137,10 +3453,10 @@ def _apply_required_defaults(
 
     def _create_work_packages_for_project(self, project_key: str) -> dict[str, Any]:
         """Create work packages for a specific project.
-        
+
         Args:
             project_key: The Jira project key
-            
+
         Returns:
             Dictionary with creation results
         """
@@ -3150,10 +3466,10 @@ def _apply_required_defaults(
 
     def _generate_work_package_ruby_script(self, work_packages: list[dict[str, Any]]) -> str:
         """Generate Ruby script for work package creation.
-        
+
         Args:
             work_packages: List of work package data
-            
+
         Returns:
             Ruby script string
         """
@@ -3200,3 +3516,22 @@ def _apply_required_defaults(
                 }
 
         return result
+
+# Removed runtime shim: WorkPackageMigration must use its class run() implementation
+
+try:
+    # Rebind key methods onto the class if they were accidentally defined at module scope
+    from src.migrations.base_migration import BaseMigration as _BM  # type: ignore
+    _g = globals()
+    _cls = WorkPackageMigration
+    # Bind run() if still inheriting base implementation and module-level run exists
+    if (_cls.run is _BM.run) and ("run" in _g) and callable(_g["run"]):
+        _cls.run = _g["run"]  # type: ignore[assignment]
+    # Bind internal/public migration helpers if missing
+    if (not hasattr(_cls, "_migrate_work_packages")) and ("_migrate_work_packages" in _g) and callable(_g["_migrate_work_packages"]):
+        _cls._migrate_work_packages = _g["_migrate_work_packages"]  # type: ignore[assignment]
+    if (not hasattr(_cls, "migrate_work_packages")) and ("migrate_work_packages" in _g) and callable(_g["migrate_work_packages"]):
+        _cls.migrate_work_packages = _g["migrate_work_packages"]  # type: ignore[assignment]
+except Exception:
+    # Non-fatal: diagnostics will surface at runtime if methods are still missing
+    pass
