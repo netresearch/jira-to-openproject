@@ -5,6 +5,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+from src import config
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,6 +88,9 @@ class TimeEntryTransformer:
             # Parse time spent (comes as seconds in Jira)
             time_spent_seconds = work_log.get("timeSpentSeconds", 0)
             hours = time_spent_seconds / 3600.0
+            # Clamp minimum hours to avoid zero-hour entries after rounding
+            min_hours = float(config.migration_config.get("min_time_entry_hours", 0.01))
+            final_hours = round(max(hours, min_hours if hours <= 0 or round(hours, 2) <= 0 else hours), 2)
 
             # Parse date (Jira format: "2023-12-01T10:30:00.000+0000")
             started_date = work_log.get("started", "")
@@ -100,7 +105,7 @@ class TimeEntryTransformer:
             # Build OpenProject time entry
             time_entry = {
                 "spentOn": spent_on,
-                "hours": round(hours, 2),
+                "hours": final_hours,
                 "comment": comment or f"Work log imported from Jira issue {issue_key}",
                 "_embedded": {},
                 "_meta": {
@@ -173,6 +178,8 @@ class TimeEntryTransformer:
             # Parse time spent (Tempo provides in seconds)
             time_spent_seconds = tempo_log.get("timeSpentSeconds", 0)
             hours = time_spent_seconds / 3600.0
+            min_hours = float(config.migration_config.get("min_time_entry_hours", 0.01))
+            final_hours = round(max(hours, min_hours if hours <= 0 or round(hours, 2) <= 0 else hours), 2)
 
             # Parse date (Tempo format: "2023-12-01")
             date_started = tempo_log.get("dateStarted", "")
@@ -184,7 +191,7 @@ class TimeEntryTransformer:
             # Build OpenProject time entry
             time_entry = {
                 "spentOn": spent_on,
-                "hours": round(hours, 2),
+                "hours": final_hours,
                 "comment": description
                 or f"Tempo work log imported from issue {issue_key}",
                 "_embedded": {},
