@@ -117,7 +117,8 @@ class TestSuiteConfig:
     preserve_failed_test_data: bool = True
 
     # Reporting
-    report_dir: Path = Path("test_reports")
+    # Prefer centralized var/results/test_reports
+    report_dir: Path = Path("var/results/test_reports")
     report_format: str = "html"  # html, json, xml
 
     def __post_init__(self):
