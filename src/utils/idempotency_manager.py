@@ -421,7 +421,8 @@ class IdempotencyKeyManager:
     ) -> IdempotencyResult:
         """Atomically get existing result or set new one.
 
-        Uses Redis Lua script for atomic operations to prevent race conditions.
+        Uses Redis when available and a process-level lock to ensure the wrapped
+        function is executed at most once per key (even under concurrency).
 
         Args:
             idempotency_key: The idempotency key
@@ -440,107 +441,53 @@ class IdempotencyKeyManager:
             logger.warning("Invalid TTL value: %s, using default", ttl)
             ttl = self.default_ttl
 
-        # Check if result_or_func is callable (function to execute)
         is_callable = callable(result_or_func)
 
-        # Try Redis Lua script for atomic operation
-        if self._redis_available and self._redis_client and self._lua_script:
+        # First, fast-path read from Redis without executing the function
+        if self._redis_available and self._redis_client:
             try:
-                # Execute function if callable to get the result
-                result = result_or_func() if is_callable else result_or_func
-
-                # Serialize the result
-                try:
-                    serialized_result = safe_json_dumps(result)
-                except (TypeError, ValueError) as e:
-                    logger.exception("Failed to serialize result for caching: %s", e)
-                    # Return the result without caching to avoid data loss
-                    return IdempotencyResult(found=False, value=result, source="redis")
-
-                # Use Lua script for atomic get-or-set operation
-                try:
-                    script_result = self._lua_script(
-                        keys=[cache_key],
-                        args=[serialized_result, str(ttl)],
-                    )
-
-                    if script_result == 1:  # Key was set (new)
+                cached_data = self._redis_client.get(cache_key)
+                if cached_data:
+                    try:
+                        cached_value = self._safe_json_loads(cached_data)
                         with self._lock:
-                            self._metrics["keys_cached"] += 1
-                        return IdempotencyResult(
-                            found=False,
-                            value=result,
-                            source="redis",
-                        )
-                    # Key already existed (cached)
+                            self._metrics["redis_hits"] += 1
+                        return IdempotencyResult(found=True, value=cached_value, source="redis")
+                    except ValueError:
+                        # Corrupt entry; clean up and continue to compute
+                        self._redis_client.delete(cache_key)
+                else:
                     with self._lock:
-                        self._metrics["redis_hits"] += 1
-
-                    # Get the cached value
-                    cached_data = self._redis_client.get(cache_key)
-                    if cached_data:
-                        try:
-                            cached_value = self._safe_json_loads(cached_data)
-                            return IdempotencyResult(
-                                found=True,
-                                value=cached_value,
-                                source="redis",
-                            )
-                        except ValueError as e:
-                            logger.warning("Failed to decode cached result: %s", e)
-                            # Remove corrupted entry and return current result
-                            self._redis_client.delete(cache_key)
-                            return IdempotencyResult(
-                                found=False,
-                                value=result,
-                                source="redis",
-                            )
-
-                    # Fallback: return current result if cached data is missing
-                    return IdempotencyResult(
-                        found=False,
-                        value=result,
-                        source="redis",
-                    )
-
-                except Exception as e:
-                    logger.warning("Lua script execution failed: %s", e)
-                    # Fall through to fallback cache
-
+                        self._metrics["redis_misses"] += 1
             except Exception as e:
-                logger.warning("Redis operation failed: %s", e)
+                logger.warning("Redis get failed, falling back to lock: %s", e)
                 with self._lock:
                     self._metrics["redis_errors"] += 1
 
-        # Fallback to atomic operation using lock
-        logger.debug(
-            "Using fallback atomic operation with lock for key %s",
-            idempotency_key,
-        )
+        # Compute under process lock to ensure single execution across threads
         with self._lock:
+            # Double-check cache using unified helper (handles redis+memory)
             existing = self.get_cached_result(idempotency_key)
             if existing.found:
-                logger.debug(
-                    "Found existing result in fallback cache for key %s",
-                    idempotency_key,
-                )
                 return existing
 
-            # Execute function if callable, otherwise use the result
+            # Execute function if callable, otherwise use provided result
             result = result_or_func() if is_callable else result_or_func
 
-            # Set the new value
-            logger.debug(
-                "Setting new result in fallback cache for key %s",
-                idempotency_key,
-            )
-            if self.cache_result(idempotency_key, result, ttl):
-                return IdempotencyResult(
-                    found=False,
-                    value=result,
-                    source="memory" if not self._redis_available else "redis",
-                )
+            # Try to store in Redis first; fallback to memory cache
+            try:
+                if self._redis_available and self._redis_client:
+                    serialized_result = safe_json_dumps(result)
+                    self._redis_client.setex(cache_key, ttl, serialized_result)
+                    self._metrics["keys_cached"] += 1
+                    return IdempotencyResult(found=False, value=result, source="redis")
+            except Exception as e:
+                logger.warning("Redis set failed, caching in memory: %s", e)
+                self._metrics["redis_errors"] += 1
 
+            # Memory cache fallback
+            self._fallback_cache.set(cache_key, result, ttl)
+            self._metrics["keys_cached"] += 1
             return IdempotencyResult(found=False, value=result, source="memory")
 
     def get_metrics(self) -> dict[str, Any]:
