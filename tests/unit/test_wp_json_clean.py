@@ -9,7 +9,8 @@ def test_generated_work_packages_json_has_no_links() -> None:
 
 
 
-    data_dir = Path('/home/sme/p/j2o/var/data')
+    project_root = Path(__file__).resolve().parents[2]
+    data_dir = project_root / 'var' / 'data'
     assert data_dir.exists(), "var/data directory must exist"
 
     json_files = list(data_dir.glob('work_packages_*.json'))

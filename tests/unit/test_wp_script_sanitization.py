@@ -3,7 +3,9 @@ from pathlib import Path
 
 def test_ruby_script_deletes_links_before_assign() -> None:
     # Read the source file and assert presence/order of sanitation around assign_attributes
-    path = Path("/home/sme/p/j2o/src/migrations/work_package_migration.py")
+    # Resolve from repository root (portable in containers/hosts)
+    project_root = Path(__file__).resolve().parents[2]
+    path = project_root / "src" / "migrations" / "work_package_migration.py"
     text = path.read_text()
 
     start = text.find("main_script = \"\"\"")
