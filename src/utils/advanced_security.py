@@ -56,7 +56,8 @@ class SecurityConfig:
     """Configuration for security features."""
 
     encryption_key_path: Path = Path("config/security/keys")
-    audit_log_path: Path = Path("logs/audit")
+    # Prefer centralized var/logs path; fallback is var/logs/audit
+    audit_log_path: Path = Path("var/logs/audit")
     max_login_attempts: int = 5
     lockout_duration: int = 300  # seconds
     session_timeout: int = 3600  # seconds

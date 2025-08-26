@@ -61,7 +61,8 @@ class LogConfig:
     log_level: str = "INFO"
     log_format: str = "json"  # "json" or "text"
     log_file: Path | None = None
-    log_dir: Path = Path("logs")
+    # Prefer var/logs via centralized config, fallback to var/logs
+    log_dir: Path | None = None
 
     # Log rotation
     max_log_size_mb: int = 100
@@ -95,6 +96,14 @@ class LogConfig:
 
     def __post_init__(self):
         """Validate and set up configuration."""
+        # Resolve default log_dir under var/logs
+        if self.log_dir is None:
+            try:
+                from src import config as _config  # local import to avoid cycles
+                self.log_dir = _config.get_path("logs")
+            except Exception:
+                self.log_dir = Path("var") / "logs"
+
         # Create log directory if it doesn't exist
         self.log_dir.mkdir(parents=True, exist_ok=True)
 

@@ -405,7 +405,7 @@ async def run_migration(
             config.logger.info(
                 "Running in MOCK MODE - using mock clients instead of real connections",
             )
-        
+
         # Create clients in the correct hierarchical order
         if mock_mode and not _in_test_mode:
             # Preserve legacy internal mocks only outside of tests
@@ -755,7 +755,7 @@ async def run_migration(
         try:
             security_config = SecurityConfig(
                 encryption_key_path=Path("config/security/keys"),
-                audit_log_path=Path("logs/audit"),
+                audit_log_path=config.get_path("logs") / "audit",
                 rate_limit_requests=100,
                 rate_limit_window=60,
                 password_min_length=12,
@@ -791,16 +791,22 @@ async def run_migration(
         from src.utils.comprehensive_logging import (
             log_migration_start,
             start_monitoring,
+            LogConfig,
+            get_monitoring_system,
         )
 
         try:
+            # Ensure comprehensive logging uses var/logs by default
+            _log_cfg = LogConfig()
+            _mon = get_monitoring_system(_log_cfg)
+            # Kick first event then start monitoring
             log_migration_start(
                 migration_id=migration_timestamp,
                 components=components,
                 config=config,
                 backup_dir=backup_path,
             )
-            await start_monitoring(config)
+            await start_monitoring(_log_cfg)
             config.logger.info("Comprehensive logging and monitoring started")
         except Exception as e:
             config.logger.warning(f"Failed to initialize comprehensive logging: {e}")
