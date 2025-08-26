@@ -114,34 +114,36 @@ install: ## Install/update Python dependencies in container (uv lock)
 
 install-test: ## Prepare the test container and its dependencies
 	docker compose --profile test up -d test
+	docker compose exec test sh -lc 'uv sync --frozen --no-install-project || uv sync --frozen'
+	docker compose exec test sh -lc 'mkdir -p var/data var/results var/logs'
+
+# Internal helper: prepare test container (deps + var dirs)
+test-prep:
+	docker compose --profile test up -d test
+	docker compose exec test sh -lc 'uv sync --frozen --no-install-project || uv sync --frozen'
+	docker compose exec test sh -lc 'mkdir -p var/data var/results var/logs'
 
 # =============================================================================
 # Testing and Quality
 # =============================================================================
 
-test: ## Run tests in dedicated test container (parallel execution)
-	docker compose --profile test up -d test
-	docker compose exec test python -m pytest -n auto
+test: test-prep ## Run tests in dedicated test container (parallel execution)
+	docker compose exec test sh -lc 'uv run python -m pytest -n auto'
 
-test-verbose: ## Run tests with verbose output (parallel execution)
-	docker compose --profile test up -d test
-	docker compose exec test python -m pytest -v -n auto
+test-verbose: test-prep ## Run tests with verbose output (parallel execution)
+	docker compose exec test sh -lc 'uv run python -m pytest -v -n auto'
 
-test-coverage: ## Run tests with coverage report (parallel execution)
-	docker compose --profile test up -d test
-	docker compose exec test python -m pytest -n auto --cov=src --cov-report=html --cov-report=term
+test-coverage: test-prep ## Run tests with coverage report (parallel execution)
+	docker compose exec test sh -lc 'uv run python -m pytest -n auto --cov=src --cov-report=html --cov-report=term'
 
-test-slow: ## Run slow tests only (integration/end-to-end)
-	docker compose --profile test up -d test
-	docker compose exec test python -m pytest -m "slow or integration or end_to_end" -n auto
+test-slow: test-prep ## Run slow tests only (integration/end-to-end)
+	docker compose exec test sh -lc 'uv run python -m pytest -m "slow or integration or end_to_end" -n auto'
 
-test-fast: ## Run fast tests only (unit tests)
-	docker compose --profile test up -d test
-	docker compose exec test python -m pytest -m "not slow and not integration and not end_to_end" -n auto
+test-fast: test-prep ## Run fast tests only (unit tests)
+	docker compose exec test sh -lc 'uv run python -m pytest -m "not slow and not integration and not end_to_end" -n auto'
 
-test-live-ssh: ## Run tests with live SSH connections
-	docker compose --profile test up -d test
-	docker compose exec test python -m pytest --live-ssh -n auto
+test-live-ssh: test-prep ## Run tests with live SSH connections
+	docker compose exec test sh -lc 'uv run python -m pytest --live-ssh -n auto'
 
 lint: ## Run linting (flake8, mypy)
 	docker compose exec app flake8 src tests
