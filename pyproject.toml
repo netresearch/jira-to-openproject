@@ -93,7 +93,7 @@ markers = [
     "requires_ssh: test requires SSH connection to be available",
     "requires_rails: test requires Rails console to be available",
 ]
-addopts = "-v --strict-markers"
+addopts = "-v --strict-markers --cache-dir=var/.pytest_cache"
 
 [tool.black]
 line-length = 88
