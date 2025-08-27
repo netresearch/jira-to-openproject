@@ -1135,7 +1135,7 @@ class OpenProjectClient:
         except json.JSONDecodeError as e:  # type: ignore[name-defined]
             # Normalize any JSON decoding errors to JsonParseError as tests expect
             raise JsonParseError(str(e)) from e
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("Failed to process query result: %s", repr(e))  # noqa: TRY401
             logger.exception("Raw output: %s", result_output[:200])
             # Raise an exception instead of returning None to ensure proper error handling
@@ -1144,7 +1144,7 @@ class OpenProjectClient:
                 msg,
             ) from e
 
-    def execute_json_query(self, query: str, timeout: int | None = None) -> object:  # noqa: ANN401
+    def execute_json_query(self, query: str, timeout: int | None = None) -> object:
         """Execute a Rails query and return parsed JSON result.
 
         This method is optimized for retrieving data from Rails as JSON,
@@ -1233,7 +1233,7 @@ class OpenProjectClient:
         try:
             with local_json.open("w", encoding="utf-8") as f:
                 json.dump(records, f)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             _msg = f"Failed to serialize records: {e}"
             raise QueryExecutionError(_msg) from e
 
@@ -1348,8 +1348,9 @@ class OpenProjectClient:
         # Execute via persistent Rails console (file-only flow; ignore stdout)
         try:
             output = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=True)
-        except Exception as e:
-            raise QueryExecutionError(f"Rails execution failed for bulk_create_records: {e}") from e
+        except Exception as e:  # noqa: BLE001
+            _msg = f"Rails execution failed for bulk_create_records: {e}"
+            raise QueryExecutionError(_msg) from e
 
         # Poll-copy result back to local
         max_wait_seconds = 30
@@ -1361,12 +1362,13 @@ class OpenProjectClient:
                 self.transfer_file_from_container(container_result, local_result)
                 copied = True
                 break
-            except Exception:
+            except Exception:  # noqa: BLE001
                 time.sleep(poll_interval)
                 waited += poll_interval
 
         if not copied:
-            raise QueryExecutionError("Result file not found after bulk_create_records execution")
+            _msg = "Result file not found after bulk_create_records execution"
+            raise QueryExecutionError(_msg)
 
         # Parse and return result
         try:
@@ -1376,8 +1378,9 @@ class OpenProjectClient:
                 if isinstance(output, str):
                     result["output"] = output[:2000]
                 return result
-        except Exception as e:
-            raise QueryExecutionError(f"Failed to parse result JSON: {e}") from e
+        except Exception as e:  # noqa: BLE001
+            _msg = f"Failed to parse result JSON: {e}"
+            raise QueryExecutionError(_msg) from e
 
     def find_record(
         self,
@@ -1418,9 +1421,9 @@ class OpenProjectClient:
             msg = f"Error finding record for {model}."
             raise QueryExecutionError(msg) from e
 
-    def _retry_with_exponential_backoff(
+    def _retry_with_exponential_backoff(  # noqa: PLR0913, ANN401
         self,
-        operation: Callable[[], Any],
+        operation: Callable[[], object],
         operation_name: str,
         max_retries: int = 3,
         base_delay: float = 1.0,
@@ -1428,7 +1431,7 @@ class OpenProjectClient:
         backoff_factor: float = 2.0,
         jitter: bool = True,
         headers: dict[str, str] | None = None,
-    ) -> Any:
+    ) -> object:
         """Execute an operation with exponential backoff retry logic.
 
         Args:
@@ -1448,7 +1451,7 @@ class OpenProjectClient:
             Exception: Last exception if all retries are exhausted
 
         """
-        last_exception = None
+        last_exception: Exception | None = None
 
         for attempt in range(max_retries + 1):
             try:
@@ -1495,7 +1498,7 @@ class OpenProjectClient:
 
                 # Add jitter to prevent thundering herd
                 if jitter:
-                    delay = delay * (0.5 + random.random() * 0.5)
+                    delay = delay * (0.5 + random.random() * 0.5)  # noqa: S311
 
                 self.logger.warning(
                     "%s failed (attempt %d/%d): %s. Retrying in %.2f seconds...",
@@ -1518,9 +1521,10 @@ class OpenProjectClient:
                 raise
 
         # This should never be reached, but just in case
-        raise last_exception or Exception(
-            f"{operation_name} failed after {max_retries} retries",
-        )
+        if last_exception is not None:
+            raise last_exception
+        _msg = f"{operation_name} failed after {max_retries} retries"
+        raise QueryExecutionError(_msg)
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for batch record lookups
     def batch_find_records(
