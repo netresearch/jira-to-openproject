@@ -43,6 +43,11 @@ except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
 
 
+# Module-level constants
+BATCH_SIZE_DEFAULT = 50
+SAFE_OFFSET_LIMIT = 5000
+
+
 class SSHConnection:
     """SSH connection class for testing purposes."""
 
@@ -863,8 +868,6 @@ class OpenProjectClient:
         try:
             # First, try a simple non-batched approach for smaller datasets
             # This handles the common case where batching isn't needed
-            BATCH_SIZE_DEFAULT = 50
-            SAFE_OFFSET_LIMIT = 5000
             simple_query = f"{model_name}.limit({BATCH_SIZE_DEFAULT}).to_json"
             result_output = self.execute_query(simple_query, timeout=timeout)
 
@@ -970,12 +973,13 @@ class OpenProjectClient:
             )
             return all_results
 
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("Batched query failed")
-            # Return empty list instead of failing completely
+        else:
+            # Should not reach here; safe default
             return []
 
-    def _parse_rails_output(self, result_output: str) -> Any:  # noqa: C901, PLR0911, PLR0912
+    def _parse_rails_output(self, result_output: str) -> object:  # noqa: C901, PLR0911, PLR0912, ANN401
         """Parse Rails console output to extract JSON or scalar values.
 
         Handles various Rails console output formats including:
@@ -1007,13 +1011,12 @@ class OpenProjectClient:
                 text = ansi_re.sub("", text)
                 # 2) Remove remaining control chars (except \t, \n, \r)
                 text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
-            except Exception:
-                # Continue with original text if sanitization fails
-                pass
+            except Exception:  # noqa: BLE001, S110
+                logger.debug("ANSI/control char sanitization failed; continuing with raw text")
 
             # If it's plain JSON, parse immediately
 
-            if text.startswith("[") or text.startswith("{"):
+            if text.startswith(("[", "{")):
                 try:
                     return json.loads(text)
                 except json.JSONDecodeError as e:  # type: ignore[name-defined]
@@ -1027,7 +1030,7 @@ class OpenProjectClient:
             skip_prompt = False
             for ln in lines_in:
                 if ln.strip().startswith("open-project("):
-                    skip_prompt = True
+                    # Skip prompt lines
                     continue
                 # Keep non-empty lines (including the JSON following the prompt)
                 if ln.strip():
@@ -1035,14 +1038,13 @@ class OpenProjectClient:
             text = "\n".join(lines)
 
             # Handle Rails prefixed outputs like "=> <value>"
-            for ln in text.split("\n"):
-                ln = ln.strip()
+            for ln in (seg.strip() for seg in text.split("\n")):
                 if ln.startswith("=> "):
                     val = ln[3:].strip()
                     # If this is '=> nil' but JSON is present elsewhere, prefer the JSON
                     if val == "nil" and ("[" in text or "{" in text):
                         continue
-                    if val.startswith("[") or val.startswith("{"):
+                    if val.startswith(("[", "{")):
                         try:
                             return json.loads(val)
                         except json.JSONDecodeError as e:  # type: ignore[name-defined]
@@ -1062,7 +1064,8 @@ class OpenProjectClient:
                     return val
 
             # Try bracket-slice JSON extraction (prefer arrays before scalars)
-            lb = text.find("["); rb = text.rfind("]")
+            lb = text.find("[")
+            rb = text.rfind("]")
             if lb != -1 and rb != -1 and rb > lb:
                 try:
                     return json.loads(text[lb : rb + 1])
@@ -1071,9 +1074,10 @@ class OpenProjectClient:
                     cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[lb : rb + 1])
                     try:
                         return json.loads(cleaned)
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         raise JsonParseError(str(e)) from e
-            lb = text.find("{"); rb = text.rfind("}")
+            lb = text.find("{")
+            rb = text.rfind("}")
             if lb != -1 and rb != -1 and rb > lb:
                 try:
                     return json.loads(text[lb : rb + 1])
@@ -1081,7 +1085,7 @@ class OpenProjectClient:
                     cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[lb : rb + 1])
                     try:
                         return json.loads(cleaned)
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         raise JsonParseError(str(e)) from e
 
             # Special case: prompt + JSON + => nil (common Rails console pattern)
@@ -1091,13 +1095,14 @@ class OpenProjectClient:
                 for i, ln in enumerate(lines2):
                     if ln.strip().startswith("=> nil") and i > 0:
                         prev = lines2[i-1].strip()
-                        if prev.startswith("[") or prev.startswith("{"):
+                        if prev.startswith(("[", "{")):
                             try:
                                 return json.loads(prev)
                             except json.JSONDecodeError as e:  # type: ignore[name-defined]
                                 raise JsonParseError(str(e)) from e
                 # Fallback to search earlier JSON
-                lb = text.find("["); rb = text.rfind("]")
+                lb = text.find("[")
+                rb = text.rfind("]")
                 if lb != -1 and rb != -1 and rb > lb:
                     try:
                         return json.loads(text[lb : rb + 1])
