@@ -901,10 +901,9 @@ class OpenProjectClient:
                 else:
                     return []
 
-            except Exception as e:
+            except Exception:  # noqa: BLE001
                 logger.debug(
-                    "Simple query failed, falling back to batched approach: %s",
-                    e,
+                    "Simple query failed, falling back to batched approach",
                 )
 
             # Fall back to batched approach for larger datasets
@@ -973,13 +972,13 @@ class OpenProjectClient:
             )
             return all_results
 
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Batched query failed")
         else:
             # Should not reach here; safe default
             return []
 
-    def _parse_rails_output(self, result_output: str) -> object:  # noqa: C901, PLR0911, PLR0912, ANN401
+    def _parse_rails_output(self, result_output: str) -> object:  # noqa: C901, PLR0911, PLR0912
         """Parse Rails console output to extract JSON or scalar values.
 
         Handles various Rails console output formats including:
@@ -1011,7 +1010,7 @@ class OpenProjectClient:
                 text = ansi_re.sub("", text)
                 # 2) Remove remaining control chars (except \t, \n, \r)
                 text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
-            except Exception:  # noqa: BLE001, S110
+            except Exception:  # noqa: BLE001
                 logger.debug("ANSI/control char sanitization failed; continuing with raw text")
 
             # If it's plain JSON, parse immediately
@@ -1027,7 +1026,7 @@ class OpenProjectClient:
             # Drop Rails prompt lines, but preserve following JSON
             lines_in = text.split("\n")
             lines: list[str] = []
-            skip_prompt = False
+            # skip_prompt variable removed (unused)
             for ln in lines_in:
                 if ln.strip().startswith("open-project("):
                     # Skip prompt lines
@@ -1108,7 +1107,8 @@ class OpenProjectClient:
                         return json.loads(text[lb : rb + 1])
                     except json.JSONDecodeError as e:  # type: ignore[name-defined]
                         raise JsonParseError(str(e)) from e
-                lb = text.find("{"); rb = text.rfind("}")
+                lb = text.find("{")
+                rb = text.rfind("}")
                 if lb != -1 and rb != -1 and rb > lb:
                     try:
                         return json.loads(text[lb : rb + 1])
@@ -1126,7 +1126,8 @@ class OpenProjectClient:
             if (t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'")):
                 return t[1:-1]
 
-            raise JsonParseError("Unable to parse Rails console output")
+            _msg = "Unable to parse Rails console output"
+            raise JsonParseError(_msg)
 
         except JsonParseError:
             # Re-raise JsonParseError
@@ -1134,8 +1135,8 @@ class OpenProjectClient:
         except json.JSONDecodeError as e:  # type: ignore[name-defined]
             # Normalize any JSON decoding errors to JsonParseError as tests expect
             raise JsonParseError(str(e)) from e
-        except Exception as e:
-            logger.exception("Failed to process query result: %s", repr(e))
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Failed to process query result: %s", repr(e))  # noqa: TRY401
             logger.exception("Raw output: %s", result_output[:200])
             # Raise an exception instead of returning None to ensure proper error handling
             msg = f"Failed to parse Rails console output: {e}"
@@ -1143,7 +1144,7 @@ class OpenProjectClient:
                 msg,
             ) from e
 
-    def execute_json_query(self, query: str, timeout: int | None = None) -> Any:
+    def execute_json_query(self, query: str, timeout: int | None = None) -> object:  # noqa: ANN401
         """Execute a Rails query and return parsed JSON result.
 
         This method is optimized for retrieving data from Rails as JSON,
@@ -1164,12 +1165,7 @@ class OpenProjectClient:
         # Modify query to ensure it produces JSON output
         if not (".to_json" in query or ".as_json" in query):
             # Add as_json if the query doesn't already have JSON conversion
-            if query.strip().endswith(")"):
-                # If query ends with a closing parenthesis, add .as_json after it
-                json_query = f"{query}.as_json"
-            else:
-                # Otherwise just append .as_json
-                json_query = f"({query}).as_json"
+            json_query = f"{query}.as_json" if query.strip().endswith(")") else f"({query}).as_json"
         else:
             json_query = query
 
@@ -1223,10 +1219,12 @@ class OpenProjectClient:
         """
         # Basic validation of model name to avoid code injection
         if not isinstance(model, str) or not model or not re.match(r"^[A-Za-z_:][A-Za-z0-9_:]*$", model):
-            raise QueryExecutionError("Invalid model name for bulk_create_records")
+            _msg = "Invalid model name for bulk_create_records"
+            raise QueryExecutionError(_msg)
 
         if not isinstance(records, list):
-            raise QueryExecutionError("records must be a list of dicts")
+            _msg = "records must be a list of dicts"
+            raise QueryExecutionError(_msg)
 
         # Prepare local JSON payload
         temp_dir = Path(self.file_manager.data_dir) / "bulk_create"
@@ -1235,16 +1233,17 @@ class OpenProjectClient:
         try:
             with local_json.open("w", encoding="utf-8") as f:
                 json.dump(records, f)
-        except Exception as e:
-            raise QueryExecutionError(f"Failed to serialize records: {e}") from e
+        except Exception as e:  # noqa: BLE001
+            _msg = f"Failed to serialize records: {e}"
+            raise QueryExecutionError(_msg) from e
 
         # Transfer JSON to container
-        container_json = Path("/tmp") / local_json.name
+        container_json = Path("/tmp") / local_json.name  # noqa: S108
         self.transfer_file_to_container(local_json, container_json)
 
         # Result file path in container and local debug path
         result_name = result_basename or f"bulk_result_{model.lower()}_{os.urandom(3).hex()}.json"
-        container_result = Path("/tmp") / result_name
+        container_result = Path("/tmp") / result_name  # noqa: S108
         local_result = temp_dir / result_name
 
         # Compose minimal Ruby script
