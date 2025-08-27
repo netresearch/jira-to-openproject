@@ -20,7 +20,12 @@ from src.clients.exceptions import (
     QueryExecutionError,
     RecordNotFoundError,
 )
-from src.clients.rails_console_client import RailsConsoleClient, RubyError
+from src.clients.rails_console_client import (
+    CommandExecutionError,
+    ConsoleNotReadyError,
+    RailsConsoleClient,
+    RubyError,
+)
 from src.clients.ssh_client import SSHClient
 from src.display import configure_logging
 from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
@@ -606,9 +611,11 @@ class OpenProjectClient:
             result = self.rails_client.execute(command)
 
             # Check if the unique ID is in the response
-            return f"OPENPROJECT_CONNECTION_TEST_{unique_id}" in result
+            if f"OPENPROJECT_CONNECTION_TEST_{unique_id}" in result:
+                return True
         except Exception:
             logger.exception("Connection test failed.")
+        else:
             return False
 
     def execute_query(self, query: str, timeout: int | None = None) -> str:
@@ -729,11 +736,6 @@ class OpenProjectClient:
             )
         except Exception as e:
             # On console instability (IRB/Reline crash, marker loss), optionally fall back to rails runner
-            from src.clients.rails_console_client import (
-                CommandExecutionError,
-                ConsoleNotReadyError,
-                RubyError,
-            )
             if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
                 if not config.migration_config.get("enable_runner_fallback", False):
                     # Respect user's preference to avoid per-request rails runner fallback
@@ -852,7 +854,7 @@ class OpenProjectClient:
 
     # Removed rails runner helper; all scripts go through persistent tmux console
 
-    def _execute_batched_query(
+    def _execute_batched_query(  # noqa: C901, PLR0912, PLR0915
         self,
         model_name: str,
         timeout: int | None = None,
@@ -861,20 +863,22 @@ class OpenProjectClient:
         try:
             # First, try a simple non-batched approach for smaller datasets
             # This handles the common case where batching isn't needed
-            simple_query = f"{model_name}.limit(50).to_json"
+            BATCH_SIZE_DEFAULT = 50
+            SAFE_OFFSET_LIMIT = 5000
+            simple_query = f"{model_name}.limit({BATCH_SIZE_DEFAULT}).to_json"
             result_output = self.execute_query(simple_query, timeout=timeout)
 
             try:
                 simple_data = self._parse_rails_output(result_output)
 
-                # If we get valid data and it's less than 50 items, we're done
-                if isinstance(simple_data, list) and len(simple_data) < 50:
+                # If we get valid data and it's less than batch size, we're done
+                if isinstance(simple_data, list) and len(simple_data) < BATCH_SIZE_DEFAULT:
                     logger.debug(
                         "Retrieved %d total records using simple query",
                         len(simple_data),
                     )
                     return simple_data
-                if isinstance(simple_data, list) and len(simple_data) == 50:
+                if isinstance(simple_data, list) and len(simple_data) == BATCH_SIZE_DEFAULT:
                     # We might have more data, fall through to batched approach
                     logger.debug(
                         "Simple query returned 50 items, using batched approach for complete data",
@@ -902,7 +906,7 @@ class OpenProjectClient:
 
             # Fall back to batched approach for larger datasets
             all_results = []
-            batch_size = 50  # Increased batch size for better performance
+            batch_size = BATCH_SIZE_DEFAULT  # Increased batch size for better performance
             offset = 0
 
             while True:
@@ -950,16 +954,12 @@ class OpenProjectClient:
                     offset += batch_size
 
                     # Increased safety limit for larger datasets
-                    if offset > 5000:
-                        logger.warning("Reached safety limit of 5000 records, stopping")
+                    if offset > SAFE_OFFSET_LIMIT:
+                        logger.warning("Reached safety limit of %d records, stopping", SAFE_OFFSET_LIMIT)
                         break
 
-                except Exception as e:
-                    logger.exception(
-                        "Failed to parse batch at offset %d: %s",
-                        offset,
-                        e,
-                    )
+                except Exception:
+                    logger.exception("Failed to parse batch at offset %d", offset)
                     # Record error for rate limiting adaptation
                     self.rate_limiter.record_response(operation_time, 500)
                     break
@@ -970,12 +970,12 @@ class OpenProjectClient:
             )
             return all_results
 
-        except Exception as e:
-            logger.exception("Batched query failed: %s", e)
+        except Exception:
+            logger.exception("Batched query failed")
             # Return empty list instead of failing completely
             return []
 
-    def _parse_rails_output(self, result_output: str) -> Any:
+    def _parse_rails_output(self, result_output: str) -> Any:  # noqa: C901, PLR0911, PLR0912
         """Parse Rails console output to extract JSON or scalar values.
 
         Handles various Rails console output formats including:

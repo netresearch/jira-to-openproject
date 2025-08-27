@@ -409,7 +409,7 @@ class TimeEntryMigrator:
         batch_size: int = 50,
         *,
         dry_run: bool = False,
-    ) -> dict[str, Any]:  # noqa: C901, PLR0915
+    ) -> dict[str, Any]:
         """Migrate time entries to OpenProject.
 
         Args:

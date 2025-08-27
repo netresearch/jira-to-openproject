@@ -145,7 +145,7 @@ class IdempotencyKeyManager:
         redis_ssl: bool = False,
         redis_ssl_ca_certs: str | None = None,
         redis_ssl_cert_reqs: str = "required",
-    ) -> None:  # noqa: PLR0913
+    ) -> None:
         """Initialize the IdempotencyKeyManager."""
         self.redis_url = redis_url
         self.default_ttl = default_ttl

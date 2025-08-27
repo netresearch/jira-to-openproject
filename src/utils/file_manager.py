@@ -123,7 +123,7 @@ class FileRegistry:
                 # Always unregister, even if file doesn't exist
                 self.unregister(file_path)
 
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Error cleaning up file %s", file_path)
 
         return len(files_to_clean), deleted_count
@@ -282,7 +282,7 @@ class FileManager:
             self.registry.register(file_path, "data")
             return file_path
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("Failed to create data file: %s", e)
             raise OSError("Failed to create data file") from e
 
@@ -332,7 +332,7 @@ class FileManager:
             # Register the file
             self.registry.register(file_path, "script")
 
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Error creating script file")
             raise
 
@@ -351,7 +351,7 @@ class FileManager:
         try:
             with file_path.open("r") as f:
                 return f.read()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Error reading file %s", file_path)
             raise
 
@@ -382,7 +382,7 @@ class FileManager:
         except json.JSONDecodeError as e:
             logger.exception("Failed to parse JSON: %s", e)
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("Failed to read file: %s", e)
             raise
 
@@ -420,7 +420,7 @@ class FileManager:
             # Register the file
             self.registry.register(dest_path, "temp")
 
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Error copying file")
             raise
 

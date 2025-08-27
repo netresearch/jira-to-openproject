@@ -250,7 +250,7 @@ class CircuitBreakerManager:
         except CircuitBreakerError as e:
             logger.exception("circuit_breaker_open", service=service_name, error=str(e))
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception(
                 "circuit_breaker_failure",
                 service=service_name,
@@ -346,7 +346,7 @@ class ErrorRecoverySystem:
                 *args,
                 **kwargs,
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Update checkpoint with error
             self.checkpoint_manager.update_checkpoint(
                 migration_id,
