@@ -1348,7 +1348,7 @@ class OpenProjectClient:
         # Execute via persistent Rails console (file-only flow; ignore stdout)
         try:
             output = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=True)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             _msg = f"Rails execution failed for bulk_create_records: {e}"
             raise QueryExecutionError(_msg) from e
 
@@ -1378,7 +1378,7 @@ class OpenProjectClient:
                 if isinstance(output, str):
                     result["output"] = output[:2000]
                 return result
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             _msg = f"Failed to parse result JSON: {e}"
             raise QueryExecutionError(_msg) from e
 
@@ -1410,16 +1410,16 @@ class OpenProjectClient:
                 query = f"{model}.find_by({conditions_str})&.as_json"
 
             result = self.execute_json_query(query)
-
-            if result is None:
-                msg = f"No {model} found with {id_or_conditions}"
-                raise RecordNotFoundError(msg)
-
-            return result
-
         except (QueryExecutionError, JsonParseError) as e:
             msg = f"Error finding record for {model}."
             raise QueryExecutionError(msg) from e
+        else:
+            if result is None:
+                msg = f"No {model} found with {id_or_conditions}"
+                raise RecordNotFoundError(msg)
+            return result
+        else:
+            return result
 
     def _retry_with_exponential_backoff(  # noqa: PLR0913, ANN401
         self,
@@ -1429,7 +1429,8 @@ class OpenProjectClient:
         base_delay: float = 1.0,
         max_delay: float = 60.0,
         backoff_factor: float = 2.0,
-        jitter: bool = True,
+        *,
+        jitter: bool = True,  # noqa: FBT001, FBT002
         headers: dict[str, str] | None = None,
     ) -> object:
         """Execute an operation with exponential backoff retry logic.
@@ -1556,22 +1557,25 @@ class OpenProjectClient:
         effective_batch_size = batch_size or getattr(self, "batch_size", 100)
         effective_batch_size = self._validate_batch_size(effective_batch_size)
 
-        results = {}
+        results: dict[int | str, dict[str, Any]] = {}
 
         # Process IDs in batches
         for i in range(0, len(ids), effective_batch_size):
             batch_ids = ids[i : i + effective_batch_size]
 
-            def batch_operation():
+            def batch_operation() -> object:
                 # Use safe query builder with ActiveRecord parameterization
                 query = self._build_safe_batch_query(model, "id", batch_ids)
                 return self.execute_json_query(query)
 
             try:
                 # Execute batch operation with retry logic (with idempotency key propagation)
+                label_prefix = f"Batch fetch {model} records "
+                sample_label = f"{batch_ids[:3]}{'...' if len(batch_ids) > 3 else ''}"
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch {model} records {batch_ids[:3]}{'...' if len(batch_ids) > 3 else ''}",
+                    f"{label_prefix}{sample_label}",
+                    jitter=True,
                     headers=headers,
                 )
 
@@ -1592,7 +1596,7 @@ class OpenProjectClient:
                                 original_id = original_id_map[record_id_str]
                                 results[original_id] = record
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self.logger.warning(
                     "Failed to fetch batch of %s records (IDs %s) after retries: %s",
                     model,
@@ -1658,7 +1662,8 @@ class OpenProjectClient:
             # If result is None, empty, or not a dict, try the fallback method
             if result is None or not isinstance(result, dict):
                 logger.debug(
-                    f"First method returned invalid result ({type(result)}), trying fallback",
+                    "First method returned invalid result (%s), trying fallback",
+                    type(result),
                 )
 
                 # Fallback to simpler command with execute_json_query
@@ -1677,8 +1682,8 @@ class OpenProjectClient:
                 # If we still don't have a dict, but the command didn't raise an error,
                 # assume success and try to get the record by its attributes
                 logger.warning(
-                    f"Could not parse JSON response from {model} creation, "
-                    f"but command executed. Attempting to find created record.",
+                    "Could not parse JSON response from %s creation, but command executed. Attempting to find created record.",
+                    model,
                 )
 
                 # Try to find the record we just created
@@ -1693,13 +1698,13 @@ class OpenProjectClient:
                     if search_attrs:
                         found_record = self.find_record(model, search_attrs)
                         if found_record:
-                            logger.info(f"Successfully found created {model} record")
+                            logger.info("Successfully found created %s record", model)
                             return found_record
-                except Exception as e:
-                    logger.debug(f"Could not find created record: {e}")
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("Could not find created record: %s", e)
 
                 # If all else fails, create a minimal response
-                logger.warning(f"Creating minimal response for {model} creation")
+                logger.warning("Creating minimal response for %s creation", model)
                 return {
                     "id": None,
                     "created": True,
