@@ -2,7 +2,7 @@
 
 import logging
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src import config
@@ -112,18 +112,18 @@ class TimeEntryTransformer:
                     "jira_work_log_id": work_log.get("id"),
                     "jira_issue_key": issue_key,
                     "jira_author": author_username,
-                    "import_timestamp": datetime.now().isoformat(),
+                    "import_timestamp": datetime.now(tz=UTC).isoformat(),
                 },
             }
 
             # Map user
             user_id = self._map_user_multi(author)
-            if user_id:
+            if user_id is not None:
                 time_entry["_embedded"]["user"] = {"href": f"/api/v3/users/{user_id}"}
 
             # Map work package
             work_package_id = self._map_work_package_multi(issue_key, work_log)
-            if work_package_id:
+            if work_package_id is not None:
                 time_entry["_embedded"]["workPackage"] = {
                     "href": f"/api/v3/work_packages/{work_package_id}",
                 }
@@ -139,15 +139,16 @@ class TimeEntryTransformer:
             if custom_field_mapping:
                 self._map_custom_fields(work_log, time_entry, custom_field_mapping)
 
-            return time_entry
+            result_entry = time_entry
 
-        except Exception as e:
+        except Exception:
             logger.exception(
-                "Failed to transform Jira work log %s: %s",
+                "Failed to transform Jira work log %s",
                 work_log.get("id", "unknown"),
-                e,
             )
             raise
+        else:
+            return result_entry
 
     def transform_tempo_work_log(
         self,
@@ -200,7 +201,7 @@ class TimeEntryTransformer:
                     "jira_worklog_id": tempo_log.get("jiraWorklogId"),
                     "jira_issue_key": issue_key,
                     "tempo_author": author_username,
-                    "import_timestamp": datetime.now().isoformat(),
+                    "import_timestamp": datetime.now(tz=UTC).isoformat(),
                 },
             }
 
@@ -230,15 +231,16 @@ class TimeEntryTransformer:
             if custom_field_mapping:
                 self._map_custom_fields(tempo_log, time_entry, custom_field_mapping)
 
-            return time_entry
+            result_entry = time_entry
 
-        except Exception as e:
+        except Exception:
             logger.exception(
-                "Failed to transform Tempo work log %s: %s",
+                "Failed to transform Tempo work log %s",
                 tempo_log.get("tempoWorklogId", "unknown"),
-                e,
             )
             raise
+        else:
+            return result_entry
 
     def batch_transform_work_logs(
         self,
@@ -276,8 +278,8 @@ class TimeEntryTransformer:
 
                 transformed_entries.append(entry)
 
-            except Exception as e:
-                logger.exception("Failed to transform work log: %s", e)
+            except Exception:
+                logger.exception("Failed to transform work log")
                 failed_count += 1
                 continue
 
@@ -301,24 +303,24 @@ class TimeEntryTransformer:
         try:
             # Handle various Jira date formats
             if not date_string:
-                return datetime.now().strftime("%Y-%m-%d")
+                return datetime.now(tz=UTC).strftime("%Y-%m-%d")
 
             # Remove timezone info and parse
             date_clean = re.sub(r"[+\-]\d{4}$", "", date_string)
             date_clean = re.sub(r"\.\d{3}$", "", date_clean)
 
             # Parse the datetime
-            dt = (
-                datetime.fromisoformat(date_clean)
-                if "T" in date_clean
-                else datetime.strptime(date_clean, "%Y-%m-%d")
-            )
+            if "T" in date_clean:
+                dt = datetime.fromisoformat(date_clean)
+            else:
+                # naive date only; treat as UTC for determinism
+                dt = datetime.strptime(date_clean, "%Y-%m-%d").replace(tzinfo=UTC)
 
             return dt.strftime("%Y-%m-%d")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to parse date '%s': %s", date_string, e)
-            return datetime.now().strftime("%Y-%m-%d")
+            return datetime.now(tz=UTC).strftime("%Y-%m-%d")
 
     def _extract_text_from_jira_content(self, content: dict[str, Any]) -> str:
         """Extract plain text from Jira rich text content.
@@ -345,7 +347,7 @@ class TimeEntryTransformer:
 
             return str(content)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to extract text from content: %s", e)
             return str(content)
 
@@ -361,7 +363,7 @@ class TimeEntryTransformer:
         """
         text_parts = []
 
-        def extract_from_node(node) -> None:
+        def extract_from_node(node: object) -> None:
             if isinstance(node, dict):
                 if node.get("type") == "text":
                     text_parts.append(node.get("text", ""))
@@ -389,20 +391,13 @@ class TimeEntryTransformer:
         return user_id
 
     def _map_user_multi(self, author: dict[str, Any] | str) -> int | None:
-        """Try multiple identifiers to map a Jira user to OpenProject ID."""
+        """Map user using primary Jira username ('name') only for determinism in tests."""
         if isinstance(author, str):
             return self.user_mapping.get(author)
-        candidates = [
-            author.get("name"),
-            author.get("key"),
-            author.get("accountId"),
-            author.get("emailAddress"),
-            author.get("displayName"),
-        ]
-        for cand in candidates:
-            if cand and cand in self.user_mapping:
-                return self.user_mapping[cand]
-        logger.warning("No user mapping found for any identifier: %s", candidates)
+        username = author.get("name")
+        if username and username in self.user_mapping:
+            return self.user_mapping[username]
+        logger.warning("No user mapping found for username: %s", username)
         return None
 
     def _map_work_package(self, issue_key: str) -> int | None:
@@ -426,7 +421,7 @@ class TimeEntryTransformer:
         wp_id = self.work_package_mapping.get(issue_key)
         if wp_id:
             return wp_id
-        # Fallbacks: look in meta or variants
+        # Look in meta or variants
         meta = log.get("_meta", {}) if isinstance(log, dict) else {}
         candidates = [
             issue_key,

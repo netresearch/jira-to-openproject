@@ -10,7 +10,6 @@ This module provides advanced audit trail migration capabilities that:
 6. Provides comprehensive validation and reporting
 """
 
-import json
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -30,9 +29,9 @@ def _default_get_path(key: str) -> Path:
         return Path("data")
     return Path("data")
 
-config = type('Config', (), {
-    'logger': logger,
-    'get_path': staticmethod(_default_get_path),
+config = type("Config", (), {
+    "logger": logger,
+    "get_path": staticmethod(_default_get_path),
 })()
 
 
@@ -512,7 +511,7 @@ class EnhancedAuditTrailMigrator:
                 "bash",
                 "-lc",
                 ruby_script,
-            ], capture_output=True, text=True)
+            ], check=False, capture_output=True, text=True)
             if completed.returncode == 0:
                 self.logger.success("Successfully executed audit event operations")
                 return True
@@ -581,7 +580,7 @@ class EnhancedAuditTrailMigrator:
             if isinstance(value, (int, float)):
                 return str(value)
             # strings
-            s = str(value).replace("\\", "\\\\").replace("\"", "\\\"")
+            s = str(value).replace("\\", "\\\\").replace('"', '\\"')
             return f'"{s}"'
 
         ruby_events = "[\n  " + ",\n  ".join(_ruby_literal(ev) for ev in audit_events_data) + "\n]"
@@ -751,10 +750,11 @@ class EnhancedAuditTrailMigrator:
     def save_migration_results(self) -> bool:
         """Save audit trail migration results to file."""
         try:
-            from src.utils import data_handler
-            from src import config as global_config
-            from pathlib import Path as _Path
             import tempfile
+            from pathlib import Path as _Path
+
+            from src import config as global_config
+            from src.utils import data_handler
 
             # Prefer the same base dir used by tests: temp_data_dir
             # Tests patch module 'config', but do not set get_path; they pass temp_data_dir via fixture.
@@ -770,7 +770,7 @@ class EnhancedAuditTrailMigrator:
             # if available via the patched config.
             # If the instance has data_dir set (in integration contexts), use it.
             if getattr(self, "data_dir", None):
-                base_dir = _Path(getattr(self, "data_dir"))
+                base_dir = _Path(self.data_dir)
             save_dir = base_dir / "migration_data"
             save_dir.mkdir(parents=True, exist_ok=True)
             data_handler.save(

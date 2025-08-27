@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Enhanced User Association Migration for comprehensive metadata preservation.
 
 This module provides advanced user association migration capabilities that:
@@ -34,17 +33,23 @@ from src.utils.validators import validate_jira_key
 
 # Error message handling configuration
 class ErrorConfig:
+    """Error message handling configuration."""
+
     MAX_LENGTH = 100
     TRUNCATE_LENGTH = 97
 
 
 # JSON serialization configuration
 class JsonConfig:
+    """JSON serialization configuration."""
+
     MAX_RECURSION_DEPTH = 10
 
 
 # Retry and rate limiting configuration
 class RetryConfig:
+    """Retry and rate limiting configuration."""
+
     DEFAULT_MAX_RETRIES = 2
     ABSOLUTE_MAX_RETRIES = 5
     DEFAULT_BASE_DELAY = 0.5
@@ -55,6 +60,8 @@ class RetryConfig:
 
 # Staleness detection configuration
 class StalenessConfig:
+    """Staleness detection configuration."""
+
     DEFAULT_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
     DEFAULT_FALLBACK_STRATEGY = "skip"
 
@@ -66,7 +73,7 @@ URL_PATTERN = re.compile(r"https?://[^\s]+")
 
 
 class ThreadSafeConcurrentTracker:
-    """Thread-safe tracker for concurrent operations to replace unsafe semaphore._value access."""
+    """Track concurrent operations without accessing private Semaphore state."""
 
     def __init__(self, max_concurrent: int) -> None:
         self.max_concurrent = max_concurrent
@@ -91,11 +98,11 @@ class ThreadSafeConcurrentTracker:
         with self._lock:
             return self._active_count
 
-    def __enter__(self):
+    def __enter__(self) -> "ThreadSafeConcurrentTracker":
         self.acquire()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.release()
 
 
@@ -117,7 +124,7 @@ class CircuitBreaker:
         self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
         self._lock = Lock()
 
-    def call(self, func, *args, **kwargs):
+    def call(self, func: Any, *args: object, **kwargs: object) -> Any:
         """Execute function with circuit breaker protection.
 
         Args:
@@ -563,7 +570,7 @@ class EnhancedUserAssociationMigrator:
                             "lastRefreshed": v.get("lastRefreshed"),
                         }
                         self.enhanced_user_mappings[k] = UserAssociationMapping(
-                            **mapping_data
+                            **mapping_data,
                         )
 
                     self.logger.info(
@@ -666,7 +673,7 @@ class EnhancedUserAssociationMigrator:
                 # If staleness check fails, proceed without blocking
                 is_stale = False
 
-            resp = getattr(self.jira_client, "get")(url)
+            resp = self.jira_client.get(url)
             if getattr(resp, "status_code", None) != 200:
                 return None
 
@@ -892,7 +899,7 @@ class EnhancedUserAssociationMigrator:
                     watchers_data = None
                     if hasattr(self.jira_client, "get_issue_watchers"):
                         watchers_data = self.jira_client.get_issue_watchers(
-                            jira_issue.key
+                            jira_issue.key,
                         )
                     if not isinstance(watchers_data, (list, tuple)):
                         watchers_data = watchers_attr if isinstance(watchers_attr, list) else []
@@ -1218,7 +1225,7 @@ class EnhancedUserAssociationMigrator:
 
         return result
 
-    def _get_fallback_user(self, role: str) -> int | None:
+    def _get_fallback_user(self, role: str) -> int | None:  # noqa: ARG002
         """Get appropriate fallback user for a specific role."""
         # Priority order for fallback users
         fallback_priority = ["migration", "admin", "system"]
@@ -1276,6 +1283,7 @@ class EnhancedUserAssociationMigrator:
     def check_and_handle_staleness(
         self,
         username: str,
+        *,
         raise_on_stale: bool = True,
     ) -> UserAssociationMapping | None:
         """Check if a user mapping is stale and handle accordingly.
@@ -1350,6 +1358,7 @@ class EnhancedUserAssociationMigrator:
     def get_mapping_with_staleness_check(
         self,
         username: str,
+        *,
         auto_refresh: bool = False,
     ) -> UserAssociationMapping | None:
         """Get user mapping with automatic staleness detection and optional refresh.
@@ -1893,9 +1902,11 @@ class EnhancedUserAssociationMigrator:
 
                         # YOLO FIX: Include error context directly in log message
                         self.logger.exception(
-                            f"Jira user lookup for '{username}' exhausted all retry attempts. "
-                            f"Final error: {type(e).__name__}: {sanitized_error}. "
-                            f"Error context: {error_context}",
+                            "Jira user lookup for '%s' exhausted all retry attempts. Final error: %s: %s. Error context: %s",
+                            username,
+                            type(e).__name__,
+                            sanitized_error,
+                            error_context,
                         )
 
             # CRITICAL FIX: Sleep outside semaphore context to avoid blocking other threads
@@ -1939,16 +1950,16 @@ class EnhancedUserAssociationMigrator:
             # Detect if tests patched the internal helper; if so, prefer it
             patched_internal_helper = False
             try:
-                from unittest.mock import MagicMock  # type: ignore
-                patched_internal_helper = isinstance(getattr(self, "_get_jira_user_info"), MagicMock)
-            except Exception:
+                from unittest.mock import MagicMock  # type: ignore[import-not-found]
+                patched_internal_helper = isinstance(self._get_jira_user_info, MagicMock)
+            except Exception:  # noqa: BLE001
                 patched_internal_helper = False
 
             # Inspect mocks to decide path: prefer raw .get when side_effect set (E2E tests)
             ji_get = getattr(self.jira_client, "get", None)
             ji_get_user_info = getattr(self.jira_client, "get_user_info", None)
-            get_side_effect_set = hasattr(ji_get, "side_effect") and getattr(ji_get, "side_effect") is not None
-            get_user_info_side_effect_set = hasattr(ji_get_user_info, "side_effect") and getattr(ji_get_user_info, "side_effect") is not None
+            get_side_effect_set = hasattr(ji_get, "side_effect") and ji_get.side_effect is not None
+            get_user_info_side_effect_set = hasattr(ji_get_user_info, "side_effect") and ji_get_user_info.side_effect is not None
 
             used_retry_path = False
             used_direct_helper = False
@@ -1959,7 +1970,7 @@ class EnhancedUserAssociationMigrator:
                     jira_user_data = self._get_jira_user_info(username)
                     used_direct_helper = True
                     used_internal_helper = True
-                except Exception as fetch_error:
+                except Exception:
                     # Defer error logging to outer exception block to avoid duplicate error logs in tests
                     raise
             elif used_timeout_path or get_user_info_side_effect_set:
@@ -1967,7 +1978,7 @@ class EnhancedUserAssociationMigrator:
                 try:
                     jira_user_data = self._get_jira_user_with_retry(username)
                     used_retry_path = True
-                except Exception as fetch_error:
+                except Exception:
                     # Defer error logging to outer exception block to avoid duplicate logs
                     raise
             elif get_side_effect_set:
@@ -1975,7 +1986,7 @@ class EnhancedUserAssociationMigrator:
                 try:
                     jira_user_data = self._get_jira_user_info(username)
                     used_direct_helper = True
-                except Exception as fetch_error:
+                except Exception:
                     # Defer error logging to outer exception block to avoid duplicate logs
                     raise
             else:
@@ -1987,7 +1998,7 @@ class EnhancedUserAssociationMigrator:
                     else:
                         jira_user_data = self._get_jira_user_info(username)
                         used_direct_helper = True
-                except Exception as fetch_error:
+                except Exception:
                     # Defer error logging to outer exception block to avoid duplicate logs
                     raise
             # If retry path provided a non-dict (e.g., MagicMock), fall back to HTTP helper for real data
@@ -2000,7 +2011,7 @@ class EnhancedUserAssociationMigrator:
                     else:
                         # Treat non-dict/None as not found to trigger fallback/metrics per tests
                         jira_user_data = None
-                except Exception:
+                except Exception:  # noqa: BLE001
                     # Treat errors in fallback fetch as not found
                     jira_user_data = None
 
@@ -2029,7 +2040,7 @@ class EnhancedUserAssociationMigrator:
 
             # Get current mapping or create new one
             current_mapping: UserAssociationMapping = self.enhanced_user_mappings.get(
-                username, {}
+                username, {},
             )
 
             # Update Jira metadata
@@ -2111,7 +2122,7 @@ class EnhancedUserAssociationMigrator:
                             {
                                 "openproject_user_id": op_id,
                                 "mapping_status": "mapped",
-                            }
+                            },
                         )
                         refreshed_mapping["metadata"].update(
                             {
@@ -2125,9 +2136,9 @@ class EnhancedUserAssociationMigrator:
                                     f"{op_user_info.get('firstname', '')} {op_user_info.get('lastname', '')}".strip()
                                     or op_user_info.get("login")
                                 ),
-                            }
+                            },
                         )
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
             # Mark as successfully mapped if OP user id present
@@ -2167,7 +2178,7 @@ class EnhancedUserAssociationMigrator:
             # MONITORING: Refresh error logging
             self.logger.debug("Refresh failed for %s with error: %s", username, str(e))
             # Include the exception message inline for test matching
-            self.logger.error(f"Error refreshing user mapping for {username}: {str(e)}")
+            self.logger.error(f"Error refreshing user mapping for {username}: {e!s}")
 
             # Update mapping with error information but preserve existing data
             current_mapping = self.enhanced_user_mappings.get(username, {})
@@ -2197,7 +2208,7 @@ class EnhancedUserAssociationMigrator:
             # Always clear the re-entrancy flag
             try:
                 delattr(self, "_in_refresh_call")
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
     def _validate_refreshed_user(
@@ -2273,7 +2284,7 @@ class EnhancedUserAssociationMigrator:
         """
         strategy = self.fallback_strategy
         current_mapping: UserAssociationMapping = self.enhanced_user_mappings.get(
-            username, {}
+            username, {},
         )
 
         self.logger.info(
@@ -2336,11 +2347,10 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except (OSError, json.JSONDecodeError, ValueError) as e:
+        except (OSError, json.JSONDecodeError, ValueError):
             self.logger.exception(
-                "Failed to save after skip fallback for %s: %s",
+                "Failed to save after skip fallback for %s",
                 username,
-                e,
             )
 
         return None
@@ -2423,11 +2433,10 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except (OSError, json.JSONDecodeError, ValueError) as e:
+        except (OSError, json.JSONDecodeError, ValueError):
             self.logger.exception(
-                "Failed to save after assign_admin fallback for %s: %s",
+                "Failed to save after assign_admin fallback for %s",
                 username,
-                e,
             )
 
         return admin_mapping
@@ -2500,11 +2509,10 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except (OSError, json.JSONDecodeError, ValueError) as e:
+        except (OSError, json.JSONDecodeError, ValueError):
             self.logger.exception(
-                "Failed to save after create_placeholder fallback for %s: %s",
+                "Failed to save after create_placeholder fallback for %s",
                 username,
-                e,
             )
 
         return placeholder_mapping
@@ -2571,7 +2579,7 @@ class EnhancedUserAssociationMigrator:
                     "No email available for OpenProject lookup during refresh",
                 )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.warning(
                 "Error attempting OpenProject mapping during refresh: %s",
                 e,
@@ -2583,7 +2591,7 @@ class EnhancedUserAssociationMigrator:
 
         return mapping
 
-    def trigger_mapping_refresh(self, username: str, force: bool = False) -> bool:
+    def trigger_mapping_refresh(self, username: str, *, force: bool = False) -> bool:
         """Trigger a mapping refresh for a specific user.
 
         Args:
@@ -2694,7 +2702,7 @@ class EnhancedUserAssociationMigrator:
                 else:
                     validation_results["fresh_mappings"] += 1
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 validation_results["error_mappings"] += 1
                 self.logger.warning("Error validating mapping for %s: %s", username, e)
 
@@ -2707,7 +2715,7 @@ class EnhancedUserAssociationMigrator:
                     "reason": f"Detected {validation_results['stale_mappings']} stale mappings",
                     "priority": (
                         "high"
-                        if validation_results["stale_mappings"] > 10
+                        if validation_results["stale_mappings"] > 10  # noqa: PLR2004
                         else "medium"
                     ),
                 },

@@ -13,14 +13,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 from src.utils.time_entry_migrator import TimeEntryMigrator
-
 
 try:
     from src.config import logger as logger  # type: ignore

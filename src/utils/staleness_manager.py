@@ -1,7 +1,3 @@
-#!/usr/bin/env python3
-
-from src.display import configure_logging
-
 """Staleness Manager for TTL-based user mapping cache with automatic refresh.
 
 This module provides intelligent caching with staleness detection for user mappings
@@ -21,6 +17,7 @@ from typing import Any
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
+from src.display import configure_logging
 
 
 class FallbackStrategy(Enum):
@@ -145,7 +142,7 @@ class StalenessManager:
                 seconds = int(duration_str[:-1])
                 return timedelta(seconds=seconds)
             msg = f"Invalid duration format: {duration_str}. Use format like '24h', '2d', '30m'"
-            raise ValueError(
+            raise ValueError(  # noqa: TRY301
                 msg,
             )
         except (ValueError, TypeError) as e:
@@ -286,7 +283,7 @@ class StalenessManager:
                     attempt + 1,
                 )
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self.logger.warning(
                     "Failed to refresh user %s (attempt %d): %s",
                     user_key,
@@ -329,7 +326,7 @@ class StalenessManager:
         try:
             # This calls the existing method that needs to be implemented in JiraClient
             return self.jira_client.get_user_info(user_key)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.debug(
                 "Failed to get user data from Jira for %s: %s",
                 user_key,

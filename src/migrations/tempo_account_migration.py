@@ -5,6 +5,9 @@ Handles the migration of Tempo Timesheet accounts from Jira to OpenProject.
 import json
 import re
 from pathlib import Path
+
+# Provide a module-level config attribute for tests expecting `config`
+from types import SimpleNamespace
 from typing import Any
 
 import requests
@@ -12,11 +15,11 @@ import requests
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient, OpenProjectError
 from src.config import get_path, jira_config, logger, migration_config
-# Provide a module-level config attribute for tests expecting `config`
-from types import SimpleNamespace
+
 config = SimpleNamespace(logger=logger)
-from src.display import ProgressTracker
 from unittest.mock import MagicMock  # added for test-time injection
+
+from src.display import ProgressTracker
 
 # Get batch size from migration config
 batch_size = migration_config.get("batch_size", 1000)

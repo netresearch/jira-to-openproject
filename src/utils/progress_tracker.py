@@ -1,5 +1,3 @@
-from src.display import configure_logging
-
 """Enhanced progress tracking system for migration operations.
 
 This module provides comprehensive progress tracking with real-time reporting,
@@ -11,9 +9,10 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any
+from pathlib import Path
+from typing import Any, TypeVar
 
 from rich.console import Console
 from rich.live import Live
@@ -29,6 +28,8 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 from rich.table import Table
+
+from src.display import configure_logging
 
 
 class ProgressStage(Enum):
@@ -91,9 +92,9 @@ class ProgressTracker:
     def __init__(
         self,
         operation_name: str = "Migration",
+        *,
         enable_console_output: bool = True,
         enable_logging: bool = True,
-        enable_file_output: bool = False,
         output_file: str | None = None,
         update_interval: float = 0.5,
     ) -> None:
@@ -103,15 +104,13 @@ class ProgressTracker:
             operation_name: Name of the operation being tracked
             enable_console_output: Show progress in console
             enable_logging: Log progress to logger
-            enable_file_output: Save progress to file
-            output_file: File path for progress output
+            output_file: File path for progress output (if provided)
             update_interval: Minimum time between updates
 
         """
         self.operation_name = operation_name
         self.enable_console_output = enable_console_output
         self.enable_logging = enable_logging
-        self.enable_file_output = enable_file_output
         self.output_file = output_file
         self.update_interval = update_interval
 
@@ -166,7 +165,9 @@ class ProgressTracker:
 
         if self.enable_logging:
             self.logger.info(
-                f"Starting {self.operation_name}: {total_items} items to process",
+                "Starting %s: %d items to process",
+                self.operation_name,
+                total_items,
             )
 
         # Start background update thread
@@ -231,8 +232,8 @@ class ProgressTracker:
         for callback in self.callbacks:
             try:
                 callback(self.metrics)
-            except Exception as e:
-                self.logger.warning(f"Progress callback error: {e}")
+            except (RuntimeError, ValueError, TypeError) as e:
+                self.logger.warning("Progress callback error: %s", e)
 
     def add_error(self, error: str) -> None:
         """Add an error to the tracking.
@@ -256,6 +257,7 @@ class ProgressTracker:
 
     def finish(
         self,
+        *,
         success: bool = True,
         final_message: str | None = None,
     ) -> ProgressMetrics:
@@ -302,18 +304,24 @@ class ProgressTracker:
             elapsed = self.metrics.elapsed_time
             if success:
                 self.logger.info(
-                    f"{self.operation_name} completed: "
-                    f"{self.metrics.processed_items}/{self.metrics.total_items} items "
-                    f"in {elapsed:.2f}s ({self.metrics.items_per_second:.1f} items/s)",
+                    "%s completed: %d/%d items in %.2fs (%.1f items/s)",
+                    self.operation_name,
+                    self.metrics.processed_items,
+                    self.metrics.total_items,
+                    elapsed,
+                    self.metrics.items_per_second,
                 )
             else:
                 self.logger.error(
-                    f"{self.operation_name} failed after {elapsed:.2f}s: "
-                    f"{self.metrics.processed_items}/{self.metrics.total_items} items processed",
+                    "%s failed after %.2fs: %d/%d items processed",
+                    self.operation_name,
+                    elapsed,
+                    self.metrics.processed_items,
+                    self.metrics.total_items,
                 )
 
         # Save to file if enabled
-        if self.enable_file_output and self.output_file:
+        if self.output_file:
             self._save_to_file()
 
         return self.metrics
@@ -389,8 +397,8 @@ class ProgressTracker:
                     self.live.update(self._create_progress_panel())
 
                 time.sleep(self.update_interval)
-            except Exception as e:
-                self.logger.debug(f"Progress display update error: {e}")
+            except (RuntimeError, ValueError, OSError) as e:
+                self.logger.debug("Progress display update error: %s", e)
 
     def _save_to_file(self) -> None:
         """Save progress metrics to file."""
@@ -408,14 +416,16 @@ class ProgressTracker:
                 "items_per_second": self.metrics.items_per_second,
                 "errors": self.metrics.errors,
                 "warnings": self.metrics.warnings,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(tz=UTC).isoformat(),
             }
 
-            with open(self.output_file, "w") as f:
-                json.dump(output_data, f, indent=2)
+            if self.output_file:
+                out_path = Path(self.output_file)
+                with out_path.open("w", encoding="utf-8") as f:
+                    json.dump(output_data, f, indent=2)
 
-        except Exception as e:
-            self.logger.warning(f"Failed to save progress to file: {e}")
+        except (OSError, TypeError, ValueError) as e:
+            self.logger.warning("Failed to save progress to file: %s", e)
 
 
 class MultiStageProgressTracker:
@@ -462,6 +472,8 @@ class MultiStageProgressTracker:
         )
 
         self.stages[stage_name] = stage_tracker
+        # Preserve total items for later start
+        stage_tracker.metrics.total_items = total_items
         self.stage_order.append(stage_name)
 
         return stage_tracker
@@ -486,7 +498,7 @@ class MultiStageProgressTracker:
         # Initialize the stage
         tracker.start(tracker.metrics.total_items)
 
-        self.logger.info(f"Starting stage: {stage_name}")
+        self.logger.info("Starting stage: %s", stage_name)
 
         return tracker
 
@@ -538,21 +550,25 @@ class MultiStageProgressTracker:
         overall_progress = self.get_overall_progress()
 
         self.logger.info(
-            f"{self.operation_name} completed: "
-            f"{overall_progress['processed_items']}/{overall_progress['total_items']} items "
-            f"in {overall_progress['elapsed_time']:.2f}s",
+            "%s completed: %d/%d items in %.2fs",
+            self.operation_name,
+            overall_progress["processed_items"],
+            overall_progress["total_items"],
+            overall_progress["elapsed_time"],
         )
 
         return overall_progress
 
 
 # Convenience functions for common progress tracking scenarios
-def track_migration_progress(
+T = TypeVar("T")
+
+def track_migration_progress(  # noqa: UP047
     operation_name: str,
     total_items: int,
-    processor_func: Callable[[Callable], Any],
-) -> Any:
-    """Convenience function to track progress for a migration operation.
+    processor_func: Callable[[Callable[[int, int, str | None], None]], T],
+) -> T:
+    """Track progress for a migration operation.
 
     Args:
         operation_name: Name of the operation
@@ -576,10 +592,11 @@ def track_migration_progress(
     try:
         result = processor_func(update_callback)
         tracker.finish(success=True)
-        return result
     except Exception as e:
         tracker.finish(success=False, final_message=str(e))
         raise
+    else:
+        return result
 
 
 def create_batch_progress_callback(
@@ -607,3 +624,4 @@ def create_batch_progress_callback(
         )
 
     return callback
+

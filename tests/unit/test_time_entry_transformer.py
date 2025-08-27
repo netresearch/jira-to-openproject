@@ -397,7 +397,7 @@ class TestTimeEntryTransformer:
         result = transformer.transform_jira_work_log(invalid_work_log, "TEST-123")
         assert result is not None
         assert result["spentOn"] is not None  # Gets today's date
-        assert result["hours"] == 0.0  # Default time
+        assert result["hours"] == 0.01  # Default min time per clamp
         assert result["_meta"]["jira_issue_key"] == "TEST-123"
 
     def test_error_handling_in_transform_tempo(self, transformer) -> None:
@@ -409,7 +409,7 @@ class TestTimeEntryTransformer:
         result = transformer.transform_tempo_work_log(invalid_tempo_log)
         assert result is not None
         assert result["spentOn"] == ""  # Empty date from Tempo
-        assert result["hours"] == 0.0  # Default time
+        assert result["hours"] == 0.01  # Default min time per clamp
         assert result["_meta"]["tempo_author"] == "unknown"
 
     def test_batch_transform_with_failures(

@@ -779,9 +779,9 @@ class ProjectMigration(BaseMigration):
                 # Use a Rails command with proper exception handling that returns JSON in all cases
                 # SECURITY: All dynamic fields are now properly escaped to prevent command injection
                 jira_base = config.jira_config.get("url", "").replace("'", "\\'")
-                cf_key_id = self.cf_jira_project_key_id or 'nil'
-                cf_id_id = self.cf_jira_project_id_id or 'nil'
-                cf_url_id = self.cf_jira_base_url_id or 'nil'
+                cf_key_id = self.cf_jira_project_key_id or "nil"
+                cf_id_id = self.cf_jira_project_id_id or "nil"
+                cf_url_id = self.cf_jira_base_url_id or "nil"
                 ensure_cfs = (
                     "begin;"
                     " k = CustomField.find_by(type: 'ProjectCustomField', name: 'Jira Project Key');"

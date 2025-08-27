@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Integration Testing Framework for Jira to OpenProject Migration."""
 
 import asyncio
@@ -8,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -17,7 +16,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from jinja2 import Environment
+import aiofiles
+import aiohttp
+from jinja2 import Environment, select_autoescape
+
+logger = logging.getLogger(__name__)
+HTTP_OK = 200
 
 
 class TestEnvironment(Enum):
@@ -118,6 +122,7 @@ class TestEnvironmentManager:
     """Manages test environment setup and teardown."""
 
     def __init__(self, config: TestConfig, work_dir: Path) -> None:
+        """Initialize the test environment manager."""
         self.config = config
         self.work_dir = work_dir
         self.temp_dirs: list[Path] = []
@@ -126,7 +131,7 @@ class TestEnvironmentManager:
 
     async def setup(self) -> None:
         """Set up the test environment."""
-        logging.info("Setting up test environment...")
+        logger.info("Setting up test environment...")
 
         # Create work directory
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -141,7 +146,7 @@ class TestEnvironmentManager:
 
     async def teardown(self) -> None:
         """Tear down the test environment."""
-        logging.info("Tearing down test environment...")
+        logger.info("Tearing down test environment...")
 
         # Stop processes
         for process in self.processes:
@@ -150,8 +155,8 @@ class TestEnvironmentManager:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
-            except Exception as e:
-                logging.warning(f"Error stopping process: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error stopping process: %s", e)
 
         # Stop Docker containers
         if self.config.environment == TestEnvironment.DOCKER:
@@ -162,8 +167,8 @@ class TestEnvironmentManager:
             for temp_dir in self.temp_dirs:
                 try:
                     shutil.rmtree(temp_dir)
-                except Exception as e:
-                    logging.warning(f"Error cleaning up {temp_dir}: {e}")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Error cleaning up %s: %s", temp_dir, e)
 
     async def _setup_mock_environment(self) -> None:
         """Set up mock environment."""
@@ -186,8 +191,8 @@ class TestEnvironmentManager:
         }
 
         config_file = mock_data_dir / "mock_config.json"
-        with open(config_file, "w") as f:
-            json.dump(mock_config, f, indent=2)
+        async with aiofiles.open(config_file, "w") as f:
+            await f.write(json.dumps(mock_config, indent=2))
 
     async def _setup_docker_environment(self) -> None:
         """Set up Docker environment."""
@@ -234,7 +239,13 @@ class TestEnvironmentManager:
             "atlassian/jira-software:latest",
         ]
 
-        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         if result.returncode != 0:
             msg = f"Failed to start Jira container: {result.stderr}"
             raise RuntimeError(msg)
@@ -260,7 +271,13 @@ class TestEnvironmentManager:
             "openproject/community:latest",
         ]
 
-        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         if result.returncode != 0:
             msg = f"Failed to start OpenProject container: {result.stderr}"
             raise RuntimeError(
@@ -279,19 +296,17 @@ class TestEnvironmentManager:
 
     async def _wait_for_service(self, url: str, service_name: str) -> None:
         """Wait for a service to be ready."""
-        import aiohttp
-
         for _attempt in range(30):  # 30 attempts, 2 seconds each = 60 seconds
             try:
                 async with (
                     aiohttp.ClientSession() as session,
                     session.get(url, timeout=2) as response,
                 ):
-                    if response.status == 200:
-                        logging.info(f"{service_name} is ready")
+                    if response.status == HTTP_OK:
+                        logger.info("%s is ready", service_name)
                         return
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Wait loop error: %s", e)
 
             await asyncio.sleep(2)
 
@@ -307,16 +322,17 @@ class TestEnvironmentManager:
         """Tear down Docker environment."""
         for container in self.docker_containers:
             try:
-                subprocess.run(["docker", "stop", container], check=True)
-                subprocess.run(["docker", "rm", container], check=True)
+                await asyncio.to_thread(subprocess.run, ["docker", "stop", container], check=True)
+                await asyncio.to_thread(subprocess.run, ["docker", "rm", container], check=True)
             except subprocess.CalledProcessError as e:
-                logging.warning(f"Error stopping container {container}: {e}")
+                logger.warning("Error stopping container %s: %s", container, e)
 
 
 class TestDataGenerator:
     """Generates test data for integration tests."""
 
     def __init__(self, config: TestData, work_dir: Path) -> None:
+        """Initialize the test data generator."""
         self.config = config
         self.work_dir = work_dir
         self.data_dir = work_dir / "test_data"
@@ -324,7 +340,7 @@ class TestDataGenerator:
 
     async def generate_all_data(self) -> dict[str, Any]:
         """Generate all test data."""
-        logging.info("Generating test data...")
+        logger.info("Generating test data...")
 
         data = {
             "jira": await self._generate_jira_data(),
@@ -409,17 +425,17 @@ class TestDataGenerator:
                 issues.append(issue)
 
         # Generate users
-        for i in range(self.config.jira_users):
-            users.append(
-                {
-                    "id": str(2000 + i),
-                    "name": f"user{i+1}",
-                    "emailAddress": f"user{i+1}@example.com",
-                    "displayName": f"User {i+1}",
-                    "active": True,
-                    "timeZone": "UTC",
-                },
-            )
+        users = [
+            {
+                "id": str(2000 + i),
+                "name": f"user{i+1}",
+                "emailAddress": f"user{i+1}@example.com",
+                "displayName": f"User {i+1}",
+                "active": True,
+                "timeZone": "UTC",
+            }
+            for i in range(self.config.jira_users)
+        ]
 
         return {
             "projects": projects,
@@ -472,18 +488,18 @@ class TestDataGenerator:
                 work_packages.append(work_package)
 
         # Generate users
-        for i in range(self.config.op_users):
-            users.append(
-                {
-                    "id": i + 1,
-                    "login": f"user{i+1}",
-                    "email": f"user{i+1}@example.com",
-                    "firstName": f"User{i+1}",
-                    "lastName": "Test",
-                    "admin": i == 0,  # First user is admin
-                    "status": "active",
-                },
-            )
+        users = [
+            {
+                "id": i + 1,
+                "login": f"user{i+1}",
+                "email": f"user{i+1}@example.com",
+                "firstName": f"User{i+1}",
+                "lastName": "Test",
+                "admin": i == 0,  # First user is admin
+                "status": "active",
+            }
+            for i in range(self.config.op_users)
+        ]
 
         return {"projects": projects, "work_packages": work_packages, "users": users}
 
@@ -569,29 +585,30 @@ class TestDataGenerator:
         """Save test data to files."""
         # Save Jira data
         jira_file = self.data_dir / "jira_data.json"
-        with open(jira_file, "w") as f:
-            json.dump(data["jira"], f, indent=2)
+        async with aiofiles.open(jira_file, "w") as f:
+            await f.write(json.dumps(data["jira"], indent=2))
 
         # Save OpenProject data
         op_file = self.data_dir / "openproject_data.json"
-        with open(op_file, "w") as f:
-            json.dump(data["openproject"], f, indent=2)
+        async with aiofiles.open(op_file, "w") as f:
+            await f.write(json.dumps(data["openproject"], indent=2))
 
         # Save migration config
         config_file = self.data_dir / "migration_config.json"
-        with open(config_file, "w") as f:
-            json.dump(data["migration_config"], f, indent=2)
+        async with aiofiles.open(config_file, "w") as f:
+            await f.write(json.dumps(data["migration_config"], indent=2))
 
         # Save metadata
         metadata_file = self.data_dir / "metadata.json"
-        with open(metadata_file, "w") as f:
-            json.dump(data["metadata"], f, indent=2)
+        async with aiofiles.open(metadata_file, "w") as f:
+            await f.write(json.dumps(data["metadata"], indent=2))
 
 
 class PerformanceMonitor:
     """Monitors performance during tests."""
 
     def __init__(self) -> None:
+        """Initialize performance monitor storage."""
         self.metrics: dict[str, list[float]] = {}
         self.start_times: dict[str, float] = {}
 
@@ -651,6 +668,7 @@ class TestReporter:
     """Generates test reports."""
 
     def __init__(self, output_dir: Path) -> None:
+        """Initialize the test reporter and output directory."""
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.reports: list[TestReport] = []
@@ -661,7 +679,7 @@ class TestReporter:
 
     def generate_reports(self) -> dict[str, Path]:
         """Generate all test reports."""
-        logging.info("Generating test reports...")
+        logger.info("Generating test reports...")
 
         report_files = {}
 
@@ -695,7 +713,7 @@ class TestReporter:
             "generated_at": datetime.now(UTC).isoformat(),
         }
 
-        with open(output_file, "w") as f:
+        with output_file.open("w") as f:
             json.dump(report_data, f, indent=2, default=str)
 
     def _generate_html_report(self, output_file: Path) -> None:
@@ -751,7 +769,7 @@ class TestReporter:
 </html>
         """
 
-        env = Environment()
+        env = Environment(autoescape=select_autoescape(["html", "xml"]))
         template_obj = env.from_string(template)
 
         html_content = template_obj.render(
@@ -759,7 +777,7 @@ class TestReporter:
             reports=self.reports,
         )
 
-        with open(output_file, "w") as f:
+        with output_file.open("w") as f:
             f.write(html_content)
 
     def _generate_junit_report(self, output_file: Path) -> None:
@@ -791,14 +809,14 @@ class TestReporter:
         xml_content += "  </testsuite>\n"
         xml_content += "</testsuites>\n"
 
-        with open(output_file, "w") as f:
+        with output_file.open("w") as f:
             f.write(xml_content)
 
     def _generate_summary_report(self, output_file: Path) -> None:
         """Generate summary text report."""
         summary = self._get_summary_stats()
 
-        with open(output_file, "w") as f:
+        with output_file.open("w") as f:
             f.write("Integration Test Results Summary\n")
             f.write("=" * 40 + "\n\n")
             f.write(f"Total Tests: {summary['total']}\n")
@@ -856,6 +874,7 @@ class IntegrationTestingFramework:
     """Main integration testing framework."""
 
     def __init__(self, config: TestConfig, work_dir: Path | None = None) -> None:
+        """Initialize the framework with configuration and working directory."""
         self.config = config
         self.work_dir = work_dir or Path(tempfile.mkdtemp(prefix="integration_test_"))
         self.environment_manager = TestEnvironmentManager(config, self.work_dir)
@@ -867,7 +886,7 @@ class IntegrationTestingFramework:
 
     async def run_test_suite(self, test_suite: TestSuite) -> dict[str, Any]:
         """Run a complete test suite."""
-        self.logger.info(f"Starting test suite: {test_suite.name}")
+        self.logger.info("Starting test suite: %s", test_suite.name)
 
         try:
             # Set up environment
@@ -933,7 +952,7 @@ class IntegrationTestingFramework:
             report.error_message = str(e)
             report.performance_metrics = self.performance_monitor.get_metrics()
 
-            self.logger.exception(f"Test {test_name} failed: {e}")
+            self.logger.exception("Test %s failed", test_name)
 
         # Add report to reporter
         self.reporter.add_report(report)
@@ -956,22 +975,22 @@ class IntegrationTestingFramework:
                 report = await self.run_single_test(test_name, test_func)
                 results["tests"].append(report.__dict__)
             else:
-                self.logger.warning(f"Test function not found: {test_name}")
+                self.logger.warning("Test function not found: %s", test_name)
 
         # Generate summary
         results["end_time"] = datetime.now(UTC).isoformat()
-        results["summary"] = self.reporter._get_summary_stats()
+        results["summary"] = self.reporter._get_summary_stats()  # noqa: SLF001
 
         return results
 
-    def _get_test_function(self, test_name: str) -> Callable | None:
+    def _get_test_function(self, _test_name: str) -> Callable | None:
         """Get test function by name."""
         # This would map test names to actual test functions
         # For now, return None - this would be implemented based on the test registry
         return None
 
     @asynccontextmanager
-    async def test_context(self):
+    async def test_context(self) -> AsyncIterator["IntegrationTestingFramework"]:
         """Context manager for test setup and teardown."""
         try:
             await self.environment_manager.setup()
@@ -1009,7 +1028,7 @@ async def run_integration_tests(
         try:
             suite_results = await framework.run_test_suite(suite)
             results[suite.name] = suite_results
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             results[suite.name] = {"error": str(e)}
 
     return results
@@ -1048,6 +1067,7 @@ def create_basic_test_suite() -> TestSuite:
 if __name__ == "__main__":
     # Example usage
     async def main() -> None:
+        """Run the example integration test suite."""
         # Create test suite
         suite = create_basic_test_suite()
 

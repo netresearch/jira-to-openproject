@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Enhanced OpenProject client with advanced features for migration operations.
 
 This client adds file-based Ruby command execution for large commands/results,
@@ -10,11 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import pathlib
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Iterable
 
 import requests
 
@@ -27,7 +29,10 @@ logger = configure_logging("INFO", None)
 class EnhancedOpenProjectClient(OpenProjectClient):
     """Enhanced OpenProject client with additional migration-specific features."""
 
-    def __init__(self, **kwargs) -> None:
+    class ExecutionError(Exception):
+        """Execution error for Rails runner operations."""
+
+    def __init__(self, **kwargs: object) -> None:
         """Initialize the enhanced OpenProject client."""
         # In unit tests, avoid real SSH/docker/rails dependencies by injecting no-ops
         if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -47,12 +52,12 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         self._priorities_cache: list[dict[str, Any]] | None = None
         self._types_cache: list[dict[str, Any]] | None = None
 
-    def get_enhanced_users(self, **kwargs) -> list[dict[str, Any]]:
+    def get_enhanced_users(self, **kwargs: object) -> list[dict[str, Any]]:
         """Get users with enhanced metadata for migration."""
         # Enhanced implementation would go here
         return self.get_users(**kwargs)
 
-    def get_enhanced_projects(self, **kwargs) -> list[dict[str, Any]]:
+    def get_enhanced_projects(self, **kwargs: object) -> list[dict[str, Any]]:
         """Get projects with enhanced metadata for migration."""
         # Enhanced implementation would go here
         return self.get_projects(**kwargs)
@@ -81,15 +86,14 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         temp_path: pathlib.Path | None = None
         try:
             temp_path = self._create_temp_work_packages_file(work_packages)
-            result = self._execute_optimized_batch_creation(temp_path)
-            return result
+            return self._execute_optimized_batch_creation(temp_path)
         finally:
             # Always attempt cleanup if object exposes unlink (supports mocks)
             try:
                 if temp_path is not None and hasattr(temp_path, "unlink"):
                     temp_path.unlink()
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Temp file cleanup failed: %s", e)
 
     def _create_temp_work_packages_file(self, work_packages: list[dict[str, Any]]) -> pathlib.Path:
         """Write work packages to a temp JSON file and return its Path."""
@@ -117,18 +121,21 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         ]
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True)
-        except Exception as e:  # timeout/process failure
-            raise Exception(f"Rails runner execution failed: {e}") from e
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True)  # noqa: S603
+        except Exception as e:
+            msg = f"Rails runner execution failed: {e}"
+            raise EnhancedOpenProjectClient.ExecutionError(msg) from e
 
         if proc.returncode != 0:
             stderr = proc.stderr.strip() if proc.stderr else ""
-            raise Exception(f"Rails script failed: {stderr}")
+            msg = f"Rails script failed: {stderr}"
+            raise EnhancedOpenProjectClient.ExecutionError(msg)
 
         try:
             return json.loads(proc.stdout)
         except Exception as e:
-            raise Exception(f"Failed to parse Rails output JSON: {e}") from e
+            msg = f"Failed to parse Rails output JSON: {e}"
+            raise EnhancedOpenProjectClient.ExecutionError(msg) from e
 
     # =====================================
     # File-based bulk updates (Rails)
@@ -152,8 +159,8 @@ class EnhancedOpenProjectClient(OpenProjectClient):
             try:
                 if temp_path is not None and hasattr(temp_path, "unlink"):
                     temp_path.unlink()
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Temp file cleanup failed: %s", e)
 
     def _create_temp_updates_file(self, updates: list[dict[str, Any]]) -> pathlib.Path:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -169,18 +176,21 @@ class EnhancedOpenProjectClient(OpenProjectClient):
             str(temp_file),
         ]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True)
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True)  # noqa: S603
         except Exception as e:
-            raise Exception(f"Rails runner execution failed: {e}") from e
+            msg = f"Rails runner execution failed: {e}"
+            raise EnhancedOpenProjectClient.ExecutionError(msg) from e
 
         if proc.returncode != 0:
             stderr = proc.stderr.strip() if proc.stderr else ""
-            raise Exception(f"Rails script failed: {stderr}")
+            msg = f"Rails script failed: {stderr}"
+            raise EnhancedOpenProjectClient.ExecutionError(msg)
 
         try:
             return json.loads(proc.stdout)
         except Exception as e:
-            raise Exception(f"Failed to parse Rails output JSON: {e}") from e
+            msg = f"Failed to parse Rails output JSON: {e}"
+            raise EnhancedOpenProjectClient.ExecutionError(msg) from e
 
     # =====================================
     # Parallel REST helpers for bulk reads
@@ -202,7 +212,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         for idx, wp_id in enumerate(ids_list):
             try:
                 data = futures[idx].result()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 data = None
             results[wp_id] = data
         return results
@@ -216,7 +226,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
             resp = self.session.get(f"/api/v3/work_packages/{wp_id}")
             resp.raise_for_status()
             return resp.json()
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     # =====================================
@@ -224,6 +234,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
     # =====================================
 
     def get_priorities_cached(self) -> list[dict[str, Any]]:
+        """Return cached priorities list from OpenProject REST API."""
         if self._priorities_cache is not None:
             return self._priorities_cache
         if not self.session:
@@ -236,6 +247,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         return items
 
     def get_types_cached(self) -> list[dict[str, Any]]:
+        """Return cached types list from OpenProject REST API."""
         if self._types_cache is not None:
             return self._types_cache
         if not self.session:
@@ -256,6 +268,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         return self._get_work_package_safe(work_package_id)
 
     def create_work_package(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a work package via REST and return its JSON payload."""
         if not self.session:
             self.session = requests.Session()
         resp = self.session.post("/api/v3/work_packages", json=payload)
@@ -263,6 +276,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         return resp.json()
 
     def update_work_package(self, work_package_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Update a work package via REST and return its JSON payload."""
         if not self.session:
             self.session = requests.Session()
         resp = self.session.patch(f"/api/v3/work_packages/{work_package_id}", json=payload)
@@ -273,18 +287,26 @@ class EnhancedOpenProjectClient(OpenProjectClient):
     # Internal helpers
     # =====================================
 
-    def _cleanup_temp_file(self, temp_path: Any) -> None:
+    def _cleanup_temp_file(self, temp_path: Any) -> None:  # noqa: ANN401
+        """Best-effort cleanup of a temp file-like object used in tests."""
         try:
             if temp_path is not None and hasattr(temp_path, "unlink"):
                 temp_path.unlink()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
+            # Tests ignore cleanup failures
             pass
 
 
 class _NoopSSHClient:
     """Test-time stub that satisfies the SSHClient interface without real I/O."""
 
-    def execute_command(self, command: str, timeout: int | None = None, check: bool = True, retry: bool = True) -> tuple[str, str, int]:
+    def execute_command(
+        self,
+        command: str,  # noqa: ARG002
+        timeout: int | None = None,  # noqa: ARG002
+        check: bool = True,  # noqa: ARG002, FBT001, FBT002
+        retry: bool = True,  # noqa: ARG002, FBT001, FBT002
+    ) -> tuple[str, str, int]:
         return ("", "", 0)
 
 
@@ -293,15 +315,26 @@ class _NoopDockerClient:
 
     container_name = "noop"
 
-    def transfer_file_to_container(self, local_path: Any, container_path: Any) -> None:  # noqa: D401 - stub
+    def transfer_file_to_container(
+        self,
+        local_path: Any,  # noqa: ANN401, ARG002
+        container_path: Any,  # noqa: ANN401, ARG002
+    ) -> None:
         return None
 
-    def execute_command(self, command: str, user: str | None = None, workdir: Any | None = None, timeout: int | None = None, env: dict[str, str] | None = None) -> tuple[str, str, int]:  # noqa: D401 - stub
+    def execute_command(
+        self,
+        command: str,  # noqa: ARG002
+        user: str | None = None,  # noqa: ARG002
+        workdir: Any | None = None,  # noqa: ANN401, ARG002
+        timeout: int | None = None,  # noqa: ARG002
+        env: dict[str, str] | None = None,  # noqa: ARG002
+    ) -> tuple[str, str, int]:
         return ("", "", 0)
 
 
 class _NoopRailsConsoleClient:
     """Test-time stub for Rails console client."""
 
-    def execute(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    def execute(self, *args: Any, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401, ARG002
         return {}

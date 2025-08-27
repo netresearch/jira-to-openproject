@@ -246,8 +246,9 @@ open-project(prod)*         begin
 /tmp/openproject_script.rb:6:in '<top (required)>': stack level too deep (SystemStackError)
 open-project(prod)>
 """
-        from src.clients.openproject_client import QueryExecutionError
         import pytest as _pytest
+
+        from src.clients.openproject_client import QueryExecutionError
         with _pytest.raises(QueryExecutionError):
             op_client._check_console_output_for_errors(severe_output, context="execute_large_query_to_json_file")
 

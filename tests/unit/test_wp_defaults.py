@@ -21,13 +21,12 @@ class _StubOPClient:
 
 
 def test_choose_default_type_id_uses_first_available(monkeypatch):
-    import importlib
     import sys
     # Bypass heavy base_migration import by injecting minimal module for the test
     sys.modules.setdefault("src.migrations.base_migration", types.ModuleType("base_migration"))
     bm = sys.modules["src.migrations.base_migration"]
-    setattr(bm, "BaseMigration", object)
-    setattr(bm, "register_entity_types", lambda *a, **k: (lambda cls: cls))
+    bm.BaseMigration = object
+    bm.register_entity_types = lambda *a, **k: lambda cls: cls
 
     from src.migrations import wp_defaults as wpm
 
@@ -36,12 +35,11 @@ def test_choose_default_type_id_uses_first_available(monkeypatch):
 
 
 def test_apply_required_defaults_sets_missing_fields(monkeypatch):
-    import importlib
     import sys
     sys.modules.setdefault("src.migrations.base_migration", types.ModuleType("base_migration"))
     bm = sys.modules["src.migrations.base_migration"]
-    setattr(bm, "BaseMigration", object)
-    setattr(bm, "register_entity_types", lambda *a, **k: (lambda cls: cls))
+    bm.BaseMigration = object
+    bm.register_entity_types = lambda *a, **k: lambda cls: cls
 
     from src.migrations import wp_defaults as wpm
 

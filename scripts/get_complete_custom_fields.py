@@ -225,7 +225,7 @@ def get_complete_custom_fields(
     print("\nCustom Fields:")
     for field in custom_fields[:5]:  # Show first 5 fields
         print(
-            f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
+            f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})",
         )
     if len(custom_fields) > 5:
         print(f"... and {len(custom_fields) - 5} more fields")
@@ -245,7 +245,7 @@ def main() -> int:
 
     # Get the custom fields
     fields: list[dict[str, Any]] = get_complete_custom_fields(
-        session_name="rails_console", output_file=output_file
+        session_name="rails_console", output_file=output_file,
     )
 
     return 0 if fields else 1

@@ -1,47 +1,21 @@
-#!/usr/bin/env python3
 """OpenProject client for interacting with OpenProject instances via SSH and Rails console."""
 
 import json
 import os
 import random
 import re
+import secrets
 import time
 from collections.abc import Callable, Iterator
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from src import config
-import builtins as _builtins  # type: ignore
-import unittest.mock as _um
-
-# Test-friendly shim: make isinstance robust when tests pass a Mock instance as the second arg.
-# If the second argument is a Mock instance (not a type), fall back to its class.
-_real_isinstance = _builtins.isinstance
-
-def _safe_isinstance(obj: Any, cls_or_tuple: Any) -> bool:  # type: ignore[override]
-    try:
-        return _real_isinstance(obj, cls_or_tuple)
-    except TypeError:
-        # cls_or_tuple is not a type; if it's a unittest.mock.Mock instance, coerce
-        try:
-            is_mock_cls = _real_isinstance(cls_or_tuple, _um.Mock)
-            is_mock_obj = _real_isinstance(obj, _um.Mock)
-            if is_mock_cls and is_mock_obj:
-                return True
-            if is_mock_cls:
-                return _real_isinstance(obj, cls_or_tuple.__class__)
-        except Exception:
-            pass
-        # Re-raise original TypeError for non-mock cases
-        raise
-
-_builtins.isinstance = _safe_isinstance  # type: ignore[assignment]
-
-# Note: Do not monkeypatch isinstance at import time; maintain standard behavior.
 from src.clients.docker_client import DockerClient
 from src.clients.exceptions import (
-    ConnectionError,
+    ClientConnectionError,
     JsonParseError,
     QueryExecutionError,
     RecordNotFoundError,
@@ -54,19 +28,18 @@ from src.utils.file_manager import FileManager
 from src.utils.idempotency_decorators import batch_idempotent
 from src.utils.metrics_collector import MetricsCollector
 from src.utils.performance_optimizer import PerformanceOptimizer
-from src.utils.rate_limiter import create_openproject_rate_limiter, RateLimiter
+from src.utils.rate_limiter import create_openproject_rate_limiter
 
 try:
     # Prefer shared logger configured at startup
-    from src.config import logger as logger  # type: ignore
-except Exception:
+    from src.config import logger
+except Exception:  # noqa: BLE001
     # Fallback to local configuration if config logger is unavailable
     logger = configure_logging("INFO", None)
 
-# Add SSHConnection class for tests
+
 class SSHConnection:
     """SSH connection class for testing purposes."""
-    pass
 
 
 class OpenProjectError(Exception):
@@ -88,7 +61,7 @@ class OpenProjectClient:
     All error handling uses exceptions rather than status dictionaries.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         container_name: str | None = None,
         ssh_host: str | None = None,
@@ -100,7 +73,7 @@ class OpenProjectClient:
         ssh_client: SSHClient | None = None,
         docker_client: DockerClient | None = None,
         rails_client: RailsConsoleClient | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         """Initialize the OpenProject client with dependency injection.
 
@@ -115,6 +88,7 @@ class OpenProjectClient:
             ssh_client: Optional SSH client (dependency injection)
             docker_client: Optional Docker client (dependency injection)
             rails_client: Optional Rails console client (dependency injection)
+            **kwargs: Additional performance-related parameters (batch sizes, TTL, etc.)
 
         Raises:
             ValueError: If required configuration values are missing
@@ -170,7 +144,9 @@ class OpenProjectClient:
             retry_delay=self.retry_delay,
         )
         logger.debug(
-            f"{'Using provided' if ssh_client else 'Initialized'} SSHClient for host {self.ssh_host}",
+            "%s SSHClient for host %s",
+            "Using provided" if ssh_client else "Initialized",
+            self.ssh_host,
         )
 
         # 2. Next, create or use the Docker client
@@ -182,7 +158,9 @@ class OpenProjectClient:
             retry_delay=self.retry_delay,
         )
         logger.debug(
-            f"{'Using provided' if docker_client else 'Initialized'} DockerClient for container {self.container_name}",
+            "%s DockerClient for container %s",
+            "Using provided" if docker_client else "Initialized",
+            self.container_name,
         )
 
         # 3. Finally, create or use the Rails console client for executing commands
@@ -191,8 +169,9 @@ class OpenProjectClient:
             command_timeout=self.command_timeout,
         )
         logger.debug(
-            f"{'Using provided' if rails_client else 'Initialized'} "
-            f"RailsConsoleClient with tmux session {self.tmux_session_name}",
+            "%s RailsConsoleClient with tmux session %s",
+            "Using provided" if rails_client else "Initialized",
+            self.tmux_session_name,
         )
 
         # ===== PERFORMANCE OPTIMIZER SETUP =====
@@ -228,8 +207,8 @@ class OpenProjectClient:
                 2048,
             )  # 2GB memory limit
 
-        except ConfigurationValidationError as e:
-            logger.exception(f"OpenProjectClient configuration validation failed: {e}")
+        except ConfigurationValidationError:
+            logger.exception("OpenProjectClient configuration validation failed")
             raise
 
         # Initialize performance optimizer with validated parameters
@@ -261,11 +240,11 @@ class OpenProjectClient:
         deterministic '/tmp/{base_name}.json' to match test expectations.
         """
         if os.getenv("PYTEST_CURRENT_TEST"):
-            return f"/tmp/{base_name}.json"
+            return f"/tmp/{base_name}.json"  # noqa: S108
         timestamp = int(time.time())
         pid = os.getpid()
-        random_suffix = format(random.randint(0, 0xFFFFFF), "06x")
-        return f"/tmp/{base_name}_{timestamp}_{pid}_{random_suffix}.json"
+        random_suffix = secrets.token_hex(3)
+        return f"/tmp/{base_name}_{timestamp}_{pid}_{random_suffix}.json"  # noqa: S108
 
     def _create_script_file(self, script_content: str) -> Path:
         """Create a temporary file with the script content.
@@ -296,15 +275,16 @@ class OpenProjectClient:
 
             # Log the absolute path for easier debugging
             logger.debug("Created temporary script file: %s", file_path.as_posix())
-            return file_path
         except OSError:
-            error_msg = f"Failed to create script file: {file_path!s}"
+            error_msg = f"Failed to create script file: {file_path}"
             logger.exception(error_msg)
             raise OSError(error_msg) from None
         except Exception:
-            error_msg = f"Failed to create script file: {file_path!s}"
+            error_msg = f"Failed to create script file: {file_path}"
             logger.exception(error_msg)
             raise OSError(error_msg) from None
+        else:
+            return file_path
 
     def _transfer_rails_script(self, local_path: Path | str) -> Path:
         """Transfer a script to the Rails environment.
@@ -329,7 +309,7 @@ class OpenProjectClient:
             logger.debug("Transferring script from: %s", abs_path)
 
             # Use just the base filename for the container path
-            container_path = Path("/tmp") / local_path.name
+            container_path = Path("/tmp") / local_path.name  # noqa: S108
 
             self.docker_client.transfer_file_to_container(abs_path, container_path)
 
@@ -354,7 +334,7 @@ class OpenProjectClient:
 
         return container_path
 
-    def _cleanup_script_files(self, files_or_local: Any, remote_path: Path | None = None) -> None:
+    def _cleanup_script_files(self, files_or_local: Any, remote_path: Path | None = None) -> None:  # noqa: ANN401
         """Clean up temporary files after execution.
 
         Two supported modes (for backward compatibility and tests):
@@ -368,7 +348,7 @@ class OpenProjectClient:
                     remote_file = name if isinstance(name, str) else getattr(name, "name", str(name))
                     cmd = f"docker exec {self.container_name} rm -f /tmp/{Path(remote_file).name}"
                     self.ssh_client.execute_command(cmd)
-                except Exception as e:  # Suppress cleanup errors
+                except Exception as e:  # noqa: BLE001 - Suppress cleanup errors
                     logger.warning("Cleanup failed for %s: %s", name, e)
             return
 
@@ -379,7 +359,7 @@ class OpenProjectClient:
             if isinstance(local_path, Path) and local_path.exists():
                 local_path.unlink()
                 logger.debug("Cleaned up local script file: %s", local_path)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Non-critical error cleaning up local file: %s", e)
 
         # Clean up remote file
@@ -392,7 +372,7 @@ class OpenProjectClient:
                 ]
                 self.ssh_client.execute_command(" ".join(command))
                 logger.debug("Cleaned up remote script file: %s", remote_path)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Non-critical error cleaning up remote file: %s", e)
 
     def execute(self, script_content: str) -> dict[str, Any]:
@@ -415,10 +395,10 @@ class OpenProjectClient:
         except (json.JSONDecodeError, TypeError):
             return {"result": result}
 
-    def execute_script_with_data(
+    def execute_script_with_data(  # noqa: C901, PLR0912, PLR0915
         self,
         script_content: str,
-        data: Any,
+        data: Any,  # noqa: ANN401
         timeout: int | None = None,
     ) -> dict[str, Any]:
         """Execute a Ruby script in the Rails console with structured input data.
@@ -439,6 +419,7 @@ class OpenProjectClient:
 
         Returns:
             Dict with keys: status ("success"|"error"), message, data (parsed JSON), output (raw snippet)
+
         """
         # Prepare local temp paths
         temp_dir = Path(self.file_manager.data_dir) / "temp_scripts"
@@ -449,10 +430,11 @@ class OpenProjectClient:
             with local_data_path.open("w", encoding="utf-8") as f:
                 json.dump(data, f)
         except Exception as e:
-            raise QueryExecutionError(f"Failed to serialize input data: {e}") from e
+            err_msg = f"Failed to serialize input data: {e}"
+            raise QueryExecutionError(err_msg) from e
 
         # Compose Ruby script with a small header that loads JSON into `input_data`
-        container_data_path = Path("/tmp") / local_data_path.name
+        container_data_path = Path("/tmp") / local_data_path.name  # noqa: S108
         header = (
             "require 'json'\n"
             f"input_data = JSON.parse(File.read('{container_data_path.as_posix()}'))\n"
@@ -476,9 +458,9 @@ class OpenProjectClient:
             except Exception as e:
                 # Fallback: if Rails console crashed or is unstable (e.g., Reline/IRB errors),
                 # execute via non-interactive runner to avoid TTY/Reline issues.
-                from src.clients.rails_console_client import (
-                    ConsoleNotReadyError,
+                from src.clients.rails_console_client import (  # noqa: PLC0415
                     CommandExecutionError,
+                    ConsoleNotReadyError,
                     RubyError,
                 )
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
@@ -491,14 +473,13 @@ class OpenProjectClient:
                     )
                     # Try common app roots: /app (official) then /opt/openproject (legacy)
                     runner_cmd = (
-                        f'(cd /app || cd /opt/openproject) && '
-                        f'bundle exec rails runner {container_script_path.as_posix()}'
+                        f"(cd /app || cd /opt/openproject) && "
+                        f"bundle exec rails runner {container_script_path.as_posix()}"
                     )
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
-                        raise QueryExecutionError(
-                            f"rails runner failed (rc={rc}): {stderr[:500]}",
-                        ) from e
+                        q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                        raise QueryExecutionError(q_msg) from e
                     output = stdout
                 else:
                     raise
@@ -511,21 +492,19 @@ class OpenProjectClient:
             if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
                 json_str = output[start_idx + len(start_marker) : end_idx].strip()
                 # Fallback parsing with sanitization to guard against stray control chars from IRB/tmux
-                def _try_parse(s: str) -> Any:
+                def _try_parse(s: str) -> Any:  # noqa: ANN401
                     return json.loads(s)
 
                 def _sanitize_control_chars(s: str) -> str:
                     # Remove ASCII control chars except standard whitespace
                     return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
 
-                def _extract_first_json_block(s: str) -> str | None:
+                def _extract_first_json_block(s: str) -> str | None:  # noqa: C901
                     # Attempt to isolate the first balanced JSON object/array
-                    start_pos = None
                     for i, ch in enumerate(s):
                         if ch in "{[":
-                            start_pos = i
                             opening = ch
-                            closing = '}' if ch == '{' else ']'
+                            closing = "}" if ch == "{" else "]"
                             depth = 0
                             in_str = False
                             esc = False
@@ -538,31 +517,31 @@ class OpenProjectClient:
                                         esc = True
                                     elif c == '"':
                                         in_str = False
-                                else:
-                                    if c == '"':
-                                        in_str = True
-                                    elif c == opening:
-                                        depth += 1
-                                    elif c == closing:
-                                        depth -= 1
-                                        if depth == 0:
-                                            return s[i : j + 1]
+                                elif c == '"':
+                                    in_str = True
+                                elif c == opening:
+                                    depth += 1
+                                elif c == closing:
+                                    depth -= 1
+                                    if depth == 0:
+                                        return s[i : j + 1]
                             break
                     return None
 
                 try:
                     parsed = _try_parse(json_str)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     try:
                         parsed = _try_parse(_sanitize_control_chars(json_str))
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         candidate = _extract_first_json_block(json_str)
                         if candidate is None:
                             candidate = _extract_first_json_block(_sanitize_control_chars(json_str)) or json_str
                         try:
                             parsed = _try_parse(candidate)
                         except Exception as e:
-                            raise QueryExecutionError(f"Failed to parse JSON output: {e}") from e
+                            q_msg = f"Failed to parse JSON output: {e}"
+                            raise QueryExecutionError(q_msg) from e
 
                 # Return a structured success response
                 return {
@@ -579,20 +558,13 @@ class OpenProjectClient:
                 "output": output[:2000],
             }
 
-        except Exception:
-            # Let caller handle detailed exception; still attempt cleanup in finally
-            raise
         finally:
             # Best-effort cleanup of local + remote files
-            try:
+            with suppress(Exception):
                 if local_script_path is not None and container_script_path is not None:
                     self._cleanup_script_files(local_script_path, container_script_path)
-            except Exception:
-                pass
-            try:
+            with suppress(Exception):
                 self._cleanup_script_files(local_data_path, container_data_path)
-            except Exception:
-                pass
 
     def transfer_file_to_container(
         self,
@@ -625,7 +597,7 @@ class OpenProjectClient:
         """
         try:
             # Generate a unique ID to verify connection
-            unique_id = str(random.randint(10000, 99999))
+            unique_id = secrets.token_hex(3)
 
             # Simple command to echo the ID back
             command = f'puts "OPENPROJECT_CONNECTION_TEST_{unique_id}"'
@@ -658,12 +630,12 @@ class OpenProjectClient:
 
         # Use provided timeout or default to 30 seconds for complex operations
         effective_timeout = timeout if timeout is not None else 30
-        return self.rails_client._send_command_to_tmux(
+        return self.rails_client._send_command_to_tmux(  # noqa: SLF001
             f"puts ({query})",
             effective_timeout,
         )
 
-    def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> Any:
+    def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> dict[str, Any]:
         """Execute a Rails query and return parsed JSON result.
 
         Args:
@@ -680,7 +652,6 @@ class OpenProjectClient:
         """
         try:
             # Prefer proper pagination for collection queries
-            import re
 
             # Extract model name when possible, e.g., Project.all / WorkPackage.where(...)
             # Only treat plain collection queries (all/where) without explicit to_json or array producers
@@ -696,28 +667,27 @@ class OpenProjectClient:
 
             # Execute the query and parse result
             result_output = self.execute_query(modified_query, timeout=timeout)
-            parsed = self._parse_rails_output(result_output)
-            return parsed
+            return self._parse_rails_output(result_output)
 
-        except JsonParseError as e:
+        except JsonParseError:
             # Surface parse errors directly to callers so orchestrator can stop on error
-            logger.error("JSON parsing failed for Rails output: %s", e)
+            logger.exception("JSON parsing failed for Rails output")
             raise
-        except RubyError as e:
+        except RubyError:
             # Preserve RubyError context for higher layers to classify
-            logger.error("Ruby error during execute_query_to_json_file: %s", e)
+            logger.exception("Ruby error during execute_query_to_json_file")
             raise
         except Exception as e:
             # Normalize any other errors to QueryExecutionError
-            logger.exception("Error in execute_query_to_json_file: %s", e)
+            logger.exception("Error in execute_query_to_json_file")
             raise QueryExecutionError(str(e)) from e
 
-    def execute_large_query_to_json_file(
+    def execute_large_query_to_json_file(  # noqa: C901, PLR0912, PLR0915
         self,
         query: str,
-        container_file: str = "/tmp/j2o_query.json",
+        container_file: str = "/tmp/j2o_query.json",  # noqa: S108
         timeout: int | None = None,
-    ) -> Any:
+    ) -> dict[str, Any]:
         """Execute a Rails query by writing JSON to a container file, then read it back.
 
         Use this for large result sets to avoid tmux/console truncation and parsing fragility.
@@ -730,6 +700,7 @@ class OpenProjectClient:
 
         Returns:
             Parsed JSON data
+
         """
         # Ensure JSON conversion on the Ruby side
         ruby_json_expr = f"({query}).as_json"
@@ -759,8 +730,8 @@ class OpenProjectClient:
         except Exception as e:
             # On console instability (IRB/Reline crash, marker loss), optionally fall back to rails runner
             from src.clients.rails_console_client import (
-                ConsoleNotReadyError,
                 CommandExecutionError,
+                ConsoleNotReadyError,
                 RubyError,
             )
             if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
@@ -771,21 +742,20 @@ class OpenProjectClient:
                     "Rails console failed during large query (%s); falling back to rails runner",
                     type(e).__name__,
                 )
-                runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+                runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
                 local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                 local_tmp.parent.mkdir(parents=True, exist_ok=True)
-                with open(local_tmp, "w", encoding="utf-8") as f:
+                with local_tmp.open("w", encoding="utf-8") as f:
                     f.write(ruby_script)
                 self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
                 runner_cmd = (
-                    f'(cd /app || cd /opt/openproject) && '
-                    f'bundle exec rails runner {runner_script_path}'
+                    f"(cd /app || cd /opt/openproject) && "
+                    f"bundle exec rails runner {runner_script_path}"
                 )
                 stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                 if rc != 0:
-                    raise QueryExecutionError(
-                        f"rails runner failed (rc={rc}): {stderr[:500]}",
-                    ) from e
+                    q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                    raise QueryExecutionError(q_msg) from e
             else:
                 raise
 
@@ -856,9 +826,8 @@ class OpenProjectClient:
                 or ln.startswith("--EXEC_ERROR--")
             ]
             snippet = informative or lines[:6]
-            raise QueryExecutionError(
-                f"Console error during {context}: {' | '.join(snippet[:8])}"
-            )
+            q_msg = f"Console error during {context}: {' | '.join(snippet[:8])}"
+            raise QueryExecutionError(q_msg)
 
     def _assert_expected_console_notice(self, output: str, expected_prefix: str, context: str) -> None:
         """Treat any unexpected console response as error in strict file-write flows.
@@ -869,14 +838,17 @@ class OpenProjectClient:
         """
         if not output:
             # When suppress_output is used we still expect our explicit puts notice
-            raise QueryExecutionError(f"No console output during {context}; expected '{expected_prefix}...'")
+            q_msg = f"No console output during {context}; expected '{expected_prefix}...'"
+            raise QueryExecutionError(q_msg)
         # Normalize
         lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
         if not any(expected_prefix in ln for ln in lines):
             sample = " | ".join(lines[:5])
-            raise QueryExecutionError(
-                f"Unexpected console output during {context}; expected '{expected_prefix}...'. Got: {sample[:300]}"
+            q_msg = (
+                f"Unexpected console output during {context}; expected '{expected_prefix}...'. "
+                f"Got: {sample[:300]}"
             )
+            raise QueryExecutionError(q_msg)
 
     # Removed rails runner helper; all scripts go through persistent tmux console
 
@@ -1242,6 +1214,7 @@ class OpenProjectClient:
 
         Raises:
             QueryExecutionError: On execution or retrieval failure
+
         """
         # Basic validation of model name to avoid code injection
         if not isinstance(model, str) or not model or not re.match(r"^[A-Za-z_:][A-Za-z0-9_:]*$", model):
@@ -1272,11 +1245,15 @@ class OpenProjectClient:
         # Compose minimal Ruby script
         header = (
             "require 'json'\n"
+            "require 'logger'\n"
             f"model_name = '{model}'\n"
             f"data_path = '{container_json.as_posix()}'\n"
             f"result_path = '{container_result.as_posix()}'\n"
         )
         ruby = (
+            "begin; Rails.logger.level = Logger::WARN; rescue; end\n"
+            "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end\n"
+            "begin; GoodJob.logger = Logger.new(nil); rescue; end\n"
             "model = Object.const_get(model_name)\n"
             "data = JSON.parse(File.read(data_path))\n"
             "created = []\n"
@@ -1476,7 +1453,7 @@ class OpenProjectClient:
                 if hasattr(self, "metrics"):
                     self.metrics.increment_counter("batch_success_total")
                 return result
-            except (ConnectionError, QueryExecutionError) as e:
+            except (ClientConnectionError, QueryExecutionError) as e:
                 last_exception = e
 
                 # Check if this is a transient error worth retrying
@@ -2014,6 +1991,7 @@ class OpenProjectClient:
         Raises:
             RecordNotFoundError: If the user cannot be found
             QueryExecutionError: If the lookup fails
+
         """
         try:
             # Normalize identifier
@@ -2260,8 +2238,8 @@ class OpenProjectClient:
                 logger.debug("Successfully executed statuses write command")
             except Exception as e:
                 from src.clients.rails_console_client import (
-                    ConsoleNotReadyError,
                     CommandExecutionError,
+                    ConsoleNotReadyError,
                     RubyError,
                 )
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
@@ -2276,16 +2254,16 @@ class OpenProjectClient:
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
                     ruby_runner = (
-                        "require 'json'\n" +
-                        "statuses = Status.all.as_json\n" +
+                        "require 'json'\n"
+                        "statuses = Status.all.as_json\n"
                         f"File.write('{file_path}', JSON.pretty_generate(statuses))\n"
                     )
                     with open(local_tmp, "w", encoding="utf-8") as f:
                         f.write(ruby_runner)
                     self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
                     runner_cmd = (
-                        f'(cd /app || cd /opt/openproject) && '
-                        f'bundle exec rails runner {runner_script_path}'
+                        f"(cd /app || cd /opt/openproject) && "
+                        f"bundle exec rails runner {runner_script_path}"
                     )
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
@@ -2360,8 +2338,8 @@ class OpenProjectClient:
                 logger.debug("Successfully executed work package types write command")
             except Exception as e:
                 from src.clients.rails_console_client import (
-                    ConsoleNotReadyError,
                     CommandExecutionError,
+                    ConsoleNotReadyError,
                     RubyError,
                 )
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
@@ -2372,16 +2350,16 @@ class OpenProjectClient:
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
                     ruby_runner = (
-                        "require 'json'\n" +
-                        "types = Type.select(:id, :name).map { |t| { id: t.id, name: t.name } }\n" +
+                        "require 'json'\n"
+                        "types = Type.select(:id, :name).map { |t| { id: t.id, name: t.name } }\n"
                         f"File.write('{file_path}', JSON.pretty_generate(types))\n"
                     )
                     with open(local_tmp, "w", encoding="utf-8") as f:
                         f.write(ruby_runner)
                     self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
                     runner_cmd = (
-                        f'(cd /app || cd /opt/openproject) && '
-                        f'bundle exec rails runner {runner_script_path}'
+                        f"(cd /app || cd /opt/openproject) && "
+                        f"bundle exec rails runner {runner_script_path}"
                     )
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
@@ -2467,8 +2445,8 @@ class OpenProjectClient:
                 logger.debug("Successfully executed projects write command")
             except Exception as e:
                 from src.clients.rails_console_client import (
-                    ConsoleNotReadyError,
                     CommandExecutionError,
+                    ConsoleNotReadyError,
                     RubyError,
                 )
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
@@ -2489,8 +2467,8 @@ class OpenProjectClient:
                         f.write(ruby_runner)
                     self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
                     runner_cmd = (
-                        f'(cd /app || cd /opt/openproject) && '
-                        f'bundle exec rails runner {runner_script_path}'
+                        f"(cd /app || cd /opt/openproject) && "
+                        f"bundle exec rails runner {runner_script_path}"
                     )
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
@@ -2818,6 +2796,10 @@ class OpenProjectClient:
         # Prepare the script with proper Ruby syntax
         script = f"""
         begin
+          require 'logger'
+          begin; Rails.logger.level = Logger::WARN; rescue; end
+          begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end
+          begin; GoodJob.logger = Logger.new(nil); rescue; end
           time_entry = TimeEntry.new(
             work_package_id: {work_package_id},
             user_id: {user_id},
@@ -3021,10 +3003,14 @@ class OpenProjectClient:
         header = (
             "require 'json'\n"
             "require 'date'\n"
+            "require 'logger'\n"
             f"data_path = '{container_json.as_posix()}'\n"
             f"result_path = '{container_result.as_posix()}'\n"
         )
         ruby = (
+            "begin; Rails.logger.level = Logger::WARN; rescue; end\n"
+            "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end\n"
+            "begin; GoodJob.logger = Logger.new(nil); rescue; end\n"
             "entries = JSON.parse(File.read(data_path), symbolize_names: true)\n"
             "results = []\n"
             "created_count = 0\n"

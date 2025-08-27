@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """DockerClient.
 
 Manages Docker container interactions, including command execution and file transfers.
@@ -10,6 +9,9 @@ Part of the layered client architecture where:
 4. OpenProjectClient coordinates all clients and operations
 """
 
+import json
+import re
+import uuid
 from pathlib import Path
 from shlex import quote
 
@@ -97,10 +99,9 @@ class DockerClient:
                 return False
 
             logger.error("Container not found: %s", self.container_name)
-            return False
-
-        except Exception as e:
-            logger.exception("Error checking if container exists: %s", e)
+            return False  # noqa: TRY300
+        except Exception:
+            logger.exception("Error checking if container exists")
             raise
 
     def execute_command(
@@ -166,21 +167,7 @@ class DockerClient:
         local_path: Path | str,
         container_path: Path | str,
     ) -> None:
-        """Copy a file from local machine to the Docker container.
-
-        Args:
-            local_path: Path to local file on the remote server
-            container_path: Path in container
-
-        Returns:
-            None on success
-
-        Raises:
-            FileNotFoundError: If the file does not exist or cannot be accessed
-            ValueError: If the file transfer fails
-            Exception: For other errors during command execution or file transfer
-
-        """
+        """Copy a file from local machine to the Docker container."""
         # Convert to Path objects if they're strings
         local_path = Path(local_path) if isinstance(local_path, str) else local_path
         container_path = (
@@ -207,20 +194,20 @@ class DockerClient:
                         container_path,
                     )
                     msg = f"File not found in container after copy: {container_path}"
-                    raise ValueError(
-                        msg,
-                    )
+                    raise ValueError(msg)  # noqa: TRY301
 
                 # Get file size in container
                 size = self.get_file_size_in_container(container_path)
                 logger.debug(
-                    f"Successfully copied file to container: "
-                    f"{local_path} -> {container_path} (size: {size} bytes)",
+                    "Successfully copied file to container: %s -> %s (size: %s bytes)",
+                    local_path,
+                    container_path,
+                    size,
                 )
             else:
                 logger.error("Failed to copy file to container: %s", stderr)
                 msg = f"Failed to copy file to container: {stderr}"
-                raise ValueError(msg)
+                raise ValueError(msg)  # noqa: TRY301
 
         except FileNotFoundError:
             # Re-raise file not found errors
@@ -235,7 +222,7 @@ class DockerClient:
                     msg,
                 ) from e
 
-            logger.exception("Error copying file to container: %s", e)
+            logger.exception("Error copying file to container")
             msg = f"Failed to copy file to container: {e}"
             raise ValueError(msg) from e
 
@@ -244,21 +231,7 @@ class DockerClient:
         container_path: Path | str,
         local_path: Path | str,
     ) -> Path:
-        """Copy a file from Docker container to local machine.
-
-        Args:
-            container_path: Path in container
-            local_path: Path to save file locally
-
-        Returns:
-            Path to the file on success
-
-        Raises:
-            FileNotFoundError: If the file does not exist in the container
-            ValueError: If the file transfer fails
-            Exception: For other errors during command execution or file transfer
-
-        """
+        """Copy a file from Docker container to local machine."""
         # Convert to Path objects if they're strings
         container_path = (
             Path(container_path) if isinstance(container_path, str) else container_path
@@ -270,19 +243,19 @@ class DockerClient:
         # This is common during polling for Rails to finish writing the file.
         if not self.check_file_exists_in_container(container_path):
             # Do not log at error level here; caller may be polling.
-            raise FileNotFoundError(f"File not found in container: {container_path}")
+            msg = f"File not found in container: {container_path}"
+            raise FileNotFoundError(msg)
 
         try:
             # Fast existence check to avoid noisy docker cp errors while caller polls
             if not self.check_file_exists_in_container(container_path):
                 logger.debug("Container file not yet present: %s", container_path)
-                raise FileNotFoundError(f"File not found in container: {container_path}")
+                msg = f"File not found in container: {container_path}"
+                raise FileNotFoundError(msg)  # noqa: TRY301
 
             # Use a temporary file on the remote server for intermediate storage
-            import uuid
-
             temp_filename = f"docker_transfer_{uuid.uuid4().hex}.tmp"
-            remote_temp_path = f"/tmp/{temp_filename}"
+            remote_temp_path = f"/tmp/{temp_filename}"  # noqa: S108
 
             # Step 1: Copy from container to temporary location on remote server
             cmd = f"docker cp {quote(self.container_name)}:{quote(str(container_path))} {quote(remote_temp_path)}"
@@ -296,7 +269,7 @@ class DockerClient:
             if returncode != 0:
                 logger.error("Failed to copy file from container: %s", stderr)
                 msg = f"Failed to copy file from container: {stderr}"
-                raise ValueError(msg)
+                raise ValueError(msg)  # noqa: TRY301
 
             # Step 2: Copy from remote server to actual local path
             try:
@@ -310,8 +283,9 @@ class DockerClient:
                 )
 
                 logger.debug(
-                    f"Successfully copied file from container: "
-                    f"{container_path} -> {local_path}",
+                    "Successfully copied file from container: %s -> %s",
+                    container_path,
+                    local_path,
                 )
 
                 return result_path
@@ -321,9 +295,11 @@ class DockerClient:
                 try:
                     cleanup_cmd = f"rm -f {quote(remote_temp_path)}"
                     self.ssh_client.execute_command(cleanup_cmd, check=False)
-                except Exception as cleanup_error:
+                except Exception as cleanup_error:  # noqa: BLE001
                     logger.warning(
-                        f"Failed to clean up temporary file {remote_temp_path}: {cleanup_error}",
+                        "Failed to clean up temporary file %s: %s",
+                        remote_temp_path,
+                        cleanup_error,
                     )
 
         except FileNotFoundError:
@@ -338,7 +314,7 @@ class DockerClient:
                     msg,
                 ) from e
 
-            logger.exception("Error copying file from container: %s", e)
+            logger.exception("Error copying file from container")
             msg = f"Failed to copy file from container: {e}"
             raise ValueError(msg) from e
 
@@ -362,7 +338,7 @@ class DockerClient:
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
 
             return stdout.strip() == "EXISTS" and returncode == 0
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Error checking if file exists in container: %s", e)
             return False
 
@@ -397,11 +373,11 @@ class DockerClient:
                     stdout.strip(),
                 )
                 return None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Error getting file size in container: %s", e)
             return None
 
-    def run_container(
+    def run_container(  # noqa: PLR0913, PLR0912, C901
         self,
         image: str,
         name: str | None = None,
@@ -412,35 +388,13 @@ class DockerClient:
         cpu_limit: str | None = None,
         memory_limit: str | None = None,
         network: str | None = None,
+        *,
         detach: bool = True,
         remove: bool = False,
         command: str | None = None,
     ) -> tuple[str, str, int]:
-        """Run a new Docker container with security and resource constraints.
-
-        Args:
-            image: Docker image to run
-            name: Container name (optional)
-            user: User to run as (e.g., "1000:1000" for UID:GID)
-            environment: Environment variables
-            volumes: Volume mappings (host_path: container_path)
-            ports: Port mappings (host_port: container_port)
-            cpu_limit: CPU limit (e.g., "0.5" for half core)
-            memory_limit: Memory limit (e.g., "512m" for 512MB)
-            network: Network to connect to
-            detach: Run in detached mode
-            remove: Remove container when it exits
-            command: Command to run in container
-
-        Returns:
-            Tuple of (stdout, stderr, returncode)
-
-        Raises:
-            Exception: If the container fails to start
-
-        """
+        """Run a new Docker container with security and resource constraints."""
         # INPUT VALIDATION: Validate critical parameters to prevent errors
-        import re
 
         if user and not re.match(r"^[\w]+:?[\w]*$", user):
             msg = f"Invalid user format: {user}. Expected format: 'user' or 'uid:gid'"
@@ -538,14 +492,12 @@ class DockerClient:
             if returncode != 0:
                 logger.error("Failed to inspect container: %s", stderr)
                 msg = f"Failed to inspect container: {stderr}"
-                raise ValueError(msg)
-
-            import json
+                raise ValueError(msg)  # noqa: TRY301
 
             inspect_data = json.loads(stdout)
             if not inspect_data:
                 msg = f"No data returned for container: {self.container_name}"
-                raise ValueError(msg)
+                raise ValueError(msg)  # noqa: TRY301
 
             container_info = inspect_data[0]
 
@@ -566,7 +518,7 @@ class DockerClient:
             }
 
         except Exception as e:
-            logger.exception("Error getting container info: %s", e)
+            logger.exception("Error getting container info")
             msg = f"Failed to get container info: {e}"
             raise ValueError(msg) from e
 
@@ -597,7 +549,7 @@ class DockerClient:
         )
 
         # Use a temporary path on the remote server
-        remote_temp_path = Path(f"/tmp/{local_path.name}")
+        remote_temp_path = Path(f"/tmp/{local_path.name}")  # noqa: S108
 
         try:
             # Step 1: Transfer from local to remote server via SSH

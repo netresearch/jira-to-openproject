@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Markdown converter for Jira wiki markup to OpenProject markdown.
 
 This module provides comprehensive conversion functionality for transforming
@@ -400,7 +399,7 @@ class MarkdownConverter:
         def replace_info(match: re.Match[str]) -> str:
             title = parse_title(match.group(1)) or "Info"
             content = match.group(2).strip()
-            return f"**ℹ️ {title}**\n\n{content}"
+            return f"**Info: {title}**\n\n{content}"
 
         text = self.info_pattern.sub(replace_info, text)
 
@@ -436,7 +435,7 @@ class MarkdownConverter:
 
         return self.panel_pattern.sub(replace_panel, text)
 
-    def _convert_advanced_macros(self, text: str) -> str:
+    def _convert_advanced_macros(self, text: str) -> str:  # noqa: C901
         """Convert advanced Jira macros to markdown equivalents."""
 
         def parse_title(params: str | None) -> str:

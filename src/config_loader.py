@@ -401,6 +401,7 @@ class ConfigLoader:
             section: Configuration section (jira, openproject, migration)
             key: Configuration key
             value: Value to set
+
         """
         if section not in self.config:
             self.config[section] = {}

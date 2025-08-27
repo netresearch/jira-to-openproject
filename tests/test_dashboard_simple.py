@@ -44,7 +44,7 @@ def test_dashboard_routes() -> bool | None:
     print("\nTesting dashboard routes...")
 
     try:
-        from dashboard.app import app  # noqa: F401
+        from dashboard.app import app
 
         # Check that the app has the expected routes
         routes = [route.path for route in app.routes]

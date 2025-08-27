@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for EnhancedTimestampMigrator."""
 
-import json
 from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
@@ -295,10 +294,10 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(sample_issue["fields"])
-        
+
         with patch.object(migrator_with_mocks, "_is_date_field", return_value=True):
             result = migrator_with_mocks._extract_all_timestamps(mock_issue)
 
@@ -320,8 +319,8 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(minimal_issue["fields"])
         result = migrator_with_mocks._extract_all_timestamps(mock_issue)
 
@@ -347,8 +346,8 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
 
         with patch.object(
@@ -359,7 +358,7 @@ class TestEnhancedTimestampMigrator:
 
             # First extract timestamps
             extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
-            
+
             result = migrator_with_mocks._migrate_creation_timestamp(
                 extracted,
                 work_package,
@@ -380,8 +379,8 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
 
         with patch.object(
@@ -392,7 +391,7 @@ class TestEnhancedTimestampMigrator:
 
             # First extract timestamps
             extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
-            
+
             result = migrator_with_mocks._migrate_creation_timestamp(
                 extracted,
                 work_package,
@@ -409,13 +408,13 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
 
         # First extract timestamps
         extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
-        
+
         result = migrator_with_mocks._migrate_creation_timestamp(
             extracted,
             work_package,
@@ -436,8 +435,8 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
 
         with patch.object(
@@ -448,7 +447,7 @@ class TestEnhancedTimestampMigrator:
 
             # First extract timestamps
             extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
-            
+
             result = migrator_with_mocks._migrate_creation_timestamp(
                 extracted,
                 work_package,
@@ -465,8 +464,8 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
 
         with patch.object(
@@ -477,7 +476,7 @@ class TestEnhancedTimestampMigrator:
 
             # First extract timestamps
             extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
-            
+
             result = migrator_with_mocks._migrate_update_timestamp(
                 extracted,
                 work_package,
@@ -494,8 +493,8 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
 
         with patch.object(
@@ -506,7 +505,7 @@ class TestEnhancedTimestampMigrator:
 
             # First extract timestamps
             extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
-            
+
             result = migrator_with_mocks._migrate_due_date(extracted, work_package)
 
             assert "warnings" in result
@@ -519,8 +518,8 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
 
         with patch.object(
@@ -531,7 +530,7 @@ class TestEnhancedTimestampMigrator:
 
             # First extract timestamps
             extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
-            
+
             result = migrator_with_mocks._migrate_resolution_date(
                 extracted,
                 work_package,
@@ -553,8 +552,8 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
 
         with patch.object(migrator_with_mocks, "_is_date_field") as mock_is_date:
@@ -568,7 +567,7 @@ class TestEnhancedTimestampMigrator:
 
                 # First extract timestamps
                 extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
-                
+
                 result = migrator_with_mocks._migrate_custom_date_fields(
                     extracted,
                     work_package,
@@ -601,7 +600,7 @@ class TestEnhancedTimestampMigrator:
         migrator_with_mocks._rails_operations_cache = [operation]
 
         work_package_mapping = {
-            "123": {"jira_key": "TEST-123", "openproject_id": 123}
+            "123": {"jira_key": "TEST-123", "openproject_id": 123},
         }
 
         script_content = migrator_with_mocks._generate_timestamp_preservation_script(
@@ -744,8 +743,8 @@ class TestEnhancedTimestampMigrator:
         # Create a mock object with fields attribute
         class MockJiraIssue:
             def __init__(self, fields):
-                self.fields = type('MockFields', (), fields)()
-        
+                self.fields = type("MockFields", (), fields)()
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
 
         with patch.object(
@@ -877,10 +876,10 @@ class TestEnhancedTimestampMigrator:
             # Create a mock object with fields attribute and raw attribute for custom fields
             class MockJiraIssue:
                 def __init__(self, fields):
-                    self.fields = type('MockFields', (), fields)()
+                    self.fields = type("MockFields", (), fields)()
                     # Add raw attribute for custom field extraction
                     self.raw = {"fields": fields}
-        
+
         mock_issue = MockJiraIssue(jira_issue["fields"])
         timestamps = migrator_with_mocks._extract_all_timestamps(mock_issue)
 

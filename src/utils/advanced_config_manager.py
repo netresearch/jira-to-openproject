@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Advanced Configuration Management System.
 
 This module provides a comprehensive configuration management solution:
@@ -12,7 +11,9 @@ This module provides a comprehensive configuration management solution:
 - Configuration backup and restore
 """
 
+import hashlib
 import json
+import logging
 import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -24,7 +25,9 @@ from uuid import uuid4
 import jsonschema
 import yaml
 from cryptography.fernet import Fernet
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+logger = logging.getLogger(__name__)
 
 
 class EnvironmentType(Enum):
@@ -138,7 +141,7 @@ class ConfigurationManager:
         # Initialize Jinja2 environment for templates
         self.jinja_env = Environment(
             loader=FileSystemLoader(str(self.templates_dir)),
-            autoescape=False,
+            autoescape=select_autoescape(["html", "xml", "yaml", "yml", "json"]),
             trim_blocks=True,
             lstrip_blocks=True,
         )
@@ -150,10 +153,11 @@ class ConfigurationManager:
         if self.schemas_dir.exists():
             for schema_file in self.schemas_dir.glob("*.json"):
                 try:
-                    with open(schema_file) as f:
+                    with schema_file.open() as f:
                         schemas[schema_file.stem] = json.load(f)
-                except Exception:
-                    pass
+                except Exception as e:  # noqa: BLE001
+                    # Log and continue to next schema
+                    logger.warning("Schema load failed for %s: %s", schema_file, e)
 
         return schemas
 
@@ -163,6 +167,7 @@ class ConfigurationManager:
         environment: EnvironmentType,
         variables: dict[str, Any],
         output_path: Path | None = None,
+        *,
         validate: bool = True,
     ) -> Path:
         """Create configuration from template.
@@ -197,7 +202,7 @@ class ConfigurationManager:
             output_path = self.config_dir / f"config_{environment.value}.yaml"
 
         # Write configuration
-        with open(output_path, "w") as f:
+        with output_path.open("w") as f:
             f.write(config_content)
 
         # Validate if requested
@@ -229,7 +234,7 @@ class ConfigurationManager:
 
         """
         # Load base configuration
-        with open(config_path) as f:
+        with config_path.open() as f:
             config = yaml.safe_load(f)
 
         # Sort overrides by priority (lower numbers = higher priority)
@@ -247,7 +252,7 @@ class ConfigurationManager:
             output_path = config_path.with_suffix(".override.yaml")
 
         # Write modified configuration
-        with open(output_path, "w") as f:
+        with output_path.open("w") as f:
             yaml.dump(config, f, default_flow_style=False, indent=2)
 
         return output_path
@@ -263,7 +268,7 @@ class ConfigurationManager:
 
         """
         # Load configuration
-        with open(config_path) as f:
+        with config_path.open() as f:
             config = yaml.safe_load(f)
 
         # Get schema version from config
@@ -306,7 +311,7 @@ class ConfigurationManager:
         timestamp = datetime.now(UTC)
 
         # Load configuration to get metadata
-        with open(config_path) as f:
+        with config_path.open() as f:
             config = yaml.safe_load(f)
 
         config_version = config.get("schema_version", "1.0")
@@ -322,9 +327,7 @@ class ConfigurationManager:
         shutil.copy2(config_path, backup_path)
 
         # Calculate checksum
-        import hashlib
-
-        with open(backup_path, "rb") as f:
+        with backup_path.open("rb") as f:
             checksum = hashlib.sha256(f.read()).hexdigest()
 
         # Create backup metadata
@@ -341,7 +344,7 @@ class ConfigurationManager:
 
         # Save backup metadata
         metadata_path = backup_path.with_suffix(".meta.json")
-        with open(metadata_path, "w") as f:
+        with metadata_path.open("w") as f:
             json.dump(backup.__dict__, f, default=str, indent=2)
 
         return backup
@@ -372,7 +375,7 @@ class ConfigurationManager:
         # Load backup metadata
         metadata_path = backup_path.with_suffix(".meta.json")
         if metadata_path.exists():
-            with open(metadata_path) as f:
+            with metadata_path.open() as f:
                 json.load(f)
 
         # Determine target path
@@ -384,23 +387,23 @@ class ConfigurationManager:
 
         return target_path
 
-    def export_config(self, config_path: Path, format: str = "yaml") -> str:
+    def export_config(self, config_path: Path, fmt: str = "yaml") -> str:
         """Export configuration in specified format.
 
         Args:
             config_path: Path to configuration file
-            format: Export format (yaml, json, env)
+            fmt: Export format (yaml, json, env)
 
         Returns:
             Exported configuration as string
 
         """
-        with open(config_path) as f:
+        with config_path.open() as f:
             config = yaml.safe_load(f)
 
-        if format.lower() == "json":
+        if fmt.lower() == "json":
             return json.dumps(config, indent=2)
-        if format.lower() == "env":
+        if fmt.lower() == "env":
             return self._config_to_env(config)
         # yaml
         return yaml.dump(config, default_flow_style=False, indent=2)
@@ -408,21 +411,21 @@ class ConfigurationManager:
     def import_config(
         self,
         config_content: str,
-        format: str = "yaml",
+        fmt: str = "yaml",
     ) -> dict[str, Any]:
         """Import configuration from string.
 
         Args:
             config_content: Configuration content as string
-            format: Import format (yaml, json, env)
+            fmt: Import format (yaml, json, env)
 
         Returns:
             Parsed configuration dictionary
 
         """
-        if format.lower() == "json":
+        if fmt.lower() == "json":
             return json.loads(config_content)
-        if format.lower() == "env":
+        if fmt.lower() == "env":
             return self._env_to_config(config_content)
         # yaml
         return yaml.safe_load(config_content)
@@ -477,7 +480,7 @@ class ConfigurationManager:
             raise ValueError(msg)
 
         # Read configuration
-        with open(config_path, "rb") as f:
+        with config_path.open("rb") as f:
             config_data = f.read()
 
         # Encrypt configuration
@@ -485,7 +488,7 @@ class ConfigurationManager:
 
         # Write encrypted configuration
         encrypted_path = config_path.with_suffix(".encrypted")
-        with open(encrypted_path, "wb") as f:
+        with encrypted_path.open("wb") as f:
             f.write(encrypted_data)
 
         return encrypted_path
@@ -505,7 +508,7 @@ class ConfigurationManager:
             raise ValueError(msg)
 
         # Read encrypted configuration
-        with open(encrypted_path, "rb") as f:
+        with encrypted_path.open("rb") as f:
             encrypted_data = f.read()
 
         # Decrypt configuration
@@ -513,7 +516,7 @@ class ConfigurationManager:
 
         # Write decrypted configuration
         decrypted_path = encrypted_path.with_suffix(".decrypted")
-        with open(decrypted_path, "wb") as f:
+        with decrypted_path.open("wb") as f:
             f.write(config_data)
 
         return decrypted_path
@@ -530,7 +533,7 @@ class ConfigurationManager:
         for template_file in self.templates_dir.glob("*.yaml.j2"):
             # Try to extract metadata from template
             try:
-                with open(template_file) as f:
+                with template_file.open() as f:
                     content = f.read()
 
                 # Extract metadata from comments
@@ -548,8 +551,8 @@ class ConfigurationManager:
                     dependencies=metadata.get("dependencies", []),
                 )
                 templates.append(template)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Template metadata parse failed for %s: %s", template_file, e)
 
         return templates
 
@@ -578,7 +581,7 @@ class ConfigurationManager:
 
         for metadata_file in self.backups_dir.glob("*.meta.json"):
             try:
-                with open(metadata_file) as f:
+                with metadata_file.open() as f:
                     metadata = json.load(f)
 
                 # Convert timestamp back to datetime
@@ -587,8 +590,8 @@ class ConfigurationManager:
 
                 backup = ConfigBackup(**metadata)
                 backups.append(backup)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Backup metadata parse failed for %s: %s", metadata_file, e)
 
         return sorted(backups, key=lambda x: x.timestamp, reverse=True)
 

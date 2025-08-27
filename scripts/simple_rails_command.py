@@ -140,7 +140,7 @@ def main() -> None:
 
         # Capture the output
         json_output = capture_tmux_output(
-            session_name, lines=5000
+            session_name, lines=5000,
         )  # Capture more lines for large datasets
 
         # Save the raw output for debugging if needed
@@ -161,7 +161,7 @@ def main() -> None:
                 # Parse the JSON
                 custom_fields = json.loads(json_str)
                 print(
-                    f"Successfully parsed JSON with {len(custom_fields)} custom fields"
+                    f"Successfully parsed JSON with {len(custom_fields)} custom fields",
                 )
 
                 # Save to local file if path provided
@@ -174,7 +174,7 @@ def main() -> None:
                 print("\nCustom Fields:")
                 for field in custom_fields[:5]:  # Show first 5 fields
                     print(
-                        f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
+                        f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})",
                     )
                 if len(custom_fields) > 5:
                     print(f"... and {len(custom_fields) - 5} more fields")
@@ -194,7 +194,7 @@ def main() -> None:
                     # Parse the JSON
                     custom_fields = json.loads(raw_json)
                     print(
-                        f"Successfully parsed raw JSON with {len(custom_fields)} custom fields"
+                        f"Successfully parsed raw JSON with {len(custom_fields)} custom fields",
                     )
 
                     # Save to local file if path provided
@@ -207,7 +207,7 @@ def main() -> None:
                     print("\nCustom Fields:")
                     for field in custom_fields[:5]:  # Show first 5 fields
                         print(
-                            f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
+                            f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})",
                         )
                     if len(custom_fields) > 5:
                         print(f"... and {len(custom_fields) - 5} more fields")

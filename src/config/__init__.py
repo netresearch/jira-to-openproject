@@ -2,10 +2,10 @@
 Provides a centralized configuration interface using ConfigLoader.
 """
 
-import threading
 import logging
-from pathlib import Path
+import threading
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.config_loader import ConfigLoader
@@ -126,8 +126,8 @@ __all__ = [
     "mappings",
     "migration_config",
     "openproject_config",
-    "update_from_cli_args",
     "reset_mappings",
+    "update_from_cli_args",
     "update_from_cli_args",
     "validate_config",
     "var_dirs",
@@ -354,7 +354,7 @@ def update_from_cli_args(args: Any) -> None:
             logger.warning("Failed applying CLI jira project filter: %s", e)
 
     # Optional: disable WorkPackageMigration shim
-    if hasattr(args, "disable_wpm_shim") and getattr(args, "disable_wpm_shim"):
+    if hasattr(args, "disable_wpm_shim") and args.disable_wpm_shim:
         try:
             _config_loader.set_value("migration", "disable_wpm_shim", True)
             migration_config["disable_wpm_shim"] = True

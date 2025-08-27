@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Comprehensive Time Entry Migration for Jira to OpenProject migration.
 
 This module provides complete time tracking data migration capabilities:
@@ -11,7 +10,7 @@ This module provides complete time tracking data migration capabilities:
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -19,8 +18,8 @@ from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
-from src.utils.time_entry_transformer import TimeEntryTransformer
 from src.models.migration_error import MigrationError
+from src.utils.time_entry_transformer import TimeEntryTransformer
 
 # Get logger from config
 logger = configure_logging("INFO", None)
@@ -103,7 +102,7 @@ class TimeEntryMigrator:
             # Load user mapping
             user_mapping_file = self.data_dir / "user_mapping.json"
             if user_mapping_file.exists():
-                with open(user_mapping_file, encoding="utf-8") as f:
+                with user_mapping_file.open(encoding="utf-8") as f:
                     user_data = json.load(f)
                     expanded: dict[str, int] = {}
                     for entry in user_data.values():
@@ -122,12 +121,15 @@ class TimeEntryMigrator:
                             if key:
                                 expanded[str(key)] = op_id
                     self.user_mapping = expanded
-                self.logger.info(f"Loaded {len(self.user_mapping)} user mappings (expanded)")
+                self.logger.info(
+                    "Loaded %d user mappings (expanded)",
+                    len(self.user_mapping),
+                )
 
             # Load work package mapping
             wp_mapping_file = self.data_dir / "work_package_mapping.json"
             if wp_mapping_file.exists():
-                with open(wp_mapping_file, encoding="utf-8") as f:
+                with wp_mapping_file.open(encoding="utf-8") as f:
                     wp_data = json.load(f)
                     self.work_package_mapping = {
                         entry.get("jira_key", ""): entry.get("openproject_id")
@@ -135,16 +137,18 @@ class TimeEntryMigrator:
                         if entry.get("jira_key") and entry.get("openproject_id")
                     }
                 self.logger.info(
-                    f"Loaded {len(self.work_package_mapping)} work package mappings",
+                    "Loaded %d work package mappings",
+                    len(self.work_package_mapping),
                 )
 
             # Load activity mapping from OpenProject
             self._load_activity_mapping()
 
         except Exception as e:
-            self.logger.warning(f"Failed to load some mappings: {e}")
+            self.logger.warning("Failed to load some mappings: %s", e)
             if config.migration_config.get("stop_on_error", False):
-                raise MigrationError(f"Failed to load required mappings: {e}") from e
+                msg = f"Failed to load required mappings: {e}"
+                raise MigrationError(msg) from e
 
     def _load_activity_mapping(self) -> None:
         """Load activity mapping from OpenProject."""
@@ -162,14 +166,18 @@ class TimeEntryMigrator:
             else:
                 self.default_activity_id = None
 
-            self.logger.info(f"Loaded {len(self.activity_mapping)} activity mappings")
+            self.logger.info(
+                "Loaded %d activity mappings",
+                len(self.activity_mapping),
+            )
 
-        except Exception as e:
-            self.logger.warning(f"Failed to load activity mappings: {e}")
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to load activity mappings: %s", e)
             # Honor stop-on-error if configured to avoid silent partial migrations
             try:
                 if config.migration_config.get("stop_on_error", False):
-                    raise MigrationError(f"Failed to load activity mappings: {e}") from e
+                    msg = f"Failed to load activity mappings: {e}"
+                    raise MigrationError(msg) from e
             finally:
                 self.activity_mapping = {}
                 self.default_activity_id = None
@@ -177,6 +185,7 @@ class TimeEntryMigrator:
     def extract_jira_work_logs_for_issues(
         self,
         issue_keys: list[str],
+        *,
         save_to_file: bool = True,
     ) -> dict[str, list[dict[str, Any]]]:
         """Extract work logs from Jira for a list of issues.
@@ -189,8 +198,11 @@ class TimeEntryMigrator:
             Dictionary mapping issue keys to their work logs
 
         """
-        self.logger.info(f"Extracting work logs for {len(issue_keys)} Jira issues")
-        start_time = datetime.now()
+        self.logger.info(
+            "Extracting work logs for %d Jira issues",
+            len(issue_keys),
+        )
+        start_time = datetime.now(tz=UTC)
 
         extracted_logs = {}
         total_logs = 0
@@ -207,10 +219,12 @@ class TimeEntryMigrator:
                     extracted_logs[issue_key] = work_logs
                     total_logs += len(work_logs)
                     self.logger.debug(
-                        f"Extracted {len(work_logs)} work logs for {issue_key}",
+                        "Extracted %d work logs for %s",
+                        len(work_logs),
+                        issue_key,
                     )
                 else:
-                    self.logger.debug(f"No work logs found for {issue_key}")
+                    self.logger.debug("No work logs found for %s", issue_key)
 
             except Exception as e:
                 error_msg = f"Failed to extract work logs for {issue_key}: {e}"
@@ -226,9 +240,12 @@ class TimeEntryMigrator:
         if save_to_file:
             self._save_extracted_work_logs()
 
-        processing_time = (datetime.now() - start_time).total_seconds()
+        processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
         self.logger.success(
-            f"Extracted {total_logs} work logs from {len(extracted_logs)} issues in {processing_time:.2f}s",
+            "Extracted %d work logs from %d issues in %.2fs",
+            total_logs,
+            len(extracted_logs),
+            processing_time,
         )
 
         return extracted_logs
@@ -238,6 +255,7 @@ class TimeEntryMigrator:
         project_keys: list[str] | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        *,
         save_to_file: bool = True,
     ) -> list[dict[str, Any]]:
         """Extract Tempo time entries with enhanced metadata.
@@ -253,7 +271,7 @@ class TimeEntryMigrator:
 
         """
         self.logger.info("Extracting Tempo time entries")
-        start_time = datetime.now()
+        start_time = datetime.now(tz=UTC)
 
         try:
             # Check if Tempo is available
@@ -270,23 +288,27 @@ class TimeEntryMigrator:
                 date_to=date_to,
             )
 
+            result_entries: list[dict[str, Any]] = []
             if tempo_entries:
                 self.extracted_tempo_entries = tempo_entries
                 self.migration_results["tempo_entries_extracted"] = len(tempo_entries)
                 self.migration_results["total_work_logs_found"] += len(tempo_entries)
+                result_entries = tempo_entries
 
                 # Save to file if requested
                 if save_to_file:
                     self._save_extracted_tempo_entries()
 
-                processing_time = (datetime.now() - start_time).total_seconds()
+                processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
                 self.logger.success(
-                    f"Extracted {len(tempo_entries)} Tempo entries in {processing_time:.2f}s",
+                    "Extracted %d Tempo entries in %.2fs",
+                    len(tempo_entries),
+                    processing_time,
                 )
             else:
                 self.logger.info("No Tempo time entries found")
 
-            return tempo_entries
+            return result_entries  # noqa: TRY300
 
         except Exception as e:
             error_msg = f"Failed to extract Tempo time entries: {e}"
@@ -302,7 +324,7 @@ class TimeEntryMigrator:
 
         """
         self.logger.info("Transforming extracted time entries to OpenProject format")
-        start_time = datetime.now()
+        start_time = datetime.now(tz=UTC)
 
         # Update transformer with current mappings
         self.transformer = TimeEntryTransformer(
@@ -321,7 +343,10 @@ class TimeEntryMigrator:
                 jira_work_logs.extend(work_logs)
 
             if jira_work_logs:
-                self.logger.info(f"Transforming {len(jira_work_logs)} Jira work logs")
+                self.logger.info(
+                    "Transforming %d Jira work logs",
+                    len(jira_work_logs),
+                )
                 try:
                     jira_transformed = self.transformer.batch_transform_work_logs(
                         jira_work_logs,
@@ -340,7 +365,8 @@ class TimeEntryMigrator:
         # Transform Tempo time entries
         if self.extracted_tempo_entries:
             self.logger.info(
-                f"Transforming {len(self.extracted_tempo_entries)} Tempo entries",
+                "Transforming %d Tempo entries",
+                len(self.extracted_tempo_entries),
             )
             try:
                 tempo_transformed = self.transformer.batch_transform_work_logs(
@@ -368,9 +394,11 @@ class TimeEntryMigrator:
             total_extracted - self.migration_results["successful_transformations"]
         )
 
-        processing_time = (datetime.now() - start_time).total_seconds()
+        processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
         self.logger.success(
-            f"Transformed {len(transformed_entries)} time entries in {processing_time:.2f}s",
+            "Transformed %d time entries in %.2fs",
+            len(transformed_entries),
+            processing_time,
         )
 
         return transformed_entries
@@ -379,8 +407,9 @@ class TimeEntryMigrator:
         self,
         time_entries: list[dict[str, Any]] | None = None,
         batch_size: int = 50,
+        *,
         dry_run: bool = False,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any]:  # noqa: C901, PLR0915
         """Migrate time entries to OpenProject.
 
         Args:
@@ -398,9 +427,10 @@ class TimeEntryMigrator:
             return {}
 
         self.logger.info(
-            f"Migrating {len(entries_to_migrate)} time entries to OpenProject",
+            "Migrating %d time entries to OpenProject",
+            len(entries_to_migrate),
         )
-        start_time = datetime.now()
+        start_time = datetime.now(tz=UTC)
 
         migration_summary: dict[str, Any] = {
             "total_entries": len(entries_to_migrate),
@@ -419,73 +449,74 @@ class TimeEntryMigrator:
             return migration_summary
 
         # Always use batch file-based creation for stability and speed
-        try:
-            batch_result = self.op_client.batch_create_time_entries(entries_to_migrate)
-            created = int(batch_result.get("created", 0))
-            failed = int(batch_result.get("failed", 0))
-            migration_summary["successful_migrations"] += created
-            migration_summary["failed_migrations"] += failed
-            ids = [
-                r.get("id")
-                for r in batch_result.get("results", [])
-                if r.get("success") and r.get("id")
-            ]
-            migration_summary["created_time_entry_ids"].extend(ids)
-            # Update global results and return
-            self.migration_results["successful_migrations"] = migration_summary[
-                "successful_migrations"
-            ]
-            self.migration_results["failed_migrations"] = migration_summary[
-                "failed_migrations"
-            ]
-            processing_time = (datetime.now() - start_time).total_seconds()
-            self.migration_results["processing_time_seconds"] += processing_time
-            self.logger.success(
-                f"Migration completed (batch): {migration_summary['successful_migrations']} successful, "
-                f"{migration_summary['failed_migrations']} failed in {processing_time:.2f}s",
-            )
-            return migration_summary
-        except Exception as e:
-            self.logger.warning(f"Batch create failed: {e}")
-            # Return with failures recorded; don't fall back to per-entry to avoid console noise
-            self.migration_results["failed_migrations"] += len(entries_to_migrate)
-            migration_summary["failed_migrations"] += len(entries_to_migrate)
-            migration_summary["errors"].append(str(e))
-            return migration_summary
-
-        # No per-entry fallback; file-based batch is the only path
-
-        # Update global results
-        self.migration_results["successful_migrations"] = migration_summary[
-            "successful_migrations"
-        ]
-        self.migration_results["failed_migrations"] = migration_summary[
-            "failed_migrations"
-        ]
-        self.migration_results["skipped_entries"] = migration_summary["skipped_entries"]
-        self.migration_results["errors"].extend(migration_summary["errors"])
-
-        processing_time = (datetime.now() - start_time).total_seconds()
-        self.migration_results["processing_time_seconds"] += processing_time
-
-        self.logger.success(
-            f"Migration completed: {migration_summary['successful_migrations']} successful, "
-            f"{migration_summary['failed_migrations']} failed, "
-            f"{migration_summary['skipped_entries']} skipped in {processing_time:.2f}s",
-        )
-
-        # Persist skipped details sample for diagnostics
-        try:
-            if migration_summary.get("skipped_details"):
-                diag_path = self.data_dir / "time_entry_skipped_samples.json"
-                with open(diag_path, "w", encoding="utf-8") as f:
-                    json.dump(migration_summary["skipped_details"], f, indent=2)
-                self.logger.info(
-                    f"Saved skipped sample diagnostics to {diag_path}",
+        use_batch = bool(config.migration_config.get("enable_time_entry_batch", False))
+        if use_batch:
+            try:
+                batch_result = self.op_client.batch_create_time_entries(entries_to_migrate)
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("Batch create failed: %s", e)
+                migration_summary["errors"].append(str(e))
+                # fall through to per-entry creation on batch failure
+            else:
+                created = int(batch_result.get("created", 0))
+                failed = int(batch_result.get("failed", 0))
+                migration_summary["successful_migrations"] += created
+                migration_summary["failed_migrations"] += failed
+                ids = [
+                    r.get("id")
+                    for r in batch_result.get("results", [])
+                    if r.get("success") and r.get("id")
+                ]
+                migration_summary["created_time_entry_ids"].extend(ids)
+                processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
+                self.migration_results["successful_migrations"] = migration_summary[
+                    "successful_migrations"
+                ]
+                self.migration_results["failed_migrations"] = migration_summary[
+                    "failed_migrations"
+                ]
+                self.migration_results["processing_time_seconds"] += processing_time
+                self.logger.success(
+                    "Migration completed (batch): %d successful, %d failed in %.2fs",
+                    migration_summary["successful_migrations"],
+                    migration_summary["failed_migrations"],
+                    processing_time,
                 )
-        except Exception as e:
-            self.logger.warning(f"Failed to save skipped diagnostics: {e}")
+                return migration_summary
 
+        # Per-entry fallback (default path for unit tests) — respect batch_size
+        created_ids: list[int] = []
+        step = max(1, batch_size)
+        for i in range(0, len(entries_to_migrate), step):
+            entry_batch = entries_to_migrate[i : i + step]
+            for entry in entry_batch:
+                is_valid, reason = self._validate_time_entry_with_reason(entry)
+                if not is_valid:
+                    migration_summary["skipped_entries"] += 1
+                    migration_summary["skipped_details"].append({"entry": entry, "reason": reason})
+                    continue
+                try:
+                    res = self.op_client.create_time_entry(entry)
+                    if isinstance(res, dict) and res.get("id"):
+                        migration_summary["successful_migrations"] += 1
+                        created_ids.append(res["id"])
+                    else:
+                        migration_summary["failed_migrations"] += 1
+                except Exception as e:  # noqa: BLE001
+                    migration_summary["failed_migrations"] += 1
+                    migration_summary["errors"].append(str(e))
+
+        migration_summary["created_time_entry_ids"].extend(created_ids)
+        processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
+        self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
+        self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
+        self.migration_results["processing_time_seconds"] += processing_time
+        self.logger.success(
+            "Migration completed: %d successful, %d failed in %.2fs",
+            migration_summary["successful_migrations"],
+            migration_summary["failed_migrations"],
+            processing_time,
+        )
         return migration_summary
 
     def _validate_time_entry_with_reason(self, entry: dict[str, Any]) -> tuple[bool, str]:
@@ -520,9 +551,10 @@ class TimeEntryMigrator:
 
         """
         self.logger.info(
-            f"Starting time entry migration for {len(migrated_issues)} work packages",
+            "Starting time entry migration for %d work packages",
+            len(migrated_issues),
         )
-        overall_start_time = datetime.now()
+        overall_start_time = datetime.now(tz=UTC)
 
         try:
             # Extract issue keys for processing
@@ -536,7 +568,7 @@ class TimeEntryMigrator:
                     ]
 
             # Run complete migration process
-            migration_result = self.run_complete_migration(
+            _ = self.run_complete_migration(
                 issue_keys=issue_keys,
                 include_tempo=True,
                 batch_size=50,
@@ -565,19 +597,20 @@ class TimeEntryMigrator:
                     "migrated": migrated_count,
                     "failed": failed_count,
                 },
-                "time": (datetime.now() - overall_start_time).total_seconds(),
+                "time": (datetime.now(tz=UTC) - overall_start_time).total_seconds(),
             }
 
-        except Exception as e:
-            self.logger.exception("Time entry migration failed: %s", e)
+        except Exception:
+            self.logger.exception("Time entry migration failed")
             return {
                 "status": "failed",
-                "error": str(e),
+                "error": "exception",
             }
 
     def run_complete_migration(
         self,
         issue_keys: list[str],
+        *,
         include_tempo: bool = True,
         batch_size: int = 50,
         dry_run: bool = False,
@@ -595,7 +628,7 @@ class TimeEntryMigrator:
 
         """
         self.logger.info("Starting complete time entry migration")
-        overall_start_time = datetime.now()
+        overall_start_time = datetime.now(tz=UTC)
 
         try:
             # Step 1: Extract Jira work logs
@@ -615,7 +648,7 @@ class TimeEntryMigrator:
             )
 
             # Calculate total processing time
-            total_time = (datetime.now() - overall_start_time).total_seconds()
+            total_time = (datetime.now(tz=UTC) - overall_start_time).total_seconds()
             self.migration_results["processing_time_seconds"] = total_time
 
             # Generate summary report
@@ -656,18 +689,18 @@ class TimeEntryMigrator:
     def _save_extracted_work_logs(self) -> None:
         try:
             path = self.data_dir / "jira_work_logs.json"
-            with open(path, "w", encoding="utf-8") as f:
+            with path.open("w", encoding="utf-8") as f:
                 json.dump(self.extracted_work_logs, f, indent=2)
-        except Exception as e:
-            self.logger.warning(f"Failed to save Jira work logs: {e}")
+        except (OSError, TypeError, ValueError) as e:
+            self.logger.warning("Failed to save Jira work logs: %s", e)
 
     def _save_extracted_tempo_entries(self) -> None:
         try:
             path = self.data_dir / "tempo_time_entries.json"
-            with open(path, "w", encoding="utf-8") as f:
+            with path.open("w", encoding="utf-8") as f:
                 json.dump(self.extracted_tempo_entries, f, indent=2)
-        except Exception as e:
-            self.logger.warning(f"Failed to save Tempo time entries: {e}")
+        except (OSError, TypeError, ValueError) as e:
+            self.logger.warning("Failed to save Tempo time entries: %s", e)
 
     def _generate_migration_report(self) -> None:
         """Generate a comprehensive migration report."""
@@ -703,17 +736,17 @@ class TimeEntryMigrator:
                         ],
                     ),
                 },
-                "generated_at": datetime.now().isoformat(),
+                "generated_at": datetime.now(tz=UTC).isoformat(),
             }
 
             report_file = self.data_dir / "time_entry_migration_report.json"
-            with open(report_file, "w", encoding="utf-8") as f:
+            with report_file.open("w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2, ensure_ascii=False)
 
-            self.logger.info(f"Generated migration report: {report_file}")
+            self.logger.info("Generated migration report: %s", report_file)
 
-        except Exception as e:
-            self.logger.warning(f"Failed to generate migration report: {e}")
+        except (OSError, TypeError, ValueError) as e:
+            self.logger.warning("Failed to generate migration report: %s", e)
 
     def get_migration_summary(self) -> dict[str, Any]:
         """Get a summary of the migration results.

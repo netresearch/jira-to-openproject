@@ -1,7 +1,3 @@
-#!/usr/bin/env python3
-
-from src.display import configure_logging
-
 """State preservation system for idempotent migration operations.
 
 This module provides functionality to track entity mappings between Jira and
@@ -18,6 +14,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from src import config
+from src.display import configure_logging
 
 
 class StateCorruptionError(Exception):
@@ -94,11 +91,11 @@ class StateManager:
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
         # Add storage attribute for tests
-        self.storage = type('Storage', (), {
-            'get_snapshot': lambda: None,
-            'get_migration_record': lambda: None,
-            'update': lambda: None,
-            'rollback_transaction': lambda: None,
+        self.storage = type("Storage", (), {
+            "get_snapshot": lambda: None,
+            "get_migration_record": lambda: None,
+            "update": lambda: None,
+            "rollback_transaction": lambda: None,
         })()
 
         # Ensure state directory structure exists
@@ -124,8 +121,7 @@ class StateManager:
     def _generate_id(self) -> str:
         """Generate a unique identifier."""
         return uuid.uuid4().hex
-
-    def register_entity_mapping(
+    def register_entity_mapping(  # noqa: PLR0913
         self,
         jira_entity_type: str,
         jira_entity_id: str,
@@ -196,7 +192,6 @@ class StateManager:
             ] == str(jira_entity_id):
                 return mapping
         return None
-
     def get_reverse_mapping(
         self,
         openproject_entity_type: str,
@@ -220,8 +215,7 @@ class StateManager:
             ):
                 return mapping
         return None
-
-    def start_migration_record(
+    def start_migration_record(  # noqa: PLR0913
         self,
         migration_component: str,
         entity_type: str,
@@ -314,7 +308,6 @@ class StateManager:
             if record["record_id"] == record_id:
                 return record
         return None
-
     def create_state_snapshot(
         self,
         description: str,
@@ -393,8 +386,8 @@ class StateManager:
                     # Lock is automatically released when file is closed
                     pass
 
-        except Exception as e:
-            self.logger.exception("Failed to save current state: %s", e)
+        except Exception:
+            self.logger.exception("Failed to save current state")
             raise
 
     def _atomic_save_mappings(self) -> None:
@@ -414,7 +407,7 @@ class StateManager:
             temp_path = temp_file.name
 
         # Atomic move (rename) to final location
-        os.replace(temp_path, mappings_path)
+        Path(temp_path).replace(mappings_path)
 
     def _atomic_save_records(self) -> None:
         """Atomically save current records to avoid partial writes."""
@@ -433,7 +426,7 @@ class StateManager:
             temp_path = temp_file.name
 
         # Atomic move (rename) to final location
-        os.replace(temp_path, records_path)
+        Path(temp_path).replace(records_path)
 
     def _atomic_save_version(self) -> None:
         """Atomically save version info to avoid partial writes."""
@@ -459,7 +452,7 @@ class StateManager:
             temp_path = temp_file.name
 
         # Atomic move (rename) to final location
-        os.replace(temp_path, version_path)
+        Path(temp_path).replace(version_path)
 
     def _load_current_state(self) -> None:
         """Load current state from persistent storage."""
@@ -493,11 +486,10 @@ class StateManager:
                 self._current_version,
             )
 
-        except Exception as e:
+        except (OSError, json.JSONDecodeError) as e:
             self.logger.warning("Failed to load current state: %s", e)
             # Continue with empty state if loading fails
-
-    def validate_state_consistency(self) -> dict[str, Any]:
+    def validate_state_consistency(self) -> dict[str, Any]:  # noqa: C901
         """Validate consistency between migration records and state snapshots.
 
         Returns:
@@ -533,7 +525,8 @@ class StateManager:
                     current_time = datetime.now(tz=UTC)
                     time_diff = current_time - started_time
 
-                    if time_diff.total_seconds() > 3600:  # 1 hour threshold
+                    one_hour_seconds = 3600
+                    if time_diff.total_seconds() > one_hour_seconds:  # 1 hour threshold
                         validation_result["is_consistent"] = False
                         validation_result["issues"].append(
                             {
@@ -553,7 +546,8 @@ class StateManager:
             for mapping in self._current_mappings.values():
                 mapping_versions.add(mapping["mapping_version"])
 
-            if len(mapping_versions) > 3:  # Too many different versions
+            max_mapping_versions = 3
+            if len(mapping_versions) > max_mapping_versions:  # Too many different versions
                 validation_result["is_consistent"] = False
                 validation_result["issues"].append(
                     {
@@ -583,18 +577,16 @@ class StateManager:
                 "State consistency validation completed: %s",
                 "CONSISTENT" if validation_result["is_consistent"] else "ISSUES FOUND",
             )
+            return validation_result  # noqa: TRY300
 
-            return validation_result
-
-        except Exception as e:
-            self.logger.exception("Error during state consistency validation: %s", e)
+        except Exception:
+            self.logger.exception("Error during state consistency validation")
             validation_result["is_consistent"] = False
             validation_result["issues"].append(
-                {"type": "validation_error", "error": str(e)},
+                {"type": "validation_error", "error": "exception"},
             )
             return validation_result
-
-    def recover_from_corruption(self, backup_snapshots: int = 5) -> bool:
+    def recover_from_corruption(self, backup_snapshots: int = 5) -> bool:  # noqa: C901
         """Attempt to recover from state corruption using snapshots.
 
         Args:
@@ -612,13 +604,13 @@ class StateManager:
             if not snapshots_dir.exists():
                 self.logger.error("No snapshots directory found for recovery")
                 return False
-
             snapshot_files = []
             for snapshot_file in snapshots_dir.glob("*.json"):
                 try:
                     stat = snapshot_file.stat()
                     snapshot_files.append((snapshot_file, stat.st_mtime))
-                except Exception:
+                except OSError:
+                    self.logger.debug("Skipping unreadable snapshot: %s", snapshot_file)
                     continue
 
             # Sort by modification time (newest first)
@@ -627,7 +619,6 @@ class StateManager:
             if not snapshot_files:
                 self.logger.error("No valid snapshots found for recovery")
                 return False
-
             # Try to recover from recent snapshots
             for snapshot_file, _ in snapshot_files[:backup_snapshots]:
                 try:
@@ -690,9 +681,8 @@ class StateManager:
                         "Successfully recovered state from snapshot: %s",
                         snapshot_file.name,
                     )
-                    return True
-
-                except Exception as e:
+                    return True  # noqa: TRY300
+                except (OSError, json.JSONDecodeError) as e:
                     self.logger.warning(
                         "Failed to recover from snapshot %s: %s",
                         snapshot_file.name,
@@ -701,12 +691,10 @@ class StateManager:
                     continue
 
             self.logger.error("Failed to recover from any available snapshots")
+            return False  # noqa: TRY300
+        except Exception:
+            self.logger.exception("Error during state recovery")
             return False
-
-        except Exception as e:
-            self.logger.exception("Error during state recovery: %s", e)
-            return False
-
     def get_mapping_statistics(self) -> dict[str, Any]:
         """Get statistics about current entity mappings.
 

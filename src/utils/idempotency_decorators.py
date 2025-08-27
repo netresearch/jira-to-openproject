@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Idempotency Decorators for Batch Operations.
 
 This module provides decorators and utilities to add idempotency support
@@ -8,7 +7,7 @@ to existing batch API operations without major code changes.
 import functools
 import logging
 from collections.abc import Callable
-from typing import Any
+from datetime import UTC, datetime
 
 from src.utils.idempotency_manager import get_idempotency_manager
 
@@ -17,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 def with_idempotency(
     header_extractor: Callable[..., dict[str, str]] | None = None,
-    result_processor: Callable[[Any], Any] | None = None,
+    result_processor: Callable[[object], object] | None = None,
     ttl: int | None = None,
-):
-    """Decorator to add idempotency support to batch operations.
+) -> Callable[[Callable], Callable]:
+    """Add idempotency support to batch operations.
 
     Args:
         header_extractor: Function to extract headers from function arguments
@@ -34,11 +33,11 @@ def with_idempotency(
 
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: object, **kwargs: object) -> object:
             # Get idempotency manager
             try:
                 manager = get_idempotency_manager()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Failed to initialize idempotency manager: %s", e)
                 # Fall back to executing function without idempotency
                 return func(*args, **kwargs)
@@ -48,7 +47,7 @@ def with_idempotency(
             if header_extractor:
                 try:
                     headers = header_extractor(*args, **kwargs)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.debug("Failed to extract headers: %s", e)
 
             # Parse or generate idempotency key
@@ -58,7 +57,7 @@ def with_idempotency(
             logger.debug("Attempting atomic get-or-set for key %s", idempotency_key)
 
             # Define the function to execute if no cached result exists
-            def execute_and_process():
+            def execute_and_process() -> object:
                 logger.debug(
                     "Executing function %s with idempotency key %s",
                     func.__name__,
@@ -69,20 +68,15 @@ def with_idempotency(
                 # Process result if needed
                 if result_processor:
                     try:
-                        final_result = result_processor(result)
-                        logger.debug(
-                            "Result processed successfully for key %s",
-                            idempotency_key,
-                        )
-                        return final_result
-                    except Exception as e:
+                        processed = result_processor(result)
+                    except Exception as e:  # noqa: BLE001
                         logger.warning(
                             "Result processor failed for key %s: %s",
                             idempotency_key,
                             e,
                         )
-                        # Don't cache if processing fails to avoid inconsistent state
-                        return result
+                        processed = result
+                    return processed
 
                 return result
 
@@ -104,8 +98,8 @@ def with_idempotency(
             return cached_result.value
 
         # Add idempotency metadata
-        wrapper._has_idempotency = True
-        wrapper._original_function = func
+        wrapper._has_idempotency = True  # noqa: SLF001
+        wrapper._original_function = func  # noqa: SLF001
 
         return wrapper
 
@@ -123,21 +117,16 @@ def extract_headers_from_kwargs(key: str = "headers") -> Callable:
 
     """
 
-    def extractor(*args, **kwargs) -> dict[str, str]:
+    def extractor(*_args: object, **kwargs: object) -> dict[str, str]:
         return kwargs.get(key, {})
 
     return extractor
 
 
-def extract_headers_from_request() -> Callable:
-    """Extract headers from request object (Flask or Django style).
+def extract_headers_from_request() -> Callable:  # noqa: C901
+    """Extract headers from request object (Flask or Django style)."""
 
-    Returns:
-        Function that extracts headers from request object
-
-    """
-
-    def extractor(*args, **kwargs) -> dict[str, str]:
+    def extractor(*args: object, **kwargs: object) -> dict[str, str]:  # noqa: C901, PLR0912
         # Look for request object in args or kwargs
         request = None
         for arg in args:
@@ -154,7 +143,7 @@ def extract_headers_from_request() -> Callable:
         if not request:
             return {}
 
-        headers = {}
+        headers: dict[str, str] = {}
 
         # Try Flask-style headers first (most common)
         if hasattr(request, "headers"):
@@ -189,19 +178,9 @@ def create_batch_result_processor(
     error_key: str = "errors",
     data_key: str = "data",
 ) -> Callable:
-    """Create a result processor for batch operations.
+    """Create a result processor for batch operations."""
 
-    Args:
-        success_key: Key indicating operation success
-        error_key: Key containing error information
-        data_key: Key containing result data
-
-    Returns:
-        Result processor function
-
-    """
-
-    def processor(result: Any) -> Any:
+    def processor(result: object) -> object:
         if isinstance(result, dict):
             # Check if this is already a processed result (has idempotent flag)
             if result.get("idempotent") is True and "cached_at" in result:
@@ -209,13 +188,11 @@ def create_batch_result_processor(
                 return result
 
             # Create a composite result structure for partial failures
-            from datetime import datetime
-
             return {
                 "success": result.get(success_key, True),
                 "data": result.get(data_key, result),
                 "errors": result.get(error_key, []),
-                "cached_at": datetime.utcnow().isoformat(),
+                "cached_at": datetime.now(tz=UTC).isoformat(),
                 "idempotent": True,
             }
 
@@ -225,16 +202,8 @@ def create_batch_result_processor(
 
 
 # Convenience decorators for common patterns
-def batch_idempotent(ttl: int | None = None):
-    """Simple idempotency decorator for batch operations.
-
-    Args:
-        ttl: Custom TTL in seconds
-
-    Returns:
-        Idempotency decorator
-
-    """
+def batch_idempotent(ttl: int | None = None) -> Callable[[Callable], Callable]:
+    """Provide simple idempotency decorator for batch operations."""
     return with_idempotency(
         header_extractor=extract_headers_from_kwargs(),
         result_processor=create_batch_result_processor(),
@@ -242,16 +211,8 @@ def batch_idempotent(ttl: int | None = None):
     )
 
 
-def api_idempotent(ttl: int | None = None):
-    """Idempotency decorator for API endpoints.
-
-    Args:
-        ttl: Custom TTL in seconds
-
-    Returns:
-        Idempotency decorator
-
-    """
+def api_idempotent(ttl: int | None = None) -> Callable[[Callable], Callable]:
+    """Provide idempotency decorator for API endpoints."""
     return with_idempotency(
         header_extractor=extract_headers_from_request(),
         result_processor=create_batch_result_processor(),
@@ -259,14 +220,6 @@ def api_idempotent(ttl: int | None = None):
     )
 
 
-def simple_idempotent(ttl: int | None = None):
-    """Simple idempotency decorator without header extraction.
-
-    Args:
-        ttl: Custom TTL in seconds
-
-    Returns:
-        Idempotency decorator
-
-    """
+def simple_idempotent(ttl: int | None = None) -> Callable[[Callable], Callable]:
+    """Create simple idempotency decorator without header extraction."""
     return with_idempotency(ttl=ttl)

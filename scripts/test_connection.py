@@ -70,7 +70,7 @@ def main() -> None:
     openproject_config = config_loader.get_openproject_config()
     if not openproject_config.get("url") or not openproject_config.get("api_token"):
         logger.error(
-            "OpenProject configuration is incomplete. Please check your .env file."
+            "OpenProject configuration is incomplete. Please check your .env file.",
         )
     else:
         openproject_client = OpenProjectClient()

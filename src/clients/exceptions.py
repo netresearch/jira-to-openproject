@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Common exceptions for all client modules."""
 
 
@@ -6,7 +5,7 @@ class ClientError(Exception):
     """Base exception for all client errors."""
 
 
-class ConnectionError(ClientError):
+class ClientConnectionError(ClientError):
     """Error when connection to a service fails."""
 
 
@@ -42,5 +41,6 @@ class RateLimitError(ClientError):
     """Error when rate limit is exceeded."""
 
     def __init__(self, message: str, retry_after: int | None = None) -> None:
+        """Initialize a rate limit error with optional retry-after seconds."""
         super().__init__(message)
         self.retry_after = retry_after

@@ -614,7 +614,7 @@ async def start_monitoring(config: LogConfig | None = None) -> None:
 
 async def stop_monitoring() -> None:
     """Stop the global monitoring system."""
-    global _monitoring_system  # noqa: F824
+    global _monitoring_system
     if _monitoring_system:
         await _monitoring_system.stop()
 

@@ -57,7 +57,7 @@ def parse_custom_fields_list(input_file: Path) -> list[dict[str, Any]]:
             field_id, field_name, field_format = match.groups()
 
             custom_fields.append(
-                {"id": int(field_id), "name": field_name, "field_format": field_format}
+                {"id": int(field_id), "name": field_name, "field_format": field_format},
             )
 
     return custom_fields

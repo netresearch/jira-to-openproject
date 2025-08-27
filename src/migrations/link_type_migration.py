@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src import config
-from src.clients.jira_client import JiraClient, JiraApiError, JiraAuthenticationError
+from src.clients.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging, console
 from src.migrations.base_migration import BaseMigration, register_entity_types

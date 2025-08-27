@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Metrics collection for monitoring staleness detection and cache operations.
 
 This module provides a thread-safe metrics collector for tracking:
@@ -105,13 +104,7 @@ class MetricsCollector:
         metric_name: str,
         tags: dict[str, str] | None = None,
     ) -> None:
-        """Increment a counter metric with optional tags.
-
-        Args:
-            metric_name: Name of the metric to increment
-            tags: Optional dictionary of tags for metric categorization
-
-        """
+        """Increment a counter metric with optional tags."""
         try:
             # Basic input validation
             if not metric_name or not isinstance(metric_name, str):
@@ -152,7 +145,7 @@ class MetricsCollector:
                             logger.debug(
                                 "Removed old metric entry for memory management",
                             )
-                    except Exception as tag_error:
+                    except Exception as tag_error:  # noqa: BLE001
                         logger.warning(
                             "Failed to process tags for metric %s: %s",
                             metric_name,
@@ -162,7 +155,7 @@ class MetricsCollector:
 
                 logger.debug("Incremented metric %s", metric_name)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Don't let metrics collection failures break core functionality
             logger.warning("Failed to increment metric %s: %s", metric_name, e)
 
@@ -209,7 +202,7 @@ class MetricsCollector:
             try:
                 tag_string = self._create_safe_tag_string(tags)
                 return self._tagged_counters.get(metric_name, {}).get(tag_string, 0)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Failed to get tagged counter: %s", e)
                 return 0
 

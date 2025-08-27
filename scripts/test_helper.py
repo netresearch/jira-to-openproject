@@ -283,7 +283,7 @@ def clean_test_artifacts() -> int:
         print_info(f"Cleaning {artifact}...")
         if artifact.startswith("."):
             subprocess.call(
-                ["find", ".", "-name", artifact, "-exec", "rm", "-rf", "{}", "+"]
+                ["find", ".", "-name", artifact, "-exec", "rm", "-rf", "{}", "+"],
             )
         else:
             subprocess.call(["find", ".", "-name", artifact, "-delete"])
@@ -337,35 +337,34 @@ Test Types:
     )
 
     parser.add_argument(
-        "module", nargs="?", help="Module name (required for 'module' command)"
+        "module", nargs="?", help="Module name (required for 'module' command)",
     )
 
     args = parser.parse_args()
 
     if args.command == "quick":
         return run_quick_tests()
-    elif args.command == "smoke":
+    if args.command == "smoke":
         return run_smoke_tests()
-    elif args.command == "full":
+    if args.command == "full":
         return run_comprehensive_tests()
-    elif args.command == "module":
+    if args.command == "module":
         if not args.module:
             print_error("Module name is required for 'module' command")
             return 1
         return run_specific_module(args.module)
-    elif args.command == "failed":
+    if args.command == "failed":
         return run_failed_tests()
-    elif args.command == "changed":
+    if args.command == "changed":
         return run_changed_tests()
-    elif args.command == "perf":
+    if args.command == "perf":
         return run_performance_tests()
-    elif args.command == "setup":
+    if args.command == "setup":
         return setup_test_environment()
-    elif args.command == "clean":
+    if args.command == "clean":
         return clean_test_artifacts()
-    else:
-        parser.print_help()
-        return 1
+    parser.print_help()
+    return 1
 
 
 if __name__ == "__main__":

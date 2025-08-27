@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 from _pytest.config import Config
 from dotenv import load_dotenv
+
 from tests.utils.mock_factory import (
     create_mock_docker_client,
     create_mock_jira_client,
@@ -267,7 +268,7 @@ def _load_env_file_cached(file_path: str) -> dict:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def setup_test_environment() -> Generator[None, None, None]:
+def setup_test_environment() -> Generator[None]:
     """Set up the test environment at the start of the test session.
 
     This fixture automatically loads the appropriate .env files for testing with caching:
@@ -311,7 +312,7 @@ def setup_test_environment() -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def test_env() -> Generator[dict[str, str], None, None]:
+def test_env() -> Generator[dict[str, str]]:
     """Fixture to control environment variables during a test.
 
     This fixture allows tests to temporarily override environment variables
@@ -339,7 +340,7 @@ def test_env() -> Generator[dict[str, str], None, None]:
 
 
 @pytest.fixture
-def temp_dir() -> Generator[Path, None, None]:
+def temp_dir() -> Generator[Path]:
     """Create a temporary directory for test files.
 
     The directory is automatically cleaned up after the test completes.
@@ -422,7 +423,7 @@ def mock_clients(mock_jira_client: JiraClient, mock_op_client: OpenProjectClient
 
 # Fixtures for integration tests directly using the clients
 @pytest.fixture
-def ssh_client(request) -> Generator[SSHClient, None, None]:
+def ssh_client(request) -> Generator[SSHClient]:
     """Create an SSH client instance.
 
     By default, returns a mock SSH client to eliminate network overhead in unit tests.
@@ -459,7 +460,7 @@ def ssh_client(request) -> Generator[SSHClient, None, None]:
 
 # Session autouse: default to fully mocked external clients, enable live via flags/env
 @pytest.fixture(scope="session", autouse=True)
-def configure_external_clients_mocking(pytestconfig: Config) -> Generator[None, None, None]:
+def configure_external_clients_mocking(pytestconfig: Config) -> Generator[None]:
     live_all = _env_flag("J2O_LIVE_SERVICES", False) or pytestconfig.getoption(
         "--live-services",
         default=False,

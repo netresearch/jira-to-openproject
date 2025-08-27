@@ -12,7 +12,7 @@ import pytest
 # Add scripts directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
 
-from fix_timestamp_timezones import TimestampCorrectionScript  # noqa: E402
+from fix_timestamp_timezones import TimestampCorrectionScript
 
 
 class TestTimestampCorrectionScript:

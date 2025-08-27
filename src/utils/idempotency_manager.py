@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Idempotency Key Manager for Batch API Operations.
 
 This module provides idempotency key support for all batch API endpoints to prevent
@@ -25,23 +24,30 @@ from decimal import Decimal
 from typing import Any
 
 try:  # Optional dependency: tests may run without redis installed
-    import redis  # type: ignore
-    from redis.exceptions import RedisError  # type: ignore
-except Exception:  # pragma: no cover - test environment without redis
+    import redis
+    from redis.exceptions import RedisError
+except ImportError:  # pragma: no cover - test environment without redis
     class RedisError(Exception):
-        pass
+        """Placeholder when redis is unavailable."""
 
-    redis = None  # type: ignore
+
+    redis = None
 
 from src.utils.performance_optimizer import PerformanceCache
 
 logger = logging.getLogger(__name__)
 
+MAX_KEY_LENGTH = 255
+UUID_V4 = 4
+MAX_JSON_BYTES = 10 * 1024 * 1024  # 10MB
+MAX_TTL_SECONDS = 7 * 24 * 60 * 60
+
 
 class SafeJSONEncoder(json.JSONEncoder):
     """Safe JSON encoder that handles common Python types without security risks."""
 
-    def default(self, obj):
+    def default(self, obj: object) -> object:
+        """Encode extra Python types safely for JSON."""
         if isinstance(obj, (datetime, date)):
             return obj.isoformat()
         if isinstance(obj, Decimal):
@@ -50,21 +56,23 @@ class SafeJSONEncoder(json.JSONEncoder):
             # For objects with __dict__, try to serialize their attributes
             try:
                 return obj.__dict__
-            except Exception:
-                pass
-        elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes, bytearray)):
+            except Exception as e:  # noqa: BLE001
+                logger.debug("JSON default encode failed for __dict__: %s", e)
+        elif hasattr(obj, "__iter__") and not isinstance(
+            obj, (str, bytes, bytearray),
+        ):
             # For iterables, convert to list
             try:
                 return list(obj)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("JSON default encode failed for iterable: %s", e)
 
         # Reject objects we can't safely serialize
         msg = f"Object of type {type(obj).__name__} is not JSON serializable"
         raise TypeError(msg)
 
 
-def safe_json_dumps(obj: Any) -> str:
+def safe_json_dumps(obj: object) -> str:
     """Safely serialize an object to JSON with proper error handling.
 
     Args:
@@ -81,7 +89,7 @@ def safe_json_dumps(obj: Any) -> str:
         return json.dumps(obj, cls=SafeJSONEncoder)
     except (TypeError, ValueError) as e:
         msg = f"Failed to serialize object: {e}"
-        raise TypeError(msg)
+        raise TypeError(msg) from e
 
 
 @dataclass
@@ -133,22 +141,12 @@ class IdempotencyKeyManager:
         fallback_cache_size: int = 1000,
         default_ttl: int = DEFAULT_TTL,
         key_prefix: str = "idempotency:",
+        *,
         redis_ssl: bool = False,
         redis_ssl_ca_certs: str | None = None,
         redis_ssl_cert_reqs: str = "required",
-    ) -> None:
-        """Initialize the IdempotencyKeyManager.
-
-        Args:
-            redis_url: Redis connection URL
-            fallback_cache_size: Size of in-memory fallback cache
-            default_ttl: Default TTL for keys in seconds
-            key_prefix: Prefix for Redis keys
-            redis_ssl: Enable SSL/TLS for Redis connection
-            redis_ssl_ca_certs: Path to CA certificates file
-            redis_ssl_cert_reqs: SSL certificate requirements
-
-        """
+    ) -> None:  # noqa: PLR0913
+        """Initialize the IdempotencyKeyManager."""
         self.redis_url = redis_url
         self.default_ttl = default_ttl
         self.key_prefix = key_prefix
@@ -204,7 +202,8 @@ class IdempotencyKeyManager:
                     redis_params["ssl_ca_certs"] = self.redis_ssl_ca_certs
 
             if redis is None:
-                raise RuntimeError("redis module not available")
+                msg = "redis module not available"
+                raise RuntimeError(msg)  # noqa: TRY301
             self._redis_client = redis.Redis.from_url(self.redis_url, **redis_params)
 
             # Test connection
@@ -218,21 +217,13 @@ class IdempotencyKeyManager:
             self._redis_available = True
             logger.info("Redis connection established for idempotency management")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Redis connection failed, using in-memory fallback: %s", e)
             self._redis_available = False
             self._redis_client = None
 
     def parse_idempotency_key(self, headers: dict[str, str] | None = None) -> str:
-        """Parse idempotency key from headers or generate a new one.
-
-        Args:
-            headers: Request headers dictionary
-
-        Returns:
-            Idempotency key string
-
-        """
+        """Parse idempotency key from headers or generate a new one."""
         if headers and "X-Idempotency-Key" in headers:
             key = headers["X-Idempotency-Key"].strip()
             if key:
@@ -253,40 +244,22 @@ class IdempotencyKeyManager:
         """Validate idempotency key format.
 
         Only allows valid UUIDv4 format for security.
-
-        Args:
-            key: Key to validate
-
-        Returns:
-            True if valid UUIDv4, False otherwise
-
         """
-        if not key or len(key) > 255:
+        if not key or len(key) > MAX_KEY_LENGTH:
             return False
 
         try:
             # Parse as UUID and verify it's version 4
             parsed_uuid = uuid.UUID(key)
-            return parsed_uuid.version == 4
+            return parsed_uuid.version == UUID_V4  # noqa: TRY300
         except (ValueError, AttributeError):
             return False
 
-    def _safe_json_loads(self, data: str) -> Any:
-        """Safely deserialize JSON data with validation.
-
-        Args:
-            data: JSON string to deserialize
-
-        Returns:
-            Deserialized object
-
-        Raises:
-            ValueError: If data is invalid or unsafe
-
-        """
+    def _safe_json_loads(self, data: str) -> object:
+        """Safely deserialize JSON data with validation."""
         try:
             # Limit size to prevent DoS attacks
-            if len(data) > 10 * 1024 * 1024:  # 10MB limit
+            if len(data) > MAX_JSON_BYTES:
                 msg = "JSON data too large"
                 raise ValueError(msg)
 
@@ -296,24 +269,16 @@ class IdempotencyKeyManager:
             # Validate that result is a safe type
             if not isinstance(result, (dict, list, str, int, float, bool, type(None))):
                 msg = "Unsafe JSON object type"
-                raise ValueError(msg)
+                raise TypeError(msg)
 
-            return result
+            return result  # noqa: TRY300
 
         except json.JSONDecodeError as e:
             msg = f"Invalid JSON: {e}"
-            raise ValueError(msg)
+            raise ValueError(msg) from e
 
     def get_cached_result(self, idempotency_key: str) -> IdempotencyResult:
-        """Get cached result for an idempotency key.
-
-        Args:
-            idempotency_key: The idempotency key
-
-        Returns:
-            IdempotencyResult with the cached value or None
-
-        """
+        """Get cached result for an idempotency key."""
         cache_key = f"{self.key_prefix}{idempotency_key}"
 
         # Try Redis first
@@ -360,20 +325,10 @@ class IdempotencyKeyManager:
     def cache_result(
         self,
         idempotency_key: str,
-        result: Any,
+        result: object,
         ttl: int | None = None,
     ) -> bool:
-        """Cache a result for an idempotency key.
-
-        Args:
-            idempotency_key: The idempotency key
-            result: The result to cache
-            ttl: TTL in seconds (defaults to default_ttl)
-
-        Returns:
-            True if successfully cached, False otherwise
-
-        """
+        """Cache a result for an idempotency key."""
         cache_key = f"{self.key_prefix}{idempotency_key}"
         ttl = ttl or self.default_ttl
 
@@ -391,7 +346,7 @@ class IdempotencyKeyManager:
 
                 with self._lock:
                     self._metrics["keys_cached"] += 1
-                return True
+                return True  # noqa: TRY300
 
             except RedisError as e:
                 logger.warning("Redis error during set: %s", e)
@@ -407,37 +362,24 @@ class IdempotencyKeyManager:
 
             with self._lock:
                 self._metrics["keys_cached"] += 1
-            return True
+            return True  # noqa: TRY300
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to cache in memory: %s", e)
             return False
 
     def atomic_get_or_set(
         self,
         idempotency_key: str,
-        result_or_func: Any,
+        result_or_func: object,
         ttl: int | None = None,
     ) -> IdempotencyResult:
-        """Atomically get existing result or set new one.
-
-        Uses Redis when available and a process-level lock to ensure the wrapped
-        function is executed at most once per key (even under concurrency).
-
-        Args:
-            idempotency_key: The idempotency key
-            result_or_func: The result to set if key doesn't exist, or a callable to execute
-            ttl: TTL in seconds (defaults to default_ttl)
-
-        Returns:
-            IdempotencyResult with either existing or newly set value
-
-        """
+        """Atomically get existing result or set new one."""
         cache_key = f"{self.key_prefix}{idempotency_key}"
         ttl = ttl or self.default_ttl
 
         # Validate TTL to prevent Redis errors
-        if not isinstance(ttl, int) or ttl <= 0 or ttl > 7 * 24 * 60 * 60:  # 7 days max
+        if not isinstance(ttl, int) or ttl <= 0 or ttl > MAX_TTL_SECONDS:
             logger.warning("Invalid TTL value: %s, using default", ttl)
             ttl = self.default_ttl
 
@@ -459,7 +401,7 @@ class IdempotencyKeyManager:
                 else:
                     with self._lock:
                         self._metrics["redis_misses"] += 1
-            except Exception as e:
+            except RedisError as e:
                 logger.warning("Redis get failed, falling back to lock: %s", e)
                 with self._lock:
                     self._metrics["redis_errors"] += 1
@@ -481,7 +423,7 @@ class IdempotencyKeyManager:
                     self._redis_client.setex(cache_key, ttl, serialized_result)
                     self._metrics["keys_cached"] += 1
                     return IdempotencyResult(found=False, value=result, source="redis")
-            except Exception as e:
+            except RedisError as e:
                 logger.warning("Redis set failed, caching in memory: %s", e)
                 self._metrics["redis_errors"] += 1
 
@@ -491,12 +433,7 @@ class IdempotencyKeyManager:
             return IdempotencyResult(found=False, value=result, source="memory")
 
     def get_metrics(self) -> dict[str, Any]:
-        """Get idempotency manager metrics.
-
-        Returns:
-            Dictionary of metrics
-
-        """
+        """Get idempotency manager metrics."""
         with self._lock:
             base_metrics = self._metrics.copy()
 
@@ -545,13 +482,8 @@ _manager_lock = threading.Lock()
 
 
 def get_idempotency_manager() -> IdempotencyKeyManager:
-    """Get the global idempotency manager instance.
-
-    Returns:
-        IdempotencyKeyManager instance
-
-    """
-    global _idempotency_manager
+    """Get the global idempotency manager instance."""
+    global _idempotency_manager  # noqa: PLW0603
 
     if _idempotency_manager is None:
         with _manager_lock:
@@ -563,7 +495,7 @@ def get_idempotency_manager() -> IdempotencyKeyManager:
 
 def reset_idempotency_manager() -> None:
     """Reset the global idempotency manager (for testing)."""
-    global _idempotency_manager
+    global _idempotency_manager  # noqa: PLW0603
 
     with _manager_lock:
         _idempotency_manager = None

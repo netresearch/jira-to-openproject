@@ -7,13 +7,13 @@ package import time (helps tests run without optional libs like `jira`).
 __all__ = ["JiraClient", "OpenProjectClient"]
 
 
-def __getattr__(name: str):  # pragma: no cover - simple lazy import shim
+def __getattr__(name: str) -> object:  # pragma: no cover - simple lazy import shim
     if name == "JiraClient":
-        from .jira_client import JiraClient as _JiraClient
+        from .jira_client import JiraClient as _JiraClient  # noqa: PLC0415
 
         return _JiraClient
     if name == "OpenProjectClient":
-        from .openproject_client import OpenProjectClient as _OpenProjectClient
+        from .openproject_client import OpenProjectClient as _OpenProjectClient  # noqa: PLC0415
 
         return _OpenProjectClient
     raise AttributeError(name)

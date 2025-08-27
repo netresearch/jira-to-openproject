@@ -83,7 +83,7 @@ def print_summary(summary: dict[str, Any]) -> None:
     console.print(f"Total custom fields: {summary['total_fields']}")
     console.print(f"Required fields: {summary['required_fields']}")
     console.print(
-        f"Fields available in all projects: {summary['all_project_fields']}\n"
+        f"Fields available in all projects: {summary['all_project_fields']}\n",
     )
 
     console.print("Field Formats:")

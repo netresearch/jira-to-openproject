@@ -18,8 +18,8 @@ help: ## Show this help message
 	@echo '  exec           Execute command in dev container (e.g., make exec CMD="python --version")'
 	@echo '  install        Install/update Python dependencies'
 	@echo '  test           Run tests in container'
-	@echo '  lint           Run linting (flake8, mypy)'
-	@echo '  format         Format code (black, isort)'
+	@echo '  lint           Run linting (ruff) + mypy'
+	@echo '  format         Format code (ruff fmt)'
 	@echo '  type-check     Run type checking'
 	@echo '  pre-commit     Run pre-commit hooks'
 	@echo ''
@@ -145,16 +145,16 @@ test-fast: test-prep ## Run fast tests only (unit tests)
 test-live-ssh: test-prep ## Run tests with live SSH connections
 	docker compose exec test sh -lc 'uv run python -m pytest --live-ssh -n auto'
 
-lint: ## Run linting (flake8, mypy)
-	docker compose exec app flake8 src tests
-	docker compose exec app mypy src
+lint: ## Run linting (ruff) + mypy
+	docker compose exec app sh -lc 'uvx ruff check --fix src tests'
+	docker compose exec app sh -lc 'uvx mypy src'
 
-format: ## Format code (black, isort)
-	docker compose exec app black src tests
-	docker compose exec app isort src tests
+format: ## Format code (ruff fmt)
+	docker compose exec app sh -lc 'uvx ruff format src tests'
+	# isort replaced by ruff format
 
 type-check: ## Run type checking
-	docker compose exec app mypy src
+	docker compose exec app sh -lc 'uvx mypy src'
 
 pre-commit: ## Run pre-commit hooks
 	docker compose exec app pre-commit run --all-files
@@ -214,12 +214,11 @@ local-test-live-ssh: ## Run tests locally with live SSH connections
 	python -m pytest --live-ssh -n auto
 
 local-lint: ## Run linting locally
-	flake8 src tests
-	mypy src
+	ruff check --fix src tests || uvx ruff check --fix src tests
+	mypy src || uvx mypy src
 
 local-format: ## Format code locally
-	black src tests
-	isort src tests
+	ruff format src tests || uvx ruff format src tests
 
 # =============================================================================
 # Maintenance and Cleanup

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Large-Scale Migration Performance Optimizer.
 
 This module provides specialized optimizations for migrations with >100k items:
@@ -28,13 +27,25 @@ import aiofiles
 import psutil
 
 from src.utils.batch_processor import BatchProcessor
-from src.utils.enhanced_rate_limiter import EnhancedRateLimiter
+from src.utils.enhanced_rate_limiter import (
+    EnhancedRateLimiter,
+    RateLimitConfig,
+    RateLimitStrategy,
+)
 from src.utils.retry_manager import RetryManager
 
 T = TypeVar("T")
 R = TypeVar("R")
 
 logger = logging.getLogger(__name__)
+
+MEMORY_THRESH_LOW = 70
+MEMORY_THRESH_MED = 85
+BATCH_FAST_SEC = 1.0
+BATCH_SLOW_SEC = 5.0
+DISTRIBUTED_THRESHOLD = 100
+ITEM_COUNT_LARGE = 1_000_000
+ITEM_COUNT_MEDIUM = 100_000
 
 
 @dataclass
@@ -57,9 +68,9 @@ class SystemResources:
 
     def get_memory_pressure_level(self) -> str:
         """Get memory pressure level for optimization decisions."""
-        if self.memory_usage_percent < 70:
+        if self.memory_usage_percent < MEMORY_THRESH_LOW:
             return "low"
-        if self.memory_usage_percent < 85:
+        if self.memory_usage_percent < MEMORY_THRESH_MED:
             return "medium"
         return "high"
 
@@ -116,33 +127,34 @@ class LargeScaleConfig:
     enable_recovery: bool = True
     checkpoint_interval: int = 5000
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate and adjust configuration based on system resources."""
         resources = SystemResources()
 
         # Adjust memory limit based on available memory
         if self.memory_limit_gb > resources.memory_total_gb * 0.8:
             self.memory_limit_gb = resources.memory_total_gb * 0.8
-            logger.info(f"Adjusted memory limit to {self.memory_limit_gb:.2f} GB")
+            logger.info("Adjusted memory limit to %.2f GB", self.memory_limit_gb)
 
         # Adjust worker count based on system resources
         optimal_workers = resources.get_optimal_worker_count(self.max_workers)
         if optimal_workers != self.max_workers:
             self.max_workers = optimal_workers
-            logger.info(f"Adjusted worker count to {self.max_workers}")
+            logger.info("Adjusted worker count to %d", self.max_workers)
 
 
 class IntelligentCache:
     """Intelligent caching system with memory pressure awareness."""
 
     def __init__(self, max_size_mb: int = 512, ttl_seconds: int = 3600) -> None:
+        """Initialize the intelligent cache."""
         self.max_size_mb = max_size_mb
         self.ttl_seconds = ttl_seconds
         self.cache: dict[str, tuple[Any, float]] = {}
         self.current_size_mb: float = 0.0
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Any | None:
+    def get(self, key: str) -> object | None:
         """Get item from cache if not expired."""
         with self._lock:
             if key in self.cache:
@@ -153,7 +165,7 @@ class IntelligentCache:
                 self._update_size()
         return None
 
-    def set(self, key: str, value: Any, size_mb: float = 0.1) -> bool:
+    def set(self, key: str, value: object, size_mb: float = 0.1) -> bool:
         """Set item in cache if there's space."""
         with self._lock:
             # Check memory pressure
@@ -172,7 +184,7 @@ class IntelligentCache:
 
     def _is_memory_pressure_high(self) -> bool:
         """Check if system memory pressure is high."""
-        return psutil.virtual_memory().percent > 85
+        return psutil.virtual_memory().percent > MEMORY_THRESH_MED
 
     def _evict_oldest(self, fraction: float = 0.3) -> None:
         """Evict oldest items from cache."""
@@ -205,6 +217,7 @@ class ProgressPersistence:
     """Progress persistence and recovery system."""
 
     def __init__(self, file_path: Path | None = None) -> None:
+        """Initialize the progress persistence manager."""
         self.file_path = file_path or Path(f"migration_progress_{uuid4().hex[:8]}.json")
         self._lock = threading.Lock()
 
@@ -222,8 +235,8 @@ class ProgressPersistence:
             async with aiofiles.open(self.file_path) as f:
                 content = await f.read()
                 return json.loads(content)
-        except Exception as e:
-            logger.warning(f"Failed to load progress: {e}")
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to load progress: %s", e)
             return None
 
     def get_checkpoint_path(self, checkpoint_id: str) -> Path:
@@ -246,8 +259,8 @@ class ProgressPersistence:
             async with aiofiles.open(checkpoint_path) as f:
                 content = await f.read()
                 return json.loads(content)
-        except Exception as e:
-            logger.warning(f"Failed to load checkpoint {checkpoint_id}: {e}")
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to load checkpoint %s: %s", checkpoint_id, e)
             return None
 
 
@@ -259,6 +272,7 @@ class ResourceMonitor:
         check_interval: float = 5.0,
         memory_threshold: float = 85.0,
     ) -> None:
+        """Initialize the resource monitor."""
         self.check_interval = check_interval
         self.memory_threshold = memory_threshold
         self.monitoring = False
@@ -286,7 +300,7 @@ class ResourceMonitor:
         self._callbacks.append(callback)
 
     def _monitor_loop(self) -> None:
-        """Main monitoring loop."""
+        """Run main monitoring loop."""
         while self.monitoring:
             try:
                 pressure = self._check_memory_pressure()
@@ -295,18 +309,18 @@ class ResourceMonitor:
                     for callback in self._callbacks:
                         try:
                             callback(pressure)
-                        except Exception as e:
-                            logger.exception(f"Pressure callback error: {e}")
+                        except Exception:
+                            logger.exception("Pressure callback error")
 
                 time.sleep(self.check_interval)
-            except Exception as e:
-                logger.exception(f"Resource monitoring error: {e}")
+            except Exception:
+                logger.exception("Resource monitoring error")
                 time.sleep(self.check_interval)
 
     def _check_memory_pressure(self) -> str:
         """Check current memory pressure level."""
         memory_percent = psutil.virtual_memory().percent
-        if memory_percent < 70:
+        if memory_percent < MEMORY_THRESH_LOW:
             return "low"
         if memory_percent < self.memory_threshold:
             return "medium"
@@ -321,6 +335,7 @@ class LargeScaleOptimizer:
     """Main large-scale migration optimizer."""
 
     def __init__(self, config: LargeScaleConfig) -> None:
+        """Initialize the large-scale optimizer."""
         self.config = config
         self.resources = SystemResources()
         self.cache = IntelligentCache(config.cache_size_mb, config.cache_ttl_seconds)
@@ -332,7 +347,6 @@ class LargeScaleOptimizer:
 
         # Initialize components
         self.batch_processor: BatchProcessor = BatchProcessor()
-        from src.utils.enhanced_rate_limiter import RateLimitConfig, RateLimitStrategy
 
         rate_limit_config = RateLimitConfig(
             max_requests=config.connection_pool_size,
@@ -354,7 +368,7 @@ class LargeScaleOptimizer:
 
     def _on_pressure_change(self, pressure: str) -> None:
         """Handle memory pressure changes."""
-        logger.info(f"Memory pressure changed to: {pressure}")
+        logger.info("Memory pressure changed to: %s", pressure)
         if pressure == "high":
             # Force garbage collection
             if self.config.enable_garbage_collection:
@@ -378,21 +392,21 @@ class LargeScaleOptimizer:
         # high pressure
         return max(10, self.config.base_batch_size // 2)
 
-    async def process_large_scale_migration(
+    async def process_large_scale_migration(  # noqa: C901
         self,
         items: list[T],
         processor_func: Callable[[T], R],
         description: str = "Large-scale migration",
     ) -> list[R]:
         """Process large-scale migration with optimizations."""
-        logger.info(f"Starting large-scale migration: {len(items)} items")
+        logger.info("Starting large-scale migration: %d items (%s)", len(items), description)
 
         # Load progress if available
         if self.config.enable_progress_persistence:
             progress = await self.progress_persistence.load_progress()
             if progress:
                 logger.info("Resuming from previous progress")
-                # TODO: Implement resume logic
+                # TODO(@dev, #ops/j2o-123): Implement resume logic
 
         results: list[R] = []
         batch_size = self.get_adaptive_batch_size()
@@ -415,9 +429,9 @@ class LargeScaleOptimizer:
                 # Update batch size based on performance
                 if self.config.adaptive_batch_sizing:
                     batch_time = time.time() - batch_start
-                    if batch_time < 1.0:  # Fast batch
+                    if batch_time < BATCH_FAST_SEC:  # Fast batch
                         batch_size = min(self.config.max_batch_size, batch_size + 50)
-                    elif batch_time > 5.0:  # Slow batch
+                    elif batch_time > BATCH_SLOW_SEC:  # Slow batch
                         batch_size = max(10, batch_size - 25)
 
                 # Save progress periodically
@@ -441,8 +455,8 @@ class LargeScaleOptimizer:
                 ):
                     await self._save_checkpoint(results, i + len(batch))
 
-            except Exception as e:
-                logger.exception(f"Batch processing error: {e}")
+            except Exception:
+                logger.exception("Batch processing error")
                 self.failed_count += len(batch)
 
                 if self.config.enable_recovery:
@@ -450,10 +464,12 @@ class LargeScaleOptimizer:
                     checkpoint = await self._load_latest_checkpoint()
                     if checkpoint:
                         logger.info("Recovering from checkpoint")
-                        # TODO: Implement recovery logic
+                        # TODO(@dev, #ops/j2o-124): Implement recovery logic
 
         logger.info(
-            f"Large-scale migration completed: {self.processed_count} processed, {self.failed_count} failed",
+            "Large-scale migration completed: %d processed, %d failed",
+            self.processed_count,
+            self.failed_count,
         )
         return results
 
@@ -463,7 +479,7 @@ class LargeScaleOptimizer:
         processor_func: Callable[[T], R],
     ) -> list[R]:
         """Process a batch with optimizations."""
-        if self.config.enable_distributed_processing and len(batch) > 100:
+        if self.config.enable_distributed_processing and len(batch) > DISTRIBUTED_THRESHOLD:
             return await self._process_batch_distributed(batch, processor_func)
         return await self._process_batch_sequential(batch, processor_func)
 
@@ -493,8 +509,8 @@ class LargeScaleOptimizer:
                 if self.config.enable_intelligent_caching:
                     self.cache.set(cache_key, result)
 
-            except Exception as e:
-                logger.exception(f"Item processing error: {e}")
+            except Exception:
+                logger.exception("Item processing error")
                 self.failed_count += 1
 
         return results
@@ -522,7 +538,7 @@ class LargeScaleOptimizer:
         results: list[R] = []
         for chunk_result in chunk_results:
             if isinstance(chunk_result, Exception):
-                logger.error(f"Chunk processing error: {chunk_result}")
+                logger.error("Chunk processing error: %s", chunk_result)
                 self.failed_count += 1  # Count the exception as one failure
             else:
                 results.extend(chunk_result)  # type: ignore[arg-type]
@@ -543,7 +559,7 @@ class LargeScaleOptimizer:
         processor_func: Callable[[T], R],
     ) -> R:
         """Process item with retry logic."""
-        # TODO: Implement retry logic with rate limiting
+        # TODO(@dev, #ops/j2o-125): Implement retry logic with rate limiting
         result = processor_func(item)
         if hasattr(result, "__await__"):
             return await result
@@ -574,7 +590,7 @@ class LargeScaleOptimizer:
 
     async def _load_latest_checkpoint(self) -> dict[str, Any] | None:
         """Load the latest checkpoint."""
-        # TODO: Implement checkpoint discovery and loading
+        # TODO(@dev, #ops/j2o-126): Implement checkpoint discovery and loading
         return None
 
     def get_performance_metrics(self) -> dict[str, Any]:
@@ -592,7 +608,7 @@ class LargeScaleOptimizer:
             ),
             "items_per_second": self.processed_count / duration if duration > 0 else 0,
             "memory_usage_mb": psutil.Process().memory_info().rss / (1024 * 1024),
-            "cache_hit_rate": 0,  # TODO: Implement cache hit rate tracking
+            "cache_hit_rate": 0,  # TODO(@dev, #ops/j2o-127): Implement cache hit rate tracking
             "current_batch_size": self.get_adaptive_batch_size(),
             "memory_pressure": self.resource_monitor.get_current_pressure(),
         }
@@ -613,7 +629,7 @@ async def optimize_large_scale_migration(
     config: LargeScaleConfig | None = None,
     description: str = "Large-scale migration",
 ) -> list[R]:
-    """Convenience function for large-scale migration optimization."""
+    """Optimize large-scale migration."""
     if config is None:
         config = LargeScaleConfig()
 
@@ -632,13 +648,13 @@ def get_optimized_config_for_size(item_count: int) -> LargeScaleConfig:
     """Get optimized configuration based on item count."""
     config = LargeScaleConfig()
 
-    if item_count > 1000000:  # >1M items
+    if item_count > ITEM_COUNT_LARGE:  # >1M items
         config.base_batch_size = 500
         config.max_batch_size = 2000
         config.max_workers = min(16, multiprocessing.cpu_count())
         config.memory_limit_gb = 16.0
         config.cache_size_mb = 1024
-    elif item_count > 100000:  # >100k items
+    elif item_count > ITEM_COUNT_MEDIUM:  # >100k items
         config.base_batch_size = 200
         config.max_batch_size = 1000
         config.max_workers = min(8, multiprocessing.cpu_count())

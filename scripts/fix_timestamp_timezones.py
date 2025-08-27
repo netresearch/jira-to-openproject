@@ -15,7 +15,7 @@ Usage:
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -28,6 +28,7 @@ from src.clients.openproject_client import OpenProjectClient  # noqa: E402
 from src.utils.enhanced_timestamp_migrator import (  # noqa: E402
     EnhancedTimestampMigrator,
 )
+
 
 # Add config attribute for tests (logger as a simple namespace to allow patching)
 class _Cfg:
@@ -54,6 +55,7 @@ class TimestampCorrectionScript:
             batch_size: Number of work packages to process in each batch
             custom_field_id: Custom field ID for Jira key references
             page_size: Page size for API requests (will paginate through all)
+
         """
         self.dry_run = dry_run
         self.batch_size = batch_size
@@ -68,7 +70,7 @@ class TimestampCorrectionScript:
 
         # Initialize enhanced timestamp migrator to get correct timezone detection
         self.timestamp_migrator = EnhancedTimestampMigrator(
-            jira_client=self.jira_client, op_client=self.op_client
+            jira_client=self.jira_client, op_client=self.op_client,
         )
 
         # Detect correct Jira timezone
@@ -142,6 +144,7 @@ class TimestampCorrectionScript:
 
         Yields:
             List of work package data dictionaries (batch size)
+
         """
         offset = 0
 
@@ -155,9 +158,9 @@ class TimestampCorrectionScript:
                                 self.custom_field_id: {  # Configurable custom field for Jira key
                                     "operator": "!*",  # Not empty
                                     "values": [],
-                                }
-                            }
-                        ]
+                                },
+                            },
+                        ],
                     ),
                     "pageSize": self.page_size,
                     "offset": offset,
@@ -182,7 +185,7 @@ class TimestampCorrectionScript:
 
             except Exception as e:
                 self.logger.error(
-                    "Failed to fetch work packages at offset %d: %s", offset, e
+                    "Failed to fetch work packages at offset %d: %s", offset, e,
                 )
                 break
 
@@ -191,13 +194,14 @@ class TimestampCorrectionScript:
 
         Args:
             work_packages: List of work package data
+
         """
         for wp in work_packages:
             try:
                 self._process_work_package(wp)
             except Exception as e:
                 self.logger.error(
-                    "Failed to process work package %s: %s", wp.get("id", "unknown"), e
+                    "Failed to process work package %s: %s", wp.get("id", "unknown"), e,
                 )
                 self.stats["errors"] += 1
 
@@ -206,6 +210,7 @@ class TimestampCorrectionScript:
 
         Args:
             work_package: Work package data
+
         """
         wp_id = work_package.get("id")
         if not wp_id:
@@ -226,7 +231,7 @@ class TimestampCorrectionScript:
                             "field": field,
                             "current_value": timestamp_str,
                             "corrected_value": self._correct_timestamp(timestamp_str),
-                        }
+                        },
                     )
 
         # Check custom date fields
@@ -244,7 +249,7 @@ class TimestampCorrectionScript:
                             "field": f"customField{field_id}",
                             "current_value": timestamp_str,
                             "corrected_value": self._correct_timestamp(timestamp_str),
-                        }
+                        },
                     )
 
         if corrections_needed:
@@ -264,6 +269,7 @@ class TimestampCorrectionScript:
 
         Returns:
             bool: True if correction is needed
+
         """
         if not timestamp_str:
             return False
@@ -273,8 +279,8 @@ class TimestampCorrectionScript:
             if timestamp_str.endswith("Z"):
                 # UTC timestamp - might need timezone correction if original was not UTC
                 dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                return dt.tzinfo == timezone.utc and self.correct_timezone != "UTC"
-            elif "+" in timestamp_str:
+                return dt.tzinfo == UTC and self.correct_timezone != "UTC"
+            if "+" in timestamp_str:
                 # Already has timezone info; treat '+01:00' as Europe/Berlin equivalence if offset matches
                 dt = datetime.fromisoformat(timestamp_str)
                 if dt.tzinfo:
@@ -304,6 +310,7 @@ class TimestampCorrectionScript:
 
         Returns:
             str: Corrected timestamp string
+
         """
         try:
             # Parse original timestamp
@@ -350,6 +357,7 @@ class TimestampCorrectionScript:
 
         Returns:
             bool: True if it's a timestamp field
+
         """
         # Check field type or value format
         field_type = field_data.get("type", "")
@@ -374,6 +382,7 @@ class TimestampCorrectionScript:
         Args:
             wp_id: Work package ID
             corrections: List of corrections to be made
+
         """
         self.logger.info(
             "Work package %s - %d timestamp corrections needed:",
@@ -395,6 +404,7 @@ class TimestampCorrectionScript:
         Args:
             wp_id: Work package ID
             corrections: List of corrections to apply
+
         """
         try:
             # Build update payload
@@ -416,7 +426,7 @@ class TimestampCorrectionScript:
 
             # Apply the update
             response = self.op_client.patch(
-                f"/api/v3/work_packages/{wp_id}", data=update_data
+                f"/api/v3/work_packages/{wp_id}", data=update_data,
             )
 
             if response:
@@ -431,7 +441,7 @@ class TimestampCorrectionScript:
 
         except Exception as e:
             self.logger.error(
-                "Failed to apply corrections to work package %s: %s", wp_id, e
+                "Failed to apply corrections to work package %s: %s", wp_id, e,
             )
             self.stats["errors"] += 1
 
@@ -440,10 +450,10 @@ class TimestampCorrectionScript:
         self.logger.info("=== Timestamp Timezone Correction Report ===")
         self.logger.info("Mode: %s", "DRY RUN" if self.dry_run else "CHANGES APPLIED")
         self.logger.info(
-            "Total work packages processed: %d", self.stats["total_packages"]
+            "Total work packages processed: %d", self.stats["total_packages"],
         )
         self.logger.info(
-            "Work packages with timestamps: %d", self.stats["packages_with_timestamps"]
+            "Work packages with timestamps: %d", self.stats["packages_with_timestamps"],
         )
         self.logger.info("Timestamps corrected: %d", self.stats["timestamps_corrected"])
         self.logger.info("Errors encountered: %d", self.stats["errors"])
@@ -456,7 +466,7 @@ class TimestampCorrectionScript:
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Correct timezone metadata for previously migrated timestamps"
+        description="Correct timezone metadata for previously migrated timestamps",
     )
 
     # Create mutually exclusive group for dry-run vs apply
@@ -468,7 +478,7 @@ def main() -> None:
         help="Show what would be changed without applying changes (default)",
     )
     action_group.add_argument(
-        "--apply", action="store_true", help="Apply the corrections"
+        "--apply", action="store_true", help="Apply the corrections",
     )
 
     parser.add_argument(

@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src import config
+from src.clients.jira_client import JiraApiError, JiraAuthenticationError
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
-from src.clients.jira_client import JiraApiError, JiraAuthenticationError
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -458,7 +458,7 @@ class AccountMigration(BaseMigration):
             warnings: list[str] = []
             if unmatched > 0:
                 warnings.append(
-                    f"{unmatched} accounts not matched to projects; they remain selectable via the custom field"
+                    f"{unmatched} accounts not matched to projects; they remain selectable via the custom field",
                 )
 
             details = {

@@ -28,6 +28,7 @@ class OpenProjectCleaner:
     def __init__(
         self,
         entities_to_delete: list[str],
+        *,
         dry_run: bool = False,
     ) -> None:
         """Initialize the OpenProject cleaner.
@@ -59,9 +60,7 @@ class OpenProjectCleaner:
             return 0
 
         if self.dry_run:
-            logger.info(
-                f"DRY RUN: Would delete {count} work packages",
-            )
+            logger.info("DRY RUN: Would delete %d work packages", count)
             return count
 
         return self.op_client.delete_all_work_packages()
@@ -82,9 +81,7 @@ class OpenProjectCleaner:
             return 0
 
         if self.dry_run:
-            logger.info(
-                f"DRY RUN: Would delete {count} projects",
-            )
+            logger.info("DRY RUN: Would delete %d projects", count)
             return count
 
         return self.op_client.delete_all_projects()
@@ -104,16 +101,15 @@ class OpenProjectCleaner:
             return 0
 
         if self.dry_run:
-            logger.info(
-                f"DRY RUN: Would delete {count} custom fields",
-            )
+            logger.info("DRY RUN: Would delete %d custom fields", count)
             return count
 
         return self.op_client.delete_all_custom_fields()
 
     def cleanup_issue_types(self) -> int:
-        """Clean up issue types (work package types) in OpenProject,
-        preserving default ones.
+        """Clean up issue types (work package types) in OpenProject.
+
+        Preserve default ones.
 
         Returns:
             Number of issue types deleted
@@ -127,16 +123,15 @@ class OpenProjectCleaner:
             return 0
 
         if self.dry_run:
-            logger.info(
-                f"DRY RUN: Would delete {count} issue types",
-            )
+            logger.info("DRY RUN: Would delete %d issue types", count)
             return count
 
         return self.op_client.delete_non_default_issue_types()
 
     def cleanup_issue_statuses(self) -> int:
-        """Clean up issue statuses in OpenProject,
-        preserving default ones.
+        """Clean up issue statuses in OpenProject.
+
+        Preserve default ones.
 
         Returns:
             Number of issue statuses deleted
@@ -150,15 +145,14 @@ class OpenProjectCleaner:
             return 0
 
         if self.dry_run:
-            logger.info(
-                f"DRY RUN: Would delete {count} issue statuses",
-            )
+            logger.info("DRY RUN: Would delete %d issue statuses", count)
             return count
 
         return self.op_client.delete_non_default_issue_statuses()
 
     def cleanup_users(self) -> int:
         """Remove users from OpenProject (placeholder, not implemented).
+
         Users cannot be bulk deleted in OpenProject for safety reasons.
 
         Returns:
@@ -173,15 +167,12 @@ class OpenProjectCleaner:
             return 0
 
         if self.dry_run:
-            logger.info(
-                f"DRY RUN: Would delete {count} users",
-            )
+            logger.info("DRY RUN: Would delete %d users", count)
             return count
 
-        # return self.op_client.delete_all_users()
         return 0
 
-    def run_cleanup(self) -> dict[str, int]:
+    def run_cleanup(self) -> dict[str, int]:  # noqa: C901, PLR0912
         """Run the complete cleanup process for specified entities.
 
         Returns:
@@ -225,47 +216,35 @@ class OpenProjectCleaner:
                         results["issue_statuses_deleted"] = (
                             self.cleanup_issue_statuses()
                         )
-                except Exception as e:
-                    logger.exception(
-                        f"Error during cleanup of {entity_type}: {e!s}",
-                    )
+                except Exception:
+                    logger.exception("Error during cleanup of %s", entity_type)
 
         logger.success(
             "OpenProject cleanup completed for specified entities",
         )
         logger.info("Summary:")
         if "wp" in self.entities:
-            logger.info(
-                f"  Work packages deleted: {results['work_packages_deleted']}",
-            )
+            logger.info("  Work packages deleted: %s", results["work_packages_deleted"])
         if "p" in self.entities:
-            logger.info(
-                f"  Projects deleted: {results['projects_deleted']}",
-            )
+            logger.info("  Projects deleted: %s", results["projects_deleted"])
         if "cf" in self.entities:
-            logger.info(
-                f"  Custom fields deleted: {results['custom_fields_deleted']}",
-            )
+            logger.info("  Custom fields deleted: %s", results["custom_fields_deleted"])
         if "u" in self.entities:
             logger.info("  Users deleted: %s", results["users_deleted"])
         if "it" in self.entities:
-            logger.info(
-                f"  Issue types deleted: {results['issue_types_deleted']}",
-            )
+            logger.info("  Issue types deleted: %s", results["issue_types_deleted"])
         if "is" in self.entities:
-            logger.info(
-                f"  Issue statuses deleted: {results['issue_statuses_deleted']}",
-            )
+            logger.info("  Issue statuses deleted: %s", results["issue_statuses_deleted"])
         if "il" in self.entities:
             logger.info(
-                f"  Issue link types deleted: {results['issue_link_types_deleted']}",
+                "  Issue link types deleted: %s", results["issue_link_types_deleted"],
             )
 
         return results
 
 
 def main() -> None:
-    """Main function to run the cleanup script."""
+    """Run the cleanup script."""
     parser = argparse.ArgumentParser(
         description="Clean up OpenProject by removing specified entities. "
         "Defaults to all entities if none are specified.",
@@ -325,7 +304,6 @@ def main() -> None:
         nargs="*",  # Optional
         choices=entity_choices,
         # Default is handled after parsing to ensure normalization
-        # default=default_entities, # Cannot directly use default with normalization easily
         help="Specify the entities to delete using short codes or full names. Available entities: users (u),"
         "work_packages (wp), projects (p), custom_fields (cf), issue_types (it), issue_statuses (is), "
         "issue_link_types (il). Defaults to all if none are specified.",
@@ -352,8 +330,8 @@ def main() -> None:
         logger.info("Cleanup process finished.")
         if args.dry_run:
             logger.warning("This was a dry run. No actual changes were made.")
-    except Exception as e:
-        logger.exception("Error during cleanup: %s", e)
+    except Exception:
+        logger.exception("Error during cleanup")
         sys.exit(1)
 
 

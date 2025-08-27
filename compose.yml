@@ -46,7 +46,7 @@ services:
 
   # Mock Jira API server
   mock-jira:
-    image: stoplight/prism:5.14.2
+    image: stoplight/prism:5
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     profiles:
       - test
@@ -67,7 +67,7 @@ services:
 
   # Mock OpenProject API server
   mock-openproject:
-    image: stoplight/prism:5.14.2
+    image: stoplight/prism:5
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     profiles:
       - test
@@ -88,7 +88,7 @@ services:
 
   # Redis for caching and task queues
   redis:
-    image: redis:8.2-alpine
+    image: redis:8-alpine
     # SECURITY: No port exposure needed - internal service only
     # NOTE: Redis Alpine runs as dedicated 'redis' user (not root) by default - no custom user needed
     volumes:

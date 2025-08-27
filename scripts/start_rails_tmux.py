@@ -4,8 +4,8 @@
 This mirrors the commonly used manual command, but reads configuration from
 .env via python-dotenv:
 
-  tmux new-session -s rails_console \; \
-    pipe-pane -o 'cat >>~/tmux.log' \; \
+  tmux new-session -s rails_console \\; \
+    pipe-pane -o 'cat >>~/tmux.log' \\; \
     send-keys 'ssh -t <server> "docker exec -e IRBRC=/app/.irbrc \
       -e RELINE_OUTPUT_ESCAPES=false -e RELINE_INPUTRC=/dev/null -ti <container> \
       bundle exec rails console"' C-m
@@ -32,7 +32,7 @@ def run(cmd: list[str]) -> None:
 
 def session_exists(name: str) -> bool:
     result = subprocess.run(
-        ["tmux", "has-session", "-t", name], capture_output=True, text=True
+        ["tmux", "has-session", "-t", name], check=False, capture_output=True, text=True,
     )
     return result.returncode == 0
 
@@ -57,7 +57,7 @@ def start_tmux_session(
         f"-e RELINE_OUTPUT_ESCAPES=false -e RELINE_INPUTRC=/dev/null "
         f"-ti {container} bundle exec rails console"
     )
-    ssh_cmd = f"ssh -t {ssh_target} \"{inner}\""
+    ssh_cmd = f'ssh -t {ssh_target} "{inner}"'
 
     # 4) Send command and press Enter
     run(["tmux", "send-keys", "-t", session, ssh_cmd, "C-m"])
@@ -100,7 +100,7 @@ def main() -> int:
         try:
             start_tmux_session(session, server, user, container, log_path)
             print(
-                f"Started tmux session '{session}'. Logs: {log_path}. Attach with: tmux attach -t {session}"
+                f"Started tmux session '{session}'. Logs: {log_path}. Attach with: tmux attach -t {session}",
             )
         except subprocess.CalledProcessError as e:
             print(f"Failed to start tmux session: {e}", file=sys.stderr)

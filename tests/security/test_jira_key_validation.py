@@ -10,8 +10,8 @@ import pytest
 # Add the src directory to the path so we can import our modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../src"))
 
-from utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator  # noqa: E402
-from utils.enhanced_user_association_migrator import (  # noqa: E402
+from utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
+from utils.enhanced_user_association_migrator import (
     EnhancedUserAssociationMigrator,
 )
 

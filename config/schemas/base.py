@@ -26,10 +26,10 @@ class JiraConfig(BaseModel):
         description="Jira fields to retrieve",
     )
     scriptrunner_enabled: bool = Field(
-        default=False, description="Enable ScriptRunner integration"
+        default=False, description="Enable ScriptRunner integration",
     )
     scriptrunner_endpoint: str | None = Field(
-        default=None, description="ScriptRunner endpoint"
+        default=None, description="ScriptRunner endpoint",
     )
 
     @validator("url")
@@ -66,7 +66,7 @@ class JiraConfig(BaseModel):
         """Validate ScriptRunner endpoint if enabled."""
         if values.get("scriptrunner_enabled") and not v:
             raise ValueError(
-                "ScriptRunner endpoint is required when ScriptRunner is enabled"
+                "ScriptRunner endpoint is required when ScriptRunner is enabled",
             )
         return v
 
@@ -147,10 +147,10 @@ class MigrationConfig(BaseModel):
     """Migration process configuration settings."""
 
     batch_size: int = Field(
-        default=100, ge=1, le=1000, description="Migration batch size"
+        default=100, ge=1, le=1000, description="Migration batch size",
     )
     ssl_verify: bool = Field(
-        default=True, description="Enable SSL certificate verification"
+        default=True, description="Enable SSL certificate verification",
     )
     log_level: str = Field(
         default="INFO",
@@ -160,7 +160,7 @@ class MigrationConfig(BaseModel):
     data_dir: Path = Field(default=Path("./data"), description="Data directory")
     backup_dir: Path = Field(default=Path("./backups"), description="Backup directory")
     results_dir: Path = Field(
-        default=Path("./results"), description="Results directory"
+        default=Path("./results"), description="Results directory",
     )
     skip_existing: bool = Field(default=True, description="Skip existing items")
     component_order: list[str] = Field(
@@ -178,14 +178,14 @@ class MigrationConfig(BaseModel):
         description="Migration component order",
     )
     mapping_file: Path = Field(
-        default=Path("data/id_mapping.json"), description="ID mapping file"
+        default=Path("data/id_mapping.json"), description="ID mapping file",
     )
     attachment_path: Path = Field(
-        default=Path("data/attachments"), description="Attachment storage path"
+        default=Path("data/attachments"), description="Attachment storage path",
     )
 
     @validator(
-        "data_dir", "backup_dir", "results_dir", "mapping_file", "attachment_path"
+        "data_dir", "backup_dir", "results_dir", "mapping_file", "attachment_path",
     )
     def validate_paths(cls, v: Path) -> Path:
         """Ensure paths are absolute or relative to current directory."""
@@ -211,7 +211,7 @@ class MigrationConfig(BaseModel):
         for component in v:
             if component not in valid_components:
                 raise ValueError(
-                    f'Invalid component: {component}. Valid components: {", ".join(valid_components)}'
+                    f'Invalid component: {component}. Valid components: {", ".join(valid_components)}',
                 )
 
         return v
@@ -224,7 +224,7 @@ class AppConfig(BaseModel):
     openproject: OpenProjectConfig
     migration: MigrationConfig
     database: DatabaseConfig | None = Field(
-        default=None, description="Database configuration"
+        default=None, description="Database configuration",
     )
     test_mode: bool = Field(default=False, description="Test mode flag")
     mock_mode: bool = Field(default=False, description="Mock mode flag")

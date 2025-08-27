@@ -307,7 +307,6 @@ class TestWorkPackageMigration(unittest.TestCase):
 
         This guards against silent no-op migrations.
         """
-
         # Arrange minimal environment
         mock_iter_issues.return_value = iter([
             # Two fake issues yielded for the project

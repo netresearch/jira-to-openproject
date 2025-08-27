@@ -8,13 +8,13 @@ def test_ruby_script_deletes_links_before_assign() -> None:
     path = project_root / "src" / "migrations" / "work_package_migration.py"
     text = path.read_text()
 
-    start = text.find("main_script = \"\"\"")
+    start = text.find('main_script = """')
     assert start != -1
     # Find the opening triple quotes after the assignment
-    open_q = text.find("\"\"\"", start)
+    open_q = text.find('"""', start)
     assert open_q != -1
     start_content = open_q + 3
-    end = text.find("\"\"\"", start_content)
+    end = text.find('"""', start_content)
     assert end != -1
     ruby = text[start_content:end]
 

@@ -8,7 +8,6 @@ from pathlib import Path
 
 def fix_logger_imports():
     """Fix logger import issues in all Python files."""
-
     # Get the project root
     project_root = Path(__file__).parent
 
@@ -64,15 +63,12 @@ def fix_logger_imports():
                     lines = new_content.split("\n")
                     for i, line in enumerate(lines):
                         if line.strip().startswith(
-                            "import "
-                        ) or line.strip().startswith("from "):
+                            "import ",
+                        ) or line.strip().startswith("from ") or line.strip() == "":
                             continue
-                        elif line.strip() == "":
-                            continue
-                        else:
-                            # Insert the import before this line
-                            lines.insert(i, "from src.display import configure_logging")
-                            break
+                        # Insert the import before this line
+                        lines.insert(i, "from src.display import configure_logging")
+                        break
                     new_content = "\n".join(lines)
 
                 # Write the fixed content back

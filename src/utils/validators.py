@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Shared validation utilities for preventing injection attacks.
 
 This module provides centralized validation functions used across the migration
@@ -6,6 +5,10 @@ system to ensure consistent security controls and reduce code duplication.
 """
 
 import re
+
+# Module-level constants to avoid magic numbers
+MAX_JIRA_KEY_LENGTH = 100
+MIN_PRINTABLE_ASCII = 32
 
 
 def validate_jira_key(jira_key: str) -> None:
@@ -50,16 +53,21 @@ def validate_jira_key(jira_key: str) -> None:
         msg = "JIRA key cannot be empty or whitespace only."
         raise ValueError(msg)
 
-    if len(jira_key) > 100:
-        msg = f"JIRA key too long ({len(jira_key)} chars). Maximum allowed: 100 characters."
+    if len(jira_key) > MAX_JIRA_KEY_LENGTH:
+        msg = (
+            f"JIRA key too long ({len(jira_key)} chars). Maximum allowed: {MAX_JIRA_KEY_LENGTH} characters."
+        )
         raise ValueError(
             msg,
         )
 
     # Check for control characters (ASCII < 32)
     for char in jira_key:
-        if ord(char) < 32:
-            msg = f"JIRA key contains control characters (ASCII {ord(char)}). Only A-Z, 0-9, and hyphens allowed."
+        if ord(char) < MIN_PRINTABLE_ASCII:
+            msg = (
+                f"JIRA key contains control characters (ASCII {ord(char)}). "
+                "Only A-Z, 0-9, and hyphens allowed."
+            )
             raise ValueError(
                 msg,
             )

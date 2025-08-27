@@ -71,7 +71,7 @@ def run_tests(
     # Handle coverage
     if coverage:
         cmd.extend(
-            ["--cov=src", "--cov-report=term", "--cov-report=html:reports/coverage"]
+            ["--cov=src", "--cov-report=term", "--cov-report=html:reports/coverage"],
         )
 
     # Handle JUnit report

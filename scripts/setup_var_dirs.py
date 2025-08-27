@@ -43,7 +43,7 @@ def main() -> bool:
                 print(f"- {name}: {path}")
         print("\nYou may now update your code to use these new paths.")
         print(
-            "After confirming everything works, you can clean up the old directories."
+            "After confirming everything works, you can clean up the old directories.",
         )
 
     except Exception as e:

@@ -21,7 +21,7 @@ console = Console()
 
 
 def test_rails_connection(
-    session_name: str = "rails_console", debug: bool = False
+    session_name: str = "rails_console", debug: bool = False,
 ) -> bool:
     """Test connection to the Rails console.
 
@@ -47,7 +47,7 @@ def test_rails_connection(
             console.print(f"Rails version: {result['output']}")
         else:
             console.print(
-                f"Error executing command: {result.get('error', 'Unknown error')}"
+                f"Error executing command: {result.get('error', 'Unknown error')}",
             )
             return False
 
@@ -59,7 +59,7 @@ def test_rails_connection(
             console.print(f"OpenProject user count: {result['output']}")
         else:
             console.print(
-                f"Error executing command: {result.get('error', 'Unknown error')}"
+                f"Error executing command: {result.get('error', 'Unknown error')}",
             )
             return False
 
@@ -77,7 +77,7 @@ def test_rails_connection(
 
 
 def get_custom_fields(
-    session_name: str = "rails_console", debug: bool = False
+    session_name: str = "rails_console", debug: bool = False,
 ) -> list[dict[str, Any]]:
     """Retrieve all custom fields from OpenProject via Rails console.
 
@@ -90,7 +90,7 @@ def get_custom_fields(
 
     """
     console.print(
-        f"Retrieving custom fields from OpenProject via Rails console in tmux session: {session_name}"
+        f"Retrieving custom fields from OpenProject via Rails console in tmux session: {session_name}",
     )
 
     try:
@@ -114,7 +114,7 @@ def get_custom_fields(
 
         if result["status"] == "error":
             console.print(
-                f"Error retrieving custom fields: {result.get('error', 'Unknown error')}"
+                f"Error retrieving custom fields: {result.get('error', 'Unknown error')}",
             )
             return []
 
@@ -187,10 +187,10 @@ Example:
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument(
-        "--get-fields", action="store_true", help="Retrieve and display custom fields"
+        "--get-fields", action="store_true", help="Retrieve and display custom fields",
     )
     parser.add_argument(
-        "--output", help="Output file for custom fields (JSON format)", default=None
+        "--output", help="Output file for custom fields (JSON format)", default=None,
     )
 
     return parser.parse_args()
@@ -221,7 +221,7 @@ def main() -> None:
             console.print("\nCustom Fields:")
             for field in fields:
                 console.print(
-                    f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})"
+                    f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})",
                 )
 
             # Save to file if output path provided

@@ -23,6 +23,7 @@ def is_test_environment() -> bool:
 
     Returns:
         bool: True if running in a test environment, False otherwise
+
     """
     # Check for pytest environment variable
     if "PYTEST_CURRENT_TEST" in os.environ:
@@ -107,7 +108,7 @@ class ConfigLoader:
         if "jira" in self.yaml_config and "projects" in self.yaml_config["jira"]:
             self.settings.jira_projects = self.yaml_config["jira"]["projects"]
             logger.debug(
-                "Applied Jira projects from YAML: %s", self.settings.jira_projects
+                "Applied Jira projects from YAML: %s", self.settings.jira_projects,
             )
 
         # Override component order from YAML
@@ -119,7 +120,7 @@ class ConfigLoader:
                 "component_order"
             ]
             logger.debug(
-                "Applied component order from YAML: %s", self.settings.component_order
+                "Applied component order from YAML: %s", self.settings.component_order,
             )
 
         # Override other YAML settings as needed
@@ -134,6 +135,7 @@ class ConfigLoader:
 
         Raises:
             RuntimeError: If POSTGRES_PASSWORD is not found or is empty
+
         """
         # Try to load PostgreSQL password from environment first
         postgres_password = os.environ.get("POSTGRES_PASSWORD")
@@ -145,17 +147,17 @@ class ConfigLoader:
                 try:
                     postgres_password = secret_path.read_text().strip()
                     logger.debug(
-                        "Successfully loaded PostgreSQL password from Docker secret"
+                        "Successfully loaded PostgreSQL password from Docker secret",
                     )
                 except (OSError, PermissionError) as e:
                     logger.warning(
-                        "Failed to read Docker secret: %s", e.__class__.__name__
+                        "Failed to read Docker secret: %s", e.__class__.__name__,
                     )
             else:
                 logger.debug("Docker secret file not found: %s", secret_path)
         else:
             logger.debug(
-                "Successfully loaded PostgreSQL password from environment variable"
+                "Successfully loaded PostgreSQL password from environment variable",
             )
 
         # Update settings with database configuration
@@ -289,6 +291,7 @@ def load_settings(config_file_path: Path | None = None) -> Settings:
 
     Returns:
         Settings: Validated configuration object
+
     """
     try:
         loader = get_config_loader(config_file_path)

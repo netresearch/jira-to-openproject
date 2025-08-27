@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Comprehensive error recovery system for Jira to OpenProject migration.
 
 This module provides:
@@ -83,6 +82,7 @@ class CheckpointManager:
     """Manages migration checkpoints for resume functionality."""
 
     def __init__(self, db_path: str = ".migration_checkpoints.db") -> None:
+        """Initialize the checkpoint manager."""
         self.db_path = Path(db_path)
         self.engine = create_engine(f"sqlite:///{self.db_path}")
         Base.metadata.create_all(self.engine)
@@ -216,6 +216,7 @@ class CircuitBreakerManager:
     """Manages circuit breakers for external services."""
 
     def __init__(self) -> None:
+        """Initialize the circuit breaker manager."""
         self.breakers: dict[str, CircuitBreaker] = {}
 
     def get_breaker(
@@ -235,21 +236,21 @@ class CircuitBreakerManager:
             )
         return self.breakers[service_name]
 
-    def call_with_breaker(self, service_name: str, func: F, *args, **kwargs) -> T:
+    def call_with_breaker(
+        self,
+        service_name: str,
+        func: F,
+        *args: object,
+        **kwargs: object,
+    ) -> T:
         """Call a function with circuit breaker protection."""
         breaker = self.get_breaker(service_name)
         try:
             result = breaker(func)(*args, **kwargs)
-            logger.info(
-                "circuit_breaker_success",
-                service=service_name,
-                function=func.__name__,
-            )
-            return result
         except CircuitBreakerError as e:
             logger.exception("circuit_breaker_open", service=service_name, error=str(e))
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.exception(
                 "circuit_breaker_failure",
                 service=service_name,
@@ -257,6 +258,13 @@ class CircuitBreakerManager:
                 error=str(e),
             )
             raise
+        else:
+            logger.info(
+                "circuit_breaker_success",
+                service=service_name,
+                function=func.__name__,
+            )
+            return result
 
 
 class RetryManager:
@@ -278,7 +286,7 @@ class RetryManager:
         before_sleep: Callable | None = None,
         after: Callable | None = None,
     ) -> Callable:
-        """Decorator for retry logic with exponential backoff."""
+        """Create a retry decorator with exponential backoff."""
 
         def decorator(func: F) -> F:
             @retry(
@@ -288,7 +296,7 @@ class RetryManager:
                 before_sleep=before_sleep or before_sleep_log(logger, logging.WARNING),
                 after=after or after_log(logger, logging.INFO),
             )
-            def wrapper(*args, **kwargs):
+            def wrapper(*args: object, **kwargs: object) -> Any:
                 return func(*args, **kwargs)
 
             return wrapper
@@ -300,6 +308,7 @@ class ErrorRecoverySystem:
     """Main error recovery system that coordinates all components."""
 
     def __init__(self, db_path: str = ".migration_checkpoints.db") -> None:
+        """Initialize the error recovery system."""
         self.checkpoint_manager = CheckpointManager(db_path)
         self.circuit_breaker_manager = CircuitBreakerManager()
         self.retry_manager = RetryManager()
@@ -313,7 +322,7 @@ class ErrorRecoverySystem:
         func: Callable,
         *args,
         **kwargs,
-    ) -> Any:
+    ) -> object:
         """Execute a function with full error recovery."""
         # Create checkpoint
         checkpoint_data = {
@@ -337,23 +346,7 @@ class ErrorRecoverySystem:
                 *args,
                 **kwargs,
             )
-
-            # Update checkpoint as successful
-            self.checkpoint_manager.update_checkpoint(
-                migration_id,
-                entity_id,
-                "completed",
-            )
-
-            logger.info(
-                "execution_successful",
-                migration_id=migration_id,
-                entity_id=entity_id,
-                checkpoint_type=checkpoint_type,
-            )
-            return result
-
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Update checkpoint with error
             self.checkpoint_manager.update_checkpoint(
                 migration_id,
@@ -370,6 +363,21 @@ class ErrorRecoverySystem:
                 error=str(e),
             )
             raise
+        else:
+            # Update checkpoint as successful
+            self.checkpoint_manager.update_checkpoint(
+                migration_id,
+                entity_id,
+                "completed",
+            )
+
+            logger.info(
+                "execution_successful",
+                migration_id=migration_id,
+                entity_id=entity_id,
+                checkpoint_type=checkpoint_type,
+            )
+            return result
 
     def resume_migration(
         self,

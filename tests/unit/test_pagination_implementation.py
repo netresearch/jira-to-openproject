@@ -7,8 +7,8 @@ and eliminates memory accumulation issues.
 from unittest.mock import Mock, patch
 
 import pytest
-from jira.resources import Issue
 
+from jira.resources import Issue
 from src.migrations.work_package_migration import WorkPackageMigration
 
 

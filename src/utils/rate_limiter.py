@@ -18,6 +18,14 @@ from src.utils.config_validation import ConfigurationValidationError, SecurityVa
 logger = configure_logging("INFO", None)
 
 
+HTTP_TOO_MANY_REQUESTS = 429
+HTTP_SERVER_ERROR_MIN = 500
+MAX_BURST_RECOVERY_RATE = 100.0
+RESPONSE_HISTORY_MAX = 10
+HIGH_USAGE_THRESHOLD = 0.8
+LOW_USAGE_THRESHOLD = 0.2
+
+
 class RateLimitStrategy(Enum):
     """Rate limiting strategies for different APIs."""
 
@@ -41,7 +49,7 @@ class RateLimitConfig:
     adaptive_threshold: float = 0.5  # Response time threshold for adaptation
     circuit_breaker_threshold: int = 5  # Failures before circuit breaker
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate configuration parameters using SecurityValidator for comprehensive security checks."""
         try:
             # Validate timing parameters
@@ -83,14 +91,14 @@ class RateLimitConfig:
             # Validate burst recovery rate (custom bounds)
             if not isinstance(self.burst_recovery_rate, (int, float)):
                 msg = "burst_recovery_rate"
-                raise ConfigurationValidationError(
+                raise ConfigurationValidationError(  # noqa: TRY301
                     msg,
                     self.burst_recovery_rate,
                     f"numeric value (got {type(self.burst_recovery_rate).__name__})",
                 )
-            if self.burst_recovery_rate <= 0 or self.burst_recovery_rate > 100:
+            if self.burst_recovery_rate <= 0 or self.burst_recovery_rate > MAX_BURST_RECOVERY_RATE:
                 msg = "burst_recovery_rate"
-                raise ConfigurationValidationError(
+                raise ConfigurationValidationError(  # noqa: TRY301
                     msg,
                     self.burst_recovery_rate,
                     "0.1 to 100.0 requests per second",
@@ -106,14 +114,14 @@ class RateLimitConfig:
             # Validate strategy enum
             if not isinstance(self.strategy, RateLimitStrategy):
                 msg = "strategy"
-                raise ConfigurationValidationError(
+                raise ConfigurationValidationError(  # noqa: TRY301
                     msg,
                     self.strategy,
                     f"RateLimitStrategy enum value (got {type(self.strategy).__name__})",
                 )
 
-        except ConfigurationValidationError as e:
-            logger.exception(f"RateLimitConfig validation failed: {e}")
+        except ConfigurationValidationError:
+            logger.exception("RateLimitConfig validation failed")
             raise
 
 
@@ -129,7 +137,8 @@ class RateLimitState:
     circuit_breaker_reset_time: float = 0.0
     response_time_history: list = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Initialize default mutable fields safely."""
         if self.response_time_history is None:
             self.response_time_history = []
 
@@ -172,14 +181,16 @@ class RateLimiter:
                 if current_time < self.state.circuit_breaker_reset_time:
                     wait_time = self.state.circuit_breaker_reset_time - current_time
                     logger.warning(
-                        f"Circuit breaker open for {endpoint}, waiting {wait_time:.2f}s",
+                        "Circuit breaker open for %s, waiting %.2fs",
+                        endpoint,
+                        wait_time,
                     )
                     time.sleep(wait_time)
                 else:
                     # Reset circuit breaker
                     self.state.circuit_breaker_open = False
                     self.state.consecutive_failures = 0
-                    logger.info(f"Circuit breaker reset for {endpoint}")
+                    logger.info("Circuit breaker reset for %s", endpoint)
 
             # Handle burst tokens
             if self.config.strategy == RateLimitStrategy.BURST:
@@ -200,7 +211,7 @@ class RateLimiter:
             delay = self._calculate_delay()
 
             if delay > 0:
-                logger.debug(f"Rate limiting {endpoint}: waiting {delay:.3f}s")
+                logger.debug("Rate limiting %s: waiting %.3fs", endpoint, delay)
                 # Use asyncio sleep if in async context, otherwise fall back to blocking sleep
                 try:
                     loop = asyncio.get_running_loop()
@@ -236,12 +247,12 @@ class RateLimiter:
             headers = headers or {}
 
             # Handle rate limit headers
-            if status_code == 429:
+            if status_code == HTTP_TOO_MANY_REQUESTS:
                 self._handle_rate_limit_exceeded(headers)
                 return
 
             # Handle other errors
-            if status_code >= 500:
+            if status_code >= HTTP_SERVER_ERROR_MIN:
                 self._handle_server_error()
                 return
 
@@ -250,7 +261,7 @@ class RateLimiter:
             self.state.response_time_history.append(response_time)
 
             # Keep only recent history
-            if len(self.state.response_time_history) > 10:
+            if len(self.state.response_time_history) > RESPONSE_HISTORY_MAX:
                 self.state.response_time_history.pop(0)
 
             # Parse rate limit headers
@@ -292,13 +303,15 @@ class RateLimiter:
         if retry_after:
             try:
                 wait_time = float(retry_after)
+            except ValueError:
+                pass
+            else:
                 logger.warning(
-                    f"Rate limit exceeded, waiting {wait_time}s as per Retry-After header",
+                    "Rate limit exceeded, waiting %ss as per Retry-After header",
+                    wait_time,
                 )
                 time.sleep(wait_time)
                 return
-            except ValueError:
-                pass
 
         # Exponential backoff
         backoff_delay = min(
@@ -307,7 +320,7 @@ class RateLimiter:
             self.config.max_delay,
         )
 
-        logger.warning(f"Rate limit exceeded, backing off for {backoff_delay:.2f}s")
+        logger.warning("Rate limit exceeded, backing off for %.2fs", backoff_delay)
         time.sleep(backoff_delay)
 
         # Update current delay for future requests
@@ -325,7 +338,8 @@ class RateLimiter:
             self.state.circuit_breaker_open = True
             self.state.circuit_breaker_reset_time = time.time() + self.config.max_delay
             logger.error(
-                f"Circuit breaker opened after {self.state.consecutive_failures} failures",
+                "Circuit breaker opened after %d failures",
+                self.state.consecutive_failures,
             )
 
         # Increase delay for adaptive strategy
@@ -335,7 +349,7 @@ class RateLimiter:
                 self.config.max_delay,
             )
 
-    def _parse_rate_limit_headers(self, headers: dict[str, str]) -> None:
+    def _parse_rate_limit_headers(self, headers: dict[str, str]) -> None:  # noqa: C901
         """Parse rate limit headers and adjust accordingly."""
         # Common rate limit headers
         remaining_headers = [
@@ -377,32 +391,36 @@ class RateLimiter:
         if remaining is not None and limit is not None:
             usage_ratio = 1 - (remaining / limit) if limit > 0 else 1
 
-            if usage_ratio > 0.8:  # Less than 20% remaining
+            if usage_ratio > HIGH_USAGE_THRESHOLD:  # Less than 20% remaining
                 self.state.current_delay = min(
                     self.state.current_delay * 1.5,
                     self.config.max_delay,
                 )
                 logger.debug(
-                    f"High API usage detected ({usage_ratio:.1%}), increasing delay",
+                    "High API usage detected (%.1f%%), increasing delay",
+                    usage_ratio * 100,
                 )
-            elif usage_ratio < 0.2:  # More than 80% remaining
+            elif usage_ratio < LOW_USAGE_THRESHOLD:  # More than 80% remaining
                 self.state.current_delay = max(
                     self.state.current_delay * 0.8,
                     self.config.min_delay,
                 )
                 logger.debug(
-                    f"Low API usage detected ({usage_ratio:.1%}), decreasing delay",
+                    "Low API usage detected (%.1f%%), decreasing delay",
+                    usage_ratio * 100,
                 )
 
     def _adapt_to_response_time(self, response_time: float) -> None:
         """Adapt delay based on response time."""
         if not self.state.response_time_history:
+            # Seed history with latest response to start adaptation
+            self.state.response_time_history.append(response_time)
             return
 
         # Calculate average response time
-        avg_response_time = sum(self.state.response_time_history) / len(
-            self.state.response_time_history,
-        )
+        # Compute average including the latest response time
+        hist = self.state.response_time_history
+        avg_response_time = (sum(hist) + response_time) / (len(hist) + 1)
 
         # Adjust delay based on response time
         if avg_response_time > self.config.adaptive_threshold:
@@ -412,7 +430,8 @@ class RateLimiter:
                 self.config.max_delay,
             )
             logger.debug(
-                f"Slow response time ({avg_response_time:.3f}s), increasing delay",
+                "Slow response time (%.3fs), increasing delay",
+                avg_response_time,
             )
         elif avg_response_time < self.config.adaptive_threshold * 0.5:
             # Fast responses, decrease delay
@@ -421,7 +440,8 @@ class RateLimiter:
                 self.config.min_delay,
             )
             logger.debug(
-                f"Fast response time ({avg_response_time:.3f}s), decreasing delay",
+                "Fast response time (%.3fs), decreasing delay",
+                avg_response_time,
             )
 
     def get_stats(self) -> dict[str, Any]:

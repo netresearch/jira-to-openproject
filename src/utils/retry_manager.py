@@ -1,5 +1,3 @@
-from src.display import configure_logging
-
 """Advanced retry mechanisms with exponential backoff for migration operations.
 
 This module provides robust retry logic for handling transient failures in API calls,
@@ -8,12 +6,14 @@ network operations, and other potentially unreliable operations during migration
 
 import asyncio
 import functools
-import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from secrets import SystemRandom
+from typing import Any, ParamSpec, TypeVar
+
+from src.display import configure_logging
 
 
 class RetryStrategy(Enum):
@@ -70,6 +70,8 @@ class RetryManager:
         """
         self.config = config_param or RetryConfig()
         self.logger = configure_logging("INFO", None)
+        # Non-crypto jitter generator that satisfies linting rules
+        self._rng = SystemRandom()
 
     def _calculate_delay(self, attempt: int) -> float:
         """Calculate delay for the given attempt number.
@@ -105,12 +107,12 @@ class RetryManager:
         # Add jitter to prevent thundering herd
         if self.config.jitter:
             jitter_amount = delay * self.config.jitter_range
-            delay += random.uniform(-jitter_amount, jitter_amount)
+            delay += self._rng.uniform(-jitter_amount, jitter_amount)
             delay = max(0, delay)  # Ensure non-negative
 
         return delay
 
-    def _should_retry(self, exception: Exception, result: Any, attempt: int) -> bool:
+    def _should_retry(self, exception: Exception, result: object, attempt: int) -> bool:
         """Determine if an operation should be retried.
 
         Args:
@@ -151,9 +153,9 @@ class RetryManager:
 
     def execute_with_retry(
         self,
-        func: Callable[..., Any],
-        *args,
-        **kwargs,
+        func: Callable[..., object],
+        *args: object,
+        **kwargs: object,
     ) -> RetryResult:
         """Execute a function with retry logic.
 
@@ -176,8 +178,8 @@ class RetryManager:
 
                 # Check if result indicates retry needed
                 if self.config.retry_on_result and self.config.retry_on_result(result):
-                    msg = f"Retry condition met for result: {result}"
-                    raise RuntimeError(msg)
+                    _msg = f"Retry condition met for result: {result!r}"
+                    raise RuntimeError(_msg)
 
                 # Success!
                 return RetryResult(
@@ -187,7 +189,7 @@ class RetryManager:
                     total_delay=total_delay,
                 )
 
-            except Exception as e:
+            except self.config.retryable_exceptions as e:
                 last_exception = e
 
                 # Check if we should retry
@@ -202,13 +204,19 @@ class RetryManager:
                     total_delay += delay
 
                     self.logger.debug(
-                        f"Attempt {attempt + 1} failed: {e}. "
-                        f"Retrying in {delay:.2f}s...",
+                        "Attempt %d failed: %s. Retrying in %.2fs...",
+                        attempt + 1,
+                        e,
+                        delay,
                     )
 
                     time.sleep(delay)
                 else:
-                    self.logger.debug(f"Final attempt {attempt + 1} failed: {e}")
+                    self.logger.debug(
+                        "Final attempt %d failed: %s",
+                        attempt + 1,
+                        e,
+                    )
 
         # All attempts failed
         return RetryResult(
@@ -235,17 +243,22 @@ class RetryManager:
 
 
 # Decorator for easy retry functionality
-def retry(
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def retry(  # noqa: PLR0913
     max_attempts: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 60.0,
     strategy: RetryStrategy = RetryStrategy.EXPONENTIAL_BACKOFF,
+    *,
     jitter: bool = True,
     retryable_exceptions: tuple = (Exception,),
     non_retryable_exceptions: tuple = (KeyboardInterrupt, SystemExit),
     retry_on_status_codes: list[int] | None = None,
-):
-    """Decorator to add retry logic to a function.
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Add retry logic to a function.
 
     Args:
         max_attempts: Maximum number of retry attempts
@@ -259,9 +272,9 @@ def retry(
 
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             retry_config = RetryConfig(
                 max_attempts=max_attempts,
                 base_delay=base_delay,
@@ -277,8 +290,8 @@ def retry(
             result = retry_manager.execute_with_retry(func, *args, **kwargs)
 
             if result.success:
-                return result.result
-            raise result.exception
+                return result.result  # type: ignore[return-value]
+            raise result.exception  # type: ignore[misc]
 
         return wrapper
 
@@ -298,24 +311,59 @@ class AsyncRetryManager:
         """
         self.config = config or RetryConfig()
         self.logger = configure_logging("INFO", None)
+        self._rng = SystemRandom()
 
     def _calculate_delay(self, attempt: int) -> float:
-        """Calculate delay for the given attempt number (same as sync version)."""
-        # Reuse the sync version's logic
-        sync_manager = RetryManager(self.config)
-        return sync_manager._calculate_delay(attempt)
+        """Calculate delay for the given attempt number (duplicated from sync version)."""
+        cfg = self.config
+        if cfg.strategy == RetryStrategy.EXPONENTIAL_BACKOFF:
+            delay = cfg.base_delay * (cfg.backoff_multiplier**attempt)
+        elif cfg.strategy == RetryStrategy.LINEAR_BACKOFF:
+            delay = cfg.base_delay * (attempt + 1)
+        elif cfg.strategy == RetryStrategy.FIXED_DELAY:
+            delay = cfg.base_delay
+        elif cfg.strategy == RetryStrategy.FIBONACCI_BACKOFF:
+            if attempt <= 1:
+                delay = cfg.base_delay
+            else:
+                fib_a, fib_b = 1, 1
+                for _ in range(attempt - 1):
+                    fib_a, fib_b = fib_b, fib_a + fib_b
+                delay = cfg.base_delay * fib_b
+        else:
+            delay = cfg.base_delay
 
-    def _should_retry(self, exception: Exception, result: Any, attempt: int) -> bool:
-        """Determine if an operation should be retried (same as sync version)."""
-        # Reuse the sync version's logic
-        sync_manager = RetryManager(self.config)
-        return sync_manager._should_retry(exception, result, attempt)
+        delay = min(delay, cfg.max_delay)
+        if cfg.jitter:
+            jitter_amount = delay * cfg.jitter_range
+            delay += self._rng.uniform(-jitter_amount, jitter_amount)
+            delay = max(0, delay)
+        return delay
+
+    def _should_retry(self, exception: Exception, result: object, attempt: int) -> bool:
+        """Determine if an operation should be retried (duplicated from sync version)."""
+        cfg = self.config
+        if attempt >= cfg.max_attempts:
+            return False
+        if exception and isinstance(exception, cfg.non_retryable_exceptions):
+            return False
+        if exception and not isinstance(exception, cfg.retryable_exceptions):
+            return False
+        if (
+            cfg.retry_on_status_codes
+            and hasattr(exception, "response")
+            and hasattr(exception.response, "status_code")
+        ):
+            return exception.response.status_code in cfg.retry_on_status_codes
+        if cfg.retry_on_result and result is not None:
+            return cfg.retry_on_result(result)  # type: ignore[arg-type]
+        return exception is not None
 
     async def execute_with_retry(
         self,
-        coro_func: Callable[..., Any],
-        *args,
-        **kwargs,
+        coro_func: Callable[..., object],
+        *args: object,
+        **kwargs: object,
     ) -> RetryResult:
         """Execute an async function with retry logic.
 
@@ -338,8 +386,8 @@ class AsyncRetryManager:
 
                 # Check if result indicates retry needed
                 if self.config.retry_on_result and self.config.retry_on_result(result):
-                    msg = f"Retry condition met for result: {result}"
-                    raise RuntimeError(msg)
+                    _msg = f"Retry condition met for result: {result!r}"
+                    raise RuntimeError(_msg)
 
                 # Success!
                 return RetryResult(
@@ -349,7 +397,7 @@ class AsyncRetryManager:
                     total_delay=total_delay,
                 )
 
-            except Exception as e:
+            except self.config.retryable_exceptions as e:
                 last_exception = e
 
                 # Check if we should retry
@@ -364,13 +412,19 @@ class AsyncRetryManager:
                     total_delay += delay
 
                     self.logger.debug(
-                        f"Async attempt {attempt + 1} failed: {e}. "
-                        f"Retrying in {delay:.2f}s...",
+                        "Async attempt %d failed: %s. Retrying in %.2fs...",
+                        attempt + 1,
+                        e,
+                        delay,
                     )
 
                     await asyncio.sleep(delay)
                 else:
-                    self.logger.debug(f"Final async attempt {attempt + 1} failed: {e}")
+                    self.logger.debug(
+                        "Final async attempt %d failed: %s",
+                        attempt + 1,
+                        e,
+                    )
 
         # All attempts failed
         return RetryResult(
@@ -424,7 +478,8 @@ class CommonRetryConfigs:
 
 
 # Quick decorator instances for common use cases
-def api_retry(func):
+def api_retry(func: Callable) -> Callable:
+    """Decorate API-call functions with a sensible retry policy."""
     return retry(
         max_attempts=5,
         base_delay=1.0,
@@ -434,7 +489,8 @@ def api_retry(func):
     )(func)
 
 
-def network_retry(func):
+def network_retry(func: Callable) -> Callable:
+    """Decorate network operations with a conservative retry policy."""
     return retry(
         max_attempts=3,
         base_delay=2.0,
@@ -443,7 +499,11 @@ def network_retry(func):
     )(func)
 
 
-def db_retry(func):
+T = TypeVar("T")
+
+
+def db_retry(func: Callable[P, T]) -> Callable[P, T]:  # noqa: UP047
+    """Decorate database operations with conservative retries."""
     return retry(
         max_attempts=3,
         base_delay=0.5,

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """FileManager.
 
 Handles all file operations for the application, providing a centralized
@@ -9,9 +8,8 @@ from __future__ import annotations
 
 import datetime
 import json
-import random
+import secrets
 import shutil
-import string
 import time
 from pathlib import Path
 from typing import Any, Self
@@ -125,7 +123,7 @@ class FileRegistry:
                 # Always unregister, even if file doesn't exist
                 self.unregister(file_path)
 
-            except Exception:
+            except Exception:  # noqa: BLE001
                 logger.exception("Error cleaning up file %s", file_path)
 
         return len(files_to_clean), deleted_count
@@ -203,9 +201,7 @@ class FileManager:
         timestamp = datetime.datetime.now(tz=datetime.UTC)
         microseconds = timestamp.microsecond
         timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
-        random_suffix = "".join(
-            random.choices(string.ascii_lowercase + string.digits, k=4),
-        )
+        random_suffix = secrets.token_hex(2)
         return f"{timestamp_str}_{microseconds:06d}_{random_suffix}"
 
     def create_debug_session(self, name: str | None = None) -> Path:
@@ -286,10 +282,9 @@ class FileManager:
             self.registry.register(file_path, "data")
             return file_path
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.exception("Failed to create data file: %s", e)
-            msg = f"Failed to create data file: {e}"
-            raise OSError(msg) from e
+            raise OSError("Failed to create data file") from e
 
     def create_script_file(
         self,
@@ -332,13 +327,12 @@ class FileManager:
                 logger.debug("Created script file: %s (%d bytes)", file_path, file_size)
             else:
                 logger.error("Failed to create script file: %s", file_path)
-                msg = f"Failed to create script file: {file_path}"
-                raise OSError(msg)
+                raise OSError("Failed to create script file")  # noqa: TRY301
 
             # Register the file
             self.registry.register(file_path, "script")
 
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("Error creating script file")
             raise
 
@@ -357,7 +351,7 @@ class FileManager:
         try:
             with file_path.open("r") as f:
                 return f.read()
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("Error reading file %s", file_path)
             raise
 
@@ -388,7 +382,7 @@ class FileManager:
         except json.JSONDecodeError as e:
             logger.exception("Failed to parse JSON: %s", e)
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.exception("Failed to read file: %s", e)
             raise
 
@@ -421,13 +415,12 @@ class FileManager:
                 )
             else:
                 logger.error("Failed to copy file: %s -> %s", source_path, dest_path)
-                msg = f"Failed to copy file: {source_path} -> {dest_path}"
-                raise OSError(msg)
+                raise OSError("Failed to copy file")  # noqa: TRY301
 
             # Register the file
             self.registry.register(dest_path, "temp")
 
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("Error copying file")
             raise
 

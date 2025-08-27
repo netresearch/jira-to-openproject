@@ -40,7 +40,7 @@ class DataProcessor:
         self.handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
 
     def register_handler(
-        self, name: str, handler: Callable[[dict[str, Any]], Any]
+        self, name: str, handler: Callable[[dict[str, Any]], Any],
     ) -> None:
         """Register a data handler function.
 
@@ -75,7 +75,7 @@ class DataProcessor:
                     results.append({"error": str(e), "item": item})
             else:
                 results.append(
-                    {"error": f"No handler for type {handler_name}", "item": item}
+                    {"error": f"No handler for type {handler_name}", "item": item},
                 )
 
         return results
@@ -108,7 +108,7 @@ class DataProcessor:
                         items = json.load(f)
                 except Exception as e:
                     all_results[source_name] = [
-                        {"error": f"Failed to load {source}: {e}"}
+                        {"error": f"Failed to load {source}: {e}"},
                     ]
                     continue
             else:

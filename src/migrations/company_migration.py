@@ -2,7 +2,6 @@
 Handles the migration of Tempo companies to OpenProject projects.
 """
 
-import contextlib
 import json
 import re
 from pathlib import Path
@@ -605,7 +604,7 @@ class CompanyMigration(BaseMigration):
                         "tempo_name": c.get("tempo_name"),
                         "identifier": c.get("identifier"),
                         "name": c.get("name"),
-                    }
+                    },
                 )
                 records.append(
                     {
@@ -613,7 +612,7 @@ class CompanyMigration(BaseMigration):
                         "identifier": c.get("identifier"),
                         "description": c.get("description"),
                         "public": False,
-                    }
+                    },
                 )
 
             result = self.op_client.bulk_create_records(
@@ -644,7 +643,7 @@ class CompanyMigration(BaseMigration):
                             "openproject_identifier": m.get("identifier"),
                             "openproject_name": m.get("name"),
                             "status": "created",
-                        }
+                        },
                     )
                     tempo_id = m.get("tempo_id")
                     if tempo_id:

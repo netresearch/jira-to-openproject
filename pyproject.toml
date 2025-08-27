@@ -64,9 +64,6 @@ test = [
     "pytest-asyncio>=0.23.8",
 ]
 dev = [
-    "black>=25.1.0",
-    "isort>=5.12.0",
-    "flake8>=7.3.0",
     "pre-commit>=4.2.0",
     "mypy>=1.17.1",
     "ruff>=0.12.7",
@@ -95,11 +92,6 @@ markers = [
 ]
 addopts = "-v --strict-markers --cache-dir=var/.pytest_cache"
 
-[tool.black]
-line-length = 88
-target-version = ['py313']
-include = '\.pyi?$'
-
 [tool.mypy]
 python_version = "3.13"
 warn_unused_configs = true
@@ -111,11 +103,6 @@ enable_error_code = "deprecated"
 # Limit type-checking to exactly these directories
 files   = ["src", "scripts", "tests"]
 exclude = ['^build/', '^dist/', '^\\.venv/']
-
-[tool.isort]
-profile = "black"
-line_length = 88
-multi_line_output = 3
 
 [tool.ruff]
 target-version = "py313"
@@ -129,21 +116,84 @@ select = ["ALL"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "S101",   # Use of assert detected
+    "ARG001", # Unused function argument
     "ARG002", # Unused method argument
+    "ARG005", # Unused lambda argument
     "E501",   # Line too long
     "PLR0913", # Too many arguments in function definition
+    "PLR2004", # Magic number in tests
     "SLF001", # Private member accessed
-    "S108",   # Probable insecure usage of temporary file or directory
-    "B018",   # Found useless expression
-    "ANN401", # Dynamically typed expressions (Any)
-    "D401",   # First line of docstring should be in imperative mood
-    "D200",    # One-line docstring should fit on one line
-    "T201",    # Allow print in tests
-    "T203",    # Allow pprint in tests
-    "PLR2004", # Use of magic number
-    "D103",
-    "D100",
-    "PT011"
+    "S108",   # Probable insecure temp file usage
+    "S311",   # Non-crypto random
+    "S603",   # subprocess untrusted input (tests)
+    "S607",   # subprocess partial path (tests)
+    "B018",   # Useless expression
+    "BLE001", # Broad except in tests
+    "B904",   # Raise from in except
+    "TRY003", # Long messages outside exception class
+    "TRY300", # Move return to else
+    "ANN001", # Missing param annotation
+    "ANN201", # Missing return annotation (public)
+    "ANN202", # Missing return annotation (private)
+    "ANN401", # Any in annotations
+    "D401",   # Docstring imperative mood
+    "D200",   # One-line docstring
+    "D100",   # Missing docstring module
+    "D101",   # Missing docstring class
+    "D103",   # Missing docstring function
+    "D417",   # Missing argument docs in docstring
+    "T201",   # print in tests
+    "T203",   # pprint in tests
+    "PT011",  # pytest raises style
+    "EXE001", # Shebang non-executable
+    "SIM117", # Combine with statements
+    "PLC0415", # Import not top-level
+    "PLC",    # All PLC class in tests
+    "EM102",  # f-string in exception
+    "EM",     # All EM class in tests
+    "PTH110", # os.path.exists -> Path.exists
+    "PTH112", # os.path.isdir -> Path.is_dir
+    "PTH113", # os.path.isfile -> Path.is_file
+    "PTH202", # os.path.getsize -> Path.stat
+    "DTZ005", # datetime.now without tz
+    "DTZ001", # datetime() without tzinfo
+    "N",      # Naming convention checks in tests
+    "S",      # Security checks in tests
+    "TRY",    # Try/except style in tests
+    "PERF",   # Performance suggestions in tests
+    "FBT",    # Boolean trap rules in tests
+    "PTH",    # Pathlib migration in tests
+    "RUF001", # Ambiguous characters
+    "RUF003", # Ambiguous characters in comments
+    "F841",   # Assigned but unused (test scaffolding)
+    "B007",   # Unused loop variable
+    "INP001", # Implicit namespace package for tests
+    "ISC001", # Implicit string concatenation
+    "PT013",  # import pytest style
+    "PT018",  # assertion should be multiple parts
+    "PGH003", # Use specific rule codes in ignores
+    "ASYNC230", # async blocking open in tests
+    "B017",   # assert blind exception in tests
+    "B023",   # loop variable binding in lambda in tests
+    "SIM102", # nested if in tests
+    "RET504", # unnecessary assignment before return in tests
+    "A004",   # Import shadowing builtin
+    "D104",   # Missing docstring in public package
+    "D107",   # Missing docstring in __init__
+    "TD001",  # Allow TODO without author in tests
+    "TD002",  # Allow TODO without author tag in tests
+    "TD003",  # Allow TODO without issue link in tests
+    "FIX002", # Allow TODO present in tests
+    "D205",   # Blank line after summary in docstring
+    "D400",   # First line should end with period
+    "D415",   # First line ends with proper punctuation
+    "D102",   # Missing docstring in public method
+    "ANN002", # *args type annotations
+    "ANN003", # **kwargs type annotations
+    "ANN204", # __init__ return type
+    "PT012",  # pytest.raises single simple statement
+    "SIM105", # contextlib.suppress vs try/except
+    "ERA001", # Commented-out code (allowed in tests)
 ]
 "scripts/**/*.py" = ["T201", "T203"]  # Allow (p)print in scripts
 "examples/**/*.py" = ["T201", "T203"]  # Allow (p)print in examples

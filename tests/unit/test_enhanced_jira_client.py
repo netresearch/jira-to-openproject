@@ -16,8 +16,8 @@ import time
 from unittest.mock import Mock, patch
 
 import pytest
-from jira import Issue, JIRAError
 
+from jira import Issue, JIRAError
 from src.clients.enhanced_jira_client import EnhancedJiraClient
 from src.clients.jira_client import JiraClient
 from src.utils.performance_optimizer import PerformanceOptimizer

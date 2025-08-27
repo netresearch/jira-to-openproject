@@ -35,6 +35,7 @@ def validate_configuration(settings: Settings) -> list[str]:
 
     Returns:
         List of validation error messages (empty if valid)
+
     """
     errors = []
 
@@ -87,6 +88,7 @@ def test_jira_connection(settings: Settings) -> bool:
 
     Returns:
         True if connection successful, False otherwise
+
     """
     try:
         base = settings.jira_url.rstrip("/")
@@ -100,7 +102,7 @@ def test_jira_connection(settings: Settings) -> bool:
         if server_ok:
             info = si.json()
             logger.info(
-                f"✓ Jira server reachable: {info.get('baseUrl','')} ({info.get('version','')})"
+                f"✓ Jira server reachable: {info.get('baseUrl','')} ({info.get('version','')})",
             )
         else:
             logger.error(f"✗ Jira server not reachable - Status: {si.status_code}")
@@ -117,12 +119,12 @@ def test_jira_connection(settings: Settings) -> bool:
         if auth_ok:
             user_info = me.json()
             logger.info(
-                f"✓ Jira auth successful - User: {user_info.get('displayName', 'Unknown')}"
+                f"✓ Jira auth successful - User: {user_info.get('displayName', 'Unknown')}",
             )
         else:
             hdr = {k: v for k, v in me.headers.items() if k.lower() in ("www-authenticate", "x-ausername")}
             logger.error(
-                f"✗ Jira auth failed - Status: {me.status_code} headers={hdr}"
+                f"✗ Jira auth failed - Status: {me.status_code} headers={hdr}",
             )
 
         return server_ok and auth_ok
@@ -140,6 +142,7 @@ def test_openproject_connection(settings: Settings) -> bool:
 
     Returns:
         True if connection successful, False otherwise
+
     """
     try:
         # Test basic connectivity
@@ -154,14 +157,13 @@ def test_openproject_connection(settings: Settings) -> bool:
         if response.status_code == 200:
             user_info = response.json()
             logger.info(
-                f"✓ OpenProject connection successful - User: {user_info.get('name', 'Unknown')}"
+                f"✓ OpenProject connection successful - User: {user_info.get('name', 'Unknown')}",
             )
             return True
-        else:
-            logger.error(
-                f"✗ OpenProject connection failed - Status: {response.status_code}"
-            )
-            return False
+        logger.error(
+            f"✗ OpenProject connection failed - Status: {response.status_code}",
+        )
+        return False
 
     except requests.exceptions.RequestException as e:
         logger.error(f"✗ OpenProject connection failed - {e}")
@@ -174,6 +176,7 @@ def print_settings_summary(settings: Settings, show_secrets: bool = False) -> No
     Args:
         settings: Settings object to display
         show_secrets: Whether to show secret values
+
     """
     print("=== Configuration Summary ===")
     print(f"Jira URL: {settings.jira_url}")
@@ -181,7 +184,7 @@ def print_settings_summary(settings: Settings, show_secrets: bool = False) -> No
     print(f"Jira API Token: {'***' if not show_secrets else settings.jira_api_token}")
     print(f"OpenProject URL: {settings.openproject_url}")
     print(
-        f"OpenProject API Token: {'***' if not show_secrets else settings.openproject_api_token}"
+        f"OpenProject API Token: {'***' if not show_secrets else settings.openproject_api_token}",
     )
     print(f"Migration Batch Size: {settings.batch_size}")
     print(f"SSL Verify: {settings.ssl_verify}")
@@ -196,7 +199,7 @@ def print_settings_summary(settings: Settings, show_secrets: bool = False) -> No
 
 
 def export_config(
-    settings: Settings, output_file: Path | None = None, format: str = "json"
+    settings: Settings, output_file: Path | None = None, format: str = "json",
 ) -> None:
     """Export configuration to file.
 
@@ -204,6 +207,7 @@ def export_config(
         settings: Settings object to export
         output_file: Output file path (if None, prints to stdout)
         format: Output format (json or yaml)
+
     """
     config_data = {
         "jira": settings.get_jira_config(),
@@ -237,13 +241,14 @@ def export_config(
 
 
 def create_envrc_template(
-    settings: Settings, output_file: Path = Path(".envrc")
+    settings: Settings, output_file: Path = Path(".envrc"),
 ) -> None:
     """Create a .envrc template for direnv.
 
     Args:
         settings: Settings object to use as template
         output_file: Output file path
+
     """
     template = f"""# Jira to OpenProject Migration - direnv configuration
 # This file is automatically loaded when entering the project directory
@@ -340,7 +345,7 @@ Examples:
     )
 
     parser.add_argument(
-        "--output", type=Path, help="Output file path (default: stdout)"
+        "--output", type=Path, help="Output file path (default: stdout)",
     )
 
     args = parser.parse_args()

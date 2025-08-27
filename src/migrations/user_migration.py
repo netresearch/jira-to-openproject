@@ -559,6 +559,7 @@ class UserMigration(BaseMigration):
 
         Returns:
             Dict with counts of updated, skipped, errors
+
         """
         # Ensure we have the latest OP users and mapping
         if not self.op_users:
@@ -603,7 +604,6 @@ class UserMigration(BaseMigration):
             return {"updated": 0, "skipped": skipped, "errors": 0}
 
         # Prepare file-based transfer
-        import contextlib
         with contextlib.ExitStack() as stack:
             try:
                 # Ensure CF exists

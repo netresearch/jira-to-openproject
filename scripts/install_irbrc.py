@@ -32,7 +32,7 @@ def main() -> int:
     if not server or not user or not container:
         logger.error(
             "Missing OpenProject remote settings. Ensure J2O_OPENPROJECT_SERVER, "
-            "J2O_OPENPROJECT_USER, and J2O_OPENPROJECT_CONTAINER are set."
+            "J2O_OPENPROJECT_USER, and J2O_OPENPROJECT_CONTAINER are set.",
         )
         return 1
 

@@ -4,9 +4,10 @@ import json
 import shutil
 import tempfile
 import unittest
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
+
+import pytest
 
 from src.migrations.user_migration import UserMigration
 
@@ -420,10 +421,10 @@ class TestUserMigration(unittest.TestCase):
                 "openproject_login": None,
                 "openproject_email": None,
                 "matched_by": "none",
-            }
+            },
         }
         mock_op_client.return_value.create_users_in_bulk.return_value = json.dumps(
-            {"created_count": 0, "created": []}
+            {"created_count": 0, "created": []},
         )
         result = migration.run()
         assert result.success is False

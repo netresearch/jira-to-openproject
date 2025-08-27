@@ -4,17 +4,18 @@ This script orchestrates the complete migration process with performance optimiz
 """
 
 import argparse
-import inspect
 import asyncio
+import inspect
 import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, TypedDict
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 
@@ -31,9 +32,9 @@ from src.migrations.issue_type_migration import IssueTypeMigration
 from src.migrations.link_type_migration import LinkTypeMigration
 from src.migrations.project_migration import ProjectMigration
 from src.migrations.status_migration import StatusMigration
+from src.migrations.time_entry_migration import TimeEntryMigration
 from src.migrations.user_migration import UserMigration
 from src.migrations.work_package_migration import WorkPackageMigration
-from src.migrations.time_entry_migration import TimeEntryMigration
 from src.models import ComponentResult, MigrationResult
 from src.performance.migration_performance_manager import (
     MigrationPerformanceManager,
@@ -41,8 +42,6 @@ from src.performance.migration_performance_manager import (
 )
 from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler
-from src.utils.advanced_validation import validate_pre_migration
-from src.utils.progress_tracker import ProgressTracker
 
 if TYPE_CHECKING:
     from src.migrations.base_migration import BaseMigration
@@ -93,7 +92,7 @@ def _component_has_errors(result: ComponentResult | None) -> bool:
 # Add StateManager class for tests
 class StateManager:
     """State manager class for testing purposes."""
-    pass
+
 
 
 class Migration:
@@ -728,11 +727,12 @@ async def run_migration(
 
         # Initialize advanced configuration manager (guard in tests)
         try:
+            # Ensure robust Path usage in runtime contexts
+            from pathlib import Path as _Path
+
             from src.utils.advanced_config_manager import (
                 ConfigurationManager,
             )
-            # Ensure robust Path usage in runtime contexts
-            from pathlib import Path as _Path
             _cfg_dir = _Path("config")
             _tpl_dir = _Path("config/templates")
             _bkp_dir = _Path("config/backups")
@@ -789,10 +789,10 @@ async def run_migration(
 
         # Initialize comprehensive logging and monitoring
         from src.utils.comprehensive_logging import (
-            log_migration_start,
-            start_monitoring,
             LogConfig,
             get_monitoring_system,
+            log_migration_start,
+            start_monitoring,
         )
 
         try:
@@ -926,7 +926,7 @@ async def run_migration(
         # Run security validation and audit logging
         config.logger.info("Running security validation and audit logging...")
         try:
-            if security_manager and hasattr(security_manager, 'audit_logger'):
+            if security_manager and hasattr(security_manager, "audit_logger"):
                 security_manager.audit_logger.log_migration_event(
                     event_type="migration_started",
                     details={
@@ -1058,7 +1058,7 @@ async def run_migration(
                     try:
                         from src.migrations.base_migration import BaseMigration  # local import to avoid cycles
                         if component.__class__.run is BaseMigration.run:
-                            src_file = inspect.getsourcefile(component.__class__) or '<unknown>'
+                            src_file = inspect.getsourcefile(component.__class__) or "<unknown>"
                             config.logger.warning(
                                 "Component '%s' (%s) is using BaseMigration.run; override likely missing. Class file: %s",
                                 component_name,
@@ -1066,7 +1066,7 @@ async def run_migration(
                                 src_file,
                             )
                             try:
-                                has_own = 'run' in component.__class__.__dict__
+                                has_own = "run" in component.__class__.__dict__
                                 config.logger.warning(
                                     "Class __dict__ has own 'run': %s; available keys (truncated): %s",
                                     has_own,
@@ -1074,25 +1074,25 @@ async def run_migration(
                                 )
                                 # Fallback: if this is the work_packages component and subclass didn't override run,
                                 # directly call its migrate_work_packages() wrapper to proceed.
-                                if (component_name == 'work_packages' and not has_own and
-                                        hasattr(component, 'migrate_work_packages')):
+                                if (component_name == "work_packages" and not has_own and
+                                        hasattr(component, "migrate_work_packages")):
                                     config.logger.warning(
                                         "Falling back to migrate_work_packages() because run() is not overridden",
                                     )
                                     data = component.migrate_work_packages()
                                     component_result = ComponentResult(
-                                        success=(data.get('status') == 'success'),
+                                        success=(data.get("status") == "success"),
                                         details={
-                                            'status': data.get('status', 'unknown'),
-                                            'total_count': data.get('total', 0),
-                                            'failed_count': data.get('error_count', 0),
+                                            "status": data.get("status", "unknown"),
+                                            "total_count": data.get("total", 0),
+                                            "failed_count": data.get("error_count", 0),
                                         },
                                         data=data,
                                     )
                                     # Store and continue to next component
                                     results.components[component_name] = component_result
                                     if (not component_result.success) or _component_has_errors(component_result):
-                                        results.overall['status'] = 'failed'
+                                        results.overall["status"] = "failed"
                                     # Skip the normal run() call
                                     continue
                             except Exception:

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Performance Optimization Utilities for Migration System.
 
 This module provides comprehensive performance optimizations including:
@@ -19,7 +18,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from typing import Any
 
@@ -28,6 +27,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
+
+# Magic thresholds/constants
+RECENT_TIMES_KEEP = 20
+MIN_SAMPLE_COUNT = 5
+FAST_RESPONSE_THRESHOLD = 0.5
+SLOW_RESPONSE_THRESHOLD = 2.0
 
 
 @dataclass
@@ -42,18 +47,19 @@ class CacheEntry:
 
     def is_expired(self) -> bool:
         """Check if cache entry has expired."""
-        return datetime.now() > self.timestamp + timedelta(seconds=self.ttl_seconds)
+        return datetime.now(tz=UTC) > self.timestamp + timedelta(seconds=self.ttl_seconds)
 
     def touch(self) -> None:
         """Update access tracking."""
         self.access_count += 1
-        self.last_accessed = datetime.now()
+        self.last_accessed = datetime.now(tz=UTC)
 
 
 class PerformanceCache:
     """Thread-safe LRU cache with TTL and statistics."""
 
     def __init__(self, max_size: int = 1000, default_ttl: int = 3600) -> None:
+        """Initialize the cache with max size and default TTL."""
         self.max_size = max_size
         self.default_ttl = default_ttl
         self._cache: dict[str, CacheEntry] = {}
@@ -62,7 +68,7 @@ class PerformanceCache:
         self._misses = 0
         self._evictions = 0
 
-    def get(self, key: str) -> Any | None:
+    def get(self, key: str) -> object | None:
         """Get cached value if not expired."""
         with self._lock:
             entry = self._cache.get(key)
@@ -79,7 +85,7 @@ class PerformanceCache:
             self._hits += 1
             return entry.data
 
-    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+    def set(self, key: str, value: object, ttl: int | None = None) -> None:
         """Set cached value with TTL."""
         with self._lock:
             if len(self._cache) >= self.max_size:
@@ -87,7 +93,7 @@ class PerformanceCache:
 
             self._cache[key] = CacheEntry(
                 data=value,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(tz=UTC),
                 ttl_seconds=ttl or self.default_ttl,
             )
 
@@ -132,6 +138,7 @@ class ConnectionPoolManager:
         max_retries: int = 3,
         backoff_factor: float = 0.3,
     ) -> None:
+        """Initialize the connection pool manager."""
         self.pool_connections = pool_connections
         self.pool_maxsize = pool_maxsize
         self.max_retries = max_retries
@@ -179,13 +186,13 @@ class ConnectionPoolManager:
                 )
 
                 self._sessions[session_key] = session
-                logger.debug(f"Created new session for {base_url}")
+                logger.debug("Created new session for %s", base_url)
 
             return self._sessions[session_key]
 
     def _get_session_key(self, base_url: str) -> str:
         """Generate session key from base URL."""
-        return hashlib.md5(base_url.encode()).hexdigest()
+        return hashlib.blake2b(base_url.encode(), digest_size=16).hexdigest()
 
     def close_all(self) -> None:
         """Close all managed sessions."""
@@ -194,21 +201,27 @@ class ConnectionPoolManager:
                 session.close()
             self._sessions.clear()
 
+    def get_active_session_count(self) -> int:
+        """Return number of active sessions."""
+        with self._lock:
+            return len(self._sessions)
+
 
 class BatchProcessor:
     """Generic batch processor for API operations."""
 
     def __init__(self, batch_size: int = 100, max_workers: int = 10) -> None:
+        """Initialize batch processor with sizes and worker pool."""
         self.batch_size = batch_size
         self.max_workers = max_workers
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
     def process_batches(
         self,
-        items: list[Any],
-        process_func: Callable[[list[Any]], Any],
-        **kwargs,
-    ) -> list[Any]:
+        items: list[object],
+        process_func: Callable[[list[object]], Any],
+        **kwargs: object,
+    ) -> list[object]:
         """Process items in batches using thread pool."""
         if not items:
             return []
@@ -220,7 +233,10 @@ class BatchProcessor:
         ]
 
         logger.info(
-            f"Processing {len(items)} items in {len(batches)} batches using {self.max_workers} workers",
+            "Processing %d items in %d batches using %d workers",
+            len(items),
+            len(batches),
+            self.max_workers,
         )
 
         results = []
@@ -242,8 +258,8 @@ class BatchProcessor:
                 result = future.result()
                 if result:
                     results.extend(result if isinstance(result, list) else [result])
-            except Exception as e:
-                logger.exception(f"Batch processing failed: {e}")
+            except Exception:
+                logger.exception("Batch processing failed")
 
         return results
 
@@ -262,6 +278,7 @@ class AdaptiveRateLimiter:
         max_rate: float = 50.0,
         adjustment_factor: float = 0.1,
     ) -> None:
+        """Initialize adaptive rate limiter with bounds and factor."""
         self.current_rate = initial_rate
         self.min_rate = min_rate
         self.max_rate = max_rate
@@ -273,7 +290,7 @@ class AdaptiveRateLimiter:
         self._success_count = 0
 
     @contextmanager
-    def throttle(self):
+    def throttle(self) -> Iterator[None]:
         """Context manager that enforces rate limiting."""
         with self._lock:
             # Calculate delay needed
@@ -300,16 +317,16 @@ class AdaptiveRateLimiter:
             raise
         finally:
             response_time = time.time() - start_time
-            self._record_response(response_time, error_occurred)
+            self._record_response(response_time, error_occurred=error_occurred)
 
-    def _record_response(self, response_time: float, error_occurred: bool) -> None:
+    def _record_response(self, response_time: float, *, error_occurred: bool) -> None:
         """Record response time and adjust rate accordingly."""
         with self._lock:
             self._recent_response_times.append(response_time)
 
             # Keep only recent response times (last 20)
-            if len(self._recent_response_times) > 20:
-                self._recent_response_times = self._recent_response_times[-20:]
+            if len(self._recent_response_times) > RECENT_TIMES_KEEP:
+                self._recent_response_times = self._recent_response_times[-RECENT_TIMES_KEEP:]
 
             # Adjust rate based on performance
             if error_occurred:
@@ -318,18 +335,18 @@ class AdaptiveRateLimiter:
                     self.min_rate,
                     self.current_rate * (1 - self.adjustment_factor * 2),
                 )
-            elif len(self._recent_response_times) >= 5:
+            elif len(self._recent_response_times) >= MIN_SAMPLE_COUNT:
                 # Adjust based on average response time
                 avg_response_time = sum(self._recent_response_times) / len(
                     self._recent_response_times,
                 )
 
-                if avg_response_time < 0.5:  # Fast responses, can increase rate
+                if avg_response_time < FAST_RESPONSE_THRESHOLD:  # Fast responses, can increase rate
                     self.current_rate = min(
                         self.max_rate,
                         self.current_rate * (1 + self.adjustment_factor),
                     )
-                elif avg_response_time > 2.0:  # Slow responses, decrease rate
+                elif avg_response_time > SLOW_RESPONSE_THRESHOLD:  # Slow responses, decrease rate
                     self.current_rate = max(
                         self.min_rate,
                         self.current_rate * (1 - self.adjustment_factor),
@@ -367,11 +384,12 @@ class StreamingPaginator:
         page_size: int = 100,
         max_pages: int | None = None,
     ) -> None:
+        """Initialize streaming paginator with fetch function and sizes."""
         self.fetch_func = fetch_func
         self.page_size = page_size
         self.max_pages = max_pages
 
-    def iter_items(self, **kwargs) -> Iterator[Any]:
+    def iter_items(self, **kwargs: object) -> Iterator[object]:
         """Iterate over all items using streaming pagination."""
         page = 0
         start_at = 0
@@ -399,13 +417,17 @@ class StreamingPaginator:
                 start_at += len(items)
                 page += 1
 
-                logger.debug(f"Processed page {page}, total items so far: {start_at}")
+                logger.debug(
+                    "Processed page %d, total items so far: %d",
+                    page,
+                    start_at,
+                )
 
-            except Exception as e:
-                logger.exception(f"Error fetching page {page}: {e}")
+            except Exception:
+                logger.exception("Error fetching page %d", page)
                 break
 
-    def collect_all(self, **kwargs) -> list[Any]:
+    def collect_all(self, **kwargs: object) -> list[object]:
         """Collect all items into a list (use with caution for large datasets)."""
         return list(self.iter_items(**kwargs))
 
@@ -421,7 +443,7 @@ class PerformanceOptimizer:
         max_workers: int = 10,
         rate_limit: float = 10.0,
     ) -> None:
-
+        """Initialize performance optimizer components and tracking."""
         self.cache = PerformanceCache(max_size=cache_size, default_ttl=cache_ttl)
         self.connection_manager = ConnectionPoolManager()
         self.batch_processor = BatchProcessor(
@@ -437,12 +459,12 @@ class PerformanceOptimizer:
             "rate_limited_calls": 0,
         }
 
-    def cached_operation(self, ttl: int | None = None):
-        """Decorator for caching expensive operations."""
+    def cached_operation(self, ttl: int | None = None) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        """Decorate a function to cache expensive operations."""
 
         def decorator(func: Callable) -> Callable:
             @wraps(func)
-            def wrapper(*args, **kwargs):
+            def wrapper(*args: object, **kwargs: object) -> object:
                 # Create cache key from function name and arguments
                 cache_key = self._create_cache_key(func.__name__, args, kwargs)
 
@@ -462,12 +484,12 @@ class PerformanceOptimizer:
 
         return decorator
 
-    def rate_limited_operation(self):
-        """Decorator for rate-limited API calls."""
+    def rate_limited_operation(self) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        """Decorate a function for rate-limited API calls."""
 
         def decorator(func: Callable) -> Callable:
             @wraps(func)
-            def wrapper(*args, **kwargs):
+            def wrapper(*args: object, **kwargs: object) -> object:
                 with self.rate_limiter.throttle():
                     self._stats["rate_limited_calls"] += 1
                     return func(*args, **kwargs)
@@ -476,12 +498,14 @@ class PerformanceOptimizer:
 
         return decorator
 
-    def batch_operation(self, batch_size: int | None = None):
-        """Decorator for batching operations."""
+    def batch_operation(self, batch_size: int | None = None) -> (
+        Callable[[Callable[..., object]], Callable[..., object]]
+    ):
+        """Decorate a function for batching operations."""
 
         def decorator(func: Callable) -> Callable:
             @wraps(func)
-            def wrapper(items: list[Any], **kwargs):
+            def wrapper(items: list[object], **kwargs: object) -> object:
                 if batch_size:
                     self.batch_processor.batch_size = batch_size
 
@@ -501,7 +525,7 @@ class PerformanceOptimizer:
             "kwargs": json.dumps(kwargs, sort_keys=True, default=str),
         }
         key_string = json.dumps(key_data, sort_keys=True)
-        return hashlib.md5(key_string.encode()).hexdigest()
+        return hashlib.blake2b(key_string.encode(), digest_size=16).hexdigest()
 
     def get_comprehensive_stats(self) -> dict[str, Any]:
         """Get comprehensive performance statistics."""
@@ -509,7 +533,9 @@ class PerformanceOptimizer:
             "cache": self.cache.get_stats(),
             "rate_limiter": self.rate_limiter.get_stats(),
             "optimizer": self._stats,
-            "connections": {"active_sessions": len(self.connection_manager._sessions)},
+            "connections": {
+                "active_sessions": self.connection_manager.get_active_session_count(),
+            },
         }
 
     def shutdown(self) -> None:
@@ -524,18 +550,18 @@ performance_optimizer = PerformanceOptimizer()
 
 
 # Convenience decorators using global instance
-def cached(ttl: int | None = None):
-    """Decorator for caching operations using global optimizer."""
+def cached(ttl: int | None = None) -> Callable[[Callable[..., object]], Callable[..., object]]:
+    """Decorate a function to cache operations using global optimizer."""
     return performance_optimizer.cached_operation(ttl=ttl)
 
 
-def rate_limited():
-    """Decorator for rate-limited operations using global optimizer."""
+def rate_limited() -> Callable[[Callable[..., object]], Callable[..., object]]:
+    """Decorate a function for rate-limited operations using global optimizer."""
     return performance_optimizer.rate_limited_operation()
 
 
-def batched(batch_size: int | None = None):
-    """Decorator for batch operations using global optimizer."""
+def batched(batch_size: int | None = None) -> Callable[[Callable[..., object]], Callable[..., object]]:
+    """Decorate a function for batch operations using global optimizer."""
     return performance_optimizer.batch_operation(batch_size=batch_size)
 
 

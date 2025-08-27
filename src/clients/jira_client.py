@@ -10,9 +10,9 @@ from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
-from jira import JIRA, Issue
 from requests import Response
 
+from jira import JIRA, Issue
 from src import config
 from src.display import configure_logging
 from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
@@ -23,10 +23,15 @@ from src.utils.performance_optimizer import (
     rate_limited,
 )
 from src.utils.rate_limiter import create_jira_rate_limiter
+from src.utils.timezone import UTC
+
+HTTP_OK = 200
+HTTP_BAD_REQUEST_MIN = 400
+HTTP_NOT_FOUND = 404
 
 try:
-    from src.config import logger as logger  # type: ignore
-except Exception:
+    from src.config import logger
+except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
 
 
@@ -64,7 +69,7 @@ class JiraClient:
     exceptions that can be caught and handled by the caller.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
         """Initialize the Jira client with proper exception handling and performance optimizations."""
         # Get connection details from config
         self.jira_url: str = config.jira_config.get("url", "")
@@ -138,8 +143,8 @@ class JiraClient:
                 2048,
             )  # 2GB memory limit
 
-        except ConfigurationValidationError as e:
-            logger.exception(f"JiraClient configuration validation failed: {e}")
+        except ConfigurationValidationError:
+            logger.exception("JiraClient configuration validation failed")
             raise
 
         # Initialize performance optimizer with validated parameters
@@ -180,24 +185,22 @@ class JiraClient:
             )
             # Explicit auth verification: /rest/api/2/myself must be 200 for valid PAT
             try:
-                resp = self.jira._session.get(f"{self.base_url}/rest/api/2/myself")
-                if resp.status_code != 200:
+                resp = self.jira._session.get(f"{self.base_url}/rest/api/2/myself")  # noqa: SLF001
+                if resp.status_code != HTTP_OK:
                     logger.error(
                         "Auth verification failed on /myself: HTTP %s, headers=%s",
                         resp.status_code,
                         {k: v for k, v in resp.headers.items() if k.lower() in ("www-authenticate", "x-ausername")},
                     )
-                    raise JiraAuthenticationError(
-                        f"/myself auth check failed with HTTP {resp.status_code}"
-                    )
-                else:
-                    logger.info("Auth verification successful on /myself")
+                    auth_msg = f"/myself auth check failed with HTTP {resp.status_code}"
+                    raise JiraAuthenticationError(auth_msg)  # noqa: TRY301
+                logger.info("Auth verification successful on /myself")
             except JiraAuthenticationError:
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Auth verification error on /myself: %s", e)
-            return  # Success
-        except Exception as e:
+            return  # noqa: TRY300
+        except Exception as e:  # noqa: BLE001
             error_msg = f"Token authentication failed: {e!s}"
             logger.warning(error_msg)
             connection_errors.append(error_msg)
@@ -213,8 +216,8 @@ class JiraClient:
             logger.debug(
                 "Successfully connected using basic authentication",
             )
-            return  # Success
-        except Exception as e2:
+            return  # noqa: TRY300
+        except Exception as e2:  # noqa: BLE001
             error_msg = f"Basic authentication failed: {e2!s}"
             logger.warning(error_msg)
             connection_errors.append(error_msg)
@@ -252,7 +255,7 @@ class JiraClient:
             if not projects:
                 logger.warning("No projects found in Jira")
 
-            return result
+            return result  # noqa: TRY300
         except Exception as e:
             error_msg = f"Failed to get projects: {e!s}"
             logger.exception(error_msg)
@@ -286,7 +289,7 @@ class JiraClient:
             if not issue_types:
                 logger.warning("No issue types found in Jira")
 
-            return result
+            return result  # noqa: TRY300
         except Exception as e:
             error_msg = f"Failed to get issue types: {e!s}"
             logger.exception(error_msg)
@@ -295,22 +298,10 @@ class JiraClient:
     def get_all_issues_for_project(
         self,
         project_key: str,
+        *,
         expand_changelog: bool = True,
     ) -> list[Issue]:
-        """Gets all issues for a specific project, handling pagination.
-
-        Args:
-            project_key: The key of the project.
-            expand_changelog: Whether to expand the changelog for history.
-
-        Returns:
-            A list of Jira issue objects.
-
-        Raises:
-            JiraApiError: If the API request fails
-            JiraResourceNotFoundError: If the project is not found
-
-        """
+        """Get all issues for a specific project, handling pagination."""
         all_issues: list[Issue] = []
         start_at = 0
         max_results = 100  # Fetch in batches of 100
@@ -467,7 +458,7 @@ class JiraClient:
                     for attachment in issue.fields.attachment
                 ]
 
-            return issue_data
+            return issue_data  # noqa: TRY300
         except Exception as e:
             error_msg = f"Failed to get issue details for {issue_key}: {e!s}"
             logger.exception(error_msg)
@@ -552,7 +543,7 @@ class JiraClient:
                     "name": getattr(user, "name", None),
                 }
 
-            return None
+            return None  # noqa: TRY300
 
         except Exception as e:
             # Log at debug level for not found cases, exception level for others
@@ -594,7 +585,7 @@ class JiraClient:
             )
 
             # Get total from the response
-            return issues.total
+            return issues.total  # noqa: TRY300
         except Exception as e:
             error_msg = f"Failed to get issue count for project {project_key}: {e!s}"
             logger.exception(error_msg)
@@ -717,9 +708,9 @@ class JiraClient:
             # Method 2: Use the status_categories endpoint
             path = "/rest/api/2/statuscategory"
             response = self._make_request(path)
-            if not response or response.status_code != 200:
+            if not response or response.status_code != HTTP_OK:
                 msg = f"Failed to get status categories: HTTP {response.status_code if response else 'No response'}"
-                raise JiraApiError(
+                raise JiraApiError(  # noqa: TRY301
                     msg,
                 )
 
@@ -729,16 +720,16 @@ class JiraClient:
             # Use the status endpoint
             path = "/rest/api/2/status"
             response = self._make_request(path)
-            if not response or response.status_code != 200:
+            if not response or response.status_code != HTTP_OK:
                 msg = f"Failed to get statuses: HTTP {response.status_code if response else 'No response'}"
-                raise JiraApiError(
+                raise JiraApiError(  # noqa: TRY301
                     msg,
                 )
 
             statuses = response.json()
             logger.info("Retrieved %s statuses from Jira API", len(statuses))
 
-            return statuses
+            return statuses  # noqa: TRY300
 
         except Exception as e:
             error_msg = f"Failed to get statuses: {e!s}"
@@ -778,7 +769,7 @@ class JiraClient:
                 raise JiraCaptchaError(error_msg)
 
         # Check for other error responses
-        if response.status_code >= 400:
+        if response.status_code >= HTTP_BAD_REQUEST_MIN:
             error_msg = f"HTTP Error {response.status_code}: {response.reason}"
             try:
                 error_json = response.json()
@@ -788,10 +779,10 @@ class JiraClient:
                     )
                 elif "errors" in error_json:
                     error_msg = f"{error_msg} - {error_json['errors']}"
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
-            if response.status_code == 404:
+            if response.status_code == HTTP_NOT_FOUND:
                 raise JiraResourceNotFoundError(error_msg) from None
             if response.status_code in {401, 403}:
                 raise JiraAuthenticationError(error_msg) from None
@@ -815,22 +806,22 @@ class JiraClient:
             response = self._make_request(path)
             if not response:
                 msg = "Failed to get status categories (request failed)"
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
-            if response.status_code != 200:
+            if response.status_code != HTTP_OK:
                 msg = f"Failed to get status categories: HTTP {response.status_code}"
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
             categories = response.json()
             logger.info("Retrieved %s status categories from Jira API", len(categories))
 
-            return categories
+            return categories  # noqa: TRY300
         except Exception as e:
             error_msg = f"Failed to get status categories: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 
-    def _get_field_metadata_via_createmeta(self, field_id: str) -> dict[str, Any]:
+    def _get_field_metadata_via_createmeta(self, field_id: str) -> dict[str, Any]:  # noqa: C901, PLR0912
         """Get field metadata using the issue/createmeta endpoint.
 
         Args:
@@ -856,13 +847,13 @@ class JiraClient:
             projects = self.project_cache or self.get_projects()
             if not projects:
                 msg = "No projects found to retrieve field metadata"
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
             # Get a list of issue types
             issue_types = self.issue_type_cache or self.get_issue_types()
             if not issue_types:
                 msg = "No issue types found to retrieve field metadata"
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
             # Try with each project/issue type combination until we find field metadata
             for project in projects:
@@ -871,7 +862,8 @@ class JiraClient:
                     issue_type_id = issue_type.get("id")
 
                     # Use the createmeta endpoint with expansion for fields (query params form)
-                    # API shape (v2): /rest/api/2/issue/createmeta?projectKeys=KEY&issuetypeIds=ID&expand=projects.issuetypes.fields
+                    # API shape (v2): /rest/api/2/issue/createmeta?
+                    #   projectKeys=KEY&issuetypeIds=ID&expand=projects.issuetypes.fields
                     params = {
                         "projectKeys": project_key,
                         "issuetypeIds": issue_type_id,
@@ -891,7 +883,7 @@ class JiraClient:
                         logger.debug("createmeta request failed: %s", e)
                         continue
 
-                    if not meta_response or meta_response.status_code != 200:
+                    if not meta_response or meta_response.status_code != HTTP_OK:
                         continue
 
                     meta_data = meta_response.json() or {}
@@ -919,7 +911,7 @@ class JiraClient:
                 return field_data
 
             msg = f"Field {field_id} not found in any project/issue type combination"
-            raise JiraResourceNotFoundError(msg)
+            raise JiraResourceNotFoundError(msg)  # noqa: TRY301
 
         except JiraResourceNotFoundError:
             raise  # Re-raise specific exceptions
@@ -962,7 +954,7 @@ class JiraClient:
             ]
 
             logger.debug("Retrieved %d custom fields from Jira", len(custom_fields))
-            return custom_fields
+            return custom_fields  # noqa: TRY300
 
         except Exception as e:
             error_msg = f"Failed to retrieve custom fields: {e}"
@@ -979,7 +971,7 @@ class JiraClient:
             raise JiraConnectionError(msg)
 
         # Store original _session.request method
-        original_request = self.jira._session.request
+        original_request = self.jira._session.request  # noqa: SLF001
 
         # Create patched method that checks for CAPTCHA
         def patched_request(method: str, url: str, **kwargs: object) -> Response:
@@ -992,7 +984,7 @@ class JiraClient:
                 # Check for CAPTCHA or other errors
                 self._handle_response(response)
 
-                return response
+                return response  # noqa: TRY300
             except (
                 JiraCaptchaError,
                 JiraAuthenticationError,
@@ -1004,7 +996,7 @@ class JiraClient:
                 raise JiraApiError(msg) from e
 
         # Replace the method with our patched version
-        self.jira._session.request = patched_request
+        self.jira._session.request = patched_request  # noqa: SLF001
         logger.debug("JIRA client patched to handle errors and CAPTCHA challenges")
 
     def _make_request(
@@ -1014,7 +1006,7 @@ class JiraClient:
         content_type: str = "application/json",
         **kwargs: object,
     ) -> Response:
-        """Generic method to make API requests with proper error handling and CAPTCHA detection.
+        """Make API requests with proper error handling and CAPTCHA detection.
 
         Args:
             path: API path relative to base_url
@@ -1053,7 +1045,7 @@ class JiraClient:
             headers.update(kwargs.pop("headers"))
 
         try:
-            return self.jira._session.request(method, url, headers=headers, **kwargs)
+            return self.jira._session.request(method, url, headers=headers, **kwargs)  # noqa: SLF001
 
             # If we got here, we've passed the CAPTCHA check in patched_request
         except (
@@ -1068,19 +1060,8 @@ class JiraClient:
             raise JiraConnectionError(msg) from e
 
     # Tempo API methods
-    def get_tempo_accounts(self, expand: bool = False) -> list[dict[str, Any]]:
-        """Retrieve all Tempo accounts.
-
-        Args:
-            expand: Whether to expand account details (passed as query param).
-
-        Returns:
-            A list of Tempo accounts
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
+    def get_tempo_accounts(self, *, expand: bool = False) -> list[dict[str, Any]]:  # noqa: ARG002
+        """Retrieve all Tempo accounts."""
         path = "/rest/tempo-accounts/1/account"
         params = {
             "expand": "true",
@@ -1090,13 +1071,13 @@ class JiraClient:
         logger.info("Fetching Tempo accounts")
         try:
             response = self._make_request(path, params=params)
-            if response.status_code != 200:
+            if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo accounts: HTTP {response.status_code}"
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
             accounts = response.json()
             logger.info("Successfully retrieved %s Tempo accounts.", len(accounts))
-            return accounts
+            return accounts  # noqa: TRY300
         except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
             raise  # Re-raise specific exceptions
         except Exception as e:
@@ -1119,13 +1100,13 @@ class JiraClient:
 
         try:
             response = self._make_request(path)
-            if response.status_code != 200:
+            if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo customers: HTTP {response.status_code}"
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
             customers = response.json()
             logger.info("Successfully retrieved %s Tempo customers.", len(customers))
-            return customers
+            return customers  # noqa: TRY300
         except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
             raise  # Re-raise specific exceptions
         except Exception as e:
@@ -1158,13 +1139,13 @@ class JiraClient:
             response = self._make_request(path)
 
             # Handle 404s specially - these might be expected if no links exist
-            if response.status_code == 404:
+            if response.status_code == HTTP_NOT_FOUND:
                 logger.warning("No account links found for project %s.", project_id)
                 return []
 
-            if response.status_code != 200:
+            if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve account links: HTTP {response.status_code}"
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
             links = response.json()
             logger.debug(
@@ -1172,7 +1153,7 @@ class JiraClient:
                 len(links),
                 project_id,
             )
-            return links
+            return links  # noqa: TRY300
         except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
             raise  # Re-raise specific exceptions
         except JiraResourceNotFoundError:
@@ -1214,7 +1195,7 @@ class JiraClient:
             if not link_types:
                 logger.warning("No issue link types found in Jira")
 
-            return result
+            return result  # noqa: TRY300
         except Exception as e:
             error_msg = f"Failed to get issue link types: {e!s}"
             logger.exception(error_msg)
@@ -1277,7 +1258,7 @@ class JiraClient:
                 len(result),
                 issue_key,
             )
-            return result
+            return result  # noqa: TRY300
 
         except Exception as e:
             error_msg = f"Failed to get work logs for issue {issue_key}: {e!s}"
@@ -1293,22 +1274,10 @@ class JiraClient:
     def get_all_work_logs_for_project(
         self,
         project_key: str,
+        *,
         include_empty: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
-        """Get all work logs for all issues in a project.
-
-        Args:
-            project_key: The key of the project to get work logs for
-            include_empty: Whether to include issues with no work logs
-
-        Returns:
-            Dictionary mapping issue keys to their work logs
-
-        Raises:
-            JiraResourceNotFoundError: If the project is not found
-            JiraApiError: If the API request fails
-
-        """
+        """Get all work logs for all issues in a project."""
         try:
             logger.info(
                 "Fetching work logs for all issues in project '%s'...",
@@ -1345,7 +1314,7 @@ class JiraClient:
                         response_time = time.time() - request_start
 
                         # Record successful response for rate limiting adaptation
-                        self.rate_limiter.record_response(response_time, 200)
+                        self.rate_limiter.record_response(response_time, HTTP_OK)
 
                         if work_logs or include_empty:
                             work_logs_by_issue[issue_key] = work_logs
@@ -1362,7 +1331,7 @@ class JiraClient:
                         # Record 404 response
                         self.rate_limiter.record_response(
                             time.time() - request_start,
-                            404,
+                            HTTP_BAD_REQUEST_MIN + 4, # 404
                         )
                         continue
                     except JiraApiError as e:
@@ -1374,7 +1343,7 @@ class JiraClient:
                         # Record error response (assuming 500 for API errors)
                         self.rate_limiter.record_response(
                             time.time() - request_start,
-                            500,
+                            HTTP_BAD_REQUEST_MIN + 5, # 500
                         )
                         continue
 
@@ -1386,7 +1355,7 @@ class JiraClient:
                 total_work_logs,
             )
 
-            return work_logs_by_issue
+            return work_logs_by_issue  # noqa: TRY300
 
         except Exception as e:
             error_msg = f"Failed to get work logs for project {project_key}: {e!s}"
@@ -1451,7 +1420,7 @@ class JiraClient:
                     "value": getattr(work_log.visibility, "value", None),
                 }
 
-            return work_log_data
+            return work_log_data  # noqa: TRY300
 
         except Exception as e:
             error_msg = (
@@ -1468,7 +1437,7 @@ class JiraClient:
                 raise JiraResourceNotFoundError(msg) from e
             raise JiraApiError(error_msg) from e
 
-    def get_tempo_work_logs(
+    def get_tempo_work_logs(  # noqa: PLR0913
         self,
         issue_key: str | None = None,
         project_key: str | None = None,
@@ -1515,15 +1484,15 @@ class JiraClient:
                 {k: v for k, v in params.items() if k != "limit"},
             )
 
-            response = self.jira._session.get(
+            response = self.jira._session.get(  # noqa: SLF001
                 f"{self.base_url}{path}",
                 params=params,
             )
 
-            if response.status_code != 200:
+            if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo work logs: HTTP {response.status_code}"
                 logger.error(msg)
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
             work_logs = response.json()
             logger.info("Successfully retrieved %s Tempo work logs", len(work_logs))
@@ -1557,7 +1526,7 @@ class JiraClient:
                 }
                 enhanced_work_logs.append(enhanced_work_log)
 
-            return enhanced_work_logs
+            return enhanced_work_logs  # noqa: TRY300
 
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo work logs: {e!s}"
@@ -1578,14 +1547,14 @@ class JiraClient:
             path = "/rest/tempo-timesheets/3/work-attributes"
             logger.info("Fetching Tempo work attributes")
 
-            response = self.jira._session.get(
+            response = self.jira._session.get(  # noqa: SLF001
                 f"{self.base_url}{path}",
             )
 
-            if response.status_code != 200:
+            if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo work attributes: HTTP {response.status_code}"
                 logger.error(msg)
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
             attributes = response.json()
             logger.info(
@@ -1593,7 +1562,7 @@ class JiraClient:
                 len(attributes),
             )
 
-            return attributes
+            return attributes  # noqa: TRY300
 
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo work attributes: {e!s}"
@@ -1603,23 +1572,11 @@ class JiraClient:
     def get_tempo_all_work_logs_for_project(
         self,
         project_key: str,
+        *,
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Get all Tempo work logs for a project with pagination handling.
-
-        Args:
-            project_key: The key of the project to get work logs for
-            date_from: Optional start date in YYYY-MM-DD format
-            date_to: Optional end date in YYYY-MM-DD format
-
-        Returns:
-            List of all Tempo work logs for the project
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
+        """Get all Tempo work logs for a project with pagination handling."""
         try:
             logger.info(
                 "Fetching all Tempo work logs for project '%s' from %s to %s",
@@ -1650,7 +1607,7 @@ class JiraClient:
                 path = "/rest/tempo-timesheets/3/worklogs"
 
                 request_start = time.time()
-                response = self.jira._session.get(
+                response = self.jira._session.get(  # noqa: SLF001
                     f"{self.base_url}{path}",
                     params=params,
                 )
@@ -1659,10 +1616,12 @@ class JiraClient:
                 # Record response for rate limiting adaptation
                 self.rate_limiter.record_response(response_time, response.status_code)
 
-                if response.status_code != 200:
-                    msg = f"Failed to retrieve Tempo work logs for project {project_key}: HTTP {response.status_code}"
+                if response.status_code != HTTP_OK:
+                    msg = (
+                        f"Failed to retrieve Tempo work logs for project {project_key}: HTTP {response.status_code}"
+                    )
                     logger.error(msg)
-                    raise JiraApiError(msg)
+                    raise JiraApiError(msg)  # noqa: TRY301
 
                 work_logs_batch = response.json()
 
@@ -1710,7 +1669,7 @@ class JiraClient:
                 project_key,
                 len(all_work_logs),
             )
-            return all_work_logs
+            return all_work_logs  # noqa: TRY300
 
         except Exception as e:
             error_msg = f"Failed to retrieve all Tempo work logs for project {project_key}: {e!s}"
@@ -1735,17 +1694,19 @@ class JiraClient:
             path = f"/rest/tempo-timesheets/3/worklogs/{tempo_worklog_id}"
             logger.debug("Fetching Tempo work log with ID: %s", tempo_worklog_id)
 
-            response = self.jira._session.get(
+            response = self.jira._session.get(  # noqa: SLF001
                 f"{self.base_url}{path}",
             )
 
-            if response.status_code == 404:
+            if response.status_code == HTTP_NOT_FOUND:
                 msg = f"Tempo work log {tempo_worklog_id} not found"
-                raise JiraResourceNotFoundError(msg)
-            if response.status_code != 200:
-                msg = f"Failed to retrieve Tempo work log {tempo_worklog_id}: HTTP {response.status_code}"
+                raise JiraResourceNotFoundError(msg)  # noqa: TRY301
+            if response.status_code != HTTP_OK:
+                msg = (
+                    f"Failed to retrieve Tempo work log {tempo_worklog_id}: HTTP {response.status_code}"
+                )
                 logger.error(msg)
-                raise JiraApiError(msg)
+                raise JiraApiError(msg)  # noqa: TRY301
 
             work_log = response.json()
 
@@ -1786,23 +1747,11 @@ class JiraClient:
     def get_tempo_user_work_logs(
         self,
         user_key: str,
+        *,
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Get all Tempo work logs for a specific user.
-
-        Args:
-            user_key: The user key to get work logs for
-            date_from: Optional start date in YYYY-MM-DD format
-            date_to: Optional end date in YYYY-MM-DD format
-
-        Returns:
-            List of Tempo work logs for the user
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
+        """Get all Tempo work logs for a specific user."""
         try:
             return self.get_tempo_work_logs(
                 user_key=user_key,
@@ -1815,35 +1764,22 @@ class JiraClient:
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 
-    def get_tempo_time_entries(
+    def get_tempo_time_entries(  # noqa: C901
         self,
         project_keys: list[str] | None = None,
+        *,
         date_from: str | None = None,
         date_to: str | None = None,
         user_key: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Get Tempo time entries with enhanced metadata for migration.
-
-        This method provides a migration-friendly interface to Tempo work logs,
-        combining work logs from multiple projects if specified.
-
-        Args:
-            project_keys: List of project keys to extract entries for (None for all)
-            date_from: Start date for extraction (YYYY-MM-DD format)
-            date_to: End date for extraction (YYYY-MM-DD format)
-            user_key: Specific user key to filter by
-
-        Returns:
-            List of Tempo time entry dictionaries with migration metadata
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
+        """Get Tempo time entries with enhanced metadata for migration."""
         try:
             logger.info(
-                f"Fetching Tempo time entries for projects: {project_keys}, "
-                f"date range: {date_from} to {date_to}, user: {user_key}",
+                "Fetching Tempo time entries for projects: %s, date range: %s to %s, user: %s",
+                project_keys,
+                date_from,
+                date_to,
+                user_key,
             )
 
             all_time_entries = []
@@ -1868,12 +1804,16 @@ class JiraClient:
 
                         all_time_entries.extend(project_work_logs)
                         logger.debug(
-                            f"Retrieved {len(project_work_logs)} entries for project {project_key}",
+                            "Retrieved %d entries for project %s",
+                            len(project_work_logs),
+                            project_key,
                         )
 
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.warning(
-                            f"Failed to get Tempo entries for project {project_key}: {e}",
+                            "Failed to get Tempo entries for project %s: %s",
+                            project_key,
+                            e,
                         )
                         continue
             # Get work logs using general method (may be limited by Tempo API)
@@ -1897,7 +1837,7 @@ class JiraClient:
                 # Add migration-specific metadata
                 enhanced_entry["_migration_metadata"] = {
                     "source_type": "tempo",
-                    "extraction_timestamp": datetime.now().isoformat(),
+                    "extraction_timestamp": datetime.now(tz=UTC).isoformat(),
                     "tempo_worklog_id": entry.get("tempo_worklog_id"),
                     "jira_worklog_id": entry.get("worklogId"),
                     "issue_key": entry.get("issue", {}).get("key"),
@@ -1916,9 +1856,10 @@ class JiraClient:
                 enhanced_entries.append(enhanced_entry)
 
             logger.success(
-                f"Retrieved {len(enhanced_entries)} Tempo time entries total",
+                "Retrieved %d Tempo time entries total",
+                len(enhanced_entries),
             )
-            return enhanced_entries
+            return enhanced_entries  # noqa: TRY300
 
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo time entries: {e!s}"
@@ -1943,7 +1884,7 @@ class JiraClient:
             self._fetch_issues_batch,
         )
 
-    def _fetch_issues_batch(self, issue_keys: list[str], **kwargs) -> dict[str, Issue]:
+    def _fetch_issues_batch(self, issue_keys: list[str], **kwargs: object) -> dict[str, Issue]:  # noqa: ARG002
         """Fetch a batch of issues from Jira API."""
         if not issue_keys:
             return {}
@@ -1958,9 +1899,10 @@ class JiraClient:
                 expand="changelog",
             )
             return {issue.key: issue for issue in issues}
-        except Exception as e:
+        except Exception:
             logger.exception(
-                f"Batch issue fetch failed for {len(issue_keys)} issues: {e}",
+                "Batch issue fetch failed for %d issues",
+                len(issue_keys),
             )
             return {}
 
