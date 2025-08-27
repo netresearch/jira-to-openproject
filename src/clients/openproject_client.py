@@ -1298,7 +1298,8 @@ class OpenProjectClient:
             "        if key\n"
             "          cf = CustomField.find_by(type: 'WorkPackageCustomField', name: 'Jira Issue Key')\n"
             "          if !cf\n"
-            "            cf = CustomField.new(name: 'Jira Issue Key', field_format: 'string', is_required: false, is_for_all: true, type: 'WorkPackageCustomField')\n"
+            "            cf = CustomField.new(name: 'Jira Issue Key', field_format: 'string',\n"
+            "              is_required: false, is_for_all: true, type: 'WorkPackageCustomField')\n"
             "            cf.save\n"
             "          end\n"
             "          begin\n"
@@ -1312,7 +1313,8 @@ class OpenProjectClient:
             "        if key\n"
             "          cf = CustomField.find_by(type: 'UserCustomField', name: 'Jira user key')\n"
             "          if !cf\n"
-            "            cf = CustomField.new(name: 'Jira user key', field_format: 'string', is_required: false, is_for_all: true, type: 'UserCustomField')\n"
+            "            cf = CustomField.new(name: 'Jira user key', field_format: 'string',\n"
+            "              is_required: false, is_for_all: true, type: 'UserCustomField')\n"
             "            cf.save\n"
             "          end\n"
             "          begin\n"
@@ -1413,11 +1415,10 @@ class OpenProjectClient:
         except (QueryExecutionError, JsonParseError) as e:
             msg = f"Error finding record for {model}."
             raise QueryExecutionError(msg) from e
-        else:
-            if result is None:
-                msg = f"No {model} found with {id_or_conditions}"
-                raise RecordNotFoundError(msg)
-            return result
+        if result is None:
+            msg = f"No {model} found with {id_or_conditions}"
+            raise RecordNotFoundError(msg)
+        return result
         else:
             return result
 

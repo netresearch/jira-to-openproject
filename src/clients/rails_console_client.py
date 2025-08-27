@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """RailsConsoleClient.
 
 Client for executing commands on a Rails console running in a tmux session.
@@ -75,7 +74,7 @@ class RailsConsoleClient:
 
         try:
             self._configure_irb_settings()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to configure IRB settings: %s", e)
 
     @staticmethod
@@ -91,11 +90,7 @@ class RailsConsoleClient:
             def is_noise(ln: str) -> bool:
                 return (
                     not ln
-                    or ln.startswith("--EXEC_")
-                    or ln.startswith("TMUX_CMD_")
-                    or ln.startswith("=> ")
-                    or ln.startswith("irb(main):")
-                    or ln.startswith("open-project(")
+                    or ln.startswith(("--EXEC_", "TMUX_CMD_", "=> ", "irb(main):", "open-project("))
                 )
 
             candidates = [ln for ln in lines if not is_noise(ln)]
@@ -110,16 +105,12 @@ class RailsConsoleClient:
 
             matched: list[str] = []
             for pred in key_preds:
-                for ln in candidates:
-                    if pred(ln):
-                        matched.append(ln)
+                matched.extend([ln for ln in candidates if pred(ln)])
             # Also include preceding file/line if available
-            enriched: list[str] = []
-            for ln in matched:
-                enriched.append(ln)
+            enriched: list[str] = list(matched)
             if not enriched:
                 # Fallback to last few non-noise lines
-                enriched = [ln for ln in candidates[-5:]]
+                enriched = list(candidates[-5:])
             # Deduplicate and clip
             seen: set[str] = set()
             unique = []
