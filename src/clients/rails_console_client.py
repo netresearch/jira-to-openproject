@@ -120,7 +120,7 @@ class RailsConsoleClient:
                     unique.append(ln)
             summary = " | ".join(unique)[:500]
             return summary or text.strip()[:300]
-        except Exception:
+        except Exception:  # noqa: BLE001
             return text.strip()[:300]
 
     def _session_exists(self) -> bool:

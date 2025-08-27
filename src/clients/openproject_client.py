@@ -1419,8 +1419,6 @@ class OpenProjectClient:
             msg = f"No {model} found with {id_or_conditions}"
             raise RecordNotFoundError(msg)
         return result
-        else:
-            return result
 
     def _retry_with_exponential_backoff(  # noqa: PLR0913, ANN401
         self,
