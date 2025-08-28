@@ -46,6 +46,8 @@ except Exception:  # noqa: BLE001
 # Module-level constants
 BATCH_SIZE_DEFAULT = 50
 SAFE_OFFSET_LIMIT = 5000
+BATCH_LABEL_SAMPLE = 3
+USERS_CACHE_TTL_SECONDS = 300
 
 
 class SSHConnection:
@@ -1420,7 +1422,7 @@ class OpenProjectClient:
             raise RecordNotFoundError(msg)
         return result
 
-    def _retry_with_exponential_backoff(  # noqa: PLR0913, ANN401
+    def _retry_with_exponential_backoff(  # noqa: PLR0913
         self,
         operation: Callable[[], object],
         operation_name: str,
@@ -1429,7 +1431,7 @@ class OpenProjectClient:
         max_delay: float = 60.0,
         backoff_factor: float = 2.0,
         *,
-        jitter: bool = True,  # noqa: FBT001, FBT002
+        jitter: bool = True,
         headers: dict[str, str] | None = None,
     ) -> object:
         """Execute an operation with exponential backoff retry logic.
@@ -1562,7 +1564,7 @@ class OpenProjectClient:
         for i in range(0, len(ids), effective_batch_size):
             batch_ids = ids[i : i + effective_batch_size]
 
-            def batch_operation() -> object:
+            def batch_operation(batch_ids: list[int | str] = batch_ids) -> object:  # noqa: B023, ANN201
                 # Use safe query builder with ActiveRecord parameterization
                 query = self._build_safe_batch_query(model, "id", batch_ids)
                 return self.execute_json_query(query)
@@ -1570,7 +1572,7 @@ class OpenProjectClient:
             try:
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 label_prefix = f"Batch fetch {model} records "
-                sample_label = f"{batch_ids[:3]}{'...' if len(batch_ids) > 3 else ''}"
+                sample_label = f"{batch_ids[:BATCH_LABEL_SAMPLE]}{'...' if len(batch_ids) > BATCH_LABEL_SAMPLE else ''}"
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
                     f"{label_prefix}{sample_label}",
@@ -1635,7 +1637,7 @@ class OpenProjectClient:
         # Build Rails command for creating a record
         # Use a simple, single-line approach that works well with tmux console
         # Convert Python boolean values to Ruby equivalents
-        def format_value(v):
+        def format_value(v: object) -> str:  # noqa: ANN001, ANN202
             if isinstance(v, bool):
                 return "true" if v else "false"
             if isinstance(v, str):
@@ -1723,14 +1725,14 @@ class OpenProjectClient:
     def update_record(
         self,
         model: str,
-        id: int,
+        record_id: int,
         attributes: dict[str, Any],
     ) -> dict[str, Any]:
         """Update a record with given attributes.
 
         Args:
             model: Model name (e.g., "User", "Project")
-            id: Record ID
+            record_id: Record ID
             attributes: Attributes to update
 
         Returns:
@@ -1746,7 +1748,7 @@ class OpenProjectClient:
 
         # Build command to update the record
         command = f"""
-        record = {model}.find_by(id: {id})
+        record = {model}.find_by(id: {record_id})
         if record.nil?
           raise "Record not found"
         elsif record.update({ruby_hash})
@@ -1767,7 +1769,7 @@ class OpenProjectClient:
             return result
         except RubyError as e:
             if "Record not found" in str(e):
-                msg = f"{model} with ID {id} not found"
+                msg = f"{model} with ID {record_id} not found"
                 raise RecordNotFoundError(msg) from e
             msg = f"Failed to update {model}."
             raise QueryExecutionError(msg) from e
@@ -1867,7 +1869,7 @@ class OpenProjectClient:
             msg = f"Error finding records for {model}."
             raise QueryExecutionError(msg) from e
 
-    def execute_transaction(self, commands: list[str]) -> Any:
+    def execute_transaction(self, commands: list[str]) -> object:  # noqa: ANN401
         """Execute multiple commands in a transaction.
 
         Args:
@@ -1942,7 +1944,7 @@ class OpenProjectClient:
             and hasattr(self, "_users_cache_time")
             and self._users_cache is not None
             and self._users_cache_time is not None
-            and current_time - self._users_cache_time < 300
+            and current_time - self._users_cache_time < USERS_CACHE_TTL_SECONDS
         )
 
         if cache_valid:
@@ -2357,7 +2359,10 @@ class OpenProjectClient:
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
                     if not config.migration_config.get("enable_runner_fallback", False):
                         raise
-                    logger.warning("Rails console failed for work package types (%s); falling back to rails runner", type(e).__name__)
+                    logger.warning(
+                        "Rails console failed for work package types (%s); falling back to rails runner",
+                        type(e).__name__,
+                    )
                     runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
@@ -2464,7 +2469,10 @@ class OpenProjectClient:
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
                     if not config.migration_config.get("enable_runner_fallback", False):
                         raise
-                    logger.warning("Rails console failed for projects (%s); falling back to rails runner", type(e).__name__)
+                    logger.warning(
+                        "Rails console failed for projects (%s); falling back to rails runner",
+                        type(e).__name__,
+                    )
                     runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
@@ -2827,7 +2835,8 @@ class OpenProjectClient:
             if key
               cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')
               if !cf
-                cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
+                cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string',
+                  is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
                 cf.save
               end
               begin
