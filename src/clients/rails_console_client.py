@@ -719,7 +719,7 @@ class RailsConsoleClient:
             logger.error("Console output wait timed out after %ss without marker", timeout)
         return False, current_output
 
-    def _wait_for_console_ready(self, target: str, timeout: int = 5, *, reset_on_stall: bool = True) -> bool:  # noqa: FBT001, FBT002
+    def _wait_for_console_ready(self, target: str, timeout: int = 5, *, reset_on_stall: bool = True) -> bool:
         """Wait for the console to be in a ready state.
 
         Args:
@@ -774,7 +774,7 @@ class RailsConsoleClient:
                     time.sleep(0.3)
                     attempts += 1
 
-                    if attempts >= 2:
+                    if attempts >= 2:  # noqa: PLR2004
                         logger.debug(
                             "Multiple Ctrl+C attempts failed, trying full stabilization",
                         )
@@ -789,7 +789,7 @@ class RailsConsoleClient:
                 time.sleep(poll_interval)
                 poll_interval *= 2
             except subprocess.SubprocessError as e:
-                logger.exception("Error checking console state: %s", e)
+                logger.exception("Error checking console state")
                 msg = f"Error checking console state: {e}"
                 raise ConsoleNotReadyError(msg) from e
 
@@ -924,7 +924,7 @@ class RailsConsoleClient:
             msg = f"Tmux command failed: {e}"
             raise TmuxSessionError(msg) from e
         except Exception as e:
-            logger.exception("Error sending command to tmux: %s", e)
+            logger.exception("Error sending command to tmux")
             self._stabilize_console()
             msg = f"Error sending command to tmux: {e}"
             raise CommandExecutionError(msg) from e
