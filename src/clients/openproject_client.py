@@ -1770,7 +1770,6 @@ class OpenProjectClient:
                     f"(type={type(result)}, value={result})"
                 )
                 raise QueryExecutionError(msg)
-            return result
         except RubyError as e:
             if "Record not found" in str(e):
                 msg = f"{model} with ID {record_id} not found"
@@ -1781,6 +1780,8 @@ class OpenProjectClient:
             # Normalize to the same message tests expect for generic failures
             msg = f"Failed to update {model}."
             raise QueryExecutionError(msg) from e
+        else:
+            return result
 
     def delete_record(self, model: str, record_id: int) -> None:
         """Delete a record.
@@ -2484,7 +2485,9 @@ class OpenProjectClient:
                         + (
                             "projects = Project.where(parent_id: nil).select(:id, :name, :identifier, :description, :status_code).as_json\n"
                             if top_level_only
-                            else "projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n"
+                            else (
+                                "projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n"
+                            )
                         )
                         + f"File.write('{file_path}', JSON.pretty_generate(projects))\n"
                     )
