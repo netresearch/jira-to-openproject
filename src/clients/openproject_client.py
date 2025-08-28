@@ -1683,7 +1683,10 @@ class OpenProjectClient:
                 # If we still don't have a dict, but the command didn't raise an error,
                 # assume success and try to get the record by its attributes
                 logger.warning(
-                    "Could not parse JSON response from %s creation, but command executed. Attempting to find created record.",
+                    (
+                        "Could not parse JSON response from %s creation, but command executed. "
+                        "Attempting to find created record."
+                    ),
                     model,
                 )
 
@@ -1783,7 +1786,7 @@ class OpenProjectClient:
 
         Args:
             model: Model name (e.g., "User", "Project")
-            id: Record ID
+            record_id: Record ID
 
         Raises:
             RecordNotFoundError: If record doesn't exist
@@ -1859,7 +1862,7 @@ class OpenProjectClient:
             # Prefer file-based for multi-record results to avoid console artifacts
             data = self.execute_large_query_to_json_file(
                 ruby_expr,
-                container_file=f"/tmp/j2o_{model.lower()}_records.json",
+                container_file=f"/tmp/j2o_{model.lower()}_records.json",  # noqa: S108
                 timeout=60,
             )
             if data is None:
@@ -2033,8 +2036,8 @@ class OpenProjectClient:
                                 return user
                             if isinstance(uid, str) and uid.isdigit() and int(uid) == identifier:
                                 return user
-                        except Exception:
-                            # Ignore malformed cache entries
+                        except Exception:  # noqa: BLE001, S112
+                            logger.debug("Malformed user cache entry encountered")
                             continue
 
                 # Fallback to direct lookup by id
@@ -2065,7 +2068,7 @@ class OpenProjectClient:
 
         except RecordNotFoundError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             msg = "Error getting user."
             raise QueryExecutionError(msg) from e
 
@@ -2179,7 +2182,7 @@ class OpenProjectClient:
             msg = "Error getting custom field ID."
             raise QueryExecutionError(msg) from e
 
-    def get_custom_fields(self, force_refresh: bool = False) -> list[dict[str, Any]]:
+    def get_custom_fields(self, *, force_refresh: bool = False) -> list[dict[str, Any]]:  # noqa: FBT001, FBT002
         """Get all custom fields from OpenProject.
 
         Args:
