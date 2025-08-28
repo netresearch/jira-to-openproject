@@ -1381,7 +1381,7 @@ class OpenProjectClient:
                 # Attach raw output snippet for callers that want to persist it
                 if isinstance(output, str):
                     result["output"] = output[:2000]
-                return result
+                return result  # noqa: TRY300
         except Exception as e:
             _msg = f"Failed to parse result JSON: {e}"
             raise QueryExecutionError(_msg) from e
@@ -1716,7 +1716,7 @@ class OpenProjectClient:
                     "attributes": attributes,
                 }
 
-            return result
+            return result  # noqa: TRY300
 
         except RubyError as e:
             msg = f"Failed to create {model}."
@@ -1977,14 +1977,14 @@ class OpenProjectClient:
                 )
                 raise QueryExecutionError(
                     msg,
-                )
+                )  # noqa: TRY301
 
             # Update cache
             self._users_cache = json_data or []
             self._users_cache_time = current_time
 
             logger.info("Retrieved %d users from OpenProject", len(self._users_cache))
-            return self._users_cache
+            return self._users_cache  # noqa: TRY300
 
         except QueryExecutionError:
             # Propagate specific high-signal errors (tests assert exact messages)
@@ -2017,7 +2017,7 @@ class OpenProjectClient:
                 identifier = user_identifier.strip()
                 if not identifier:
                     msg = "Empty user identifier"
-                    raise ValueError(msg)
+                    raise ValueError(msg)  # noqa: TRY301
             else:
                 identifier = int(user_identifier)
 
@@ -2064,7 +2064,7 @@ class OpenProjectClient:
             email = (user.get("mail") or user.get("email"))
             if isinstance(email, str):
                 self._users_by_email_cache[email.lower()] = user
-            return user
+            return user  # noqa: TRY300
 
         except RecordNotFoundError:
             raise
@@ -2116,7 +2116,7 @@ class OpenProjectClient:
                 return user
 
             msg = f"User with email '{email}' not found"
-            raise RecordNotFoundError(msg)
+            raise RecordNotFoundError(msg)  # noqa: TRY301
 
         except RecordNotFoundError:
             raise  # Re-raise RecordNotFoundError
@@ -2159,7 +2159,7 @@ class OpenProjectClient:
             # Handle nil value from Ruby
             if result is None:
                 msg = f"Custom field '{name}' not found"
-                raise RecordNotFoundError(msg)
+                raise RecordNotFoundError(msg)  # noqa: TRY301
 
             # Handle integer result
             if isinstance(result, int):
@@ -2174,7 +2174,7 @@ class OpenProjectClient:
                     raise QueryExecutionError(msg) from None
 
             msg = f"Unexpected result type: {type(result)}"
-            raise QueryExecutionError(msg)
+            raise QueryExecutionError(msg)  # noqa: TRY301
 
         except RecordNotFoundError:
             raise  # Re-raise RecordNotFoundError
@@ -2285,7 +2285,7 @@ class OpenProjectClient:
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
                         msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
-                        raise QueryExecutionError(msg) from e  # noqa: TRY003
+                        raise QueryExecutionError(msg) from e
                 else:
                     raise
 
@@ -2314,17 +2314,16 @@ class OpenProjectClient:
                     if stderr and "No such file or directory" in stderr:
                         time.sleep(0.25)
                         continue
-                    raise QueryExecutionError(
-                        f"Failed to read statuses file: {stderr or 'unknown error'}",  # noqa: TRY003
-                    )
+                    _emsg = f"Failed to read statuses file: {stderr or 'unknown error'}"
+                    raise QueryExecutionError(_emsg)
                 parsed = json.loads(stdout)
                 logger.info("Successfully loaded %d statuses from container file", len(parsed))
                 return parsed if isinstance(parsed, list) else []
             finally:
-                try:
-                    self.ssh_client.execute_command(f"docker exec {self.container_name} rm -f {file_path}")
-                except Exception:
-                    pass
+                with suppress(Exception):
+                    self.ssh_client.execute_command(
+                        f"docker exec {self.container_name} rm -f {file_path}"
+                    )
         except Exception as e:
             msg = "Failed to get statuses."
             raise QueryExecutionError(msg) from e
