@@ -161,8 +161,8 @@ class ConnectionManager:
             await websocket.send_text(json.dumps(message, default=str))
         except WebSocketDisconnect:
             self.disconnect(websocket)
-        except Exception as e:
-            logger.exception("Error sending personal message: %s", e)
+        except Exception:
+            logger.exception("Error sending personal message")
             self.disconnect(websocket)
 
     async def broadcast(self, message: dict[str, Any]) -> None:
@@ -173,8 +173,8 @@ class ConnectionManager:
                 await connection.send_text(json.dumps(message, default=str))
             except WebSocketDisconnect:
                 disconnected.append(connection)
-            except Exception as e:
-                logger.exception("Error broadcasting message: %s", e)
+            except Exception:
+                logger.exception("Error broadcasting message")
                 disconnected.append(connection)
 
         # Remove disconnected clients
@@ -240,8 +240,8 @@ async def collect_system_metrics() -> None:
 
             await asyncio.sleep(5)  # Update every 5 seconds
 
-        except Exception as e:
-            logger.exception("Error collecting system metrics: %s", e)
+        except Exception:
+            logger.exception("Error collecting system metrics")
             await asyncio.sleep(10)  # Wait longer on error
 
 
@@ -282,8 +282,8 @@ async def update_migration_progress() -> None:
 
             await asyncio.sleep(1)  # Update every second during migration
 
-        except Exception as e:
-            logger.exception("Error updating migration progress: %s", e)
+        except Exception:
+            logger.exception("Error updating migration progress")
             await asyncio.sleep(5)
 
 
@@ -302,8 +302,8 @@ async def startup_event() -> None:
         )
         await redis_client.ping()
         logger.info("Connected to Redis")
-    except Exception as e:
-        logger.warning("Could not connect to Redis: %s", e)
+    except Exception:
+        logger.warning("Could not connect to Redis")
         redis_client = None
 
     # Start background tasks
@@ -322,7 +322,7 @@ async def shutdown_event() -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request):
+async def dashboard(request: Any) -> JSONResponse | HTMLResponse:
     """Serve the main dashboard page."""
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
@@ -364,8 +364,8 @@ async def websocket_progress(websocket: WebSocket) -> None:
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-    except Exception as e:
-        logger.exception("WebSocket error: %s", e)
+    except Exception:
+        logger.exception("WebSocket error")
         manager.disconnect(websocket)
 
 
@@ -410,8 +410,8 @@ async def start_migration_background(config: dict[str, Any]) -> None:
 
         logger.info("Migration started: %s", migration_state["migration_id"])
 
-    except Exception as e:
-        logger.exception("Error starting migration: %s", e)
+    except Exception:
+        logger.exception("Error starting migration")
         migration_state["is_running"] = False
 
         event = MigrationEvent(
@@ -432,8 +432,8 @@ async def stop_migration_background() -> None:
 
         logger.info("Migration stopped by user")
 
-    except Exception as e:
-        logger.exception("Error stopping migration: %s", e)
+    except Exception:
+        logger.exception("Error stopping migration")
 
 
 async def pause_migration_background() -> None:
@@ -447,8 +447,8 @@ async def pause_migration_background() -> None:
 
         logger.info("Migration paused")
 
-    except Exception as e:
-        logger.exception("Error pausing migration: %s", e)
+    except Exception:
+        logger.exception("Error pausing migration")
 
 
 async def resume_migration_background() -> None:
@@ -468,8 +468,8 @@ async def resume_migration_background() -> None:
 
         logger.info("Migration resumed")
 
-    except Exception as e:
-        logger.exception("Error resuming migration: %s", e)
+    except Exception:
+        logger.exception("Error resuming migration")
 
 
 @app.get("/api/progress")
@@ -506,8 +506,8 @@ async def get_progress(migration_id: str | None = None) -> JSONResponse:
         return JSONResponse(content=progress.dict())
 
     except Exception as e:
-        logger.exception("Error getting progress: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error getting progress")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/metrics")
@@ -550,8 +550,8 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
         return JSONResponse(content=metrics.dict())
 
     except Exception as e:
-        logger.exception("Error getting metrics: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error getting metrics")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/metrics/csv")
@@ -581,8 +581,8 @@ async def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
         )
 
     except Exception as e:
-        logger.exception("Error generating CSV: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error generating CSV")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/migration/status")
@@ -610,8 +610,8 @@ async def get_migration_status() -> JSONResponse:
         return JSONResponse(content=status)
 
     except Exception as e:
-        logger.exception("Error getting migration status: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error getting migration status")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/migration/start")

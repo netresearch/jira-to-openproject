@@ -26,14 +26,29 @@ T = TypeVar("T")
 class ExtendedLogger(Protocol):
     """Extended logger protocol with success and notice methods."""
 
-    def debug(self, msg: str, *args: object, **kwargs: object) -> None: ...
-    def info(self, msg: str, *args: object, **kwargs: object) -> None: ...
-    def warning(self, msg: str, *args: object, **kwargs: object) -> None: ...
-    def error(self, msg: str, *args: object, **kwargs: object) -> None: ...
-    def critical(self, msg: str, *args: object, **kwargs: object) -> None: ...
-    def success(self, msg: str, *args: object, **kwargs: object) -> None: ...
-    def notice(self, msg: str, *args: object, **kwargs: object) -> None: ...
-    def exception(self, msg: str, *args: object, **kwargs: object) -> None: ...
+    def debug(self, msg: str, *args: object, **kwargs: object) -> None:
+        """Log a debug message."""
+
+    def info(self, msg: str, *args: object, **kwargs: object) -> None:
+        """Log an info message."""
+
+    def warning(self, msg: str, *args: object, **kwargs: object) -> None:
+        """Log a warning message."""
+
+    def error(self, msg: str, *args: object, **kwargs: object) -> None:
+        """Log an error message."""
+
+    def critical(self, msg: str, *args: object, **kwargs: object) -> None:
+        """Log a critical message."""
+
+    def success(self, msg: str, *args: object, **kwargs: object) -> None:
+        """Log a success message."""
+
+    def notice(self, msg: str, *args: object, **kwargs: object) -> None:
+        """Log a notice message."""
+
+    def exception(self, msg: str, *args: object, **kwargs: object) -> None:
+        """Log an exception with traceback."""
 
 
 # Create a custom theme for logging

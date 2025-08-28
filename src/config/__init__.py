@@ -314,7 +314,7 @@ def validate_config() -> bool:
     return True
 
 
-def update_from_cli_args(args: object) -> None:
+def update_from_cli_args(args: object) -> None:  # noqa: C901
     """Update migration configuration from CLI arguments.
 
     Also applies select Jira/OpenProject overrides that must be available
