@@ -100,7 +100,7 @@ class Migration:
         self.components = components or []
         self.performance_manager = MigrationPerformanceManager()
 
-    async def run(  # noqa: FBT001, FBT002
+    async def run(
         self,
         stop_on_error: bool = False,
         no_confirm: bool = False,
@@ -227,7 +227,7 @@ def restore_backup(backup_dir: Path) -> bool:
             config.logger.info("Backup was created on: %s", metadata.get("timestamp"))
             files_count = len(metadata.get("files_backed_up", []))
             config.logger.info("Contains %s files", files_count)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             config.logger.warning("Could not read backup metadata: %s", e)
 
     # Copy all files from backup to data directory
@@ -248,6 +248,7 @@ def restore_backup(backup_dir: Path) -> bool:
 def create_performance_config(
     batch_size: int = 100,
     max_concurrent_batches: int = 5,
+    *,
     enable_performance_tracking: bool = True,
 ) -> PerformanceConfig:
     """Create performance configuration based on migration settings.
@@ -265,7 +266,12 @@ def create_performance_config(
     max_requests_per_minute = getattr(config, "max_requests_per_minute", 100)
 
     # Determine if this is a large migration (affects performance tuning)
-    is_large_migration = batch_size > 50 or max_concurrent_batches > 3
+    BATCH_LARGE_THRESHOLD = 50
+    MAX_CONCURRENT_BATCHES_THRESHOLD = 3
+    is_large_migration = (
+        batch_size > BATCH_LARGE_THRESHOLD
+        or max_concurrent_batches > MAX_CONCURRENT_BATCHES_THRESHOLD
+    )
 
     return PerformanceConfig(
         # Batching configuration
@@ -291,7 +297,8 @@ def create_performance_config(
     )
 
 
-async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
+async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915, FBT001, FBT002
+    *,
     components: list[ComponentName] | None = None,
     stop_on_error: bool = False,
     no_confirm: bool = False,
@@ -333,7 +340,8 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             config.logger.warning(
                 "Running in DRY RUN mode - no changes will be made to OpenProject",
             )
-            time.sleep(1)  # Give the user a moment to see this warning
+            import asyncio as _asyncio  # noqa: PLC0415
+            await _asyncio.sleep(1)  # Give the user a moment to see this warning
             mode = "DRY RUN"
         else:
             mode = "PRODUCTION"
@@ -406,8 +414,8 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         # Create clients in the correct hierarchical order
         if mock_mode and not _in_test_mode:
             # Preserve legacy internal mocks only outside of tests
-            import sys
-            from pathlib import Path
+            import sys  # noqa: PLC0415
+            from pathlib import Path  # noqa: PLC0415
 
             tests_dir = Path(__file__).parent.parent / "tests"
             if str(tests_dir) not in sys.path:
