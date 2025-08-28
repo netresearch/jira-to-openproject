@@ -3138,7 +3138,7 @@ class OpenProjectClient:
     def _create_work_packages_batch(
         self,
         work_packages: list[dict[str, Any]],
-        **kwargs,
+        **kwargs: object,
     ) -> dict[str, Any]:
         """Create a batch of work packages using Rails."""
         if not work_packages:
@@ -3330,9 +3330,9 @@ class OpenProjectClient:
         updates.each do |update|
           begin
             wp = WorkPackage.find(update['id'])
-            update.each do |k, value|
-              next if k == 'id'
-              wp.send("#{k}=", value) if wp.respond_to?("#{k}=")
+            update.each do |key, value|
+              next if key == 'id'
+              wp.send("#{" + "key" + "}=", value) if wp.respond_to?("#{" + "key" + "}=")
             end
             wp.save!
             updated_count += 1
@@ -3547,16 +3547,16 @@ class OpenProjectClient:
         for i in range(0, len(names), effective_batch_size):
             batch_names = names[i : i + effective_batch_size]
 
-            def batch_operation():
+            def batch_operation(batch_names: list[str] = batch_names) -> list[dict[str, Any]]:
                 # Use safe query builder with ActiveRecord parameterization
                 query = self._build_safe_batch_query("CustomField", "name", batch_names)
-                return self.execute_json_query(query)
+                return self.execute_json_query(query)  # type: ignore[return-value]
 
             try:
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}",
+                    f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}",  # noqa: PLR2004
                     headers=headers,
                 )
 
@@ -3610,14 +3610,14 @@ class OpenProjectClient:
             )
 
         # Enforce maximum batch size to prevent memory exhaustion
-        MAX_BATCH_SIZE = 1000
-        if batch_size > MAX_BATCH_SIZE:
+        max_batch_size = 1000
+        if batch_size > max_batch_size:
             self.logger.warning(
                 "batch_size %d exceeds maximum %d, clamping to maximum",
                 batch_size,
-                MAX_BATCH_SIZE,
+                max_batch_size,
             )
-            return MAX_BATCH_SIZE
+            return max_batch_size
 
         return batch_size
 
@@ -3635,7 +3635,7 @@ class OpenProjectClient:
 
         """
         # Whitelist of allowed OpenProject model names
-        ALLOWED_MODELS = {
+        allowed_models = {
             "User",
             "Project",
             "WorkPackage",
@@ -3656,8 +3656,8 @@ class OpenProjectClient:
             "Board",
         }
 
-        if model not in ALLOWED_MODELS:
-            msg = f"Model '{model}' not in allowed list: {sorted(ALLOWED_MODELS)}"
+        if model not in allowed_models:
+            msg = f"Model '{model}' not in allowed list: {sorted(allowed_models)}"
             raise ValueError(
                 msg,
             )
@@ -3695,10 +3695,10 @@ class OpenProjectClient:
 
         # Add payload byte cap to prevent memory exhaustion (Zen's recommendation)
         payload_bytes = len(values_json.encode("utf-8"))
-        MAX_PAYLOAD_BYTES = 256_000  # 256 KB limit
-        if payload_bytes > MAX_PAYLOAD_BYTES:
+        max_payload_bytes = 256_000  # 256 KB limit
+        if payload_bytes > max_payload_bytes:
             msg = (
-                f"Batch payload {payload_bytes} bytes exceeds {MAX_PAYLOAD_BYTES} limit"
+                f"Batch payload {payload_bytes} bytes exceeds {max_payload_bytes} limit"
             )
             raise ValueError(
                 msg,

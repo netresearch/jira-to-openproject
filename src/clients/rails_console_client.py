@@ -412,7 +412,7 @@ class RailsConsoleClient:
 
             # 2) Recapture a larger pane slice to find markers
             try:
-                recapture = subprocess.run(  # noqa: S603,S607
+                recapture = subprocess.run(  # noqa: S603
                     ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
                     capture_output=True,
                     text=True,
@@ -473,7 +473,7 @@ class RailsConsoleClient:
         if end_line_index == -1:
             # One more try: recapture a larger slice in case the marker landed after our first capture
             try:
-                recapture = subprocess.run(  # noqa: S603,S607
+                recapture = subprocess.run(  # noqa: S603
                     ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
                     capture_output=True,
                     text=True,
