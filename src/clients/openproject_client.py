@@ -2512,7 +2512,7 @@ class OpenProjectClient:
             ssh_command = f"docker exec {self.container_name} cat {file_path}"
             try:
                 stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 msg = f"SSH command failed: {e}"
                 raise QueryExecutionError(msg) from e
             if returncode != 0:
@@ -2543,7 +2543,7 @@ class OpenProjectClient:
                 )
 
             # The execute_query_to_json_file method should return the parsed JSON
-            if not isinstance(result, list):  # noqa: TRY301
+            if not isinstance(result, list):
                 logger.error(
                     "Expected list of projects, got %s: %s",
                     type(result),
@@ -2588,7 +2588,7 @@ class OpenProjectClient:
             )
             return validated_projects  # noqa: TRY300
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("Failed to get projects using file-based method")
             msg = f"Failed to retrieve projects: {e}"
             raise QueryExecutionError(msg) from e
@@ -2611,7 +2611,7 @@ class OpenProjectClient:
             project = self.execute_json_query(
                 f"Project.find_by(identifier: '{identifier}')",
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = "Failed to get project."
             raise QueryExecutionError(msg) from e
         if project is None:
@@ -2880,12 +2880,12 @@ class OpenProjectClient:
 
             if isinstance(result, dict):
                 if result.get("error"):
-                    logger.warning(f"Time entry creation failed: {result}")
+                    logger.warning("Time entry creation failed: %s", result)
                     return None
                 return result
 
-            logger.warning(f"Unexpected time entry creation result: {result}")
-            return None
+            logger.warning("Unexpected time entry creation result: %s", result)
+            return None  # noqa: TRY300
 
         except Exception as e:
             msg = f"Failed to create time entry: {e}"
@@ -2936,7 +2936,7 @@ class OpenProjectClient:
         try:
             result = self.execute_large_query_to_json_file(
                 query,
-                container_file="/tmp/j2o_time_entries.json",
+                container_file="/tmp/j2o_time_entries.json",  # noqa: S108
                 timeout=60,
             )
             return result if isinstance(result, list) else []
@@ -3092,7 +3092,8 @@ class OpenProjectClient:
         try:
             _ = self.rails_client.execute(header + ruby, timeout=120, suppress_output=True)
         except Exception as e:
-            raise QueryExecutionError("Rails execution failed for batch_create_time_entries: %s" % e) from e
+            msg = f"Rails execution failed for batch_create_time_entries: {e}"
+            raise QueryExecutionError(msg) from e
 
         # Retrieve result file
         max_wait_seconds = 30
@@ -3107,7 +3108,8 @@ class OpenProjectClient:
                 waited += poll_interval
 
         if not local_result.exists():
-            raise QueryExecutionError("Result file not found after batch_create_time_entries execution")
+            msg = "Result file not found after batch_create_time_entries execution"
+            raise QueryExecutionError(msg)
 
         with local_result.open("r", encoding="utf-8") as f:
             return json.load(f)
@@ -3306,10 +3308,8 @@ class OpenProjectClient:
             results = self.execute_json_query(script)
             if isinstance(results, list):
                 yield from results
-        except Exception as e:
-            logger.exception(
-                f"Failed to stream work packages for project {project_id}: {e}",
-            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Failed to stream work packages for project %s", project_id)
 
     def batch_update_work_packages(
         self,
@@ -3330,9 +3330,9 @@ class OpenProjectClient:
         updates.each do |update|
           begin
             wp = WorkPackage.find(update['id'])
-            update.each do |key, value|  # noqa: F821
-              next if key == 'id'  # noqa: F821
-              wp.send("#{key}=", value) if wp.respond_to?("#{key}=")  # noqa: F821
+            update.each do |k, value|
+              next if k == 'id'
+              wp.send("#{k}=", value) if wp.respond_to?("#{k}=")
             end
             wp.save!
             updated_count += 1
@@ -3704,4 +3704,4 @@ class OpenProjectClient:
                 msg,
             )
 
-        return "{}\.where({}: {}).map(&:as_json)".format(safe_model, field, values_json)
+        return rf"{safe_model}\.where({field}: {values_json}).map(&:as_json)"

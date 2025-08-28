@@ -133,7 +133,7 @@ class RailsConsoleClient:
         try:
             cmd = ["tmux", "has-session", "-t", self.tmux_session_name]
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
-        except subprocess.SubprocessError as e:
+        except subprocess.SubprocessError:
             logger.exception("Error checking tmux session")
             return False
         else:
