@@ -900,8 +900,11 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         "Continuing despite validation errors due to force/test mode",
                     )
                 else:
+                    class PreMigrationValidationError(RuntimeError):
+                        """Raised when pre-migration validation fails and cannot proceed."""
+
                     msg = "Pre-migration validation failed. Use --force to override."
-                    raise Exception(msg)
+                    raise PreMigrationValidationError(msg)
             elif pre_validation_summary.errors > 0:
                 config.logger.warning(
                     f"Pre-migration validation completed with {pre_validation_summary.errors} errors",
@@ -927,10 +930,10 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 dry_run=config.migration_config.get("dry_run", False),
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             config.logger.error(f"Pre-migration validation failed: {e}")
             # If force or test mode is set, continue; otherwise, re-raise
-            import os as _os
+            import os as _os  # noqa: PLC0415
             _in_test_mode = (
                 "PYTEST_CURRENT_TEST" in _os.environ
                 or _os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes")
@@ -957,7 +960,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                     },
                 )
             config.logger.info("Security validation and audit logging completed")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             config.logger.error(f"Security validation failed: {e}")
             if not config.migration_config.get("force", False):
                 raise
@@ -1023,7 +1026,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 if factory is None:
                     config.logger.warning("Unknown component '%s' - skipping", component_name)
                     continue
-                component: BaseMigration = factory()
+                component: "BaseMigration" = factory()
 
                 # Header for this component in logs
                 print_component_header(component_name)
@@ -1043,8 +1046,6 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                             "status": bool(config.mappings.get_mapping("status")),
                             # Some configs may enable link/custom field enrichment
                             "custom_field": bool(config.mappings.get_mapping("custom_field")),
-                            # link_type mapping is optional at runtime; include if present in pipeline
-                            # "link_type": bool(config.mappings.get_mapping("link_type")),
                         }
                         missing = [k for k, ok in required.items() if not ok]
                         if missing:
@@ -1079,7 +1080,8 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         if component.__class__.run is BaseMigration.run:
                             src_file = inspect.getsourcefile(component.__class__) or "<unknown>"
                             config.logger.warning(
-                                "Component '%s' (%s) is using BaseMigration.run; override likely missing. Class file: %s",
+                                "Component '%s' (%s) is using BaseMigration.run; override likely missing. "
+                                "Class file: %s",
                                 component_name,
                                 component.__class__.__name__,
                                 src_file,
@@ -1089,7 +1091,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                 config.logger.warning(
                                     "Class __dict__ has own 'run': %s; available keys (truncated): %s",
                                     has_own,
-                                    sorted(list(component.__class__.__dict__.keys()))[:12],
+                                    sorted(component.__class__.__dict__.keys())[:12],
                                 )
                                 # Fallback: if this is the work_packages component and subclass didn't override run,
                                 # directly call its migrate_work_packages() wrapper to proceed.
@@ -1114,10 +1116,9 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                         results.overall["status"] = "failed"
                                     # Skip the normal run() call
                                     continue
-                            except Exception:
+                            except Exception:  # noqa: BLE001, S110
                                 pass
-                    except Exception:
-                        # Non-fatal: continue
+                    except Exception:  # noqa: BLE001, S110
                         pass
                     component_result = component.run()
 
@@ -1364,7 +1365,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         config.logger.info("Migration results saved to %s", results_file)
 
         # Log migration completion with comprehensive logging
-        from src.utils.comprehensive_logging import (
+        from src.utils.comprehensive_logging import (  # noqa: PLC0415
             log_migration_complete,
             stop_monitoring,
         )
