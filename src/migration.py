@@ -559,25 +559,25 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                     def get_issue_types(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_statuses(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_statuses(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_workflows(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_workflows(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_versions(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_versions(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_components(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_components(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_attachments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
+                    def get_attachments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def get_comments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
+                    def get_comments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def get_worklogs(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
+                    def get_worklogs(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
                 jira_client = MockJiraClient(**performance_config)
@@ -591,10 +591,10 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             else:
                 # Legacy internal mock for non-test mock mode
                 class MockRailsClient:
-                    def __init__(self, **kwargs: object) -> None:  # noqa: ANN003, ARG002
+                    def __init__(self, **kwargs: object) -> None:
                         pass
 
-                    def execute(self, command: str) -> str:  # noqa: ANN202, ANN001
+                    def execute(self, command: str) -> str:
                         if command.startswith("ls ") or command == "ls":
                             return "Mock file exists"
                         if command.startswith("cat "):
@@ -603,13 +603,13 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                             return command[5:]
                         return "Mock Rails execution result"
 
-                    def execute_query(self, query: str) -> dict[str, object]:  # noqa: ANN202, ANN001
+                    def execute_query(self, query: str) -> dict[str, object]:
                         return {"result": "Mock query result"}
 
-                    def transfer_file_to_container(self, local_path: str, container_path: str) -> bool:  # noqa: ANN202
+                    def transfer_file_to_container(self, local_path: str, container_path: str) -> bool:
                         return True
 
-                    def transfer_file_from_container(self, container_path: str, local_path: str) -> bool:  # noqa: ANN202
+                    def transfer_file_from_container(self, container_path: str, local_path: str) -> bool:
                         return True
 
                 class MockOpenProjectClient:
@@ -617,70 +617,70 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         self.rails_client = MockRailsClient()
                         config.logger.info("Mock OpenProject client initialized")
 
-                    def create_project(self, **kwargs):
+                    def create_project(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
                         return {"id": 1, "name": "Mock Project"}
 
-                    def create_user(self, **kwargs):
+                    def create_user(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
                         return {"id": 1, "name": "Mock User"}
 
-                    def create_custom_field(self, **kwargs):
+                    def create_custom_field(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
                         return {"id": 1, "name": "Mock Field"}
 
-                    def create_issue_type(self, **kwargs):
+                    def create_issue_type(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
                         return {"id": 1, "name": "Mock Issue Type"}
 
-                    def create_status(self, **kwargs):
+                    def create_status(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
                         return {"id": 1, "name": "Mock Status"}
 
-                    def create_work_package(self, **kwargs):
+                    def create_work_package(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
                         return {"id": 1, "subject": "Mock Work Package"}
 
-                    def create_attachment(self, **kwargs):
+                    def create_attachment(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
                         return {"id": 1, "filename": "mock_attachment.txt"}
 
-                    def create_comment(self, **kwargs):
+                    def create_comment(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
                         return {"id": 1, "comment": "Mock comment"}
 
-                    def create_time_entry(self, **kwargs):
+                    def create_time_entry(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
                         return {"id": 1, "hours": 1.0}
 
-                    def get_projects(self):
+                    def get_projects(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
-                    def get_users(self, **kwargs):
+                    def get_users(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ARG002, ANN202
                         return []
 
-                    def get_custom_fields(self, **kwargs):
+                    def get_custom_fields(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ARG002, ANN202
                         return []
 
-                    def get_issue_types(self):
+                    def get_issue_types(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
-                    def get_statuses(self):
+                    def get_statuses(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
-                    def create_record(self, *args, **kwargs):
+                    def create_record(self, *args: object, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ANN202, ARG002
                         return {"id": 1, "name": "Mock Record"}
 
-                    def get_work_package_types(self, **kwargs):
+                    def get_work_package_types(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ARG002, ANN202
                         return []
 
-                    def execute_query(self, *args, **kwargs):
+                    def execute_query(self, *args: object, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ANN202, ARG002
                         return {"status": "success"}
 
-                    def execute_json_query(self, *args, **kwargs):
+                    def execute_json_query(self, *args: object, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ANN202, ARG002
                         return []
 
-                    def transfer_file_to_container(self, *args, **kwargs) -> bool:
+                    def transfer_file_to_container(self, *args: object, **kwargs: object) -> bool:  # noqa: ANN003, ARG002, ANN202
                         return True
 
-                    def get_time_entry_activities(self, **kwargs):
+                    def get_time_entry_activities(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ARG002, ANN202
                         return []
 
-                    def get_custom_field_id_by_name(self, name) -> int:
+                    def get_custom_field_id_by_name(self, name: str) -> int:  # noqa: ANN001
                         return 1
 
-                    def execute_script_with_data(self, script_content, data):
+                    def execute_script_with_data(self, script_content: str, data: object) -> dict[str, object]:  # noqa: ANN001, ANN202
                         if "status" in script_content.lower():
                             created_count = len(data) if isinstance(data, list) else 1
                             status_data = {}
