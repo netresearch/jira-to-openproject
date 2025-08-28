@@ -102,6 +102,7 @@ class Migration:
 
     async def run(
         self,
+        *,
         stop_on_error: bool = False,
         no_confirm: bool = False,
         batch_size: int = 100,
@@ -297,7 +298,7 @@ def create_performance_config(
     )
 
 
-async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915, FBT001, FBT002
+async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
     *,
     components: list[ComponentName] | None = None,
     stop_on_error: bool = False,
@@ -421,7 +422,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915, FBT001, FBT00
             if str(tests_dir) not in sys.path:
                 sys.path.insert(0, str(tests_dir))
 
-            from integration.test_file_transfer_chain import (
+            from integration.test_file_transfer_chain import (  # noqa: PLC0415
                 MockDockerClient,
                 MockRailsConsoleClient,
                 MockSSHClient,
@@ -482,12 +483,12 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915, FBT001, FBT00
             else:
                 # Legacy internal mock for non-test mock mode
                 class MockJiraClient:
-                    def __init__(self, **kwargs) -> None:
+                    def __init__(self, **kwargs: object) -> None:  # noqa: ANN003, ARG002
                         class MockJira:
-                            def fields(self):
+                            def fields(self) -> list[dict[str, object]]:  # noqa: ANN202
                                 return []
 
-                            def server_info(self):
+                            def server_info(self) -> dict[str, object]:  # noqa: ANN202
                                 return {
                                     "serverTime": "2025-08-04T12:00:00.000+0000",
                                     "serverTimeZone": "UTC",
@@ -495,12 +496,24 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915, FBT001, FBT00
                                     "version": "9.0.0",
                                 }
 
-                            def _get_json(self, endpoint):
+                            def _get_json(self, endpoint: str) -> list[dict[str, object]]:  # noqa: ANN202, ANN001
                                 if "status" in endpoint:
                                     return [
-                                        {"id": "1", "name": "To Do", "statusCategory": {"id": 2, "name": "To Do"}},
-                                        {"id": "2", "name": "In Progress", "statusCategory": {"id": 3, "name": "In Progress"}},
-                                        {"id": "3", "name": "Done", "statusCategory": {"id": 4, "name": "Done"}},
+                                        {
+                                            "id": "1",
+                                            "name": "To Do",
+                                            "statusCategory": {"id": 2, "name": "To Do"},
+                                        },
+                                        {
+                                            "id": "2",
+                                            "name": "In Progress",
+                                            "statusCategory": {"id": 3, "name": "In Progress"},
+                                        },
+                                        {
+                                            "id": "3",
+                                            "name": "Done",
+                                            "statusCategory": {"id": 4, "name": "Done"},
+                                        },
                                     ]
                                 if "statuscategory" in endpoint:
                                     return [
@@ -515,35 +528,35 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915, FBT001, FBT00
                         self.scriptrunner_client = None
                         config.logger.info("Mock Jira client initialized")
 
-                    def get_projects(self):
+                    def get_projects(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
-                    def get_issues(self, **kwargs):
+                    def get_issues(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
                         return []
 
-                    def get_issue_link_types(self, **kwargs):
+                    def get_issue_link_types(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
                         return [
                             {"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
                             {"id": "10001", "name": "Relates to", "inward": "relates to", "outward": "relates to"},
                         ]
 
-                    def get_status_categories(self, **kwargs):
+                    def get_status_categories(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
                         return [
                             {"id": 2, "name": "To Do", "key": "new"},
                             {"id": 3, "name": "In Progress", "key": "indeterminate"},
                             {"id": 4, "name": "Done", "key": "done"},
                         ]
 
-                    def get_tempo_accounts(self, **kwargs):
+                    def get_tempo_accounts(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
                         return []
 
-                    def get_users(self):
+                    def get_users(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
-                    def get_custom_fields(self, **kwargs):
+                    def get_custom_fields(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
                         return []
 
-                    def get_issue_types(self):
+                    def get_issue_types(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
                     def get_statuses(self):
