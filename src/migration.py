@@ -848,7 +848,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             )
             test_suite = AutomatedTestingSuite(test_config)
             config.logger.info("Automated testing suite initialized")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             config.logger.warning(f"Failed to initialize automated testing suite: {e}")
             config.logger.warning("Continuing without automated testing")
             test_suite = None
@@ -881,7 +881,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             )
 
             # Determine if we're in test mode (pytest)
-            import os as _os
+            import os as _os  # noqa: PLC0415
             _in_test_mode = (
                 "PYTEST_CURRENT_TEST" in _os.environ
                 or _os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes")
@@ -930,7 +930,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 dry_run=config.migration_config.get("dry_run", False),
             )
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             config.logger.error(f"Pre-migration validation failed: {e}")
             # If force or test mode is set, continue; otherwise, re-raise
             import os as _os  # noqa: PLC0415
@@ -960,7 +960,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                     },
                 )
             config.logger.info("Security validation and audit logging completed")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             config.logger.error(f"Security validation failed: {e}")
             if not config.migration_config.get("force", False):
                 raise
@@ -1386,28 +1386,31 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
 
         # Log security audit completion
         try:
+            # Local import for enum/type to avoid cross-dependency during tests
+            from src.utils.advanced_security import AuditEventType  # noqa: PLC0415
+
             if security_manager and hasattr(security_manager, "audit_logger"):
                 security_manager.audit_logger.log_migration_event(
-                migration_id=migration_timestamp,
-                event_type=AuditEventType.MIGRATION_COMPLETE,
-                user_id="system",
-                details={
-                    "migration_id": migration_timestamp,
-                    "success": results.overall["status"] == "success",
-                    "total_components": len(results.components),
-                    "successful_components": sum(
-                        1 for c in results.components.values() if c.success
-                    ),
-                    "total_seconds": total_seconds,
-                },
+                    migration_id=migration_timestamp,
+                    event_type=AuditEventType.MIGRATION_COMPLETE,
+                    user_id="system",
+                    details={
+                        "migration_id": migration_timestamp,
+                        "success": results.overall["status"] == "success",
+                        "total_components": len(results.components),
+                        "successful_components": sum(
+                            1 for c in results.components.values() if c.success
+                        ),
+                        "total_seconds": total_seconds,
+                    },
                 )
                 config.logger.info("Security audit logging completed")
             else:
                 config.logger.debug("Security audit logger not initialized; skipping audit log write")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             config.logger.warning(f"Security audit logging failed: {e}")
-
-        return results
+        else:
+            return results
 
     except Exception as e:
         # Handle unexpected errors at the top level
@@ -1532,11 +1535,13 @@ def setup_tmux_session() -> bool:
 
     try:
         # Check if tmux is installed
-        subprocess.run(["tmux", "-V"], check=True, capture_output=True)
+        import shutil as _shutil  # noqa: PLC0415
+        tmux_bin = _shutil.which("tmux") or "tmux"
+        subprocess.run([tmux_bin, "-V"], check=True, capture_output=True)  # noqa: S607
 
         # Check if session already exists
-        result = subprocess.run(
-            ["tmux", "has-session", "-t", session_name],
+        result = subprocess.run(  # noqa: S603, S607
+            [tmux_bin, "has-session", "-t", session_name],
             check=False,
             capture_output=True,
         )
@@ -1548,7 +1553,7 @@ def setup_tmux_session() -> bool:
             return True
 
         # Create a new session
-        subprocess.run(["tmux", "new-session", "-d", "-s", session_name], check=True)
+        subprocess.run([tmux_bin, "new-session", "-d", "-s", session_name], check=True)  # noqa: S607
 
         config.logger.success("Created tmux session '%s'", session_name)
         config.logger.info("To attach to this session, run:")
