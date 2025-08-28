@@ -106,7 +106,7 @@ class AccountMigration(BaseMigration):
         else:
             self.logger.info("No valid custom field ID found, will create a new one")
 
-    def extract_tempo_accounts(self, *, force: bool = False) -> list:  # noqa: FBT001, FBT002
+    def extract_tempo_accounts(self, *, force: bool = False) -> list:
         """Extract Tempo accounts using the JiraClient.
 
         Args:
@@ -151,7 +151,7 @@ class AccountMigration(BaseMigration):
                 "Tempo API unauthorized or unavailable (401/403). Blocking migration: "
                 f"{e}"
             )
-            self.logger.exception(msg)  # noqa: TRY400
+            self.logger.exception(msg)
             raise MigrationError(msg) from e
         except Exception as e:
             error_msg = f"Failed to extract Tempo accounts: {e!s}"
@@ -390,7 +390,7 @@ class AccountMigration(BaseMigration):
             elif isinstance(output, str):
                 out = output.strip()
                 # Some consoles echo with prefix/suffix; extract trailing digits
-                import re as _re
+                import re as _re  # noqa: PLC0415
                 m = _re.search(r"(\d+)$", out)
                 if m:
                     cf_id = int(m.group(1))
@@ -404,10 +404,12 @@ class AccountMigration(BaseMigration):
                         break
 
             if not cf_id:
-                raise MigrationError("Failed to determine Tempo Account custom field ID")
+                msg = "Failed to determine Tempo Account custom field ID"
+                raise MigrationError(msg)  # noqa: TRY301, EM101
             self.account_custom_field_id = cf_id
         except Exception as e:
-            raise MigrationError(f"Failed to create or retrieve Tempo Account custom field: {e}") from e
+            msg = f"Failed to create or retrieve Tempo Account custom field: {e}"
+            raise MigrationError(msg) from e  # noqa: TRY003, EM102
         # Field created or found
 
         # At this point we have a field ID
@@ -690,13 +692,13 @@ class AccountMigration(BaseMigration):
             if existing_id is None:
                 self.logger.info("No existing 'Tempo Account' custom field found")
                 msg = "Tempo Account custom field does not exist"
-                raise MigrationError(msg)
+                raise MigrationError(msg)  # noqa: TRY301
 
             self.logger.info(
                 "Found existing 'Tempo Account' custom field with ID: %d",
                 existing_id,
             )
-            return existing_id
+            return existing_id  # noqa: TRY300
         except MigrationError:
             # Re-raise migration errors
             raise
@@ -771,7 +773,7 @@ class AccountMigration(BaseMigration):
 
             error_msg = f"Failed to create custom field via Rails. Result: {result}"
             self.logger.warning(error_msg)
-            raise MigrationError(error_msg)
+            raise MigrationError(error_msg)  # noqa: TRY301
 
         except MigrationError:
             # Re-raise migration errors

@@ -904,7 +904,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         """Raised when pre-migration validation fails and cannot proceed."""
 
                     msg = "Pre-migration validation failed. Use --force to override."
-                    raise PreMigrationValidationError(msg)
+                    raise PreMigrationValidationError(msg)  # noqa: TRY301
             elif pre_validation_summary.errors > 0:
                 config.logger.warning(
                     f"Pre-migration validation completed with {pre_validation_summary.errors} errors",
