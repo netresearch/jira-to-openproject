@@ -253,13 +253,16 @@ class BaseMigration:
             self.jira_client = jira_client
         else:
             try:
-                if config.migration_config.get("TEST_MODE", False) or config.migration_config.get("disable_external_connect", False):
-                    from unittest.mock import MagicMock as MagicMock  # noqa: PLC0415, N814
+                if (
+                    config.migration_config.get("TEST_MODE", False)
+                    or config.migration_config.get("disable_external_connect", False)
+                ):
+                    from unittest.mock import MagicMock  # noqa: PLC0415
                     self.jira_client = MagicMock(spec=JiraClient)
                 else:
                     self.jira_client = JiraClient()
             except Exception:  # noqa: BLE001
-                from unittest.mock import MagicMock as MagicMock  # noqa: PLC0415, N814
+                from unittest.mock import MagicMock  # noqa: PLC0415
                 self.jira_client = MagicMock(spec=JiraClient)
         # Lazily create OpenProjectClient; fall back to None if config is incomplete
         if op_client is not None:
@@ -309,9 +312,8 @@ class BaseMigration:
         except config.MappingsInitializationError as e:
             # Only perform diagnostics if mappings initialization fails
             self.logger.exception(
-                "Failed to initialize mappings in %s: %s",
+                "Failed to initialize mappings in %s",
                 self.__class__.__name__,
-                e,
             )
             msg = f"Cannot initialize {self.__class__.__name__}: {e}"
             raise ComponentInitializationError(
@@ -355,7 +357,9 @@ class BaseMigration:
         """Setup performance features and provide easy access to enhanced client capabilities."""
         # Check if clients have enhanced features
         self.has_enhanced_jira = hasattr(self.jira_client, "performance_optimizer")
-        self.has_enhanced_openproject = hasattr(self.op_client, "performance_optimizer") if self.op_client is not None else False
+        self.has_enhanced_openproject = (
+            hasattr(self.op_client, "performance_optimizer") if self.op_client is not None else False
+        )
 
         if self.has_enhanced_jira:
             self.logger.debug(
@@ -474,11 +478,7 @@ class BaseMigration:
             try:
                 entities = self._get_current_entities_for_type(entity_type)
             except Exception as e:
-                self.logger.exception(
-                    "Failed to fetch entities for %s: %s",
-                    entity_type,
-                    e,
-                )
+                self.logger.exception("Failed to fetch entities for %s", entity_type)
                 msg = f"API call failed for {entity_type}: {e}"
                 raise MigrationError(msg) from e
 
@@ -505,11 +505,7 @@ class BaseMigration:
             return entities
 
         except Exception as e:
-            self.logger.exception(
-                "Critical error in cache retrieval for %s: %s",
-                entity_type,
-                e,
-            )
+            self.logger.exception("Critical error in cache retrieval for %s", entity_type)
             raise
 
     def register_entity_mapping(
