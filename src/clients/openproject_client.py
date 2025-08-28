@@ -2427,7 +2427,7 @@ class OpenProjectClient:
             msg = "Failed to get work package types."
             raise QueryExecutionError(msg) from e
 
-    def get_projects(self, *, top_level_only: bool = False) -> list[dict[str, Any]]:  # noqa: C901, PLR0915
+    def get_projects(self, *, top_level_only: bool = False) -> list[dict[str, Any]]:  # noqa: C901, PLR0915, PLR0912
         """Get projects from OpenProject using file-based approach.
 
         Args:
@@ -2552,7 +2552,7 @@ class OpenProjectClient:
                 msg = (
                     f"Invalid projects data format - expected list, got {type(result)}"
                 )
-                raise QueryExecutionError(msg)
+                raise QueryExecutionError(msg)  # noqa: TRY301
 
             # Validate and clean project data
             validated_projects = []
@@ -2944,7 +2944,7 @@ class OpenProjectClient:
             msg = "Failed to retrieve time entries."
             raise QueryExecutionError(msg) from e
 
-    def batch_create_time_entries(
+    def batch_create_time_entries(  # noqa: C901
         self,
         time_entries: list[dict[str, Any]],
     ) -> dict[str, Any]:
@@ -2967,7 +2967,6 @@ class OpenProjectClient:
             return {"created": 0, "failed": 0, "results": []}
 
         # Build entries data with necessary fields and ID extraction
-        import re
         entries_data: list[dict[str, Any]] = []
         for i, entry_data in enumerate(time_entries):
             embedded = entry_data.get("_embedded", {})
@@ -3012,11 +3011,11 @@ class OpenProjectClient:
             json.dump(entries_data, f)
 
         # Transfer JSON to container and define result path
-        container_json = Path("/tmp") / local_json.name
+        container_json = Path("/tmp") / local_json.name  # noqa: S108
         self.transfer_file_to_container(local_json, container_json)
 
         result_name = f"bulk_result_time_entries_{os.urandom(3).hex()}.json"
-        container_result = Path("/tmp") / result_name
+        container_result = Path("/tmp") / result_name  # noqa: S108
         local_result = temp_dir / result_name
 
         # Build Ruby runner that writes results JSON to file
@@ -3061,7 +3060,10 @@ class OpenProjectClient:
             "      if key\n"
             "        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')\n"
             "        if !cf\n"
-            "          cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')\n"
+            (
+                "          cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', "
+                "is_required: false, is_for_all: true, type: 'TimeEntryCustomField')\n"
+            )
             "          cf.save\n"
             "        end\n"
             "        begin\n"
@@ -3103,7 +3105,7 @@ class OpenProjectClient:
             try:
                 self.transfer_file_from_container(container_result, local_result)
                 break
-            except Exception:
+            except Exception:  # noqa: BLE001
                 time.sleep(poll_interval)
                 waited += poll_interval
 
@@ -3308,7 +3310,7 @@ class OpenProjectClient:
             results = self.execute_json_query(script)
             if isinstance(results, list):
                 yield from results
-        except Exception as e:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to stream work packages for project %s", project_id)
 
     def batch_update_work_packages(
@@ -3390,16 +3392,16 @@ class OpenProjectClient:
         for i in range(0, len(emails), effective_batch_size):
             batch_emails = emails[i : i + effective_batch_size]
 
-            def batch_operation():
+            def batch_operation(batch_emails: list[str] = batch_emails) -> list[dict[str, Any]]:
                 # Use safe query builder with ActiveRecord parameterization
                 query = self._build_safe_batch_query("User", "mail", batch_emails)
-                return self.execute_json_query(query)
+                return self.execute_json_query(query)  # type: ignore[return-value]
 
             try:
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}",
+                    f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}",  # noqa: PLR2004
                     headers=headers,
                 )
 
@@ -3463,21 +3465,21 @@ class OpenProjectClient:
         for i in range(0, len(identifiers), effective_batch_size):
             batch_identifiers = identifiers[i : i + effective_batch_size]
 
-            def batch_operation():
+            def batch_operation(batch_identifiers: list[str] = batch_identifiers) -> list[dict[str, Any]]:
                 # Use safe query builder with ActiveRecord parameterization
                 query = self._build_safe_batch_query(
                     "Project",
                     "identifier",
                     batch_identifiers,
                 )
-                return self.execute_json_query(query)
+                return self.execute_json_query(query)  # type: ignore[return-value]
 
             try:
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
                     f"Batch fetch projects by identifier "
-                    f"{batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}",
+                    f"{batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}",  # noqa: PLR2004
                     headers=headers,
                 )
 
