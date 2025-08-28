@@ -265,7 +265,7 @@ class RailsConsoleClient:
 
             logger.debug("Console state stabilized")
         except subprocess.SubprocessError as e:
-            logger.exception("Failed to stabilize console: %s", e)
+            logger.exception("Failed to stabilize console")
             msg = f"Failed to stabilize console: {e}"
             raise ConsoleNotReadyError(msg) from e
 
@@ -285,6 +285,7 @@ class RailsConsoleClient:
         self,
         command: str,
         timeout: int | None = None,
+        *,
         suppress_output: bool = False,
     ) -> str:
         """Execute a command in the Rails console and wait for completion.
@@ -406,11 +407,12 @@ class RailsConsoleClient:
                 or "full_message':" in severe_output
             ):
                 snippet = self._extract_error_summary(severe_output)
-                raise RubyError(f"Ruby console reported error with no markers: {snippet}")
+                msg = f"Ruby console reported error with no markers: {snippet}"
+                raise RubyError(msg)
 
             # 2) Recapture a larger pane slice to find markers
             try:
-                recapture = subprocess.run(
+                recapture = subprocess.run(  # noqa: S603,S607
                     ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
                     capture_output=True,
                     text=True,
@@ -454,7 +456,7 @@ class RailsConsoleClient:
                     out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
                     if out_lines:
                         return "\n".join(out_lines).strip()
-            except Exception:
+            except Exception:  # noqa: BLE001,S110
                 # Fall through to strict error below
                 pass
 
@@ -471,7 +473,7 @@ class RailsConsoleClient:
         if end_line_index == -1:
             # One more try: recapture a larger slice in case the marker landed after our first capture
             try:
-                recapture = subprocess.run(
+                recapture = subprocess.run(  # noqa: S603,S607
                     ["tmux", "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
                     capture_output=True,
                     text=True,
@@ -497,7 +499,7 @@ class RailsConsoleClient:
                     between_lines = rec_lines[new_start + 1 : new_end]
                     out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
                     return "\n".join(out_lines).strip()
-            except Exception:
+            except Exception:  # noqa: BLE001,S110
                 # Fall through to existing error handling
                 pass
 
@@ -511,7 +513,8 @@ class RailsConsoleClient:
                 or "full_message':" in severe_output
             ):
                 snippet = self._extract_error_summary(severe_output)
-                raise RubyError(f"Ruby console reported error before end marker: {snippet}")
+                msg = f"Ruby console reported error before end marker: {snippet}"
+                raise RubyError(msg)
             console_state = self._get_console_state(tmux_output[-50:])
             if console_state["ready"]:
                 logger.error(

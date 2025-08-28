@@ -3060,10 +3060,8 @@ class OpenProjectClient:
             "      if key\n"
             "        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')\n"
             "        if !cf\n"
-            (
-                "          cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', "
-                "is_required: false, is_for_all: true, type: 'TimeEntryCustomField')\n"
-            )
+            "          cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', "
+            "is_required: false, is_for_all: true, type: 'TimeEntryCustomField')\n"
             "          cf.save\n"
             "        end\n"
             "        begin\n"
