@@ -1026,7 +1026,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 if factory is None:
                     config.logger.warning("Unknown component '%s' - skipping", component_name)
                     continue
-                component: "BaseMigration" = factory()
+                component: BaseMigration = factory()
 
                 # Header for this component in logs
                 print_component_header(component_name)
@@ -1076,7 +1076,9 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 # Run the component (diagnose if base run is invoked)
                 try:
                     try:
-                        from src.migrations.base_migration import BaseMigration  # noqa: PLC0415  # local import to avoid cycles
+                        from src.migrations.base_migration import (
+                            BaseMigration,  # local import to avoid cycles
+                        )
                         if component.__class__.run is BaseMigration.run:
                             src_file = inspect.getsourcefile(component.__class__) or "<unknown>"
                             config.logger.warning(
@@ -1602,7 +1604,7 @@ def setup_tmux_session() -> bool:
         return False
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901, PLR0912, PLR0915
     """Run the migration tool."""
     # Parse command-line arguments
     args = parse_args()

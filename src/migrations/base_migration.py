@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable  # noqa: TC003
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, Callable
+from typing import Any, ClassVar
 
 from pybreaker import CircuitBreakerError
 
@@ -171,7 +172,7 @@ class EntityTypeRegistry:
         return all_types
 
 
-def register_entity_types(*entity_types: str) -> Callable[[type[BaseMigration]], type[BaseMigration]]:  # noqa: ANN201
+def register_entity_types(*entity_types: str) -> Callable[[type[BaseMigration]], type[BaseMigration]]:
     """Register entity types for a migration class.
 
     Args:
@@ -220,21 +221,21 @@ class BaseMigration:
     CACHE_CLEANUP_THRESHOLD = 0.8  # Cleanup when 80% full
 
     # Cache statistics tracking
-    _global_cache_stats = {
+    _global_cache_stats: ClassVar[dict[str, int]] = {
         "total_hits": 0,
         "total_misses": 0,
         "total_evictions": 0,
         "memory_cleanups": 0,
     }
 
-    def __init__(
+    def __init__(  # noqa: C901, PLR0913, PLR0912, PLR0915
         self,
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
         change_detector: ChangeDetector | None = None,
         state_manager: StateManager | None = None,
         data_preservation_manager: DataPreservationManager | None = None,
-        performance_manager=None,
+        performance_manager: object | None = None,
     ) -> None:
         """Initialize the base migration with common attributes.
 
