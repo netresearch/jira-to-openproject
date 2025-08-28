@@ -3138,7 +3138,7 @@ class OpenProjectClient:
     def _create_work_packages_batch(
         self,
         work_packages: list[dict[str, Any]],
-        **kwargs: object,
+        **_kwargs: object,
     ) -> dict[str, Any]:
         """Create a batch of work packages using Rails."""
         if not work_packages:

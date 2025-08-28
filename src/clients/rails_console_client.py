@@ -255,7 +255,7 @@ class RailsConsoleClient:
             time.sleep(0.2)
 
             # Send Ctrl+C to abort any pending operation
-            subprocess.run(  # noqa: S603
+            subprocess.run(  # noqa: S603,S607
                 ["tmux", "send-keys", "-t", target, "C-c"],
                 capture_output=True,
                 text=True,
@@ -589,7 +589,8 @@ class RailsConsoleClient:
                 or "stack level too deep" in trailing_output
             ):
                 snippet = self._extract_error_summary(trailing_output)
-                raise RubyError(f"Ruby console reported error after end marker: {snippet}")
+                msg = f"Ruby console reported error after end marker: {snippet}"
+                raise RubyError(msg)
         except RubyError:
             raise
         except Exception:
