@@ -132,11 +132,12 @@ class RailsConsoleClient:
         """
         try:
             cmd = ["tmux", "has-session", "-t", self.tmux_session_name]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            return result.returncode == 0
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
         except subprocess.SubprocessError as e:
-            logger.exception("Error checking tmux session: %s", e)
+            logger.exception("Error checking tmux session")
             return False
+        else:
+            return result.returncode == 0
 
     def _get_target(self) -> str:
         """Get the tmux target string for the session, window, and pane.
@@ -194,10 +195,10 @@ class RailsConsoleClient:
 
         try:
             send_cmd = ["tmux", "send-keys", "-t", target, config_cmd, "Enter"]
-            subprocess.run(send_cmd, capture_output=True, text=True, check=True)
+            subprocess.run(send_cmd, capture_output=True, text=True, check=True)  # noqa: S603
             logger.debug("IRB configuration commands sent successfully")
         except subprocess.SubprocessError as e:
-            logger.exception("Failed to configure IRB settings: %s", e)
+            logger.exception("Failed to configure IRB settings")
             msg = f"Failed to configure IRB settings: {e}"
             raise TmuxSessionError(msg) from e
 
@@ -227,7 +228,7 @@ class RailsConsoleClient:
 
         try:
             clear_cmd = ["tmux", "send-keys", "-t", target, "C-l"]
-            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)
+            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)  # noqa: S603
         except subprocess.SubprocessError as e:
             logger.warning("Failed to clear tmux pane: %s", e)
             msg = f"Failed to clear tmux pane: {e}"
@@ -245,16 +246,16 @@ class RailsConsoleClient:
 
             # Send a space and Enter to reset terminal state
             send_cmd = ["tmux", "send-keys", "-t", target, " ", "Enter"]
-            subprocess.run(send_cmd, capture_output=True, text=True, check=True)
+            subprocess.run(send_cmd, capture_output=True, text=True, check=True)  # noqa: S603
             time.sleep(0.3)
 
             # Clear the screen
             clear_cmd = ["tmux", "send-keys", "-t", target, "C-l"]
-            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)
+            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)  # noqa: S603
             time.sleep(0.2)
 
             # Send Ctrl+C to abort any pending operation
-            subprocess.run(
+            subprocess.run(  # noqa: S603
                 ["tmux", "send-keys", "-t", target, "C-c"],
                 capture_output=True,
                 text=True,

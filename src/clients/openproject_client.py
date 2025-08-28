@@ -1992,12 +1992,6 @@ class OpenProjectClient:
             logger.info("Retrieved %d users from OpenProject", len(self._users_cache))
             return self._users_cache
 
-        except QueryExecutionError:
-            # Propagate specific high-signal errors (tests assert exact messages)
-            raise
-        except Exception as e:
-            msg = "Failed to retrieve users."
-            raise QueryExecutionError(msg) from e
 
     def get_user(self, user_identifier: int | str) -> dict[str, Any]:  # noqa: C901, PLR0912
         """Get a single user by id, email, or login.
@@ -2427,7 +2421,7 @@ class OpenProjectClient:
             finally:
                 with suppress(Exception):
                     self.ssh_client.execute_command(
-                        f"docker exec {self.container_name} rm -f {file_path}"
+                        f"docker exec {self.container_name} rm -f {file_path}",
                     )
         except Exception as e:
             msg = "Failed to get work package types."
@@ -3089,7 +3083,10 @@ class OpenProjectClient:
             "    results << { index: entry[:index], success: false, error: e.message }\n"
             "  end\n"
             "end\n"
-            "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))\n"
+            (
+                "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, "
+                "results: results }))\n"
+            )
         )
 
         try:
@@ -3707,4 +3704,4 @@ class OpenProjectClient:
                 msg,
             )
 
-        return f"{safe_model}.where({field}: {values_json}).map(&:as_json)"
+        return "{}\.where({}: {}).map(&:as_json)".format(safe_model, field, values_json)
