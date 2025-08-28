@@ -1026,7 +1026,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 if factory is None:
                     config.logger.warning("Unknown component '%s' - skipping", component_name)
                     continue
-                component: BaseMigration = factory()
+                component: "BaseMigration" = factory()
 
                 # Header for this component in logs
                 print_component_header(component_name)
@@ -1070,13 +1070,13 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                 break
                             # Skip executing this component but continue with others
                             continue
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         config.logger.warning("Preflight mapping check error: %s", e)
 
                 # Run the component (diagnose if base run is invoked)
                 try:
                     try:
-                        from src.migrations.base_migration import BaseMigration  # local import to avoid cycles
+                        from src.migrations.base_migration import BaseMigration  # noqa: PLC0415  # local import to avoid cycles
                         if component.__class__.run is BaseMigration.run:
                             src_file = inspect.getsourcefile(component.__class__) or "<unknown>"
                             config.logger.warning(
@@ -1204,7 +1204,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                     results.overall["status"] = "interrupted"
                     break
 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     # Handle unexpected errors during component execution
                     config.logger.exception(
                         f"Error during '{component_name}' migration: {e}",
@@ -1412,7 +1412,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         else:
             return results
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Handle unexpected errors at the top level
         config.logger.exception(e)
         config.logger.error("Unexpected error during migration: %s", e)
@@ -1429,7 +1429,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         "error_type": type(e).__name__,
                     },
                 )
-        except Exception as audit_error:
+        except Exception as audit_error:  # noqa: BLE001
             config.logger.warning(
                 f"Security audit logging failed during error handling: {audit_error}",
             )

@@ -1,4 +1,4 @@
- 
+
 """Base migration class providing common functionality for all migrations."""
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ import json
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar, Callable
 
 from pybreaker import CircuitBreakerError
 
@@ -171,8 +171,8 @@ class EntityTypeRegistry:
         return all_types
 
 
-def register_entity_types(*entity_types: str) -> "typing.Callable[[type[BaseMigration]], type[BaseMigration]]":  # noqa: ANN201
-    """Decorator to register entity types for a migration class.
+def register_entity_types(*entity_types: str) -> Callable[[type[BaseMigration]], type[BaseMigration]]:  # noqa: ANN201
+    """Register entity types for a migration class.
 
     Args:
         entity_types: Entity types supported by the decorated class
