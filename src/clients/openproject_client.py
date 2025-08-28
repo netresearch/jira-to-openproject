@@ -1381,7 +1381,7 @@ class OpenProjectClient:
                 # Attach raw output snippet for callers that want to persist it
                 if isinstance(output, str):
                     result["output"] = output[:2000]
-                return result  # noqa: TRY300
+                return result
         except Exception as e:
             _msg = f"Failed to parse result JSON: {e}"
             raise QueryExecutionError(_msg) from e
@@ -1461,7 +1461,6 @@ class OpenProjectClient:
                 # Track successful batch operations (Zen's observability recommendation)
                 if hasattr(self, "metrics"):
                     self.metrics.increment_counter("batch_success_total")
-                return result
             except (ClientConnectionError, QueryExecutionError) as e:
                 last_exception = e
 
@@ -1521,6 +1520,8 @@ class OpenProjectClient:
                     e,
                 )
                 raise
+            else:
+                return result
 
         # This should never be reached, but just in case
         if last_exception is not None:
@@ -1529,7 +1530,7 @@ class OpenProjectClient:
         raise QueryExecutionError(_msg)
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for batch record lookups
-    def batch_find_records(
+    def batch_find_records(  # noqa: C901
         self,
         model: str,
         ids: list[int | str],
@@ -1617,7 +1618,7 @@ class OpenProjectClient:
 
         return results
 
-    def create_record(self, model: str, attributes: dict[str, Any]) -> dict[str, Any]:
+    def create_record(self, model: str, attributes: dict[str, Any]) -> dict[str, Any]:  # noqa: C901
         """Create a new record.
 
         Args:
@@ -1977,7 +1978,7 @@ class OpenProjectClient:
                 )
                 raise QueryExecutionError(
                     msg,
-                )  # noqa: TRY301
+                )
 
             # Update cache
             self._users_cache = json_data or []
@@ -1993,7 +1994,7 @@ class OpenProjectClient:
             msg = "Failed to retrieve users."
             raise QueryExecutionError(msg) from e
 
-    def get_user(self, user_identifier: int | str) -> dict[str, Any]:
+    def get_user(self, user_identifier: int | str) -> dict[str, Any]:  # noqa: C901, PLR0912
         """Get a single user by id, email, or login.
 
         This is a convenience wrapper over ``find_record`` and existing helpers,
@@ -2322,7 +2323,7 @@ class OpenProjectClient:
             finally:
                 with suppress(Exception):
                     self.ssh_client.execute_command(
-                        f"docker exec {self.container_name} rm -f {file_path}"
+                        f"docker exec {self.container_name} rm -f {file_path}",
                     )
         except Exception as e:
             msg = "Failed to get statuses."
@@ -2354,7 +2355,7 @@ class OpenProjectClient:
                 self.rails_client.execute(write_query, suppress_output=True)
                 logger.debug("Successfully executed work package types write command")
             except Exception as e:
-                from src.clients.rails_console_client import (
+                from src.clients.rails_console_client import (  # noqa: PLC0415
                     CommandExecutionError,
                     ConsoleNotReadyError,
                     RubyError,
@@ -2366,7 +2367,7 @@ class OpenProjectClient:
                         "Rails console failed for work package types (%s); falling back to rails runner",
                         type(e).__name__,
                     )
-                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
                     ruby_runner = (
@@ -2374,7 +2375,7 @@ class OpenProjectClient:
                         "types = Type.select(:id, :name).map { |t| { id: t.id, name: t.name } }\n"
                         f"File.write('{file_path}', JSON.pretty_generate(types))\n"
                     )
-                    with open(local_tmp, "w", encoding="utf-8") as f:
+                    with local_tmp.open("w", encoding="utf-8") as f:
                         f.write(ruby_runner)
                     self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
                     runner_cmd = (
@@ -2383,7 +2384,8 @@ class OpenProjectClient:
                     )
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
-                        raise QueryExecutionError(f"rails runner failed (rc={rc}): {stderr[:500]}") from e
+                        _emsg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                        raise QueryExecutionError(_emsg) from e
                 else:
                     raise
 
@@ -2406,13 +2408,11 @@ class OpenProjectClient:
                     if stderr and "No such file or directory" in stderr:
                         time.sleep(0.25)
                         continue
-                    raise QueryExecutionError(
-                        f"Failed to read work package types file: {stderr or 'unknown error'}",
-                    )
+                    _emsg = f"Failed to read work package types file: {stderr or 'unknown error'}"
+                    raise QueryExecutionError(_emsg)
                 if returncode != 0:
-                    raise QueryExecutionError(
-                        f"Failed to read work package types file: {stderr or 'unknown error'}",
-                    )
+                    _emsg = f"Failed to read work package types file: {stderr or 'unknown error'}"
+                    raise QueryExecutionError(_emsg)
                 parsed = json.loads(stdout.strip())
                 logger.info(
                     "Successfully loaded %d work package types from container file",
