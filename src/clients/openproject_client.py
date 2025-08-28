@@ -1432,7 +1432,7 @@ class OpenProjectClient:
         backoff_factor: float = 2.0,
         *,
         jitter: bool = True,
-        headers: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,  # noqa: ARG002
     ) -> object:
         """Execute an operation with exponential backoff retry logic.
 
@@ -2036,7 +2036,7 @@ class OpenProjectClient:
                                 return user
                             if isinstance(uid, str) and uid.isdigit() and int(uid) == identifier:
                                 return user
-                        except Exception:  # noqa: BLE001, S112
+                        except Exception:  # noqa: BLE001
                             logger.debug("Malformed user cache entry encountered")
                             continue
 
@@ -2068,7 +2068,7 @@ class OpenProjectClient:
 
         except RecordNotFoundError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = "Error getting user."
             raise QueryExecutionError(msg) from e
 
@@ -2182,7 +2182,7 @@ class OpenProjectClient:
             msg = "Error getting custom field ID."
             raise QueryExecutionError(msg) from e
 
-    def get_custom_fields(self, *, force_refresh: bool = False) -> list[dict[str, Any]]:  # noqa: FBT001, FBT002
+    def get_custom_fields(self, *, force_refresh: bool = False) -> list[dict[str, Any]]:
         """Get all custom fields from OpenProject.
 
         Args:
