@@ -1,4 +1,4 @@
- 
+
 """SSHClient.
 
 Handles SSH operations to remote servers, including command execution and file transfers.
@@ -35,6 +35,7 @@ class SSHCommandError(Exception):
         stdout: Captured stdout
         stderr: Captured stderr
         message: Optional base message
+
     """
 
     def __init__(
@@ -45,6 +46,15 @@ class SSHCommandError(Exception):
         stderr: str,
         message: str = "SSH command failed",
     ) -> None:
+        """Initialize error with process details.
+
+        Args:
+            command: The SSH command executed
+            returncode: Exit code
+            stdout: Captured standard output
+            stderr: Captured standard error
+            message: Optional descriptive message
+        """
         self.command = command
         self.returncode = returncode
         self.stdout = stdout
@@ -60,6 +70,7 @@ class SSHFileTransferError(Exception):
         source: Source path
         destination: Destination path
         message: Optional base message
+
     """
 
     def __init__(
@@ -68,6 +79,13 @@ class SSHFileTransferError(Exception):
         destination: str,
         message: str = "File transfer failed",
     ) -> None:
+        """Initialize file transfer error.
+
+        Args:
+            source: Source path
+            destination: Destination path
+            message: Optional message
+        """
         self.source = source
         self.destination = destination
         self.message = message
@@ -200,13 +218,12 @@ class SSHClient:
                 check=False,
             )
 
-            ok = result.returncode == 0 and "Connection successful" in result.stdout
-            return ok
+            return result.returncode == 0 and "Connection successful" in result.stdout
 
-        except subprocess.SubprocessError as e:
+        except subprocess.SubprocessError:
             logger.exception("SSH connection test failed")
             return False
-        except Exception as e:  # noqa: BLE001
+        except Exception:
             logger.exception("Unexpected error testing SSH connection")
             return False
 
@@ -278,7 +295,7 @@ class SSHClient:
 
                 # If check=True and command failed, raise our custom error
                 if check and result.returncode != 0:
-                    raise SSHCommandError(
+                    raise SSHCommandError(  # noqa: TRY301
                         command=command,
                         returncode=result.returncode,
                         stdout=result.stdout,
@@ -320,7 +337,7 @@ class SSHClient:
                         e,
                     )
                 else:
-                    logger.exception("Unexpected error executing SSH command: %s", e)
+                    logger.exception("Unexpected error executing SSH command")
                 last_exception = e
                 if attempt < max_attempts - 1:
                     continue
