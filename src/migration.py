@@ -267,11 +267,11 @@ def create_performance_config(
     max_requests_per_minute = getattr(config, "max_requests_per_minute", 100)
 
     # Determine if this is a large migration (affects performance tuning)
-    BATCH_LARGE_THRESHOLD = 50
-    MAX_CONCURRENT_BATCHES_THRESHOLD = 3
+    batch_large_threshold = 50
+    max_concurrent_batches_threshold = 3
     is_large_migration = (
-        batch_size > BATCH_LARGE_THRESHOLD
-        or max_concurrent_batches > MAX_CONCURRENT_BATCHES_THRESHOLD
+        batch_size > batch_large_threshold
+        or max_concurrent_batches > max_concurrent_batches_threshold
     )
 
     return PerformanceConfig(
@@ -483,12 +483,12 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             else:
                 # Legacy internal mock for non-test mock mode
                 class MockJiraClient:
-                    def __init__(self, **kwargs: object) -> None:  # noqa: ANN003, ARG002
+                    def __init__(self, **kwargs: object) -> None:  # noqa: ARG002
                         class MockJira:
-                            def fields(self) -> list[dict[str, object]]:  # noqa: ANN202
+                            def fields(self) -> list[dict[str, object]]:
                                 return []
 
-                            def server_info(self) -> dict[str, object]:  # noqa: ANN202
+                            def server_info(self) -> dict[str, object]:
                                 return {
                                     "serverTime": "2025-08-04T12:00:00.000+0000",
                                     "serverTimeZone": "UTC",
@@ -496,7 +496,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                     "version": "9.0.0",
                                 }
 
-                            def _get_json(self, endpoint: str) -> list[dict[str, object]]:  # noqa: ANN202, ANN001
+                            def _get_json(self, endpoint: str) -> list[dict[str, object]]:
                                 if "status" in endpoint:
                                     return [
                                         {
@@ -528,56 +528,56 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         self.scriptrunner_client = None
                         config.logger.info("Mock Jira client initialized")
 
-                    def get_projects(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_projects(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_issues(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
+                    def get_issues(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def get_issue_link_types(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
+                    def get_issue_link_types(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return [
                             {"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
                             {"id": "10001", "name": "Relates to", "inward": "relates to", "outward": "relates to"},
                         ]
 
-                    def get_status_categories(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
+                    def get_status_categories(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return [
                             {"id": 2, "name": "To Do", "key": "new"},
                             {"id": 3, "name": "In Progress", "key": "indeterminate"},
                             {"id": 4, "name": "Done", "key": "done"},
                         ]
 
-                    def get_tempo_accounts(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
+                    def get_tempo_accounts(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def get_users(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_users(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_custom_fields(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
+                    def get_custom_fields(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def get_issue_types(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_issue_types(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_statuses(self):
+                    def get_statuses(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
-                    def get_workflows(self):
+                    def get_workflows(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
-                    def get_versions(self):
+                    def get_versions(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
-                    def get_components(self):
+                    def get_components(self) -> list[dict[str, object]]:  # noqa: ANN202
                         return []
 
-                    def get_attachments(self, **kwargs):
+                    def get_attachments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
                         return []
 
-                    def get_comments(self, **kwargs):
+                    def get_comments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
                         return []
 
-                    def get_worklogs(self, **kwargs):
+                    def get_worklogs(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN202, ANN003, ARG002
                         return []
 
                 jira_client = MockJiraClient(**performance_config)
@@ -591,10 +591,10 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             else:
                 # Legacy internal mock for non-test mock mode
                 class MockRailsClient:
-                    def __init__(self, **kwargs) -> None:
+                    def __init__(self, **kwargs: object) -> None:  # noqa: ANN003, ARG002
                         pass
 
-                    def execute(self, command):
+                    def execute(self, command: str) -> str:  # noqa: ANN202, ANN001
                         if command.startswith("ls ") or command == "ls":
                             return "Mock file exists"
                         if command.startswith("cat "):
@@ -603,17 +603,17 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                             return command[5:]
                         return "Mock Rails execution result"
 
-                    def execute_query(self, query):
+                    def execute_query(self, query: str) -> dict[str, object]:  # noqa: ANN202, ANN001
                         return {"result": "Mock query result"}
 
-                    def transfer_file_to_container(self, local_path, container_path) -> bool:
+                    def transfer_file_to_container(self, local_path: str, container_path: str) -> bool:  # noqa: ANN202
                         return True
 
-                    def transfer_file_from_container(self, container_path, local_path) -> bool:
+                    def transfer_file_from_container(self, container_path: str, local_path: str) -> bool:  # noqa: ANN202
                         return True
 
                 class MockOpenProjectClient:
-                    def __init__(self, **kwargs) -> None:
+                    def __init__(self, **kwargs: object) -> None:  # noqa: ANN003, ARG002
                         self.rails_client = MockRailsClient()
                         config.logger.info("Mock OpenProject client initialized")
 
