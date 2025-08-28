@@ -1422,7 +1422,7 @@ class OpenProjectClient:
             raise RecordNotFoundError(msg)
         return result
 
-    def _retry_with_exponential_backoff(  # noqa: PLR0913
+    def _retry_with_exponential_backoff(  # noqa: PLR0913, C901
         self,
         operation: Callable[[], object],
         operation_name: str,
@@ -2329,7 +2329,7 @@ class OpenProjectClient:
             msg = "Failed to get statuses."
             raise QueryExecutionError(msg) from e
 
-    def get_work_package_types(self) -> list[dict[str, Any]]:
+    def get_work_package_types(self) -> list[dict[str, Any]]:  # noqa: C901, PLR0912, PLR0915
         """Get all work package types from OpenProject.
 
         Returns:
@@ -2428,7 +2428,7 @@ class OpenProjectClient:
             msg = "Failed to get work package types."
             raise QueryExecutionError(msg) from e
 
-    def get_projects(self, *, top_level_only: bool = False) -> list[dict[str, Any]]:
+    def get_projects(self, *, top_level_only: bool = False) -> list[dict[str, Any]]:  # noqa: C901, PLR0915
         """Get projects from OpenProject using file-based approach.
 
         Args:
@@ -2464,7 +2464,7 @@ class OpenProjectClient:
                 self._check_console_output_for_errors(out or "", context="get_projects")
                 logger.debug("Successfully executed projects write command")
             except Exception as e:
-                from src.clients.rails_console_client import (
+                from src.clients.rails_console_client import (  # noqa: PLC0415
                     CommandExecutionError,
                     ConsoleNotReadyError,
                     RubyError,
@@ -2476,17 +2476,19 @@ class OpenProjectClient:
                         "Rails console failed for projects (%s); falling back to rails runner",
                         type(e).__name__,
                     )
-                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
                     ruby_runner = (
-                        "require 'json'\n" +
-                        ("projects = Project.where(parent_id: nil).select(:id, :name, :identifier, :description, :status_code).as_json\n"
-                         if top_level_only else
-                         "projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n") +
-                        f"File.write('{file_path}', JSON.pretty_generate(projects))\n"
+                        "require 'json'\n"
+                        + (
+                            "projects = Project.where(parent_id: nil).select(:id, :name, :identifier, :description, :status_code).as_json\n"
+                            if top_level_only
+                            else "projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n"
+                        )
+                        + f"File.write('{file_path}', JSON.pretty_generate(projects))\n"
                     )
-                    with open(local_tmp, "w", encoding="utf-8") as f:
+                    with local_tmp.open("w", encoding="utf-8") as f:
                         f.write(ruby_runner)
                     self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
                     runner_cmd = (
@@ -2495,7 +2497,8 @@ class OpenProjectClient:
                     )
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
-                        raise QueryExecutionError(f"rails runner failed (rc={rc}): {stderr[:500]}") from e
+                        _emsg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                        raise QueryExecutionError(_emsg) from e
                 else:
                     raise
 
