@@ -980,7 +980,7 @@ class OpenProjectClient:
             # Should not reach here; safe default
             return []
 
-    def _parse_rails_output(self, result_output: str) -> object:  # noqa: C901, PLR0911, PLR0912
+    def _parse_rails_output(self, result_output: str) -> object:  # noqa: C901, PLR0911, PLR0912, PLR0915
         """Parse Rails console output to extract JSON or scalar values.
 
         Handles various Rails console output formats including:
@@ -1129,7 +1129,7 @@ class OpenProjectClient:
                 return t[1:-1]
 
             _msg = "Unable to parse Rails console output"
-            raise JsonParseError(_msg)
+            raise JsonParseError(_msg)  # noqa: TRY301
 
         except JsonParseError:
             # Re-raise JsonParseError
@@ -1194,7 +1194,7 @@ class OpenProjectClient:
         msg = "Unable to parse count result."
         raise QueryExecutionError(msg)
 
-    def bulk_create_records(
+    def bulk_create_records(  # noqa: PLR0915
         self,
         model: str,
         records: list[dict[str, Any]],
@@ -1564,7 +1564,7 @@ class OpenProjectClient:
         for i in range(0, len(ids), effective_batch_size):
             batch_ids = ids[i : i + effective_batch_size]
 
-            def batch_operation(batch_ids: list[int | str] = batch_ids) -> object:  # noqa: B023, ANN201
+            def batch_operation(batch_ids: list[int | str] = batch_ids) -> object:
                 # Use safe query builder with ActiveRecord parameterization
                 query = self._build_safe_batch_query(model, "id", batch_ids)
                 return self.execute_json_query(query)
@@ -1637,7 +1637,7 @@ class OpenProjectClient:
         # Build Rails command for creating a record
         # Use a simple, single-line approach that works well with tmux console
         # Convert Python boolean values to Ruby equivalents
-        def format_value(v: object) -> str:  # noqa: ANN001, ANN202
+        def format_value(v: object) -> str:
             if isinstance(v, bool):
                 return "true" if v else "false"
             if isinstance(v, str):
@@ -1778,7 +1778,7 @@ class OpenProjectClient:
             msg = f"Failed to update {model}."
             raise QueryExecutionError(msg) from e
 
-    def delete_record(self, model: str, id: int) -> None:
+    def delete_record(self, model: str, record_id: int) -> None:
         """Delete a record.
 
         Args:
@@ -1791,7 +1791,7 @@ class OpenProjectClient:
 
         """
         command = f"""
-        record = {model}.find_by(id: {id})
+        record = {model}.find_by(id: {record_id})
         if record.nil?
           raise "Record not found"
         elsif record.destroy
@@ -1869,7 +1869,7 @@ class OpenProjectClient:
             msg = f"Error finding records for {model}."
             raise QueryExecutionError(msg) from e
 
-    def execute_transaction(self, commands: list[str]) -> object:  # noqa: ANN401
+    def execute_transaction(self, commands: list[str]) -> object:
         """Execute multiple commands in a transaction.
 
         Args:
