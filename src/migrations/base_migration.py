@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ 
 """Base migration class providing common functionality for all migrations."""
 
 from __future__ import annotations
@@ -31,8 +31,10 @@ class EntityTypeRegistry:
     fail-fast behavior when entity types cannot be resolved.
     """
 
-    _registry: dict[type[BaseMigration], list[str]] = {}
-    _type_to_class_map: dict[str, type[BaseMigration]] = {}
+    from typing import ClassVar
+
+    _registry: ClassVar[dict[type[BaseMigration], list[str]]] = {}
+    _type_to_class_map: ClassVar[dict[str, type[BaseMigration]]] = {}
 
     @classmethod
     def register(
@@ -56,7 +58,7 @@ class EntityTypeRegistry:
 
         if not entity_types:
             msg = f"Migration class {migration_class.__name__} must support at least one entity type"
-            raise ValueError(
+            raise TypeError(
                 msg,
             )
 
@@ -75,9 +77,11 @@ class EntityTypeRegistry:
                 if existing_class != migration_class:
                     logger = configure_logging("INFO", None)
                     logger.warning(
-                        f"Entity type '{entity_type}' is supported by multiple classes: "
-                        f"{existing_class.__name__} and {migration_class.__name__}. "
-                        f"Using {migration_class.__name__}.",
+                        "Entity type '%s' is supported by multiple classes: %s and %s. Using %s.",
+                        entity_type,
+                        existing_class.__name__,
+                        migration_class.__name__,
+                        migration_class.__name__,
                     )
             cls._type_to_class_map[entity_type] = migration_class
 
@@ -167,7 +171,7 @@ class EntityTypeRegistry:
         return all_types
 
 
-def register_entity_types(*entity_types: str):
+def register_entity_types(*entity_types: str) -> "typing.Callable[[type[BaseMigration]], type[BaseMigration]]":  # noqa: ANN201
     """Decorator to register entity types for a migration class.
 
     Args:

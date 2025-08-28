@@ -1026,7 +1026,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 if factory is None:
                     config.logger.warning("Unknown component '%s' - skipping", component_name)
                     continue
-                component: "BaseMigration" = factory()
+                component: BaseMigration = factory()
 
                 # Header for this component in logs
                 print_component_header(component_name)
@@ -1524,7 +1524,7 @@ def parse_args() -> argparse.Namespace:
 
 def setup_tmux_session() -> bool:
     """Create and set up a tmux session for Rails console."""
-    from src import config  # Import config here to make it available
+    from src import config  # noqa: PLC0415
 
     session_name = config.openproject_config.get("tmux_session_name", "rails_console")
 

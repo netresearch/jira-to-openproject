@@ -405,11 +405,11 @@ class AccountMigration(BaseMigration):
 
             if not cf_id:
                 msg = "Failed to determine Tempo Account custom field ID"
-                raise MigrationError(msg)  # noqa: TRY301, EM101
+                raise MigrationError(msg)  # noqa: TRY301
             self.account_custom_field_id = cf_id
         except Exception as e:
             msg = f"Failed to create or retrieve Tempo Account custom field: {e}"
-            raise MigrationError(msg) from e  # noqa: TRY003, EM102
+            raise MigrationError(msg) from e
         # Field created or found
 
         # At this point we have a field ID
