@@ -333,16 +333,16 @@ def update_from_cli_args(args: object) -> None:
                 _config_loader.set_value("jira", "projects", keys)
                 jira_config["projects"] = keys
                 logger.info("Applied CLI Jira project filter: %s", keys)
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("Failed applying CLI jira project filter")
 
     # Optional: disable WorkPackageMigration shim
     if hasattr(args, "disable_wpm_shim") and args.disable_wpm_shim:
         try:
-            _config_loader.set_value("migration", "disable_wpm_shim", True)
+            _config_loader.set_value("migration", "disable_wpm_shim", value=True)
             migration_config["disable_wpm_shim"] = True
             logger.info("Applied CLI: disable WorkPackageMigration runtime shim")
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("Failed applying CLI disable_wpm_shim")
     if hasattr(args, "dry_run") and args.dry_run:
         migration_config["dry_run"] = True

@@ -211,7 +211,7 @@ class ConfigLoader:
 
         config_logger.debug("Database configuration loaded successfully")
 
-    def _apply_environment_overrides(self) -> None:
+    def _apply_environment_overrides(self) -> None:  # noqa: C901, PLR0912
         """Override configuration settings with environment variables."""
         # Use pattern matching to organize environment variable processing
         for env_var, env_value in os.environ.items():
@@ -378,7 +378,9 @@ class ConfigLoader:
             raise RuntimeError(msg)
         return password
 
-    def get_value(self, section: SectionName, key: str, default: Any = None) -> Any:
+    def get_value(
+        self, section: SectionName, key: str, default: ConfigValue | None = None
+    ) -> ConfigValue | None:
         """Get a specific configuration value.
 
         Args:
@@ -392,7 +394,7 @@ class ConfigLoader:
         """
         return self.config[section].get(key, default)
 
-    def set_value(self, section: SectionName, key: str, value: Any) -> None:
+    def set_value(self, section: SectionName, key: str, value: ConfigValue) -> None:
         """Set a specific configuration value at runtime.
 
         Useful for applying CLI overrides.

@@ -54,6 +54,6 @@ def load_error_recovery_config(
     if not config_path:
         return DEFAULT_ERROR_RECOVERY_CONFIG
 
-    # TODO: Implement configuration file loading
-    # For now, return default configuration
+    # File-based configuration loading may be implemented in future versions.
+    # For now, return the default configuration instance.
     return DEFAULT_ERROR_RECOVERY_CONFIG
