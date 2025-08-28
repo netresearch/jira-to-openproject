@@ -3357,7 +3357,7 @@ class OpenProjectClient:
             raise QueryExecutionError(msg) from e
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for user email lookups
-    def batch_get_users_by_emails(
+    def batch_get_users_by_emails(  # noqa: C901
         self,
         emails: list[str],
         batch_size: int | None = None,
@@ -3430,7 +3430,7 @@ class OpenProjectClient:
         return results
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for project identifier lookups
-    def batch_get_projects_by_identifiers(
+    def batch_get_projects_by_identifiers(  # noqa: C901
         self,
         identifiers: list[str],
         batch_size: int | None = None,
@@ -3514,7 +3514,7 @@ class OpenProjectClient:
     @batch_idempotent(
         ttl=7200,
     )  # 2 hour TTL for custom field lookups (less frequent changes)
-    def batch_get_custom_fields_by_names(
+    def batch_get_custom_fields_by_names(  # noqa: C901
         self,
         names: list[str],
         batch_size: int | None = None,
