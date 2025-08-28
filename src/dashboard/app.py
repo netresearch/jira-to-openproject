@@ -259,31 +259,31 @@ async def update_migration_progress() -> None:
                     "error_recovery_system"
                 ].get_progress()
 
-                    # Create progress object
-                    progress = MigrationProgress(
-                        migration_id=migration_state["migration_id"],
-                        total_entities=progress_data.get("total_entities", 0),
-                        processed_entities=progress_data.get("processed_entities", 0),
-                        failed_entities=progress_data.get("failed_entities", 0),
-                        current_entity=progress_data.get("current_entity"),
-                        current_entity_type=progress_data.get("current_entity_type"),
-                        current_component=migration_state["current_component"],
-                        status="running",
-                        start_time=migration_state["start_time"],
-                        last_update=datetime.now(UTC),
-                        error_count=progress_data.get("error_count", 0),
-                        success_rate=progress_data.get("success_rate", 0.0),
-                        pause_time=migration_state.get("pause_time"),
-                        total_pause_time=migration_state.get("total_pause_time", 0),
-                    )
+                # Create progress object
+                progress = MigrationProgress(
+                    migration_id=migration_state["migration_id"],
+                    total_entities=progress_data.get("total_entities", 0),
+                    processed_entities=progress_data.get("processed_entities", 0),
+                    failed_entities=progress_data.get("failed_entities", 0),
+                    current_entity=progress_data.get("current_entity"),
+                    current_entity_type=progress_data.get("current_entity_type"),
+                    current_component=migration_state["current_component"],
+                    status="running",
+                    start_time=migration_state["start_time"],
+                    last_update=datetime.now(UTC),
+                    error_count=progress_data.get("error_count", 0),
+                    success_rate=progress_data.get("success_rate", 0.0),
+                    pause_time=migration_state.get("pause_time"),
+                    total_pause_time=migration_state.get("total_pause_time", 0),
+                )
 
-                    # Broadcast progress update
-                    await manager.broadcast_progress(progress)
+                # Broadcast progress update
+                await manager.broadcast_progress(progress)
 
             await asyncio.sleep(1)  # Update every second during migration
 
         except Exception as e:
-            logger.exception(f"Error updating migration progress: {e}")
+            logger.exception("Error updating migration progress: %s", e)
             await asyncio.sleep(5)
 
 
