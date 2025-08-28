@@ -1076,7 +1076,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 # Run the component (diagnose if base run is invoked)
                 try:
                     try:
-                        from src.migrations.base_migration import (
+                        from src.migrations.base_migration import (  # noqa: PLC0415
                             BaseMigration,  # local import to avoid cycles
                         )
                         if component.__class__.run is BaseMigration.run:

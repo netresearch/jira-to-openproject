@@ -341,7 +341,7 @@ class AccountMigration(BaseMigration):
 
         return mapping
 
-    def create_account_custom_field(self) -> int:
+    def create_account_custom_field(self) -> int:  # noqa: C901
         """Create a custom field in OpenProject for Tempo accounts.
 
         Returns:
@@ -367,7 +367,7 @@ class AccountMigration(BaseMigration):
                     )
                     return self.account_custom_field_id
             self.logger.info("Tempo Account custom field not found, will create it")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.warning("Error checking existing custom fields via file: %s", e)
 
         # Try file-based Ruby script approach to avoid console parsing issues
@@ -833,9 +833,11 @@ class AccountMigration(BaseMigration):
                 if (
                     "SUCCESS" in result
                     or "=> nil" in result
-                    or not any(
-                        error_word in result.lower()
-                        for error_word in ["error", "exception", "failed"]
+                    or (
+                        not any(
+                            error_word in result.lower()
+                            for error_word in ["error", "exception", "failed"]
+                        )
                     )
                 ):
                     success = True
@@ -847,7 +849,7 @@ class AccountMigration(BaseMigration):
                     f"Failed to activate custom field for all types. Result: {result}"
                 )
                 self.logger.warning(error_msg)
-                raise MigrationError(error_msg)
+                raise MigrationError(error_msg)  # noqa: TRY301
 
         except MigrationError:
             # Re-raise migration errors

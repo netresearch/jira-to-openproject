@@ -504,7 +504,7 @@ class BaseMigration:
                 entity_cache[entity_type] = entities
                 cache_invalidated.discard(entity_type)
 
-            return entities
+            return entities  # noqa: TRY300
 
         except Exception:
             self.logger.exception("Critical error in cache retrieval for %s", entity_type)
@@ -788,7 +788,7 @@ class BaseMigration:
     def should_skip_migration(
         self,
         entity_type: str,
-        cache_func=None,
+        cache_func: "Callable[[str], list[dict[str, Any]]] | None" = None,
     ) -> tuple[bool, ChangeReport | None]:
         """Check if migration should be skipped based on change detection.
 
@@ -830,7 +830,7 @@ class BaseMigration:
                     change_report["changes_by_type"],
                 )
 
-            return should_skip, change_report
+            return should_skip, change_report  # noqa: TRY300
 
         except Exception as e:
             # If change detection fails, proceed with migration to be safe
