@@ -6,7 +6,6 @@ Uses exception-based error handling for all operations.
 
 import shutil
 import subprocess
-import shutil
 import time
 from typing import Any
 
@@ -289,7 +288,7 @@ class RailsConsoleClient:
         """
         return command.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
 
-    def execute(
+    def execute(  # noqa: C901, PLR0912, PLR0915
         self,
         command: str,
         timeout: int | None = None,
@@ -603,7 +602,7 @@ class RailsConsoleClient:
                 raise RubyError(msg)
         except RubyError:
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001,S110
             # If detection itself fails, ignore and continue
             pass
 
@@ -720,7 +719,7 @@ class RailsConsoleClient:
             logger.error("Console output wait timed out after %ss without marker", timeout)
         return False, current_output
 
-    def _wait_for_console_ready(self, target: str, timeout: int = 5, reset_on_stall: bool = True) -> bool:
+    def _wait_for_console_ready(self, target: str, timeout: int = 5, *, reset_on_stall: bool = True) -> bool:  # noqa: FBT001, FBT002
         """Wait for the console to be in a ready state.
 
         Args:
@@ -858,8 +857,10 @@ class RailsConsoleClient:
                 if not found_script_end:
                     if self._has_fatal_console_error(pane_output):
                         snippet = self._extract_error_summary(pane_output)
-                        raise ConsoleNotReadyError(f"Rails console crashed before script-end echo: {snippet}")
-                    raise CommandExecutionError("Script end echo not observed in console output")
+                        msg = f"Rails console crashed before script-end echo: {snippet}"
+                        raise ConsoleNotReadyError(msg)
+                    msg = "Script end echo not observed in console output"
+                    raise CommandExecutionError(msg)
 
                 # Wait for any new output beyond script-end echo
                 baseline = pane_output
@@ -881,7 +882,8 @@ class RailsConsoleClient:
                 tail_lines = cur.strip().split("\n")[-200:]
                 if wait_for_line and not any(wait_for_line in ln for ln in tail_lines):
                     # No further output with EXEC_END → error (nothing should print after EXEC_END)
-                    raise CommandExecutionError("End marker not found in tail after post-script output")
+                    msg = "End marker not found in tail after post-script output"
+                    raise CommandExecutionError(msg)
 
             # Now ensure prompt is ready before final capture
             self._wait_for_console_ready(target, timeout, reset_on_stall=False)
@@ -917,7 +919,7 @@ class RailsConsoleClient:
             return last_output.strip()
 
         except subprocess.SubprocessError as e:
-            logger.exception("Tmux command failed: %s", e)
+            logger.exception("Tmux command failed")
             self._stabilize_console()
             msg = f"Tmux command failed: {e}"
             raise TmuxSessionError(msg) from e
