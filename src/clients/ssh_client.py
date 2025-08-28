@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ 
 """SSHClient.
 
 Handles SSH operations to remote servers, including command execution and file transfers.
@@ -27,7 +27,15 @@ class SSHConnectionError(ConnectionError):
 
 
 class SSHCommandError(Exception):
-    """Exception raised when an SSH command fails."""
+    """Exception raised when an SSH command fails.
+
+    Args:
+        command: The command that was executed
+        returncode: Process return code
+        stdout: Captured stdout
+        stderr: Captured stderr
+        message: Optional base message
+    """
 
     def __init__(
         self,
@@ -46,7 +54,13 @@ class SSHCommandError(Exception):
 
 
 class SSHFileTransferError(Exception):
-    """Exception raised when an SCP file transfer operation fails."""
+    """Exception raised when an SCP file transfer operation fails.
+
+    Args:
+        source: Source path
+        destination: Destination path
+        message: Optional base message
+    """
 
     def __init__(
         self,
@@ -81,6 +95,7 @@ class SSHClient:
         operation_timeout: int = 60,
         retry_count: int = 3,
         retry_delay: float = 1.0,
+        *,
         auto_reconnect: bool = True,
     ) -> None:
         """Initialize the SSH client.
@@ -177,7 +192,7 @@ class SSHClient:
             cmd = self.get_ssh_base_command()
             cmd.extend(["-o", "BatchMode=yes", "echo", "Connection successful"])
 
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: S603
                 cmd,
                 capture_output=True,
                 text=True,
@@ -185,13 +200,14 @@ class SSHClient:
                 check=False,
             )
 
-            return result.returncode == 0 and "Connection successful" in result.stdout
+            ok = result.returncode == 0 and "Connection successful" in result.stdout
+            return ok
 
         except subprocess.SubprocessError as e:
-            logger.exception("SSH connection test failed: %s", e)
+            logger.exception("SSH connection test failed")
             return False
-        except Exception as e:
-            logger.exception("Unexpected error testing SSH connection: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Unexpected error testing SSH connection")
             return False
 
     def is_connected(self) -> bool:
@@ -203,10 +219,11 @@ class SSHClient:
         """
         return True
 
-    def execute_command(
+    def execute_command(  # noqa: C901, PLR0912
         self,
         command: str,
         timeout: int | None = None,
+        *,
         check: bool = True,
         retry: bool = True,
     ) -> tuple[str, str, int]:
@@ -251,7 +268,7 @@ class SSHClient:
 
                 logger.debug("Executing SSH command: %s", " ".join(cmd))
 
-                result = subprocess.run(
+                result = subprocess.run(  # noqa: S603
                     cmd,
                     capture_output=True,
                     text=True,
@@ -368,7 +385,7 @@ class SSHClient:
                 logger.debug("Executing SCP command: %s", " ".join(cmd))
 
                 # Execute scp command
-                result = subprocess.run(
+                result = subprocess.run(  # noqa: S603
                     cmd,
                     capture_output=True,
                     text=True,
@@ -498,7 +515,7 @@ class SSHClient:
                 logger.debug("Executing SCP command: %s", " ".join(cmd))
 
                 # Execute scp command
-                result = subprocess.run(
+                result = subprocess.run(  # noqa: S603
                     cmd,
                     capture_output=True,
                     text=True,
