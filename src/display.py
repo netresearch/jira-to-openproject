@@ -87,7 +87,7 @@ _LOGGER: logging.Logger | None = None
 _LOG_LEVEL_NUM: int | None = None
 
 
-def configure_logging(
+def configure_logging(  # noqa: C901, PLR0912, PLR0915
     level: str = "INFO",
     log_file: Path | None = None,
 ) -> ExtendedLogger:

@@ -291,7 +291,7 @@ def create_performance_config(
     )
 
 
-async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915, FBT001, FBT002
+async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
     components: list[ComponentName] | None = None,
     stop_on_error: bool = False,
     no_confirm: bool = False,
