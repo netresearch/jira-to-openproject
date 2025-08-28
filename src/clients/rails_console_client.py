@@ -7,6 +7,7 @@ Uses exception-based error handling for all operations.
 import subprocess
 import time
 from typing import Any
+import shutil
 
 from src.display import configure_logging
 from src.utils.file_manager import FileManager
@@ -675,7 +676,7 @@ class RailsConsoleClient:
 
         while time.time() - start_time < timeout:
             try:
-                capture = subprocess.run(  # noqa: S603,S607
+                capture = subprocess.run(  # noqa: S603
                     ["tmux", "capture-pane", "-p", "-S", "-500", "-t", target],
                     capture_output=True,
                     text=True,
@@ -725,14 +726,15 @@ class RailsConsoleClient:
 
         """
         logger.debug("Waiting for console ready state (timeout: %ss)", timeout)
+        tmux = shutil.which("tmux") or "tmux"
         start_time = time.time()
         poll_interval = 0.05
         attempts = 0
 
         while time.time() - start_time < timeout:
             try:
-                capture = subprocess.run(  # noqa: S603,S607
-                    ["tmux", "capture-pane", "-p", "-S", "-10", "-t", target],
+                capture = subprocess.run(  # noqa: S603
+                    [tmux, "capture-pane", "-p", "-S", "-10", "-t", target],
                     capture_output=True,
                     text=True,
                     check=True,
@@ -754,8 +756,8 @@ class RailsConsoleClient:
                         "Console in %s state, sending Ctrl+C to reset",
                         console_state["state"],
                     )
-                    subprocess.run(
-                        ["tmux", "send-keys", "-t", target, "C-c"],
+                    subprocess.run(  # noqa: S603
+                        [tmux, "send-keys", "-t", target, "C-c"],
                         capture_output=True,
                         text=True,
                         check=True,
