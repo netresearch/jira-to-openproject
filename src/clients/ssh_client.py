@@ -54,6 +54,7 @@ class SSHCommandError(Exception):
             stdout: Captured standard output
             stderr: Captured standard error
             message: Optional descriptive message
+
         """
         self.command = command
         self.returncode = returncode
@@ -85,6 +86,7 @@ class SSHFileTransferError(Exception):
             source: Source path
             destination: Destination path
             message: Optional message
+
         """
         self.source = source
         self.destination = destination
@@ -104,7 +106,7 @@ class SSHClient:
     - Propagates standard subprocess exceptions for timeouts and process errors
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         host: str,
         user: str | None = None,
@@ -218,7 +220,7 @@ class SSHClient:
                 check=False,
             )
 
-            return result.returncode == 0 and "Connection successful" in result.stdout
+            return result.returncode == 0 and "Connection successful" in result.stdout  # noqa: TRY300
 
         except subprocess.SubprocessError:
             logger.exception("SSH connection test failed")
@@ -348,11 +350,12 @@ class SSHClient:
         msg = "Command failed after all retry attempts"
         raise RuntimeError(msg)  # Fallback in case of logic error
 
-    def copy_file_to_remote(
+    def copy_file_to_remote(  # noqa: C901, PLR0912
         self,
         local_path: Path | str,
         remote_path: Path | str,
-        retry: bool = True,
+        *,
+        retry: bool = True,  # noqa: FBT001, FBT002
     ) -> None:
         """Copy a file from local to remote host using scp.
 
@@ -419,7 +422,7 @@ class SSHClient:
                     )
                     return
                 # This shouldn't be reached due to check=True above
-                raise SSHFileTransferError(
+                raise SSHFileTransferError(  # noqa: TRY301
                     source=str(local_path),
                     destination=f"{self.host}:{remote_path}",
                     message=f"SCP failed with exit code {result.returncode}: {result.stderr}",
@@ -457,7 +460,7 @@ class SSHClient:
                 raise
 
             except Exception as e:
-                logger.exception("Unexpected error during file copy: %s", e)
+                logger.exception("Unexpected error during file copy")
                 last_exception = SSHFileTransferError(
                     source=str(local_path),
                     destination=f"{self.host}:{remote_path}",
@@ -472,11 +475,12 @@ class SSHClient:
         msg = "File copy failed after all retry attempts"
         raise RuntimeError(msg)  # Fallback in case of logic error
 
-    def copy_file_from_remote(
+    def copy_file_from_remote(  # noqa: C901
         self,
         remote_path: Path | str,
         local_path: Path | str,
-        retry: bool = True,
+        *,
+        retry: bool = True,  # noqa: FBT001, FBT002
     ) -> Path:
         """Copy a file from remote host to local using scp.
 

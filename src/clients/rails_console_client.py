@@ -599,7 +599,7 @@ class RailsConsoleClient:
             ):
                 snippet = self._extract_error_summary(trailing_output)
                 msg = f"Ruby console reported error after end marker: {snippet}"
-                raise RubyError(msg)
+                raise RubyError(msg)  # noqa: TRY301
         except RubyError:
             raise
         except Exception:  # noqa: BLE001,S110
@@ -858,9 +858,9 @@ class RailsConsoleClient:
                     if self._has_fatal_console_error(pane_output):
                         snippet = self._extract_error_summary(pane_output)
                         msg = f"Rails console crashed before script-end echo: {snippet}"
-                        raise ConsoleNotReadyError(msg)
+                        raise ConsoleNotReadyError(msg)  # noqa: TRY301
                     msg = "Script end echo not observed in console output"
-                    raise CommandExecutionError(msg)
+                    raise CommandExecutionError(msg)  # noqa: TRY301
 
                 # Wait for any new output beyond script-end echo
                 baseline = pane_output
@@ -883,7 +883,7 @@ class RailsConsoleClient:
                 if wait_for_line and not any(wait_for_line in ln for ln in tail_lines):
                     # No further output with EXEC_END → error (nothing should print after EXEC_END)
                     msg = "End marker not found in tail after post-script output"
-                    raise CommandExecutionError(msg)
+                    raise CommandExecutionError(msg)  # noqa: TRY301
 
             # Now ensure prompt is ready before final capture
             self._wait_for_console_ready(target, timeout, reset_on_stall=False)
