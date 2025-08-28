@@ -803,7 +803,7 @@ class AccountMigration(BaseMigration):
                 validated_field_id = int(field_id)
                 if validated_field_id <= 0:
                     msg = "Field ID must be positive"
-                    raise ValueError(msg)
+                    raise ValueError(msg)  # noqa: TRY301
             except (ValueError, TypeError) as e:
                 error_msg = f"Invalid field_id provided: {field_id!r} (must be positive integer)"
                 raise MigrationError(error_msg) from e
@@ -828,19 +828,18 @@ class AccountMigration(BaseMigration):
             if isinstance(result, dict):
                 if result.get("status") == "success":
                     success = True
-            elif isinstance(result, str):
-                # Check if the command executed successfully (no error output)
-                if (
-                    "SUCCESS" in result
-                    or "=> nil" in result
-                    or (
-                        not any(
-                            error_word in result.lower()
-                            for error_word in ["error", "exception", "failed"]
-                        )
+            elif isinstance(result, str) and (
+                "SUCCESS" in result
+                or "=> nil" in result
+                or (
+                    not any(
+                        error_word in result.lower()
+                        for error_word in ["error", "exception", "failed"]
                     )
-                ):
-                    success = True
+                )
+            ):
+                # Check if the command executed successfully (no error output)
+                success = True
 
             if success:
                 self.logger.info("Custom field activated for all work package types")
