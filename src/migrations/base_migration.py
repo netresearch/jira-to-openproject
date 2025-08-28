@@ -354,11 +354,13 @@ class BaseMigration:
         self._setup_performance_features()
 
     def _setup_performance_features(self) -> None:
-        """Setup performance features and provide easy access to enhanced client capabilities."""
+        """Set up performance features and shortcuts to enhanced client capabilities."""
         # Check if clients have enhanced features
         self.has_enhanced_jira = hasattr(self.jira_client, "performance_optimizer")
         self.has_enhanced_openproject = (
-            hasattr(self.op_client, "performance_optimizer") if self.op_client is not None else False
+            hasattr(self.op_client, "performance_optimizer")
+            if self.op_client is not None
+            else False
         )
 
         if self.has_enhanced_jira:
@@ -504,7 +506,7 @@ class BaseMigration:
 
             return entities
 
-        except Exception as e:
+        except Exception:
             self.logger.exception("Critical error in cache retrieval for %s", entity_type)
             raise
 
