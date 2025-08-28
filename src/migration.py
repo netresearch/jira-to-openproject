@@ -603,84 +603,84 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                             return command[5:]
                         return "Mock Rails execution result"
 
-                    def execute_query(self, query: str) -> dict[str, object]:
+                    def execute_query(self, query: str) -> dict[str, object]:  # noqa: ARG002
                         return {"result": "Mock query result"}
 
-                    def transfer_file_to_container(self, local_path: str, container_path: str) -> bool:
+                    def transfer_file_to_container(self, local_path: str, container_path: str) -> bool:  # noqa: ARG002
                         return True
 
-                    def transfer_file_from_container(self, container_path: str, local_path: str) -> bool:
+                    def transfer_file_from_container(self, container_path: str, local_path: str) -> bool:  # noqa: ARG002
                         return True
 
                 class MockOpenProjectClient:
-                    def __init__(self, **kwargs: object) -> None:  # noqa: ANN003, ARG002
+                    def __init__(self, **kwargs: object) -> None:  # noqa: ARG002
                         self.rails_client = MockRailsClient()
                         config.logger.info("Mock OpenProject client initialized")
 
-                    def create_project(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
+                    def create_project(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "name": "Mock Project"}
 
-                    def create_user(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
+                    def create_user(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "name": "Mock User"}
 
-                    def create_custom_field(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
+                    def create_custom_field(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "name": "Mock Field"}
 
-                    def create_issue_type(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
+                    def create_issue_type(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "name": "Mock Issue Type"}
 
-                    def create_status(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
+                    def create_status(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "name": "Mock Status"}
 
-                    def create_work_package(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
+                    def create_work_package(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "subject": "Mock Work Package"}
 
-                    def create_attachment(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
+                    def create_attachment(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "filename": "mock_attachment.txt"}
 
-                    def create_comment(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
+                    def create_comment(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "comment": "Mock comment"}
 
-                    def create_time_entry(self, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ARG002, ANN202
+                    def create_time_entry(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "hours": 1.0}
 
-                    def get_projects(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_projects(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_users(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ARG002, ANN202
+                    def get_users(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def get_custom_fields(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ARG002, ANN202
+                    def get_custom_fields(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def get_issue_types(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_issue_types(self) -> list[dict[str, object]]:
                         return []
 
-                    def get_statuses(self) -> list[dict[str, object]]:  # noqa: ANN202
+                    def get_statuses(self) -> list[dict[str, object]]:
                         return []
 
-                    def create_record(self, *args: object, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ANN202, ARG002
+                    def create_record(self, *args: object, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"id": 1, "name": "Mock Record"}
 
-                    def get_work_package_types(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ARG002, ANN202
+                    def get_work_package_types(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def execute_query(self, *args: object, **kwargs: object) -> dict[str, object]:  # noqa: ANN003, ANN202, ARG002
+                    def execute_query(self, *args: object, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
                         return {"status": "success"}
 
-                    def execute_json_query(self, *args: object, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ANN202, ARG002
+                    def execute_json_query(self, *args: object, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def transfer_file_to_container(self, *args: object, **kwargs: object) -> bool:  # noqa: ANN003, ARG002, ANN202
+                    def transfer_file_to_container(self, *args: object, **kwargs: object) -> bool:  # noqa: ARG002
                         return True
 
-                    def get_time_entry_activities(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ANN003, ARG002, ANN202
+                    def get_time_entry_activities(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
-                    def get_custom_field_id_by_name(self, name: str) -> int:  # noqa: ANN001
+                    def get_custom_field_id_by_name(self, name: str) -> int:  # noqa: ARG002
                         return 1
 
-                    def execute_script_with_data(self, script_content: str, data: object) -> dict[str, object]:  # noqa: ANN001, ANN202
+                    def execute_script_with_data(self, script_content: str, data: object) -> dict[str, object]:
                         if "status" in script_content.lower():
                             created_count = len(data) if isinstance(data, list) else 1
                             status_data = {}
@@ -736,7 +736,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         config.logger.success("All clients initialized successfully")
 
         # Initialize validation framework
-        from src.utils.advanced_validation import (
+        from src.utils.advanced_validation import (  # noqa: PLC0415
             ValidationFramework,
             validate_pre_migration,
         )
@@ -747,9 +747,9 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         # Initialize advanced configuration manager (guard in tests)
         try:
             # Ensure robust Path usage in runtime contexts
-            from pathlib import Path as _Path
+            from pathlib import Path as _Path  # noqa: PLC0415
 
-            from src.utils.advanced_config_manager import (
+            from src.utils.advanced_config_manager import (  # noqa: PLC0415
                 ConfigurationManager,
             )
             _cfg_dir = _Path("config")
@@ -761,12 +761,12 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 backups_dir=_bkp_dir,
             )
             config.logger.info("Advanced configuration manager initialized")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             config.logger.warning(f"Skipping advanced configuration manager init: {e}")
             config_manager = None
 
         # Initialize advanced security system
-        from src.utils.advanced_security import (
+        from src.utils.advanced_security import (  # noqa: PLC0415
             SecurityConfig,
             SecurityManager,
         )
@@ -784,13 +784,13 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             )
             security_manager = SecurityManager(security_config)
             config.logger.info("Advanced security system initialized")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             config.logger.warning(f"Failed to initialize security system: {e}")
             config.logger.warning("Continuing without security features")
             security_manager = None
 
         # Initialize large-scale optimizer for performance
-        from src.utils.large_scale_optimizer import (
+        from src.utils.large_scale_optimizer import (  # noqa: PLC0415
             LargeScaleOptimizer,
             get_optimized_config_for_size,
         )
@@ -801,13 +801,13 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             )  # Default to 100k+ optimization
             large_scale_optimizer = LargeScaleOptimizer(large_scale_config)
             config.logger.info("Large-scale optimizer initialized")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             config.logger.warning(f"Failed to initialize large-scale optimizer: {e}")
             config.logger.warning("Continuing without performance optimization")
             large_scale_optimizer = None
 
         # Initialize comprehensive logging and monitoring
-        from src.utils.comprehensive_logging import (
+        from src.utils.comprehensive_logging import (  # noqa: PLC0415
             LogConfig,
             get_monitoring_system,
             log_migration_start,
@@ -827,13 +827,13 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             )
             await start_monitoring(_log_cfg)
             config.logger.info("Comprehensive logging and monitoring started")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             config.logger.warning(f"Failed to initialize comprehensive logging: {e}")
             config.logger.warning("Continuing without advanced logging")
             monitoring_task = None
 
         # Initialize automated testing suite
-        from src.utils.automated_testing_suite import (
+        from src.utils.automated_testing_suite import (  # noqa: PLC0415
             AutomatedTestingSuite,
             TestSuiteConfig,
             TestType,
