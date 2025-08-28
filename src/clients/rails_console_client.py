@@ -255,7 +255,7 @@ class RailsConsoleClient:
             time.sleep(0.2)
 
             # Send Ctrl+C to abort any pending operation
-            subprocess.run(  # noqa: S603,S607
+            subprocess.run(  # noqa: S603
                 ["tmux", "send-keys", "-t", target, "C-c"],
                 capture_output=True,
                 text=True,
@@ -675,7 +675,7 @@ class RailsConsoleClient:
 
         while time.time() - start_time < timeout:
             try:
-                capture = subprocess.run(
+                capture = subprocess.run(  # noqa: S603,S607
                     ["tmux", "capture-pane", "-p", "-S", "-500", "-t", target],
                     capture_output=True,
                     text=True,
@@ -693,13 +693,13 @@ class RailsConsoleClient:
                     return True, current_output
 
                 console_state = self._get_console_state(current_output)
-                if console_state["ready"] and time.time() - start_time > 3:
+                if console_state["ready"] and time.time() - start_time > 3:  # noqa: PLR2004
                     logger.debug("Console ready but marker not found yet")
 
                 time.sleep(poll_interval)
                 poll_interval = min(poll_interval * 1.5, max_interval)
             except subprocess.SubprocessError as e:
-                logger.exception("Error capturing tmux pane: %s", e)
+                logger.exception("Error capturing tmux pane")
                 msg = f"Error capturing tmux pane: {e}"
                 raise CommandExecutionError(msg) from e
 
@@ -731,7 +731,7 @@ class RailsConsoleClient:
 
         while time.time() - start_time < timeout:
             try:
-                capture = subprocess.run(
+                capture = subprocess.run(  # noqa: S603,S607
                     ["tmux", "capture-pane", "-p", "-S", "-10", "-t", target],
                     capture_output=True,
                     text=True,

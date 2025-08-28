@@ -3415,7 +3415,7 @@ class OpenProjectClient:
                             if email in batch_emails:
                                 results[email] = record
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self.logger.warning(
                     "Failed to fetch batch of user emails %s after retries: %s",
                     batch_emails,
@@ -3493,7 +3493,7 @@ class OpenProjectClient:
                             if identifier in batch_identifiers:
                                 results[identifier] = record
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self.logger.warning(
                     "Failed to fetch batch of project identifiers %s after retries: %s",
                     batch_identifiers,
@@ -3572,7 +3572,7 @@ class OpenProjectClient:
                             if name in batch_names:
                                 results[name] = record
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self.logger.warning(
                     "Failed to fetch batch of custom field names %s after retries: %s",
                     batch_names,
