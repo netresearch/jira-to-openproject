@@ -1026,7 +1026,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 if factory is None:
                     config.logger.warning("Unknown component '%s' - skipping", component_name)
                     continue
-                component: BaseMigration = factory()
+                component: "BaseMigration" = factory()
 
                 # Header for this component in logs
                 print_component_header(component_name)
@@ -1539,7 +1539,7 @@ def setup_tmux_session() -> bool:
         # Check if tmux is installed
         import shutil as _shutil  # noqa: PLC0415
         tmux_bin = _shutil.which("tmux") or "tmux"
-        subprocess.run([tmux_bin, "-V"], check=True, capture_output=True)
+        subprocess.run([tmux_bin, "-V"], check=True, capture_output=True)  # noqa: S603
 
         # Check if session already exists
         result = subprocess.run(  # noqa: S603
@@ -1555,7 +1555,7 @@ def setup_tmux_session() -> bool:
             return True
 
         # Create a new session
-        subprocess.run([tmux_bin, "new-session", "-d", "-s", session_name], check=True)
+        subprocess.run([tmux_bin, "new-session", "-d", "-s", session_name], check=True)  # noqa: S603
 
         config.logger.success("Created tmux session '%s'", session_name)
         config.logger.info("To attach to this session, run:")
@@ -1594,7 +1594,7 @@ def setup_tmux_session() -> bool:
             "After running Rails console, you can use the direct migration features.",
         )
 
-        return True
+        return True  # noqa: TRY300
     except (subprocess.SubprocessError, FileNotFoundError):
         config.logger.error("tmux is not installed or not available in PATH")
         config.logger.info("Please install tmux first:")
