@@ -300,9 +300,9 @@ def validate_config() -> bool:
             case _:
                 continue
 
-        for key in required_keys:
-            if not config_section.get(key):
-                missing_vars.append(f"{prefix}{key.upper()}")
+        missing_vars.extend(
+            f"{prefix}{key.upper()}" for key in required_keys if not config_section.get(key)
+        )
 
     if missing_vars:
         logger.error(

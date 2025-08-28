@@ -475,7 +475,7 @@ class SSHClient:
         msg = "File copy failed after all retry attempts"
         raise RuntimeError(msg)  # Fallback in case of logic error
 
-    def copy_file_from_remote(  # noqa: C901
+    def copy_file_from_remote(  # noqa: C901, PLR0912
         self,
         remote_path: Path | str,
         local_path: Path | str,
@@ -588,7 +588,7 @@ class SSHClient:
                 raise
 
             except Exception as e:
-                logger.exception("Unexpected error during file download: %s", e)
+                logger.exception("Unexpected error during file download")
                 last_exception = SSHFileTransferError(
                     source=f"{self.host}:{remote_path}",
                     destination=str(local_path),
@@ -622,7 +622,7 @@ class SSHClient:
             cmd = f"test -e {quote(remote_path_str)} && echo 'EXISTS' || echo 'NOT_EXISTS'"
             stdout, _, returncode = self.execute_command(cmd, check=False)
 
-            return "EXISTS" in stdout and returncode == 0
+            return "EXISTS" in stdout and returncode == 0  # noqa: TRY300
         except Exception:
             logger.exception("Error checking if remote file exists: %s", remote_path)
             return False
@@ -698,7 +698,7 @@ class SSHClient:
             try:
                 return operation(*args, **kwargs)
             except Exception as e:
-                logger.exception("Operation failed: %s", e)
+                logger.exception("Operation failed")
                 last_exception = e
                 if attempt == max_attempts - 1:
                     raise

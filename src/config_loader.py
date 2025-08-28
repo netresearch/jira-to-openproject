@@ -6,7 +6,6 @@ Handles loading and accessing configuration settings.
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
 import yaml
 from dotenv import load_dotenv
@@ -379,7 +378,7 @@ class ConfigLoader:
         return password
 
     def get_value(
-        self, section: SectionName, key: str, default: ConfigValue | None = None
+        self, section: SectionName, key: str, default: ConfigValue | None = None,
     ) -> ConfigValue | None:
         """Get a specific configuration value.
 

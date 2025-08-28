@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """FastAPI web server for real-time migration progress dashboard."""
 
 import asyncio
@@ -113,6 +112,7 @@ class ConnectionManager:
     """Manages WebSocket connections for real-time updates."""
 
     def __init__(self) -> None:
+        """Initialize connection manager state."""
         self.active_connections: list[WebSocket] = []
         self.connection_metadata: dict[WebSocket, dict[str, Any]] = {}
 
@@ -126,7 +126,8 @@ class ConnectionManager:
             "client_id": str(uuid4()),
         }
         logger.info(
-            f"WebSocket client connected. Total clients: {len(self.active_connections)}",
+            "WebSocket client connected. Total clients: %d",
+            len(self.active_connections),
         )
 
         # Send initial state
@@ -146,7 +147,8 @@ class ConnectionManager:
         if websocket in self.connection_metadata:
             del self.connection_metadata[websocket]
         logger.info(
-            f"WebSocket client disconnected. Total clients: {len(self.active_connections)}",
+            "WebSocket client disconnected. Total clients: %d",
+            len(self.active_connections),
         )
 
     async def send_personal_message(
@@ -160,7 +162,7 @@ class ConnectionManager:
         except WebSocketDisconnect:
             self.disconnect(websocket)
         except Exception as e:
-            logger.exception(f"Error sending personal message: {e}")
+            logger.exception("Error sending personal message: %s", e)
             self.disconnect(websocket)
 
     async def broadcast(self, message: dict[str, Any]) -> None:
@@ -172,7 +174,7 @@ class ConnectionManager:
             except WebSocketDisconnect:
                 disconnected.append(connection)
             except Exception as e:
-                logger.exception(f"Error broadcasting message: {e}")
+                logger.exception("Error broadcasting message: %s", e)
                 disconnected.append(connection)
 
         # Remove disconnected clients
@@ -239,7 +241,7 @@ async def collect_system_metrics() -> None:
             await asyncio.sleep(5)  # Update every 5 seconds
 
         except Exception as e:
-            logger.exception(f"Error collecting system metrics: {e}")
+            logger.exception("Error collecting system metrics: %s", e)
             await asyncio.sleep(10)  # Wait longer on error
 
 
@@ -248,12 +250,14 @@ async def update_migration_progress() -> None:
     """Update migration progress and broadcast to clients."""
     while True:
         try:
-            if migration_state["is_running"] and migration_state["migration_id"]:
-                # Get current progress from error recovery system
-                if migration_state["error_recovery_system"]:
-                    progress_data = await migration_state[
-                        "error_recovery_system"
-                    ].get_progress()
+            if (
+                migration_state["is_running"]
+                and migration_state["migration_id"]
+                and migration_state["error_recovery_system"]
+            ):
+                progress_data = await migration_state[
+                    "error_recovery_system"
+                ].get_progress()
 
                     # Create progress object
                     progress = MigrationProgress(
@@ -286,7 +290,7 @@ async def update_migration_progress() -> None:
 @app.on_event("startup")
 async def startup_event() -> None:
     """Initialize dashboard on startup."""
-    global redis_client
+    global redis_client  # noqa: PLW0603
 
     try:
         # Initialize Redis connection
@@ -299,12 +303,12 @@ async def startup_event() -> None:
         await redis_client.ping()
         logger.info("Connected to Redis")
     except Exception as e:
-        logger.warning(f"Could not connect to Redis: {e}")
+        logger.warning("Could not connect to Redis: %s", e)
         redis_client = None
 
     # Start background tasks
-    asyncio.create_task(collect_system_metrics())
-    asyncio.create_task(update_migration_progress())
+    _task_metrics = asyncio.create_task(collect_system_metrics())
+    _task_progress = asyncio.create_task(update_migration_progress())
 
     logger.info("Dashboard started successfully")
 
@@ -361,7 +365,7 @@ async def websocket_progress(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
-        logger.exception(f"WebSocket error: {e}")
+        logger.exception("WebSocket error: %s", e)
         manager.disconnect(websocket)
 
 
@@ -404,10 +408,10 @@ async def start_migration_background(config: dict[str, Any]) -> None:
         )
         await manager.broadcast_event(event)
 
-        logger.info(f"Migration started: {migration_state['migration_id']}")
+        logger.info("Migration started: %s", migration_state["migration_id"])
 
     except Exception as e:
-        logger.exception(f"Error starting migration: {e}")
+        logger.exception("Error starting migration: %s", e)
         migration_state["is_running"] = False
 
         event = MigrationEvent(
@@ -429,7 +433,7 @@ async def stop_migration_background() -> None:
         logger.info("Migration stopped by user")
 
     except Exception as e:
-        logger.exception(f"Error stopping migration: {e}")
+        logger.exception("Error stopping migration: %s", e)
 
 
 async def pause_migration_background() -> None:
@@ -444,7 +448,7 @@ async def pause_migration_background() -> None:
         logger.info("Migration paused")
 
     except Exception as e:
-        logger.exception(f"Error pausing migration: {e}")
+        logger.exception("Error pausing migration: %s", e)
 
 
 async def resume_migration_background() -> None:
@@ -465,7 +469,7 @@ async def resume_migration_background() -> None:
         logger.info("Migration resumed")
 
     except Exception as e:
-        logger.exception(f"Error resuming migration: {e}")
+        logger.exception("Error resuming migration: %s", e)
 
 
 @app.get("/api/progress")
@@ -502,7 +506,7 @@ async def get_progress(migration_id: str | None = None) -> JSONResponse:
         return JSONResponse(content=progress.dict())
 
     except Exception as e:
-        logger.exception(f"Error getting progress: {e}")
+        logger.exception("Error getting progress: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -546,7 +550,7 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
         return JSONResponse(content=metrics.dict())
 
     except Exception as e:
-        logger.exception(f"Error getting metrics: {e}")
+        logger.exception("Error getting metrics: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -577,7 +581,7 @@ async def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
         )
 
     except Exception as e:
-        logger.exception(f"Error generating CSV: {e}")
+        logger.exception("Error generating CSV: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -606,7 +610,7 @@ async def get_migration_status() -> JSONResponse:
         return JSONResponse(content=status)
 
     except Exception as e:
-        logger.exception(f"Error getting migration status: {e}")
+        logger.exception("Error getting migration status: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -631,7 +635,7 @@ async def start_migration(
         )
 
     except Exception as e:
-        logger.exception(f"Error starting migration: {e}")
+        logger.exception("Error starting migration: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -648,7 +652,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
         return JSONResponse(content={"message": "Migration stop requested"})
 
     except Exception as e:
-        logger.exception(f"Error stopping migration: {e}")
+        logger.exception("Error stopping migration: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -668,7 +672,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
         return JSONResponse(content={"message": "Migration pause requested"})
 
     except Exception as e:
-        logger.exception(f"Error pausing migration: {e}")
+        logger.exception("Error pausing migration: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -688,7 +692,7 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
         return JSONResponse(content={"message": "Migration resume requested"})
 
     except Exception as e:
-        logger.exception(f"Error resuming migration: {e}")
+        logger.exception("Error resuming migration: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
