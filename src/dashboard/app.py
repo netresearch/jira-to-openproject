@@ -641,8 +641,8 @@ async def start_migration(
         )
 
     except Exception as e:
-        logger.exception("Error starting migration: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error starting migration")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/migration/stop")
@@ -658,8 +658,8 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
         return JSONResponse(content={"message": "Migration stop requested"})
 
     except Exception as e:
-        logger.exception("Error stopping migration: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error stopping migration")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/migration/pause")
@@ -678,8 +678,8 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
         return JSONResponse(content={"message": "Migration pause requested"})
 
     except Exception as e:
-        logger.exception("Error pausing migration: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error pausing migration")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/migration/resume")
@@ -698,8 +698,8 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
         return JSONResponse(content={"message": "Migration resume requested"})
 
     except Exception as e:
-        logger.exception("Error resuming migration: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error resuming migration")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.websocket("/ws/dashboard")

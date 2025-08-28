@@ -9,6 +9,8 @@ from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
+from contextlib import suppress
+from types import TracebackType
 
 from rich.console import Console
 from rich.live import Live
@@ -100,14 +102,14 @@ def configure_logging(
 
     """
     # If already configured, return the existing logger without reconfiguring
-    global _LOGGING_CONFIGURED, _LOGGER, _LOG_LEVEL_NUM
+    global _LOGGING_CONFIGURED, _LOGGER, _LOG_LEVEL_NUM  # noqa: PLW0603
     if _LOGGING_CONFIGURED and _LOGGER is not None:
         # If already configured but requested level differs, upgrade/downgrade levels dynamically
         # This fixes cases where an early import configured INFO before config sets DEBUG
         try:
             current_root = logging.getLogger()
             current_level = current_root.getEffectiveLevel()
-        except Exception:
+        except Exception:  # noqa: BLE001
             current_level = logging.INFO
 
         # Compute requested numeric level (including custom levels)
@@ -122,10 +124,8 @@ def configure_logging(
         if requested_level < current_level:
             current_root.setLevel(requested_level)
             for h in current_root.handlers:
-                try:
+                with suppress(Exception):  # noqa: S110
                     h.setLevel(requested_level)
-                except Exception:
-                    pass
             _LOG_LEVEL_NUM = requested_level
         return cast("ExtendedLogger", _LOGGER)
 
@@ -267,7 +267,12 @@ class ProgressTracker[T]:
         self.live.__enter__()
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Close the live display when exiting context."""
         if self.live:
             self.live.__exit__(exc_type, exc_val, exc_tb)
