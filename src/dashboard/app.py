@@ -12,6 +12,7 @@ from fastapi import (
     BackgroundTasks,
     FastAPI,
     HTTPException,
+    Request,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -41,6 +42,9 @@ app.mount("/static", StaticFiles(directory="src/dashboard/static"), name="static
 
 # Redis connection
 redis_client: redis.Redis | None = None
+
+# Track background tasks to satisfy linter and keep references
+BACKGROUND_TASKS: set[asyncio.Task[object]] = set()
 
 # Global state for migration tracking
 migration_state = {
@@ -302,13 +306,18 @@ async def startup_event() -> None:
         )
         await redis_client.ping()
         logger.info("Connected to Redis")
-    except Exception:
+    except Exception:  # noqa: BLE001
         logger.warning("Could not connect to Redis")
         redis_client = None
 
     # Start background tasks
-    _task_metrics = asyncio.create_task(collect_system_metrics())
-    _task_progress = asyncio.create_task(update_migration_progress())
+    t_metrics: asyncio.Task[object] = asyncio.create_task(collect_system_metrics())
+    BACKGROUND_TASKS.add(t_metrics)
+    t_metrics.add_done_callback(BACKGROUND_TASKS.discard)
+
+    t_progress: asyncio.Task[object] = asyncio.create_task(update_migration_progress())
+    BACKGROUND_TASKS.add(t_progress)
+    t_progress.add_done_callback(BACKGROUND_TASKS.discard)
 
     logger.info("Dashboard started successfully")
 
@@ -322,7 +331,7 @@ async def shutdown_event() -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Any) -> JSONResponse | HTMLResponse:
+async def dashboard(request: Request) -> HTMLResponse:
     """Serve the main dashboard page."""
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
@@ -383,7 +392,7 @@ async def handle_control_command(command: dict[str, Any], websocket: WebSocket) 
         await resume_migration_background()
     else:
         await manager.send_personal_message(
-            {"type": "error", "message": f"Unknown command: {action}"},
+            {"type": "error", "message": "Unknown command"},
             websocket,
         )
 
@@ -414,10 +423,7 @@ async def start_migration_background(config: dict[str, Any]) -> None:
         logger.exception("Error starting migration")
         migration_state["is_running"] = False
 
-        event = MigrationEvent(
-            level="error",
-            message=f"Failed to start migration: {e!s}",
-        )
+        event = MigrationEvent(level="error", message="Failed to start migration")
         await manager.broadcast_event(event)
 
 
@@ -543,7 +549,7 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
             average_processing_time=average_processing_time,
             memory_usage_mb=memory.used / 1024 / 1024,
             cpu_usage_percent=cpu_percent,
-            network_requests_per_second=0.0,  # TODO: Implement network monitoring
+            network_requests_per_second=0.0,  # Network monitoring not implemented
             error_rate=error_rate,
         )
 
@@ -622,7 +628,7 @@ async def start_migration(
     """Start migration with specified configuration."""
     try:
         if migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="Migration is already running")
+            raise HTTPException(status_code=400, detail="Migration is already running")  # noqa: TRY301
 
         # Start migration in background
         background_tasks.add_task(start_migration_background, control.config or {})
@@ -644,7 +650,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Stop current migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+            raise HTTPException(status_code=400, detail="No migration is running")  # noqa: TRY301
 
         # Stop migration in background
         background_tasks.add_task(stop_migration_background)
@@ -664,7 +670,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
             raise HTTPException(status_code=400, detail="No migration is running")
 
         if migration_state["pause_time"]:
-            raise HTTPException(status_code=400, detail="Migration is already paused")
+            raise HTTPException(status_code=400, detail="Migration is already paused")  # noqa: TRY301
 
         # Pause migration in background
         background_tasks.add_task(pause_migration_background)
@@ -681,10 +687,10 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Resume paused migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+            raise HTTPException(status_code=400, detail="No migration is running")  # noqa: TRY301
 
         if not migration_state["pause_time"]:
-            raise HTTPException(status_code=400, detail="Migration is not paused")
+            raise HTTPException(status_code=400, detail="Migration is not paused")  # noqa: TRY301
 
         # Resume migration in background
         background_tasks.add_task(resume_migration_background)
@@ -741,8 +747,8 @@ async def websocket_dashboard(websocket: WebSocket) -> None:
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-    except Exception as e:
-        logger.exception(f"WebSocket error: {e}")
+    except Exception:
+        logger.exception("WebSocket error")
         manager.disconnect(websocket)
 
 
