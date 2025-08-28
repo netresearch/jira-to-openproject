@@ -1060,7 +1060,7 @@ class BaseMigration:
 
             return result  # noqa: TRY300
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.exception("Error in state management workflow: %s", e)
 
             # Complete migration record with error if it was started
