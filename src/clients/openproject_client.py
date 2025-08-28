@@ -1809,7 +1809,7 @@ class OpenProjectClient:
             self.execute_query(command)
         except RubyError as e:
             if "Record not found" in str(e):
-                msg = f"{model} with ID {id} not found"
+                msg = f"{model} with ID {record_id} not found"
                 raise RecordNotFoundError(msg) from e
             msg = f"Failed to delete {model}."
             raise QueryExecutionError(msg) from e
