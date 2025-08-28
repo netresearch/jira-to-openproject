@@ -1,1 +1,1 @@
-
+"""Mappings package."""

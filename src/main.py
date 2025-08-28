@@ -1,4 +1,4 @@
- 
+
 """Main entry point for Jira to OpenProject migration tool.
 
 This script provides a unified interface for running both migration

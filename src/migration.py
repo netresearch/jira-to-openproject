@@ -1,4 +1,4 @@
- 
+
 """Master migration script for Jira to OpenProject migration.
 
 This script orchestrates the complete migration process with performance optimization.
@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 console = Console()
 
 # Helper: strictly detect any error condition in a component result
-def _component_has_errors(result: ComponentResult | None) -> bool:  # noqa: C901, PLR0911, PLR0912
+def _component_has_errors(result: ComponentResult | None) -> bool:  # noqa: C901, PLR0911
     """Return True if the component result contains any errors or failed items.
 
     This treats as error when:
@@ -64,7 +64,7 @@ def _component_has_errors(result: ComponentResult | None) -> bool:  # noqa: C901
         return True
     if not getattr(result, "success", False):
         return True
-    if getattr(result, "errors", None) and len(result.errors) > 0:  # noqa: SIM102
+    if getattr(result, "errors", None) and len(result.errors) > 0:
         return True
     if getattr(result, "error", None):
         return True
@@ -85,7 +85,7 @@ def _component_has_errors(result: ComponentResult | None) -> bool:  # noqa: C901
         return True
     if int(getattr(result, "failed_types", 0)) > 0:
         return True
-    return int(getattr(result, "failed_issues", 0)) > 0  # noqa: SIM103
+    return int(getattr(result, "failed_issues", 0)) > 0
 
 # Add StateManager class for tests
 class StateManager:
@@ -96,11 +96,11 @@ class StateManager:
 class Migration:
     """Main migration orchestrator class."""
 
-    def __init__(self, components: list[ComponentName] | None = None) -> None:
+    def __init__(self, components: list[ComponentName] | None = None) -> None:  # noqa: D107
         self.components = components or []
         self.performance_manager = MigrationPerformanceManager()
 
-    async def run(
+    async def run(  # noqa: FBT001, FBT002
         self,
         stop_on_error: bool = False,
         no_confirm: bool = False,
@@ -291,7 +291,7 @@ def create_performance_config(
     )
 
 
-async def run_migration(
+async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915, FBT001, FBT002
     components: list[ComponentName] | None = None,
     stop_on_error: bool = False,
     no_confirm: bool = False,

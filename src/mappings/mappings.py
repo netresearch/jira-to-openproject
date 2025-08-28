@@ -1,3 +1,5 @@
+"""Mappings module for loading and accessing persisted migration mappings."""
+
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +34,7 @@ class Mappings:
     OP_PROJECTS_FILE = Path("openproject_projects.json")
     TEMPO_COMPANIES_FILE = Path("tempo_companies.json")
 
-    def __init__(
+    def __init__(  # noqa: D107
         self,
         data_dir: Path,
     ) -> None:
