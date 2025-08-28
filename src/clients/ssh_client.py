@@ -304,7 +304,7 @@ class SSHClient:
                         stderr=result.stderr,
                     )
 
-                return result.stdout, result.stderr, result.returncode
+                return result.stdout, result.stderr, result.returncode  # noqa: TRY300
 
             except subprocess.TimeoutExpired as e:
                 logger.exception("SSH command timed out after %d seconds", timeout)
@@ -355,7 +355,7 @@ class SSHClient:
         local_path: Path | str,
         remote_path: Path | str,
         *,
-        retry: bool = True,  # noqa: FBT001, FBT002
+        retry: bool = True,
     ) -> None:
         """Copy a file from local to remote host using scp.
 
@@ -480,7 +480,7 @@ class SSHClient:
         remote_path: Path | str,
         local_path: Path | str,
         *,
-        retry: bool = True,  # noqa: FBT001, FBT002
+        retry: bool = True,
     ) -> Path:
         """Copy a file from remote host to local using scp.
 
@@ -547,7 +547,7 @@ class SSHClient:
                 # Verify the command was successful and file exists
                 if result.returncode == 0 and not local_path.exists():
                     msg = f"File download succeeded but file not found at {local_path}"
-                    raise FileNotFoundError(msg)
+                    raise FileNotFoundError(msg)  # noqa: TRY301
 
                 file_size = local_path.stat().st_size
                 logger.debug(
@@ -560,7 +560,7 @@ class SSHClient:
                 # Register the file with the file manager
                 self.file_manager.registry.register(local_path, "temp")
 
-                return local_path
+                return local_path  # noqa: TRY300
 
             except subprocess.CalledProcessError as e:
                 logger.exception("SCP command failed: %s", e.stderr)
@@ -668,7 +668,7 @@ class SSHClient:
         operation: Callable[..., Any],
         *args: object,
         **kwargs: object,
-    ) -> Any:
+    ) -> object:
         """Execute an operation with retry logic.
 
         Args:

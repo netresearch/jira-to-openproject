@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Configuration settings for error recovery system."""
 
 from dataclasses import dataclass

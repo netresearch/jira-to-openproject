@@ -796,7 +796,7 @@ class RailsConsoleClient:
         logger.error("Console not ready after %ss", timeout)
         return False
 
-    def _send_command_to_tmux(  # noqa: C901
+    def _send_command_to_tmux(  # noqa: C901, PLR0915
         self,
         command: str,
         timeout: int,

@@ -1,4 +1,5 @@
 """Configuration module for the Jira to OpenProject migration.
+
 Provides a centralized configuration interface using ConfigLoader.
 """
 
@@ -92,7 +93,7 @@ try:
                 try:
                     old_log.unlink()
                     pruned += 1
-                except Exception:
+                except OSError:
                     logger.debug("Failed to remove old per-run log: %s", old_log)
             if pruned:
                 logger.info(
@@ -100,7 +101,7 @@ try:
                     retention_count,
                     pruned,
                 )
-except Exception:
+except OSError:
     # Do not fail initialization if per-run handler cannot be attached
     logger.exception("Failed to attach per-run log handler")
 
@@ -167,13 +168,13 @@ def get_mappings() -> "Mappings":
         MappingsInitializationError: If mappings cannot be initialized
 
     """
-    global _mappings
+    global _mappings  # noqa: PLW0603
     if _mappings is None:
         with _mappings_lock:  # Thread safety per expert feedback
             if _mappings is None:  # Double-check pattern
                 try:
                     # Optimistic execution: attempt to create mappings directly
-                    from src.mappings.mappings import Mappings
+                    from src.mappings.mappings import Mappings  # noqa: PLC0415
 
                     _mappings = Mappings(data_dir=get_path("data"))
                     logger.debug("Successfully initialized global mappings instance")
@@ -181,9 +182,8 @@ def get_mappings() -> "Mappings":
                     # Only perform diagnostics if initialization fails
                     data_dir = get_path("data")
                     logger.exception(
-                        "Failed to initialize mappings with data_dir=%s: %s",
+                        "Failed to initialize mappings with data_dir=%s",
                         data_dir,
-                        e,
                     )
                     msg = f"Cannot initialize mappings: {e}"
                     raise MappingsInitializationError(
@@ -200,7 +200,7 @@ def reset_mappings() -> None:
 
     Note: This function is primarily intended for test usage.
     """
-    global _mappings
+    global _mappings  # noqa: PLW0603
     with _mappings_lock:
         _mappings = None
         logger.debug("Reset mappings cache for testing")
@@ -214,11 +214,11 @@ class _MappingsProxy:
     maintaining proper lazy initialization and exception handling.
     """
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         """Delegate all attribute access to the actual Mappings instance."""
         return getattr(get_mappings(), name)
 
-    def __setattr__(self, name: str, value: Any) -> None:
+    def __setattr__(self, name: str, value: object) -> None:
         """Delegate all attribute setting to the actual Mappings instance."""
         setattr(get_mappings(), name, value)
 
@@ -233,7 +233,7 @@ def get_config() -> Config:
     return _config_loader.get_config()
 
 
-def get_value(section: SectionName, key: str, default: Any = None) -> Any:
+def get_value(section: SectionName, key: str, default: object | None = None) -> object:
     """Get a specific configuration value."""
     return _config_loader.get_value(section, key, default)
 
@@ -247,24 +247,7 @@ def get_path(path_type: DirType) -> Path:
     return var_dirs[path_type]
 
 
-def update_from_cli_args(args: Any) -> None:
-    """Apply CLI arguments into runtime config.
-
-    Currently supports --jira-project-filter to limit projects.
-    """
-    try:
-        # Reuse existing loader to set values so downstream views pick them up
-        if hasattr(args, "jira_project_filter") and args.jira_project_filter:
-            keys_raw = args.jira_project_filter
-            keys = [k.strip() for k in str(keys_raw).split(",") if k.strip()]
-            if keys:
-                _config_loader.set_value("jira", "projects", keys)
-                logger.info("Applied CLI Jira project filter: %s", keys)
-        if hasattr(args, "disable_wpm_shim") and args.disable_wpm_shim:
-            _config_loader.set_value("migration", "disable_wpm_shim", True)
-            logger.info("Applied CLI: disable WorkPackageMigration runtime shim")
-    except Exception as e:
-        logger.warning("Failed applying CLI args to config: %s", e)
+# Removed duplicate `update_from_cli_args` (see below) to avoid F811
 
 
 def ensure_subdir(parent_dir_type: DirType, subdir_name: str | None = None) -> Path:
@@ -331,7 +314,7 @@ def validate_config() -> bool:
     return True
 
 
-def update_from_cli_args(args: Any) -> None:
+def update_from_cli_args(args: object) -> None:
     """Update migration configuration from CLI arguments.
 
     Also applies select Jira/OpenProject overrides that must be available
@@ -350,8 +333,8 @@ def update_from_cli_args(args: Any) -> None:
                 _config_loader.set_value("jira", "projects", keys)
                 jira_config["projects"] = keys
                 logger.info("Applied CLI Jira project filter: %s", keys)
-        except Exception as e:
-            logger.warning("Failed applying CLI jira project filter: %s", e)
+        except Exception:
+            logger.warning("Failed applying CLI jira project filter")
 
     # Optional: disable WorkPackageMigration shim
     if hasattr(args, "disable_wpm_shim") and args.disable_wpm_shim:
@@ -359,8 +342,8 @@ def update_from_cli_args(args: Any) -> None:
             _config_loader.set_value("migration", "disable_wpm_shim", True)
             migration_config["disable_wpm_shim"] = True
             logger.info("Applied CLI: disable WorkPackageMigration runtime shim")
-        except Exception as e:
-            logger.warning("Failed applying CLI disable_wpm_shim: %s", e)
+        except Exception:
+            logger.warning("Failed applying CLI disable_wpm_shim")
     if hasattr(args, "dry_run") and args.dry_run:
         migration_config["dry_run"] = True
         logger.debug("Setting dry_run=True from CLI arguments")
