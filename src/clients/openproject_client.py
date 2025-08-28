@@ -1764,12 +1764,6 @@ class OpenProjectClient:
 
         try:
             result = self.execute_json_query(command)
-            if not isinstance(result, dict):
-                msg = (
-                    f"Failed to update {model}: Invalid response from OpenProject "
-                    f"(type={type(result)}, value={result})"
-                )
-                raise QueryExecutionError(msg)
         except RubyError as e:
             if "Record not found" in str(e):
                 msg = f"{model} with ID {record_id} not found"
@@ -1781,6 +1775,12 @@ class OpenProjectClient:
             msg = f"Failed to update {model}."
             raise QueryExecutionError(msg) from e
         else:
+            if not isinstance(result, dict):
+                msg = (
+                    f"Failed to update {model}: Invalid response from OpenProject "
+                    f"(type={type(result)}, value={result})"
+                )
+                raise QueryExecutionError(msg)
             return result
 
     def delete_record(self, model: str, record_id: int) -> None:
@@ -1966,7 +1966,13 @@ class OpenProjectClient:
                 "u.as_json.merge({'mail' => u.mail, 'jira_user_key' => v}) end"
             )
             json_data = self.execute_large_query_to_json_file(ruby_query, container_file=file_path, timeout=60)
-
+        except QueryExecutionError:
+            # Propagate specific high-signal errors (tests assert exact messages)
+            raise
+        except Exception as e:
+            msg = "Failed to retrieve users."
+            raise QueryExecutionError(msg) from e
+        else:
             # Validate that we got a list
             if not isinstance(json_data, list):
                 logger.error(
@@ -1977,16 +1983,14 @@ class OpenProjectClient:
                 msg = (
                     f"Invalid users data format - expected list, got {type(json_data)}"
                 )
-                raise QueryExecutionError(
-                    msg,
-                )
+                raise QueryExecutionError(msg)
 
             # Update cache
             self._users_cache = json_data or []
             self._users_cache_time = current_time
 
             logger.info("Retrieved %d users from OpenProject", len(self._users_cache))
-            return self._users_cache  # noqa: TRY300
+            return self._users_cache
 
         except QueryExecutionError:
             # Propagate specific high-signal errors (tests assert exact messages)
@@ -2421,10 +2425,10 @@ class OpenProjectClient:
                 )
                 return parsed if isinstance(parsed, list) else []
             finally:
-                try:
-                    self.ssh_client.execute_command(f"docker exec {self.container_name} rm -f {file_path}")
-                except Exception:
-                    pass
+                with suppress(Exception):
+                    self.ssh_client.execute_command(
+                        f"docker exec {self.container_name} rm -f {file_path}"
+                    )
         except Exception as e:
             msg = "Failed to get work package types."
             raise QueryExecutionError(msg) from e
@@ -2480,15 +2484,19 @@ class OpenProjectClient:
                     runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
+                    top_selector_line = (
+                        "projects = Project.where(parent_id: nil).select("
+                        ":id, :name, :identifier, :description, :status_code"
+                        ").as_json\n"
+                    )
+                    all_selector_line = (
+                        "projects = Project.all.select("
+                        ":id, :name, :identifier, :description, :status_code"
+                        ").as_json\n"
+                    )
                     ruby_runner = (
                         "require 'json'\n"
-                        + (
-                            "projects = Project.where(parent_id: nil).select(:id, :name, :identifier, :description, :status_code).as_json\n"
-                            if top_level_only
-                            else (
-                                "projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n"
-                            )
-                        )
+                        + (top_selector_line if top_level_only else all_selector_line)
                         + f"File.write('{file_path}', JSON.pretty_generate(projects))\n"
                     )
                     with local_tmp.open("w", encoding="utf-8") as f:
@@ -2506,48 +2514,42 @@ class OpenProjectClient:
                     raise
 
             # Read the JSON directly from the Docker container file system via SSH
+            # Use SSH to read the file from the Docker container
+            ssh_command = f"docker exec {self.container_name} cat {file_path}"
             try:
-                # Use SSH to read the file from the Docker container
-                ssh_command = f"docker exec {self.container_name} cat {file_path}"
-                stdout, stderr, returncode = self.ssh_client.execute_command(
-                    ssh_command,
+                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+            except Exception as e:  # noqa: BLE001
+                msg = f"SSH command failed: {e}"
+                raise QueryExecutionError(msg) from e
+            if returncode != 0:
+                logger.error(
+                    "Failed to read file from container, stderr: %s",
+                    stderr,
                 )
+                msg = f"SSH command failed with code {returncode}: {stderr}"
+                raise QueryExecutionError(msg)  # noqa: TRY301
 
-                if returncode != 0:
-                    logger.error(
-                        "Failed to read file from container, stderr: %s",
-                        stderr,
-                    )
-                    msg = f"SSH command failed with code {returncode}: {stderr}"
-                    raise QueryExecutionError(
-                        msg,
-                    )
+            file_content = stdout.strip()
+            logger.debug(
+                "Successfully read projects file from container, content length: %d",
+                len(file_content),
+            )
 
-                file_content = stdout.strip()
-                logger.debug(
-                    "Successfully read projects file from container, content length: %d",
-                    len(file_content),
-                )
-
-                # Parse the JSON content
+            # Parse the JSON content
+            try:
                 result = json.loads(file_content)
+            except json.JSONDecodeError as e:
+                logger.exception("Failed to read projects from container file %s", file_path)
+                msg = f"Failed to read projects from container file: {e}"
+                raise QueryExecutionError(msg) from e
+            else:
                 logger.info(
                     "Successfully loaded %d projects from container file",
                     len(result) if isinstance(result, list) else 0,
                 )
-            except (json.JSONDecodeError, Exception) as e:
-                logger.exception(
-                    "Failed to read projects from container file %s: %s",
-                    file_path,
-                    e,
-                )
-                msg = f"Failed to read projects from container file: {e}"
-                raise QueryExecutionError(
-                    msg,
-                )
 
             # The execute_query_to_json_file method should return the parsed JSON
-            if not isinstance(result, list):
+            if not isinstance(result, list):  # noqa: TRY301
                 logger.error(
                     "Expected list of projects, got %s: %s",
                     type(result),
@@ -2556,9 +2558,7 @@ class OpenProjectClient:
                 msg = (
                     f"Invalid projects data format - expected list, got {type(result)}"
                 )
-                raise QueryExecutionError(
-                    msg,
-                )
+                raise QueryExecutionError(msg)
 
             # Validate and clean project data
             validated_projects = []
@@ -2592,10 +2592,10 @@ class OpenProjectClient:
                 "Retrieved %d projects using file-based method",
                 len(validated_projects),
             )
-            return validated_projects
+            return validated_projects  # noqa: TRY300
 
-        except Exception as e:
-            logger.exception("Failed to get projects using file-based method: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Failed to get projects using file-based method")
             msg = f"Failed to retrieve projects: {e}"
             raise QueryExecutionError(msg) from e
 
@@ -2617,15 +2617,13 @@ class OpenProjectClient:
             project = self.execute_json_query(
                 f"Project.find_by(identifier: '{identifier}')",
             )
-            if project is None:
-                msg = f"Project with identifier '{identifier}' not found"
-                raise RecordNotFoundError(msg)
-            return project
-        except RecordNotFoundError:
-            raise  # Re-raise RecordNotFoundError
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             msg = "Failed to get project."
             raise QueryExecutionError(msg) from e
+        if project is None:
+            msg = f"Project with identifier '{identifier}' not found"
+            raise RecordNotFoundError(msg)
+        return project
 
     def delete_all_work_packages(self) -> int:
         """Delete all work packages in bulk.
@@ -2750,7 +2748,7 @@ class OpenProjectClient:
         try:
             result = self.execute_large_query_to_json_file(
                 query,
-                container_file="/tmp/j2o_time_entry_activities.json",
+                container_file="/tmp/j2o_time_entry_activities.json",  # noqa: S108
                 timeout=60,
             )
             return result if isinstance(result, list) else []
@@ -2758,7 +2756,7 @@ class OpenProjectClient:
             msg = f"Failed to retrieve time entry activities: {e}"
             raise QueryExecutionError(msg) from e
 
-    def create_time_entry(
+    def create_time_entry(  # noqa: C901
         self,
         time_entry_data: dict[str, Any],
     ) -> dict[str, Any] | None:
@@ -2782,8 +2780,6 @@ class OpenProjectClient:
         work_package_id = None
         if work_package_href:
             # Extract ID from href like "/api/v3/work_packages/123"
-            import re
-
             match = re.search(r"/work_packages/(\d+)", work_package_href)
             if match:
                 work_package_id = int(match.group(1))
