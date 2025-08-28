@@ -106,7 +106,7 @@ class AccountMigration(BaseMigration):
         else:
             self.logger.info("No valid custom field ID found, will create a new one")
 
-    def extract_tempo_accounts(self, force: bool = False) -> list:
+    def extract_tempo_accounts(self, *, force: bool = False) -> list:  # noqa: FBT001, FBT002
         """Extract Tempo accounts using the JiraClient.
 
         Args:
@@ -143,7 +143,7 @@ class AccountMigration(BaseMigration):
                 return accounts
             error_msg = "Failed to retrieve Tempo accounts using JiraClient"
             self.logger.error(error_msg)
-            raise MigrationError(error_msg)
+            raise MigrationError(error_msg)  # noqa: TRY301
 
         except (JiraAuthenticationError, JiraApiError) as e:
             # Make 401/authorization failures fatal to avoid silent data loss
@@ -151,7 +151,7 @@ class AccountMigration(BaseMigration):
                 "Tempo API unauthorized or unavailable (401/403). Blocking migration: "
                 f"{e}"
             )
-            self.logger.error(msg)
+            self.logger.exception(msg)  # noqa: TRY400
             raise MigrationError(msg) from e
         except Exception as e:
             error_msg = f"Failed to extract Tempo accounts: {e!s}"

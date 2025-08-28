@@ -1537,10 +1537,10 @@ def setup_tmux_session() -> bool:
         # Check if tmux is installed
         import shutil as _shutil  # noqa: PLC0415
         tmux_bin = _shutil.which("tmux") or "tmux"
-        subprocess.run([tmux_bin, "-V"], check=True, capture_output=True)  # noqa: S607
+        subprocess.run([tmux_bin, "-V"], check=True, capture_output=True)
 
         # Check if session already exists
-        result = subprocess.run(  # noqa: S603, S607
+        result = subprocess.run(  # noqa: S603
             [tmux_bin, "has-session", "-t", session_name],
             check=False,
             capture_output=True,
@@ -1553,7 +1553,7 @@ def setup_tmux_session() -> bool:
             return True
 
         # Create a new session
-        subprocess.run([tmux_bin, "new-session", "-d", "-s", session_name], check=True)  # noqa: S607
+        subprocess.run([tmux_bin, "new-session", "-d", "-s", session_name], check=True)
 
         config.logger.success("Created tmux session '%s'", session_name)
         config.logger.info("To attach to this session, run:")
