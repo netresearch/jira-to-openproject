@@ -788,7 +788,7 @@ class BaseMigration:
     def should_skip_migration(
         self,
         entity_type: str,
-        cache_func: "Callable[[str], list[dict[str, Any]]] | None" = None,
+        cache_func: Callable[[str], list[dict[str, Any]]] | None = None,
     ) -> tuple[bool, ChangeReport | None]:
         """Check if migration should be skipped based on change detection.
 
@@ -1058,9 +1058,9 @@ class BaseMigration:
                     errors=result.errors,
                 )
 
-            return result
+            return result  # noqa: TRY300
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.exception("Error in state management workflow: %s", e)
 
             # Complete migration record with error if it was started
@@ -1072,7 +1072,7 @@ class BaseMigration:
                         error_count=1,
                         errors=[f"State management workflow error: {e}"],
                     )
-                except Exception as cleanup_error:
+                except Exception as cleanup_error:  # noqa: BLE001
                     self.logger.warning(
                         "Failed to complete migration record during error cleanup: %s",
                         cleanup_error,
