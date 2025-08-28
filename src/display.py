@@ -7,10 +7,10 @@ import logging
 import time
 from collections import deque
 from collections.abc import Iterable
-from pathlib import Path
-from typing import Any, Protocol, TypeVar, cast
 from contextlib import suppress
+from pathlib import Path
 from types import TracebackType
+from typing import Protocol, TypeVar, cast
 
 from rich.console import Console
 from rich.live import Live
@@ -124,7 +124,7 @@ def configure_logging(
         if requested_level < current_level:
             current_root.setLevel(requested_level)
             for h in current_root.handlers:
-                with suppress(Exception):  # noqa: S110
+                with suppress(Exception):
                     h.setLevel(requested_level)
             _LOG_LEVEL_NUM = requested_level
         return cast("ExtendedLogger", _LOGGER)

@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
+ 
 """Master migration script for Jira to OpenProject migration.
+
 This script orchestrates the complete migration process with performance optimization.
 """
 
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
 console = Console()
 
 # Helper: strictly detect any error condition in a component result
-def _component_has_errors(result: ComponentResult | None) -> bool:
+def _component_has_errors(result: ComponentResult | None) -> bool:  # noqa: C901, PLR0911, PLR0912
     """Return True if the component result contains any errors or failed items.
 
     This treats as error when:
@@ -63,9 +64,8 @@ def _component_has_errors(result: ComponentResult | None) -> bool:
         return True
     if not getattr(result, "success", False):
         return True
-    if getattr(result, "errors", None):
-        if len(result.errors) > 0:
-            return True
+    if getattr(result, "errors", None) and len(result.errors) > 0:  # noqa: SIM102
+        return True
     if getattr(result, "error", None):
         return True
     # Check details
@@ -85,9 +85,7 @@ def _component_has_errors(result: ComponentResult | None) -> bool:
         return True
     if int(getattr(result, "failed_types", 0)) > 0:
         return True
-    if int(getattr(result, "failed_issues", 0)) > 0:
-        return True
-    return False
+    return int(getattr(result, "failed_issues", 0)) > 0  # noqa: SIM103
 
 # Add StateManager class for tests
 class StateManager:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ 
 """Main entry point for Jira to OpenProject migration tool.
 
 This script provides a unified interface for running both migration
@@ -26,7 +26,7 @@ def validate_database_configuration() -> None:
 
     """
     try:
-        from src.config_loader import ConfigLoader
+        from src.config_loader import ConfigLoader  # noqa: PLC0415
 
         # ConfigLoader initialization will raise RuntimeError if POSTGRES_PASSWORD is missing
         # or empty, so we don't need additional validation here
@@ -40,7 +40,7 @@ def validate_database_configuration() -> None:
             "or as a Docker secret at /run/secrets/postgres_password",
         )
         sys.exit(1)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Unexpected error validating database configuration: %s", e)
         sys.exit(1)
 
@@ -139,7 +139,7 @@ def main() -> None:
         update_from_cli_args(args)
 
         # Lazily import migration helpers now that config is updated
-        from src.migration import restore_backup, run_migration, setup_tmux_session
+        from src.migration import restore_backup, run_migration, setup_tmux_session  # noqa: PLC0415
 
         # Check if we're restoring from a backup
         if args.restore:
@@ -155,7 +155,7 @@ def main() -> None:
             setup_tmux_session()
 
         # Run the migration with new options
-        import asyncio
+        import asyncio  # noqa: PLC0415
 
         result = asyncio.run(
             run_migration(
@@ -196,6 +196,6 @@ if __name__ == "__main__":
     except (ConnectionError, TimeoutError) as e:
         logger.error("Network connectivity error: %s", e)
         sys.exit(1)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.exception("Unexpected error occurred during migration: %s", e)
         sys.exit(1)

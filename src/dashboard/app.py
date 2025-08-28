@@ -667,7 +667,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Pause current migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+            raise HTTPException(status_code=400, detail="No migration is running")  # noqa: TRY301
 
         if migration_state["pause_time"]:
             raise HTTPException(status_code=400, detail="Migration is already paused")  # noqa: TRY301
