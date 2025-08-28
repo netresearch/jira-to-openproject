@@ -1026,7 +1026,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 if factory is None:
                     config.logger.warning("Unknown component '%s' - skipping", component_name)
                     continue
-                component: "BaseMigration" = factory()
+                component: BaseMigration = factory()
 
                 # Header for this component in logs
                 print_component_header(component_name)

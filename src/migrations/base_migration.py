@@ -32,8 +32,6 @@ class EntityTypeRegistry:
     fail-fast behavior when entity types cannot be resolved.
     """
 
-    from typing import ClassVar
-
     _registry: ClassVar[dict[type[BaseMigration], list[str]]] = {}
     _type_to_class_map: ClassVar[dict[str, type[BaseMigration]]] = {}
 
@@ -65,7 +63,7 @@ class EntityTypeRegistry:
 
         if not issubclass(migration_class, BaseMigration):
             msg = f"Class {migration_class.__name__} must inherit from BaseMigration"
-            raise ValueError(
+            raise TypeError(
                 msg,
             )
 
@@ -256,20 +254,20 @@ class BaseMigration:
         else:
             try:
                 if config.migration_config.get("TEST_MODE", False) or config.migration_config.get("disable_external_connect", False):
-                    from unittest.mock import MagicMock as _MM
-                    self.jira_client = _MM(spec=JiraClient)
+                    from unittest.mock import MagicMock as MagicMock  # noqa: PLC0415, N814
+                    self.jira_client = MagicMock(spec=JiraClient)
                 else:
                     self.jira_client = JiraClient()
-            except Exception:
-                from unittest.mock import MagicMock as _MM
-                self.jira_client = _MM(spec=JiraClient)
+            except Exception:  # noqa: BLE001
+                from unittest.mock import MagicMock as MagicMock  # noqa: PLC0415, N814
+                self.jira_client = MagicMock(spec=JiraClient)
         # Lazily create OpenProjectClient; fall back to None if config is incomplete
         if op_client is not None:
             self.op_client = op_client
         else:
             try:
                 self.op_client = OpenProjectClient()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 # During tests or when OpenProject config is not set up, allow proceeding
                 # without an OpenProjectClient. Consumers must guard uses appropriately.
                 self.logger = configure_logging("INFO", None)
@@ -284,13 +282,13 @@ class BaseMigration:
         self.data_preservation_manager = data_preservation_manager
         if self.data_preservation_manager is None:
             try:
-                from src.utils.advanced_config_manager import ConfigurationManager
+                from src.utils.advanced_config_manager import ConfigurationManager  # noqa: PLC0415
 
                 cfg_manager = ConfigurationManager()
                 self.data_preservation_manager = DataPreservationManager(
                     config_manager=cfg_manager,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self.logger = configure_logging("INFO", None)
                 self.logger.debug(
                     "DataPreservationManager unavailable; proceeding without it: %s",
@@ -326,12 +324,12 @@ class BaseMigration:
         # Do not override an already initialized data_preservation_manager
         if self.data_preservation_manager is None:
             try:
-                from src.utils.advanced_config_manager import ConfigurationManager
+                from src.utils.advanced_config_manager import ConfigurationManager  # noqa: PLC0415
                 cfg_manager = ConfigurationManager()
                 self.data_preservation_manager = DataPreservationManager(
                     config_manager=cfg_manager,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 # Leave as None if configuration manager is unavailable in tests
                 self.data_preservation_manager = None
 
