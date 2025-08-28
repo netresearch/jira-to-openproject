@@ -3332,7 +3332,7 @@ class OpenProjectClient:
             wp = WorkPackage.find(update['id'])
             update.each do |key, value|
               next if key == 'id'
-              wp.send("#{" + "key" + "}=", value) if wp.respond_to?("#{" + "key" + "}=")
+              wp.send("#{{key}}=", value) if wp.respond_to?("#{{key}}=")
             end
             wp.save!
             updated_count += 1
