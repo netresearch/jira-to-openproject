@@ -16,6 +16,7 @@ from src import config
 from src.clients.docker_client import DockerClient
 from src.clients.exceptions import (
     ClientConnectionError,
+    ConnectionError,
     JsonParseError,
     QueryExecutionError,
     RecordNotFoundError,

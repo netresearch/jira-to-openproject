@@ -75,6 +75,8 @@ class OpenProjectConfig(TypedDict, total=False):
     container_name: NotRequired[str]
     project_path: NotRequired[str]
     api_key: NotRequired[str]
+    api_token: NotRequired[str]
+    tmux_session_name: NotRequired[str]
 
 
 class JiraConfig(TypedDict):
@@ -85,6 +87,7 @@ class JiraConfig(TypedDict):
     api_token: str
     verify_ssl: bool
     scriptrunner: dict[str, Any]
+    projects: NotRequired[list[str]]
 
 
 type LogLevel = Literal[
@@ -110,6 +113,8 @@ class MigrationConfig(TypedDict):
     no_backup: bool
     stop_on_error: bool
     no_confirm: bool
+    disable_wpm_shim: NotRequired[bool]
+    log_retention_count: NotRequired[int]
 
 
 class Config(TypedDict):

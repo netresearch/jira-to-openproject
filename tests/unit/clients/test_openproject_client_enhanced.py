@@ -98,9 +98,10 @@ class TestOpenProjectClientInitialization:
         MockSSHClient.assert_called_once()
         MockDockerClient.assert_called_once()
         MockRailsClient.assert_called_once()
-        assert isinstance(client.ssh_client, MockSSHClient)
-        assert isinstance(client.docker_client, MockDockerClient)
-        assert isinstance(client.rails_client, MockRailsClient)
+        # With patched constructors, identity with their return values is the robust assertion
+        assert client.ssh_client is MockSSHClient.return_value
+        assert client.docker_client is MockDockerClient.return_value
+        assert client.rails_client is MockRailsClient.return_value
 
     def test_init_raises_value_error_if_config_missing(self, mock_config) -> None:
         """Verify that initialization fails if critical configuration is missing.

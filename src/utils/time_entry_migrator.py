@@ -689,7 +689,7 @@ class TimeEntryMigrator:
     def _save_extracted_work_logs(self) -> None:
         try:
             path = self.data_dir / "jira_work_logs.json"
-            with path.open("w", encoding="utf-8") as f:
+            with open(str(path), "w", encoding="utf-8") as f:
                 json.dump(self.extracted_work_logs, f, indent=2)
         except (OSError, TypeError, ValueError) as e:
             self.logger.warning("Failed to save Jira work logs: %s", e)
@@ -697,7 +697,7 @@ class TimeEntryMigrator:
     def _save_extracted_tempo_entries(self) -> None:
         try:
             path = self.data_dir / "tempo_time_entries.json"
-            with path.open("w", encoding="utf-8") as f:
+            with open(str(path), "w", encoding="utf-8") as f:
                 json.dump(self.extracted_tempo_entries, f, indent=2)
         except (OSError, TypeError, ValueError) as e:
             self.logger.warning("Failed to save Tempo time entries: %s", e)
@@ -740,7 +740,7 @@ class TimeEntryMigrator:
             }
 
             report_file = self.data_dir / "time_entry_migration_report.json"
-            with report_file.open("w", encoding="utf-8") as f:
+            with open(str(report_file), "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2, ensure_ascii=False)
 
             self.logger.info("Generated migration report: %s", report_file)

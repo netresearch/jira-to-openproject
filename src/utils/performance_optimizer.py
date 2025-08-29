@@ -47,7 +47,11 @@ class CacheEntry:
 
     def is_expired(self) -> bool:
         """Check if cache entry has expired."""
-        return datetime.now(tz=UTC) > self.timestamp + timedelta(seconds=self.ttl_seconds)
+        ts = self.timestamp
+        # Normalize naive timestamps to UTC for safe comparison
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        return datetime.now(tz=UTC) > ts + timedelta(seconds=self.ttl_seconds)
 
     def touch(self) -> None:
         """Update access tracking."""
@@ -319,8 +323,30 @@ class AdaptiveRateLimiter:
             response_time = time.time() - start_time
             self._record_response(response_time, error_occurred=error_occurred)
 
-    def _record_response(self, response_time: float, *, error_occurred: bool) -> None:
-        """Record response time and adjust rate accordingly."""
+    def _record_response(
+        self,
+        response_time: float,
+        error_or_status: bool | int | None = None,
+        *,
+        error_occurred: bool | None = None,
+    ) -> None:
+        """Record response time and adjust rate accordingly.
+
+        Accepts either:
+        - error_occurred as a keyword-only bool, or
+        - a positional boolean, or
+        - a positional HTTP status code (int), where >=400 counts as error.
+        """
+        # Resolve error flag precedence
+        if error_occurred is None:
+            if isinstance(error_or_status, bool):
+                error_flag = error_or_status
+            elif isinstance(error_or_status, int):
+                error_flag = error_or_status >= 400
+            else:
+                error_flag = False
+        else:
+            error_flag = error_occurred
         with self._lock:
             self._recent_response_times.append(response_time)
 
@@ -329,7 +355,7 @@ class AdaptiveRateLimiter:
                 self._recent_response_times = self._recent_response_times[-RECENT_TIMES_KEEP:]
 
             # Adjust rate based on performance
-            if error_occurred:
+            if error_flag:
                 # Slow down on errors
                 self.current_rate = max(
                     self.min_rate,

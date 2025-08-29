@@ -50,11 +50,13 @@ def apply_required_defaults(
     except Exception:
         default_priority_id = None
 
-    default_author_id = None
+    # Author can be provided as int or str (environment/CLI); normalize but preserve type-safety
+    default_author_id: int | str | None = None
     if fallback_admin_user_id:
         try:
             default_author_id = int(fallback_admin_user_id)
         except Exception:
+            # If int conversion fails (e.g., it's a username string), use as-is
             default_author_id = fallback_admin_user_id
     if not default_author_id:
         try:

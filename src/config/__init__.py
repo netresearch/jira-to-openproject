@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.config_loader import ConfigLoader
 from src.display import configure_logging
-from src.type_definitions import Config, DirType, LogLevel, SectionName
+from src.type_definitions import Config, ConfigValue, DirType, LogLevel, SectionName
 
 if TYPE_CHECKING:
     from src.mappings.mappings import Mappings
@@ -62,7 +62,7 @@ for dir_path in var_dirs.values():
         created_dirs.append(f"Using existing directory: {dir_path}")
 
 # Set up logging with rich
-LOG_LEVEL: LogLevel = migration_config.get("log_level", "DEBUG")
+LOG_LEVEL: LogLevel = migration_config.get("log_level", "DEBUG")  # type: ignore[assignment]
 
 # Always keep a stable, aggregate log as before
 latest_log_file = var_dirs["logs"] / "migration.log"
@@ -233,7 +233,9 @@ def get_config() -> Config:
     return _config_loader.get_config()
 
 
-def get_value(section: SectionName, key: str, default: object | None = None) -> object:
+def get_value(
+    section: SectionName, key: str, default: ConfigValue | None = None,
+) -> ConfigValue | None:
     """Get a specific configuration value."""
     return _config_loader.get_value(section, key, default)
 
@@ -284,9 +286,12 @@ def validate_config() -> bool:
         ("jira", ["url", "username", "api_token"]),
         ("openproject", ["url"]),  # Allow either api_token or api_key for OpenProject
     ]:
+        # Use a generic mapping type to avoid inconsistent TypedDict union issues
+        from typing import Mapping, Any as _Any  # local import to avoid top pollution
+
         match section:
             case "jira":
-                config_section = jira_config
+                config_section: Mapping[str, _Any] = jira_config
                 prefix = "J2O_JIRA_"
             case "openproject":
                 config_section = openproject_config

@@ -44,3 +44,8 @@ class RateLimitError(ClientError):
         """Initialize a rate limit error with optional retry-after seconds."""
         super().__init__(message)
         self.retry_after = retry_after
+
+
+# Backwards-compatible alias expected by some tests
+class ConnectionError(ClientConnectionError):
+    """Alias for client connection errors for compatibility with tests."""

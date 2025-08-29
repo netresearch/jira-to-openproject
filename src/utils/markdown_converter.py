@@ -397,9 +397,9 @@ class MarkdownConverter:
 
         # Info panels
         def replace_info(match: re.Match[str]) -> str:
-            title = parse_title(match.group(1)) or "Info"
+            title = parse_title(match.group(1)) or "Important Info"
             content = match.group(2).strip()
-            return f"**Info: {title}**\n\n{content}"
+            return f"**ℹ️ {title}**\n\n{content}"
 
         text = self.info_pattern.sub(replace_info, text)
 

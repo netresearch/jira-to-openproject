@@ -102,9 +102,11 @@ class TestDocumentationStructure:
             assert section in content, f"Workflow Guide should contain: {section}"
 
     def test_no_duplicate_documentation_files(self, project_root: Path) -> None:
-        """Test that old duplicate documentation files have been removed."""
+        """Test that old duplicate documentation files have been removed.
+
+        Note: `AGENTS.md` is intentionally present as the canonical AI agent rules file.
+        """
         removed_files = [
-            "AGENTS.md",
             "CLAUDE.md",
             "docs/client_architecture.md",
             "docs/TESTING_GUIDE.md",
@@ -118,6 +120,13 @@ class TestDocumentationStructure:
             assert (
                 not file_path.exists()
             ), f"Duplicate file should be removed: {removed_file}"
+
+    def test_agents_doc_exists(self, project_root: Path) -> None:
+        """Ensure AGENTS.md exists as the AI coding agent rules file."""
+        agents_path = project_root / "AGENTS.md"
+        assert agents_path.exists(), "AGENTS.md must exist at repo root"
+        content = agents_path.read_text()
+        assert len(content) > 100, "AGENTS.md should have substantial content"
 
     def test_readme_links_to_documentation(self, project_root: Path) -> None:
         """Test that README.md properly links to consolidated documentation."""

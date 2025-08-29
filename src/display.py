@@ -183,9 +183,12 @@ def configure_logging(  # noqa: C901, PLR0912, PLR0915
         **kwargs: object,
     ) -> None:
         if self.isEnabledFor(25):
-            kwargs["extra"] = kwargs.get("extra", {})
-            kwargs["extra"]["markup"] = True
-            self._log(25, f"[success]{message}[/]", args, stacklevel=2, **kwargs)
+            existing_extra = kwargs.get("extra")
+            extra_mapping: dict[str, object] = {}
+            if isinstance(existing_extra, dict):
+                extra_mapping.update(existing_extra)  # type: ignore[arg-type]
+            extra_mapping["markup"] = True
+            self._log(25, f"[success]{message}[/]", args, extra=extra_mapping, stacklevel=2)
 
     # Define a notice method for the logger (less prominent than INFO)
     def notice(
@@ -195,15 +198,19 @@ def configure_logging(  # noqa: C901, PLR0912, PLR0915
         **kwargs: object,
     ) -> None:
         if self.isEnabledFor(21):
-            kwargs["extra"] = kwargs.get("extra", {})
-            kwargs["extra"]["markup"] = True
-            self._log(21, message, args, stacklevel=2, **kwargs)
+            existing_extra = kwargs.get("extra")
+            extra_mapping: dict[str, object] = {}
+            if isinstance(existing_extra, dict):
+                extra_mapping.update(existing_extra)  # type: ignore[arg-type]
+            extra_mapping["markup"] = True
+            self._log(21, message, args, extra=extra_mapping, stacklevel=2)
 
     # Add the success method to the logger class
-    logging.Logger.success = success
+    # Attach dynamic methods; acceptable for runtime extension in app code
+    logging.Logger.success = success  # type: ignore[attr-defined,assignment]
 
     # Add the notice method to the logger class
-    logging.Logger.notice = notice
+    logging.Logger.notice = notice  # type: ignore[attr-defined,assignment]
 
     logger.info("Rich logging configured")
     if log_file:

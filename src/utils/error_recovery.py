@@ -19,7 +19,7 @@ import structlog
 from pybreaker import CircuitBreaker, CircuitBreakerError
 from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import DeclarativeMeta, sessionmaker
 from tenacity import (
     after_log,
     before_sleep_log,
@@ -51,11 +51,11 @@ structlog.configure(
 logger = structlog.get_logger()
 
 # Type variables
-T = TypeVar("T")
+R = TypeVar("R")
 F = TypeVar("F", bound=Callable[..., Any])
 
-# SQLAlchemy base and models
-Base = declarative_base()
+# SQLAlchemy base (annotated for mypy)
+Base: DeclarativeMeta = declarative_base()
 
 
 class MigrationCheckpoint(Base):
@@ -239,14 +239,14 @@ class CircuitBreakerManager:
     def call_with_breaker(
         self,
         service_name: str,
-        func: F,
+        func: Callable[..., R],
         *args: object,
         **kwargs: object,
-    ) -> T:
+    ) -> R:
         """Call a function with circuit breaker protection."""
         breaker = self.get_breaker(service_name)
         try:
-            result = breaker(func)(*args, **kwargs)
+            result: R = breaker(func)(*args, **kwargs)
         except CircuitBreakerError as e:
             logger.exception("circuit_breaker_open", service=service_name, error=str(e))
             raise
@@ -340,7 +340,7 @@ class ErrorRecoverySystem:
         try:
             # Execute with retry and circuit breaker
             service_name = f"{checkpoint_type}_service"
-            result = self.circuit_breaker_manager.call_with_breaker(
+            result: object = self.circuit_breaker_manager.call_with_breaker(
                 service_name,
                 func,
                 *args,

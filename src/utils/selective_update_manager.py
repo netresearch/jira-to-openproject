@@ -409,7 +409,7 @@ class SelectiveUpdateManager:
                 type_result = self._execute_operations_for_type(
                     entity_type,
                     operations,
-                    dry_run,
+                    dry_run=dry_run,
                 )
 
                 # Update overall result
@@ -568,7 +568,11 @@ class SelectiveUpdateManager:
         # Process operations in batches
         for i in range(0, len(operations), batch_size):
             batch = operations[i : i + batch_size]
-            batch_result = self._execute_operation_batch(entity_type, batch, dry_run)
+            batch_result = self._execute_operation_batch(
+                entity_type,
+                batch,
+                dry_run=dry_run,
+            )
 
             result["completed"] += batch_result["completed"]
             result["failed"] += batch_result["failed"]

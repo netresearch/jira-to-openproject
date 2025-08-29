@@ -83,16 +83,20 @@ class EnhancedJiraClient(JiraClient):
         ]
 
         with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
-            futures = [executor.submit(self._fetch_issues_batch, batch) for batch in batches]
+            futures: list[Any] = []
+            future_to_keys: dict[Any, list[str]] = {}
+            for batch in batches:
+                fut = executor.submit(self._fetch_issues_batch, batch)
+                futures.append(fut)
+                future_to_keys[fut] = batch
 
             for fut in as_completed(futures):
-                batch_keys = []  # will be filled below if needed
                 try:
                     batch_result = fut.result()
                     results.update(batch_result)
                 except Exception:  # noqa: BLE001
-                    # Unable to tie future back to keys without mapping; mark unknown batch
-                    for k in batch_keys:
+                    # On failure, mark all keys from this batch as None (tests expect this)
+                    for k in future_to_keys.get(fut, []):
                         results[k] = None
 
         return results

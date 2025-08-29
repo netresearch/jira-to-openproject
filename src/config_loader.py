@@ -6,13 +6,15 @@ Handles loading and accessing configuration settings.
 import logging
 import os
 from pathlib import Path
+from typing import cast
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from dotenv import load_dotenv
 
 from src.type_definitions import (
     Config,
     ConfigValue,
+    LogLevel,
     JiraConfig,
     MigrationConfig,
     OpenProjectConfig,
@@ -61,7 +63,8 @@ class ConfigLoader:
         if "jira" not in self.config:
             self.config["jira"] = {}
         if "openproject" not in self.config:
-            self.config["openproject"] = OpenProjectConfig
+            # Initialize with an empty object of the right TypedDict shape
+            self.config["openproject"] = {}
         if "migration" not in self.config:
             self.config["migration"] = {}
 
@@ -145,9 +148,10 @@ class ConfigLoader:
             RuntimeError: If POSTGRES_PASSWORD is not found or is empty
 
         """
-        # Initialize database section if not present
+        # Initialize database section if not present (extend Config at runtime)
         if "database" not in self.config:
-            self.config["database"] = {}
+            # mypy: allow dynamic extension for internal convenience
+            self.config["database"] = {}  # type: ignore[typeddict-unknown-key]
 
         # Priority: explicit secret file env -> env var -> default Docker secret path
         postgres_password: str | None = None
@@ -196,14 +200,14 @@ class ConfigLoader:
             )
 
         # Store in config
-        self.config["database"]["postgres_password"] = postgres_password
+        self.config["database"]["postgres_password"] = postgres_password  # type: ignore[typeddict-item]
 
         # Also load other PostgreSQL environment variables with defaults
-        self.config["database"]["postgres_db"] = os.environ.get(
+        self.config["database"]["postgres_db"] = os.environ.get(  # type: ignore[typeddict-item]
             "POSTGRES_DB",
             "jira_migration",
         )
-        self.config["database"]["postgres_user"] = os.environ.get(
+        self.config["database"]["postgres_user"] = os.environ.get(  # type: ignore[typeddict-item]
             "POSTGRES_USER",
             "postgres",
         )
@@ -230,7 +234,7 @@ class ConfigLoader:
                         "CRITICAL",
                         "SUCCESS",
                     ]:
-                        self.config["migration"]["log_level"] = log_level
+                        self.config["migration"]["log_level"] = cast(LogLevel, log_level)
                     config_logger.debug("Applied log level: %s", log_level)
 
                 case ["J2O", "JIRA", *rest] if rest:
@@ -244,7 +248,7 @@ class ConfigLoader:
 
                         # Extract the specific scriptrunner config key
                         sr_key = key[len("scriptrunner_") :]
-                        self.config["jira"]["scriptrunner"][sr_key] = (
+                        self.config["jira"]["scriptrunner"][sr_key] = (  # type: ignore[literal-required]
                             self._convert_value(env_value)
                         )
                         config_logger.debug(
@@ -254,7 +258,7 @@ class ConfigLoader:
                         )
                     else:
                         # Regular Jira config
-                        self.config["jira"][key] = self._convert_value(env_value)
+                        self.config["jira"][key] = self._convert_value(env_value)  # type: ignore[literal-required]
                         config_logger.debug(
                             "Applied Jira config: %s=%s",
                             key,
@@ -263,7 +267,8 @@ class ConfigLoader:
 
                 case ["J2O", "OPENPROJECT", *rest] if rest:
                     key = "_".join(rest).lower()
-                    self.config["openproject"][key] = self._convert_value(env_value)
+                    # Known OpenProject keys are defined in OpenProjectConfig; still allow extras dynamically
+                    self.config["openproject"][key] = self._convert_value(env_value)  # type: ignore[literal-required]
                     config_logger.debug(
                         "Applied OpenProject config: %s=%s",
                         key,
@@ -359,7 +364,7 @@ class ConfigLoader:
             dict: Database configuration settings including postgres_password
 
         """
-        return self.config.get("database", {})
+        return cast("dict[str, str]", self.config.get("database", {}))
 
     def get_postgres_password(self) -> str:
         """Get PostgreSQL password from configuration.
@@ -371,14 +376,18 @@ class ConfigLoader:
             RuntimeError: If password is not configured
 
         """
-        password = self.config.get("database", {}).get("postgres_password")
+        db_cfg = self.get_database_config()
+        password = db_cfg.get("postgres_password")
         if not password:
             msg = "PostgreSQL password not configured"
             raise RuntimeError(msg)
         return password
 
     def get_value(
-        self, section: SectionName, key: str, default: ConfigValue | None = None,
+        self,
+        section: SectionName,
+        key: str,
+        default: ConfigValue | None = None,
     ) -> ConfigValue | None:
         """Get a specific configuration value.
 
@@ -391,7 +400,9 @@ class ConfigLoader:
             Configuration value or default if not found
 
         """
-        return self.config[section].get(key, default)
+        section_map = cast("dict[str, ConfigValue]", self.config[section])
+        value: ConfigValue | None = section_map.get(key, default)
+        return value
 
     def set_value(self, section: SectionName, key: str, value: ConfigValue) -> None:
         """Set a specific configuration value at runtime.
@@ -405,5 +416,7 @@ class ConfigLoader:
 
         """
         if section not in self.config:
-            self.config[section] = {}
-        self.config[section][key] = value
+            # create section lazily for dynamic overrides
+            self.config[section] = {}  # type: ignore[typeddict-unknown-key]
+        section_map = cast("dict[str, ConfigValue]", self.config[section])
+        section_map[key] = value

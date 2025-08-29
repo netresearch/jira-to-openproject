@@ -6,14 +6,14 @@ with special handling for Pydantic models.
 
 import json
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel
 
 from src import config
 from src.models.migration_error import MigrationError
 
-T = TypeVar("T")
+T = TypeVar("T", bound=BaseModel)
 
 
 def save_results(
@@ -132,15 +132,9 @@ def load[T](
         with filepath.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
-        # Convert dict to model instance
-        if hasattr(model_class, "model_validate"):
-            result = model_class.model_validate(data)
-        elif hasattr(model_class, "parse_obj"):
-            # Legacy Pydantic v1 support
-            result = model_class.parse_obj(data)
-        else:
-            # Fallback to normal constructor
-            result = model_class(**data)
+        # Convert dict to model instance (Pydantic v2 only)
+        model_cls = cast(type[BaseModel], model_class)
+        result = cast(T, model_cls.model_validate(data))
 
         config.logger.info("Loaded data from %s", filepath)
         return result
@@ -361,7 +355,8 @@ def load_model[T](
             data = json.load(f)
 
         config.logger.info("Loaded data from %s", file_path)
-        return model_class.model_validate(data)
+        model_cls = cast(type[BaseModel], model_class)
+        return cast(T, model_cls.model_validate(data))
     except json.JSONDecodeError:
         config.logger.exception("Error parsing JSON from %s", file_path)
         return None
