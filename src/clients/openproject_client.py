@@ -3019,16 +3019,11 @@ class OpenProjectClient:
         container_result = Path("/tmp") / result_name  # noqa: S108
         local_result = temp_dir / result_name
 
-        # Build Ruby runner that writes results JSON to file (avoid implicit string concat warnings)
+        # Build Ruby runner that writes results JSON to file via helper assembly
         header_lines = [
-            "require 'json'",
-            "require 'date'",
-            "require 'logger'",
             f"data_path = '{container_json.as_posix()}'",
             f"result_path = '{container_result.as_posix()}'",
         ]
-        header = "\n".join(header_lines) + "\n"
-
         ruby_lines = [
             "begin; Rails.logger.level = Logger::WARN; rescue; end",
             "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end",
@@ -3087,10 +3082,16 @@ class OpenProjectClient:
             "end",
             "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))",
         ]
-        ruby = "\n".join(ruby_lines) + "\n"
+        ruby = "\n".join([
+            "require 'json'",
+            "require 'date'",
+            "require 'logger'",
+            *header_lines,
+            *ruby_lines,
+        ]) + "\n"
 
         try:
-            _ = self.rails_client.execute(header + ruby, timeout=120, suppress_output=True)
+            _ = self.rails_client.execute(ruby, timeout=120, suppress_output=True)
         except Exception as e:
             msg = f"Rails execution failed for batch_create_time_entries: {e}"
             raise QueryExecutionError(msg) from e
