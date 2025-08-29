@@ -3019,76 +3019,75 @@ class OpenProjectClient:
         container_result = Path("/tmp") / result_name  # noqa: S108
         local_result = temp_dir / result_name
 
-        # Build Ruby runner that writes results JSON to file
-        header = (
-            "require 'json'\n"
-            "require 'date'\n"
-            "require 'logger'\n"
-            f"data_path = '{container_json.as_posix()}'\n"
-            f"result_path = '{container_result.as_posix()}'\n"
-        )
-        ruby = (
-            "begin; Rails.logger.level = Logger::WARN; rescue; end\n"
-            "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end\n"
-            "begin; GoodJob.logger = Logger.new(nil); rescue; end\n"
-            "entries = JSON.parse(File.read(data_path), symbolize_names: true)\n"
-            "results = []\n"
-            "created_count = 0\n"
-            "failed_count = 0\n"
-            "entries.each do |entry|\n"
-            "  begin\n"
-            "    te = TimeEntry.new(\n"
-            "      activity_id: entry[:activity_id],\n"
-            "      hours: entry[:hours],\n"
-            "      spent_on: Date.parse(entry[:spent_on]),\n"
-            "      comments: entry[:comments]\n"
-            "    )\n"
-            "    begin\n"
-            "      wp = WorkPackage.find_by(id: entry[:work_package_id])\n"
-            "      if wp\n"
-            "        te.work_package = wp\n"
-            "        te.project = wp.project\n"
-            "      end\n"
-            "    rescue => e\n"
-            "    end\n"
-            "    begin\n"
-            "      te.user_id = entry[:user_id]\n"
-            "      te.logged_by_id = entry[:user_id]\n"
-            "    rescue => e\n"
-            "    end\n"
-            "    begin\n"
-            "      key = entry[:jira_worklog_key]\n"
-            "      if key\n"
-            "        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')\n"
-            "        if !cf\n"
-            "          cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', "
-            "is_required: false, is_for_all: true, type: 'TimeEntryCustomField')\n"
-            "          cf.save\n"
-            "        end\n"
-            "        begin\n"
-            "          te.custom_field_values = { cf.id => key }\n"
-            "        rescue => e\n"
-            "        end\n"
-            "      end\n"
-            "    rescue => e\n"
-            "    end\n"
-            "    if te.save\n"
-            "      created_count += 1\n"
-            "      results << { index: entry[:index], success: true, id: te.id }\n"
-            "    else\n"
-            "      failed_count += 1\n"
-            "      results << { index: entry[:index], success: false, errors: te.errors.full_messages }\n"
-            "    end\n"
-            "  rescue => e\n"
-            "    failed_count += 1\n"
-            "    results << { index: entry[:index], success: false, error: e.message }\n"
-            "  end\n"
-            "end\n"
-            (
-                "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, "
-                "results: results }))\n"
-            )
-        )
+        # Build Ruby runner that writes results JSON to file (avoid implicit string concat warnings)
+        header_lines = [
+            "require 'json'",
+            "require 'date'",
+            "require 'logger'",
+            f"data_path = '{container_json.as_posix()}'",
+            f"result_path = '{container_result.as_posix()}'",
+        ]
+        header = "\n".join(header_lines) + "\n"
+
+        ruby_lines = [
+            "begin; Rails.logger.level = Logger::WARN; rescue; end",
+            "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end",
+            "begin; GoodJob.logger = Logger.new(nil); rescue; end",
+            "entries = JSON.parse(File.read(data_path), symbolize_names: true)",
+            "results = []",
+            "created_count = 0",
+            "failed_count = 0",
+            "entries.each do |entry|",
+            "  begin",
+            "    te = TimeEntry.new(",
+            "      activity_id: entry[:activity_id],",
+            "      hours: entry[:hours],",
+            "      spent_on: Date.parse(entry[:spent_on]),",
+            "      comments: entry[:comments]",
+            "    )",
+            "    begin",
+            "      wp = WorkPackage.find_by(id: entry[:work_package_id])",
+            "      if wp",
+            "        te.work_package = wp",
+            "        te.project = wp.project",
+            "      end",
+            "    rescue => e",
+            "    end",
+            "    begin",
+            "      te.user_id = entry[:user_id]",
+            "      te.logged_by_id = entry[:user_id]",
+            "    rescue => e",
+            "    end",
+            "    begin",
+            "      key = entry[:jira_worklog_key]",
+            "      if key",
+            "        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')",
+            "        if !cf",
+            "          cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')",
+            "          cf.save",
+            "        end",
+            "        begin",
+            "          te.custom_field_values = { cf.id => key }",
+            "        rescue => e",
+            "        end",
+            "      end",
+            "    rescue => e",
+            "    end",
+            "    if te.save",
+            "      created_count += 1",
+            "      results << { index: entry[:index], success: true, id: te.id }",
+            "    else",
+            "      failed_count += 1",
+            "      results << { index: entry[:index], success: false, errors: te.errors.full_messages }",
+            "    end",
+            "  rescue => e",
+            "    failed_count += 1",
+            "    results << { index: entry[:index], success: false, error: e.message }",
+            "  end",
+            "end",
+            "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))",
+        ]
+        ruby = "\n".join(ruby_lines) + "\n"
 
         try:
             _ = self.rails_client.execute(header + ruby, timeout=120, suppress_output=True)
