@@ -94,9 +94,17 @@ class EnhancedJiraClient(JiraClient):
                 try:
                     batch_result = fut.result()
                     results.update(batch_result)
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    failed_keys = future_to_keys.get(fut, [])
+                    if failed_keys:
+                        logger.warning(
+                            "EnhancedJiraClient batch failed for %d keys: first=%s error=%s",
+                            len(failed_keys),
+                            failed_keys[0],
+                            e,
+                        )
                     # On failure, mark all keys from this batch as None (tests expect this)
-                    for k in future_to_keys.get(fut, []):
+                    for k in failed_keys:
                         results[k] = None
 
         return results

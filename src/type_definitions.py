@@ -117,12 +117,22 @@ class MigrationConfig(TypedDict):
     log_retention_count: NotRequired[int]
 
 
+class DatabaseConfig(TypedDict, total=False):
+    """Database configuration populated from environment/secrets."""
+
+    postgres_password: str
+    postgres_db: str
+    postgres_user: str
+
+
 class Config(TypedDict):
     """Configuration for the config loader."""
 
     jira: JiraConfig
     openproject: OpenProjectConfig
     migration: MigrationConfig
+    # Optional database section populated at runtime
+    database: NotRequired[DatabaseConfig]
 
 
 type SectionName = Literal["jira", "openproject", "migration"]

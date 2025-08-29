@@ -18,6 +18,7 @@ from src.type_definitions import (
     JiraConfig,
     MigrationConfig,
     OpenProjectConfig,
+    DatabaseConfig,
     SectionName,
 )
 
@@ -148,10 +149,9 @@ class ConfigLoader:
             RuntimeError: If POSTGRES_PASSWORD is not found or is empty
 
         """
-        # Initialize database section if not present (extend Config at runtime)
+        # Initialize database section if not present
         if "database" not in self.config:
-            # mypy: allow dynamic extension for internal convenience
-            self.config["database"] = {}  # type: ignore[typeddict-unknown-key]
+            self.config["database"] = cast(DatabaseConfig, {})
 
         # Priority: explicit secret file env -> env var -> default Docker secret path
         postgres_password: str | None = None
@@ -200,14 +200,15 @@ class ConfigLoader:
             )
 
         # Store in config
-        self.config["database"]["postgres_password"] = postgres_password  # type: ignore[typeddict-item]
+        db_cfg = cast(DatabaseConfig, self.config["database"])
+        db_cfg["postgres_password"] = postgres_password
 
         # Also load other PostgreSQL environment variables with defaults
-        self.config["database"]["postgres_db"] = os.environ.get(  # type: ignore[typeddict-item]
+        db_cfg["postgres_db"] = os.environ.get(
             "POSTGRES_DB",
             "jira_migration",
         )
-        self.config["database"]["postgres_user"] = os.environ.get(  # type: ignore[typeddict-item]
+        db_cfg["postgres_user"] = os.environ.get(
             "POSTGRES_USER",
             "postgres",
         )
