@@ -769,6 +769,33 @@ class JiraClient:
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 
+    def get_issue_property(self, issue_key: str, property_key: str) -> dict[str, Any] | None:
+        """Get an issue property JSON by key. Returns None if missing or on 404.
+
+        This supports add-ons like Simple Tasklists that store data in properties.
+        """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        try:
+            # Prefer REST call via underlying session if available
+            base_url = self.config.jira_config.get("url", "") if hasattr(self, "config") else ""
+            if base_url:
+                from urllib.parse import quote  # noqa: PLC0415
+
+                url = f"{base_url}/rest/api/2/issue/{quote(issue_key)}/properties/{quote(property_key)}"
+                resp = self._session.get(url, timeout=15) if hasattr(self, "_session") else None
+                if resp and resp.status_code == 200:
+                    data = resp.json()
+                    # property payload can be under 'value'
+                    if isinstance(data, dict):
+                        return data.get("value", data)  # type: ignore[return-value]
+                return None
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to fetch issue property: %s %s", issue_key, property_key)
+            return None
+
     def _handle_response(self, response: Response) -> None:
         """Check response for CAPTCHA challenge and raise appropriate exception if found.
 

@@ -35,6 +35,7 @@ from src.migrations.project_migration import ProjectMigration
 from src.migrations.status_migration import StatusMigration
 from src.migrations.relation_migration import RelationMigration
 from src.migrations.priority_migration import PriorityMigration
+from src.migrations.simpletasks_migration import SimpleTasksMigration
 from src.migrations.watcher_migration import WatcherMigration
 from src.migrations.time_entry_migration import TimeEntryMigration
 from src.migrations.user_migration import UserMigration
@@ -145,6 +146,7 @@ def _build_component_factories(
         "watchers": lambda: WatcherMigration(jira_client=jira_client, op_client=op_client),
         "relations": lambda: RelationMigration(jira_client=jira_client, op_client=op_client),
         "priorities": lambda: PriorityMigration(jira_client=jira_client, op_client=op_client),
+        "simpletasks": lambda: SimpleTasksMigration(jira_client=jira_client, op_client=op_client),
         "accounts": lambda: AccountMigration(jira_client=jira_client, op_client=op_client),
     }
 

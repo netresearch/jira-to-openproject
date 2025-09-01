@@ -151,6 +151,7 @@ type ComponentName = Literal[
     "work_packages",
     "relations",
     "priorities",
+    "simpletasks",
 ]
 
 
