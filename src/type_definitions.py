@@ -149,6 +149,7 @@ type ComponentName = Literal[
     "issue_types",
     "status_types",
     "work_packages",
+    "relations",
 ]
 
 
