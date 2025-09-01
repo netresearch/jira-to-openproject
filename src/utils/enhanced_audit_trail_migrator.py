@@ -16,6 +16,7 @@ from typing import Any, TypedDict
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
+from src.utils.markdown_converter import MarkdownConverter
 
 # Get logger from config
 logger = configure_logging("INFO", None)
@@ -90,6 +91,8 @@ class EnhancedAuditTrailMigrator:
 
         # Load user mapping if available
         self._load_user_mapping()
+        # Initialize converter for mention conversion using current mapping
+        self.converter = MarkdownConverter(user_mapping=self.user_mapping)
 
     def _load_user_mapping(self) -> None:
         """Load user mapping from previous migration results."""
@@ -110,6 +113,12 @@ class EnhancedAuditTrailMigrator:
 
         except Exception as e:
             self.logger.warning(f"Failed to load user mapping: {e}")
+        # Keep converter in sync with latest mapping
+        try:
+            if hasattr(self, "converter"):
+                self.converter.user_mapping = self.user_mapping or {}
+        except Exception:
+            pass
 
     def extract_changelog_from_issue(self, jira_issue: Any) -> list[dict[str, Any]]:
         """Extract changelog data from a Jira issue.
@@ -236,6 +245,14 @@ class EnhancedAuditTrailMigrator:
                 if not user_id:
                     self.migration_results["user_attribution_failures"] += 1
                     user_id = 1
+                # Convert user mentions in comment body using current mapping
+                raw_comment = c.get("body", "")
+                try:
+                    converted_comment = (
+                        self.converter.convert(raw_comment) if raw_comment else ""
+                    )
+                except Exception:
+                    converted_comment = raw_comment
                 events.append(
                     {
                         "jira_issue_key": jira_issue_key,
@@ -248,7 +265,7 @@ class EnhancedAuditTrailMigrator:
                         "auditable_type": "WorkPackage",
                         "auditable_id": openproject_work_package_id,
                         "version": 1,
-                        "comment": c.get("body", ""),
+                        "comment": converted_comment,
                         "changes": [],
                     }
                 )
