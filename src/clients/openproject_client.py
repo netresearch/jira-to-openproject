@@ -2968,6 +2968,77 @@ class OpenProjectClient:
             msg = "Failed to retrieve time entries."
             raise QueryExecutionError(msg) from e
 
+    def find_relation(
+        self,
+        from_work_package_id: int,
+        to_work_package_id: int,
+    ) -> dict[str, Any] | None:
+        """Find a relation between two work packages if it exists.
+
+        Returns minimal relation info or None.
+        """
+        query = (
+            "Relation.where(from_id: %d, to_id: %d).limit(1).map do |r| "
+            "{ id: r.id, relation_type: r.relation_type, from_id: r.from_id, to_id: r.to_id } end.first"
+            % (from_work_package_id, to_work_package_id)
+        )
+        try:
+            result = self.execute_large_query_to_json_file(
+                query,
+                container_file="/tmp/j2o_find_relation.json",  # noqa: S108
+                timeout=30,
+            )
+            return result if isinstance(result, dict) else None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to find relation: %s", e)
+            return None
+
+    def create_relation(  # noqa: C901
+        self,
+        from_work_package_id: int,
+        to_work_package_id: int,
+        relation_type: str,
+    ) -> dict[str, Any] | None:
+        """Create a relation idempotently between two work packages.
+
+        On success returns dict with id and status ('created' or 'exists'); otherwise None.
+        """
+        script = f"""
+        begin
+          from_wp = WorkPackage.find_by(id: {from_work_package_id})
+          to_wp = WorkPackage.find_by(id: {to_work_package_id})
+          if !from_wp || !to_wp
+            {{ error: 'NotFound' }}
+          else
+            rel = Relation.where(from_id: {from_work_package_id}, to_id: {to_work_package_id}, relation_type: '{relation_type}').first
+            if rel
+              {{ id: rel.id, status: 'exists', relation_type: rel.relation_type, from_id: rel.from_id, to_id: rel.to_id }}
+            else
+              rel = Relation.create(from: from_wp, to: to_wp, relation_type: '{relation_type}')
+              if rel.persisted?
+                {{ id: rel.id, status: 'created', relation_type: rel.relation_type, from_id: rel.from_id, to_id: rel.to_id }}
+              else
+                {{ error: 'Validation failed', errors: rel.errors.full_messages }}
+              end
+            end
+          end
+        rescue => e
+          {{ error: 'Creation failed', message: e.message }}
+        end
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                if result.get("error"):
+                    logger.warning("Relation creation failed: %s", result)
+                    return None
+                return result
+            logger.warning("Unexpected relation creation result: %s", result)
+            return None  # noqa: TRY300
+        except Exception as e:  # noqa: BLE001
+            msg = f"Failed to create relation: {e}"
+            raise QueryExecutionError(msg) from e
+
     def batch_create_time_entries(  # noqa: C901
         self,
         time_entries: list[dict[str, Any]],
