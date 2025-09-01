@@ -1903,6 +1903,19 @@ def _apply_required_defaults(
                                                 "jira_issue_key": issue_key,
                                                 "changelog_entries": changelog_entries,
                                             }
+                                        # Additionally store comments for audit processing
+                                        comments = self.enhanced_audit_trail_migrator.extract_comments_from_issue(issue)
+                                        if comments:
+                                            jira_id = (
+                                                issue.id if hasattr(issue, "id") else issue.get("id")
+                                            )
+                                            self.enhanced_audit_trail_migrator.changelog_data.setdefault(
+                                                jira_id,
+                                                {"jira_issue_key": issue_key, "changelog_entries": []},
+                                            )
+                                            self.enhanced_audit_trail_migrator.changelog_data[jira_id][
+                                                "comments"
+                                            ] = comments
                                     except Exception as audit_error:
                                         self.logger.warning(
                                             f"Failed to extract audit trail for {issue_key}: {audit_error}",

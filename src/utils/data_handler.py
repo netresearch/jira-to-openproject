@@ -16,6 +16,19 @@ from src.models.migration_error import MigrationError
 T = TypeVar("T", bound=BaseModel)
 
 
+def _json_default(value: Any) -> Any:
+    """Best-effort encoder for non-JSON-native objects.
+
+    - Convert pathlib.Path to str
+    - Convert Pydantic models to dict
+    - Fallback to string representation for unknown objects
+    """
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    return str(value)
+
 def save_results(
     data: Any,
     filename: Path | str,
@@ -82,7 +95,13 @@ def save(
             data = data.model_dump()
 
         with filepath.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=indent, ensure_ascii=ensure_ascii)
+            json.dump(
+                data,
+                f,
+                indent=indent,
+                ensure_ascii=ensure_ascii,
+                default=_json_default,
+            )
 
         config.logger.info("Saved data to %s", filepath)
         return True
@@ -283,7 +302,13 @@ def save_to_path(
             data = data.model_dump()
 
         with filepath.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=indent, ensure_ascii=ensure_ascii)
+            json.dump(
+                data,
+                f,
+                indent=indent,
+                ensure_ascii=ensure_ascii,
+                default=_json_default,
+            )
 
         # Verify file was created successfully
         if filepath.exists():

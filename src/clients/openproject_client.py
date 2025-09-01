@@ -684,10 +684,22 @@ class OpenProjectClient:
             result_output = self.execute_query(modified_query, timeout=timeout)
             return self._parse_rails_output(result_output)
 
-        except JsonParseError:
-            # Surface parse errors directly to callers so orchestrator can stop on error
+        except JsonParseError as e:
+            # Fallback: when console output is noisy (e.g., shell banners), use file-based execution
             logger.exception("JSON parsing failed for Rails output")
-            raise
+            try:
+                # Use a unique file path inside the container to avoid collisions
+                _ts = int(__import__("time").time())
+                container_file = f"/tmp/j2o_query_{_ts}_{os.getpid()}.json"
+                logger.info("Falling back to file-based query execution: %s", container_file)
+                return self.execute_large_query_to_json_file(
+                    query,
+                    container_file=container_file,
+                    timeout=timeout,
+                )
+            except Exception:
+                # If fallback fails, re-raise the original parse error for upstream handling
+                raise e
         except RubyError:
             # Preserve RubyError context for higher layers to classify
             logger.exception("Ruby error during execute_query_to_json_file")
@@ -2828,6 +2840,17 @@ class OpenProjectClient:
             spent_on: Date.parse('{time_entry_data.get('spentOn', '')}'),
             comments: {comment_str!r}
           )
+
+          # Ensure project is set from associated work package to satisfy validations
+          begin
+            wp = WorkPackage.find_by(id: {work_package_id})
+            if wp
+              time_entry.work_package = wp
+              time_entry.project = wp.project
+            end
+          rescue => e
+            # ignore association errors here; validations will surface below
+          end
 
           # Provenance CF for time entries: Jira Worklog Key
           begin

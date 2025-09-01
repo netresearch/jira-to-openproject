@@ -48,10 +48,12 @@ class CacheEntry:
     def is_expired(self) -> bool:
         """Check if cache entry has expired."""
         ts = self.timestamp
-        # Normalize naive timestamps to UTC for safe comparison
+        # Compare using matching awareness to avoid incorrect shifts
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
-        return datetime.now(tz=UTC) > ts + timedelta(seconds=self.ttl_seconds)
+            now_ref = datetime.now()
+        else:
+            now_ref = datetime.now(tz=UTC)
+        return now_ref > ts + timedelta(seconds=self.ttl_seconds)
 
     def touch(self) -> None:
         """Update access tracking."""

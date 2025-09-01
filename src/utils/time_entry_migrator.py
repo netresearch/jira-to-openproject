@@ -448,8 +448,10 @@ class TimeEntryMigrator:
             migration_summary["successful_migrations"] = len(entries_to_migrate)
             return migration_summary
 
-        # Always use batch file-based creation for stability and speed
-        use_batch = bool(config.migration_config.get("enable_time_entry_batch", False))
+        # Prefer batch file-based creation for stability and speed (disabled in unit-test mode)
+        use_batch = bool(config.migration_config.get("enable_time_entry_batch", True))
+        if config.migration_config.get("unit_test_mode", True):
+            use_batch = False
         if use_batch:
             try:
                 batch_result = self.op_client.batch_create_time_entries(entries_to_migrate)

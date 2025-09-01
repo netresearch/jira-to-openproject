@@ -95,6 +95,7 @@ class ProgressTracker:
         *,
         enable_console_output: bool = True,
         enable_logging: bool = True,
+        enable_file_output: bool = False,
         output_file: str | None = None,
         update_interval: float = 0.5,
     ) -> None:
@@ -104,6 +105,7 @@ class ProgressTracker:
             operation_name: Name of the operation being tracked
             enable_console_output: Show progress in console
             enable_logging: Log progress to logger
+            enable_file_output: When True, write progress to a JSON file
             output_file: File path for progress output (if provided)
             update_interval: Minimum time between updates
 
@@ -111,7 +113,17 @@ class ProgressTracker:
         self.operation_name = operation_name
         self.enable_console_output = enable_console_output
         self.enable_logging = enable_logging
-        self.output_file = output_file
+        # Determine output file path when file output is enabled
+        if enable_file_output and not output_file:
+            try:
+                results_dir = Path("var/results")
+                results_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S")
+                self.output_file = str(results_dir / f"progress_{ts}.json")
+            except Exception:  # noqa: BLE001 - best-effort file output setup
+                self.output_file = None
+        else:
+            self.output_file = output_file
         self.update_interval = update_interval
 
         self.logger = configure_logging("INFO", None)

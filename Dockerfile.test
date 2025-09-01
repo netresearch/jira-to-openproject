@@ -19,6 +19,7 @@ RUN apt-get update \
     libffi-dev \
     python3-dev \
     openssh-client \
+    tmux \
     && rm -rf /var/lib/apt/lists/*
 # SECURITY: docker.io package removed - uses SSH-based remote Docker client
 # See src/clients/docker_client.py for remote Docker operations via SSH

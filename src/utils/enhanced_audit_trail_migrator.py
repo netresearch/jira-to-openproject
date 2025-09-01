@@ -182,6 +182,80 @@ class EnhancedAuditTrailMigrator:
 
         return changelog_entries
 
+    def extract_comments_from_issue(self, jira_issue: Any) -> list[dict[str, Any]]:
+        """Extract issue comments from Jira issue if present.
+
+        Returns list of dicts: {id, created, author:{name,displayName,emailAddress}, body}
+        """
+        comments: list[dict[str, Any]] = []
+        try:
+            if not hasattr(jira_issue, "fields"):
+                return comments
+            fields = jira_issue.fields
+            if not hasattr(fields, "comment") or not getattr(fields, "comment"):
+                return comments
+            comment_container = fields.comment
+            raw_comments = getattr(comment_container, "comments", []) or []
+            for c in raw_comments:
+                try:
+                    entry = {
+                        "id": getattr(c, "id", None),
+                        "created": getattr(c, "created", None),
+                        "author": {
+                            "name": getattr(getattr(c, "author", None), "name", None)
+                            if getattr(c, "author", None)
+                            else None,
+                            "displayName": getattr(getattr(c, "author", None), "displayName", None)
+                            if getattr(c, "author", None)
+                            else None,
+                            "emailAddress": getattr(getattr(c, "author", None), "emailAddress", None)
+                            if getattr(c, "author", None)
+                            else None,
+                        },
+                        "body": getattr(c, "body", ""),
+                    }
+                    comments.append(entry)
+                except Exception:
+                    continue
+        except Exception:
+            return comments
+        return comments
+
+    def transform_comments_to_audit_events(
+        self,
+        comments: list[dict[str, Any]],
+        jira_issue_key: str,
+        openproject_work_package_id: int,
+    ) -> list[AuditEventData]:
+        """Transform Jira comments into audit events (Journal entries with notes)."""
+        events: list[AuditEventData] = []
+        for c in comments or []:
+            try:
+                author_name = (c.get("author") or {}).get("name")
+                user_id = self.user_mapping.get(author_name) if author_name else None
+                if not user_id:
+                    self.migration_results["user_attribution_failures"] += 1
+                    user_id = 1
+                events.append(
+                    {
+                        "jira_issue_key": jira_issue_key,
+                        "jira_changelog_id": str(c.get("id")),
+                        "openproject_work_package_id": openproject_work_package_id,
+                        "user_id": user_id,
+                        "user_name": author_name,
+                        "created_at": c.get("created", "1970-01-01T00:00:00Z"),
+                        "action": "comment",
+                        "auditable_type": "WorkPackage",
+                        "auditable_id": openproject_work_package_id,
+                        "version": 1,
+                        "comment": c.get("body", ""),
+                        "changes": [],
+                    }
+                )
+            except Exception:
+                continue
+        return events
+
     def transform_changelog_to_audit_events(
         self,
         changelog_entries: list[dict[str, Any]],
@@ -501,11 +575,52 @@ class EnhancedAuditTrailMigrator:
             f"Executing {len(self.rails_operations)} audit trail Rails operations",
         )
 
+        # Optional feature flag to use the OpenProject client for reliable, non-interactive script execution
+        # Default remains subprocess path to preserve existing test expectations
         try:
-            # Create Rails script for batch audit event creation
+            from src import config as _cfg  # noqa: PLC0415
+            use_client_exec = bool(_cfg.migration_config.get("audit_use_client", False))
+        except Exception:  # noqa: BLE001
+            use_client_exec = False
+
+        # Normalize operations into a plain list of event dicts
+        events: list[dict[str, Any]] = []
+        for op in self.rails_operations:
+            if isinstance(op, dict) and "operation" in op:
+                data = op.get("data", {})
+            else:
+                data = op
+            if isinstance(data, dict):
+                # Ensure expected keys exist for downstream script
+                if "work_package_id" not in data and "openproject_work_package_id" in data:
+                    data["work_package_id"] = data["openproject_work_package_id"]
+                events.append(data)
+
+        if use_client_exec:
+            try:
+                # Generate a Ruby runner that expects `input_data` (provided by the client) as events list
+                ruby_runner = self._generate_audit_creation_runner_from_input()
+
+                result = self.op_client.execute_script_with_data(ruby_runner, events)
+                if isinstance(result, dict) and result.get("status") == "success":
+                    self.logger.success("Successfully executed audit event operations via client")
+                    # Clear queue on success
+                    self.rails_operations.clear()
+                    return True
+
+                self.logger.error("Audit event execution via client failed: %s", result)
+                return False
+            except Exception as e:  # noqa: BLE001
+                error_msg = f"Failed to execute audit Rails operations via client: {e}"
+                self.logger.exception(error_msg)
+                self.migration_results["errors"].append(error_msg)
+                return False
+
+        # Fallback: maintain legacy subprocess execution path for compatibility with existing tests
+        try:
+            # Create Ruby script with inline data for legacy path
             ruby_script = self._generate_audit_creation_script(self.rails_operations)
 
-            # Execute via shell (subprocess) so tests can assert subprocess.run was invoked
             import subprocess
             completed = subprocess.run([
                 "bash",
@@ -518,7 +633,7 @@ class EnhancedAuditTrailMigrator:
             self.logger.error(f"Rails audit operations failed: {completed.stderr}")
             return False
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error_msg = f"Failed to execute audit Rails operations: {e}"
             self.logger.exception(error_msg)
             self.migration_results["errors"].append(error_msg)
@@ -588,6 +703,7 @@ class EnhancedAuditTrailMigrator:
         # Ruby script for audit event creation
         return f"""
         require 'json'
+        require 'time'
 
         begin
           # Audit events data
@@ -673,6 +789,60 @@ class EnhancedAuditTrailMigrator:
           error_result
         end
         """
+
+    def _generate_audit_creation_runner_from_input(self) -> str:
+        """Generate Ruby script that reads audit events from `input_data`.
+
+        The surrounding Python execution will serialize events to JSON and make them
+        available in Ruby as the `input_data` variable via execute_script_with_data().
+        The script must print JSON between JSON_OUTPUT_START/JSON_OUTPUT_END markers.
+        """
+        return (
+            "require 'json'\n"
+            "require 'time'\n\n"
+            "begin\n"
+            "  audit_events = input_data\n"
+            "  created_count = 0\n"
+            "  errors = []\n"
+            "  audit_events.each do |event_data|\n"
+            "    begin\n"
+            "      wp = WorkPackage.find_by(id: event_data['openproject_work_package_id'] || event_data['work_package_id'])\n"
+            "      unless wp\n"
+            "        errors << \"Work package #{event_data['openproject_work_package_id']} not found for #{event_data['jira_issue_key']}\"\n"
+            "        next\n"
+            "      end\n"
+            "      user_id = event_data['user_id'] || 1\n"
+            "      user = User.find_by(id: user_id) || User.where(admin: true).first\n"
+            "      current_version = wp.journals.maximum(:version) || 0\n"
+            "      next_version = current_version + 1\n"
+            "      begin\n"
+            "        created_at = Time.parse(event_data['created_at'])\n"
+            "      rescue\n"
+            "        created_at = Time.now\n"
+            "      end\n"
+            "      journal = Journal.create!(journable: wp, user: user, version: next_version, activity_type: 'work_packages', created_at: created_at, notes: event_data['comment'])\n"
+            "      (event_data['changes'] || []).each do |change|\n"
+            "        field = change['field']\n"
+            "        old_value = change['old_value']\n"
+            "        new_value = change['new_value']\n"
+            "        JournalDetail.create!(journal: journal, property: 'attr', prop_key: field, old_value: old_value&.to_s, value: new_value&.to_s)\n"
+            "      end\n"
+            "      created_count += 1\n"
+            "    rescue => e\n"
+            "      errors << \"Failed to create audit event for #{event_data['jira_issue_key']}: #{e.message}\"\n"
+            "    end\n"
+            "  end\n"
+            "  result = { 'status' => 'success', 'processed' => created_count, 'errors' => errors, 'total' => audit_events.length }\n"
+            "  puts 'JSON_OUTPUT_START'\n"
+            "  puts JSON.dump(result)\n"
+            "  puts 'JSON_OUTPUT_END'\n"
+            "rescue => e\n"
+            "  error_result = { 'status' => 'error', 'message' => e.message, 'processed' => 0, 'errors' => [e.message] }\n"
+            "  puts 'JSON_OUTPUT_START'\n"
+            "  puts JSON.dump(error_result)\n"
+            "  puts 'JSON_OUTPUT_END'\n"
+            "end\n"
+        )
 
     def generate_audit_trail_report(self) -> str:
         """Generate comprehensive audit trail migration report.
