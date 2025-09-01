@@ -34,6 +34,8 @@ from src.migrations.link_type_migration import LinkTypeMigration
 from src.migrations.project_migration import ProjectMigration
 from src.migrations.status_migration import StatusMigration
 from src.migrations.relation_migration import RelationMigration
+from src.migrations.priority_migration import PriorityMigration
+from src.migrations.watcher_migration import WatcherMigration
 from src.migrations.time_entry_migration import TimeEntryMigration
 from src.migrations.user_migration import UserMigration
 from src.migrations.work_package_migration import WorkPackageMigration
@@ -140,7 +142,9 @@ def _build_component_factories(
         "status_types": lambda: StatusMigration(jira_client=jira_client, op_client=op_client),
         "work_packages": lambda: WorkPackageMigration(jira_client=jira_client, op_client=op_client),
         "time_entries": lambda: TimeEntryMigration(jira_client=jira_client, op_client=op_client),
+        "watchers": lambda: WatcherMigration(jira_client=jira_client, op_client=op_client),
         "relations": lambda: RelationMigration(jira_client=jira_client, op_client=op_client),
+        "priorities": lambda: PriorityMigration(jira_client=jira_client, op_client=op_client),
         "accounts": lambda: AccountMigration(jira_client=jira_client, op_client=op_client),
     }
 

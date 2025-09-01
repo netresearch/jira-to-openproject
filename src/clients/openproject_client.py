@@ -1430,10 +1430,10 @@ class OpenProjectClient:
         except (QueryExecutionError, JsonParseError) as e:
             msg = f"Error finding record for {model}."
             raise QueryExecutionError(msg) from e
-        if result is None:
-            msg = f"No {model} found with {id_or_conditions}"
-            raise RecordNotFoundError(msg)
-        return result
+            if result is None:
+                msg = f"No {model} found with {id_or_conditions}"
+                raise RecordNotFoundError(msg)
+            return result
 
     def _retry_with_exponential_backoff(  # noqa: PLR0913, C901
         self,
@@ -2521,28 +2521,28 @@ class OpenProjectClient:
                     raise
 
             # Read the JSON directly from the Docker container file system via SSH
-            # Use SSH to read the file from the Docker container
-            ssh_command = f"docker exec {self.container_name} cat {file_path}"
+                # Use SSH to read the file from the Docker container
+                ssh_command = f"docker exec {self.container_name} cat {file_path}"
             try:
                 stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
             except Exception as e:
                 msg = f"SSH command failed: {e}"
                 raise QueryExecutionError(msg) from e
-            if returncode != 0:
-                logger.error(
-                    "Failed to read file from container, stderr: %s",
-                    stderr,
-                )
-                msg = f"SSH command failed with code {returncode}: {stderr}"
+                if returncode != 0:
+                    logger.error(
+                        "Failed to read file from container, stderr: %s",
+                        stderr,
+                    )
+                    msg = f"SSH command failed with code {returncode}: {stderr}"
                 raise QueryExecutionError(msg)  # noqa: TRY301
 
-            file_content = stdout.strip()
-            logger.debug(
-                "Successfully read projects file from container, content length: %d",
-                len(file_content),
-            )
+                file_content = stdout.strip()
+                logger.debug(
+                    "Successfully read projects file from container, content length: %d",
+                    len(file_content),
+                )
 
-            # Parse the JSON content
+                # Parse the JSON content
             try:
                 result = json.loads(file_content)
             except json.JSONDecodeError as e:
@@ -2627,10 +2627,10 @@ class OpenProjectClient:
         except Exception as e:
             msg = "Failed to get project."
             raise QueryExecutionError(msg) from e
-        if project is None:
-            msg = f"Project with identifier '{identifier}' not found"
-            raise RecordNotFoundError(msg)
-        return project
+            if project is None:
+                msg = f"Project with identifier '{identifier}' not found"
+                raise RecordNotFoundError(msg)
+            return project
 
     def delete_all_work_packages(self) -> int:
         """Delete all work packages in bulk.
@@ -2966,6 +2966,87 @@ class OpenProjectClient:
             return result if isinstance(result, list) else []
         except Exception as e:
             msg = "Failed to retrieve time entries."
+            raise QueryExecutionError(msg) from e
+    # ----- Priority helpers -----
+    def get_issue_priorities(self) -> list[dict[str, Any]]:
+        """Return list of IssuePriority with id, name, position, is_default, active."""
+        script = """
+        IssuePriority.order(:position).map do |p|
+          { id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }
+        end
+        """
+        try:
+            result = self.execute_json_query(script)
+            return result if isinstance(result, list) else []
+        except Exception:
+            logger.exception("Failed to get issue priorities")
+            return []
+
+    def find_issue_priority_by_name(self, name: str) -> dict[str, Any] | None:
+        script = (
+            "p = IssuePriority.find_by(name: %s); p && { id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }"
+            % json.dumps(name)
+        )
+        try:
+            result = self.execute_json_query(script)
+            return result if isinstance(result, dict) else None
+        except Exception:
+            logger.exception("Failed to find issue priority by name %s", name)
+            return None
+
+    def create_issue_priority(self, name: str, position: int | None = None, is_default: bool = False) -> dict[str, Any]:
+        pos_expr = "nil" if position is None else str(int(position))
+        script = f"""
+        p = IssuePriority.create!(name: {json.dumps(name)}, position: {pos_expr}, is_default: {str(is_default).lower()}, active: true)
+        {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}
+        """
+        try:
+            result = self.execute_json_query(script)
+            return result if isinstance(result, dict) else {"id": None, "name": name}
+        except Exception as e:
+            msg = f"Failed to create issue priority {name}: {e}"
+            raise QueryExecutionError(msg) from e
+
+    # ----- Watchers helpers -----
+    def find_watcher(self, work_package_id: int, user_id: int) -> dict[str, Any] | None:
+        """Find a watcher for a work package and user if it exists."""
+        query = (
+            "Watcher.where(watchable_type: 'WorkPackage', watchable_id: %d, user_id: %d).limit(1).map do |w| "
+            "{ id: w.id, user_id: w.user_id, watchable_id: w.watchable_id } end.first"
+        ) % (work_package_id, user_id)
+        try:
+            res = self.execute_query(query)
+            if isinstance(res, dict) and res:
+                return res
+            return None
+        except Exception as e:
+            msg = "Failed to query watcher."
+            raise QueryExecutionError(msg) from e
+
+    def add_watcher(self, work_package_id: int, user_id: int) -> bool:
+        """Idempotently add a watcher to the work package.
+
+        Returns True if the watcher exists or was created successfully.
+        """
+        try:
+            if self.find_watcher(work_package_id, user_id):
+                return True
+        except Exception:
+            # Proceed to attempt create even if find failed
+            pass
+
+        script = (
+            "wp = WorkPackage.find(%d); u = User.find(%d); "
+            "if !Watcher.exists?(watchable_type: 'WorkPackage', watchable_id: wp.id, user_id: u.id); "
+            "w = Watcher.new(user: u, watchable: wp); w.save!; {created: true}.to_json; else; {created: false}.to_json; end"
+        ) % (work_package_id, user_id)
+        try:
+            created = self.execute_query(script)
+            if isinstance(created, dict):
+                return True
+            return bool(created)
+        except Exception as e:
+            msg = "Failed to add watcher."
             raise QueryExecutionError(msg) from e
 
     def find_relation(

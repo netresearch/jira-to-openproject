@@ -736,6 +736,39 @@ class JiraClient:
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 
+    def get_priorities(self) -> list[dict[str, Any]]:
+        """Get all priorities from Jira.
+
+        Returns:
+            List of priority dictionaries with id, name, and status
+
+        Raises:
+            JiraApiError: If the API request fails
+
+        """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        try:
+            # jira client has priorities() helper in many versions
+            priorities = self.jira.priorities()
+            result = [
+                {
+                    "id": getattr(p, "id", None),
+                    "name": getattr(p, "name", None),
+                    "status": getattr(p, "status", None),
+                }
+                for p in priorities
+            ]
+            if not priorities:
+                logger.warning("No priorities found in Jira")
+            return result
+        except Exception as e:
+            error_msg = f"Failed to get priorities: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
     def _handle_response(self, response: Response) -> None:
         """Check response for CAPTCHA challenge and raise appropriate exception if found.
 
