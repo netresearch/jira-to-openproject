@@ -30,7 +30,12 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
         import src.mappings as mappings  # noqa: PLC0415
 
-        self.mappings = mappings.Mappings()
+        # Use configured data directory for mapping IO consistency, but
+        # remain compatible with test doubles that expect zero-arg init.
+        try:
+            self.mappings = mappings.Mappings(config.get_path("data"))
+        except TypeError:
+            self.mappings = mappings.Mappings()
 
     @staticmethod
     def _coerce_labels(fields: Any) -> list[str]:
