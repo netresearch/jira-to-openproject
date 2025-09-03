@@ -653,6 +653,9 @@ class OpenProjectClient:
     def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> dict[str, Any]:
         """Execute a Rails query and return parsed JSON result.
 
+        Default path: write JSON to a container file and read it back.
+        This avoids tmux/console noise and parsing fragility.
+
         Args:
             query: Rails query to execute
             timeout: Timeout in seconds
@@ -662,50 +665,20 @@ class OpenProjectClient:
 
         Raises:
             QueryExecutionError: If execution fails
-            JsonParseError: If result parsing fails
-
         """
         try:
-            # Prefer proper pagination for collection queries
-
-            # Extract model name when possible, e.g., Project.all / WorkPackage.where(...)
-            # Only treat plain collection queries (all/where) without explicit to_json or array producers
-            produces_array = any(k in query for k in [".map", ".pluck", ".collect", ".select{"])
-            has_to_json = ".to_json" in query
-            m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*\.(all|where)\b", query)
-            if m and ".limit(" not in query and not produces_array and not has_to_json:
-                model_name = m.group(1)
-                return self._execute_batched_query(model_name, timeout=timeout)
-
-            # For other queries, wrap and add .to_json (even if already contains .to_json)
-            modified_query = f"({query}).to_json"
-
-            # Execute the query and parse result
-            result_output = self.execute_query(modified_query, timeout=timeout)
-            return self._parse_rails_output(result_output)
-
-        except JsonParseError as e:
-            # Fallback: when console output is noisy (e.g., shell banners), use file-based execution
-            logger.exception("JSON parsing failed for Rails output")
-            try:
-                # Use a unique file path inside the container to avoid collisions
-                _ts = int(__import__("time").time())
-                container_file = f"/tmp/j2o_query_{_ts}_{os.getpid()}.json"
-                logger.info("Falling back to file-based query execution: %s", container_file)
-                return self.execute_large_query_to_json_file(
-                    query,
-                    container_file=container_file,
-                    timeout=timeout,
-                )
-            except Exception:
-                # If fallback fails, re-raise the original parse error for upstream handling
-                raise e
+            # Always prefer file-based execution for reliability
+            _ts = int(__import__("time").time())
+            container_file = f"/tmp/j2o_query_{_ts}_{os.getpid()}.json"  # noqa: S108
+            return self.execute_large_query_to_json_file(
+                query,
+                container_file=container_file,
+                timeout=timeout,
+            )
         except RubyError:
-            # Preserve RubyError context for higher layers to classify
             logger.exception("Ruby error during execute_query_to_json_file")
             raise
         except Exception as e:
-            # Normalize any other errors to QueryExecutionError
             logger.exception("Error in execute_query_to_json_file")
             raise QueryExecutionError(str(e)) from e
 
@@ -2521,26 +2494,26 @@ class OpenProjectClient:
                     raise
 
             # Read the JSON directly from the Docker container file system via SSH
-                # Use SSH to read the file from the Docker container
-                ssh_command = f"docker exec {self.container_name} cat {file_path}"
+            # Use SSH to read the file from the Docker container
+            ssh_command = f"docker exec {self.container_name} cat {file_path}"
             try:
                 stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
             except Exception as e:
                 msg = f"SSH command failed: {e}"
                 raise QueryExecutionError(msg) from e
-                if returncode != 0:
-                    logger.error(
-                        "Failed to read file from container, stderr: %s",
-                        stderr,
-                    )
-                    msg = f"SSH command failed with code {returncode}: {stderr}"
+            if returncode != 0:
+                logger.error(
+                    "Failed to read file from container, stderr: %s",
+                    stderr,
+                )
+                msg = f"SSH command failed with code {returncode}: {stderr}"
                 raise QueryExecutionError(msg)  # noqa: TRY301
 
-                file_content = stdout.strip()
-                logger.debug(
-                    "Successfully read projects file from container, content length: %d",
-                    len(file_content),
-                )
+            file_content = stdout.strip()
+            logger.debug(
+                "Successfully read projects file from container, content length: %d",
+                len(file_content),
+            )
 
                 # Parse the JSON content
             try:
@@ -2835,6 +2808,7 @@ class OpenProjectClient:
           time_entry = TimeEntry.new(
             work_package_id: {work_package_id},
             user_id: {user_id},
+            logged_by_id: {user_id},
             activity_id: {activity_id},
             hours: {time_entry_data.get('hours', 0)},
             spent_on: Date.parse('{time_entry_data.get('spentOn', '')}'),

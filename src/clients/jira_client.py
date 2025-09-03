@@ -12,7 +12,7 @@ from typing import Any
 
 from requests import Response
 
-from jira import JIRA, Issue
+from jira import Issue
 from src import config
 from src.display import configure_logging
 from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
@@ -173,10 +173,59 @@ class JiraClient:
         """
         connection_errors = []
 
+        # Helper: import real jira module even if a local test stub shadows it
+        def _import_real_jira_module():
+            try:
+                import importlib, importlib.util, site, sys
+                from pathlib import Path as _Path
+
+                # If a shadow stub is loaded from the project, purge it
+                if "jira" in sys.modules:
+                    mod = sys.modules["jira"]
+                    mod_file = getattr(mod, "__file__", "")
+                    if mod_file and "/p/j2o/jira/__init__.py" in mod_file:
+                        # Remove stub and any submodules to force a clean import
+                        for key in list(sys.modules.keys()):
+                            if key == "jira" or key.startswith("jira."):
+                                sys.modules.pop(key, None)
+
+                # Prefer virtualenv site-packages path
+                candidates: list[_Path] = []
+                try:
+                    candidates.extend(_Path(p) for p in site.getsitepackages())
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    usp = site.getusersitepackages()
+                    if usp:
+                        candidates.append(_Path(usp))
+                except Exception:  # noqa: BLE001
+                    pass
+
+                for base in candidates:
+                    jira_init = base / "jira" / "__init__.py"
+                    if jira_init.exists():
+                        # Load the real package under the canonical name 'jira'
+                        spec = importlib.util.spec_from_file_location("jira", str(jira_init))
+                        if spec and spec.loader:
+                            mod = importlib.util.module_from_spec(spec)
+                            sys.modules["jira"] = mod  # ensure relative imports resolve to this package
+                            spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                            if hasattr(mod, "JIRA"):
+                                return mod
+
+                # Fallback: regular import (may still hit stub if unresolved)
+                return importlib.import_module("jira")
+            except Exception:  # noqa: BLE001
+                import importlib
+                return importlib.import_module("jira")
+
+        jira_mod = _import_real_jira_module()
+
         # Try to connect using token auth (Jira Cloud and Server PAT)
         try:
             logger.info("Attempting to connect to Jira using token authentication")
-            self.jira = JIRA(server=self.jira_url, token_auth=self.jira_token)
+            self.jira = jira_mod.JIRA(server=self.jira_url, token_auth=self.jira_token)
             server_info = self.jira.server_info()
             logger.success(
                 "Successfully connected to Jira server: %s (%s)",
@@ -207,7 +256,7 @@ class JiraClient:
 
         # Try basic authentication
         try:
-            self.jira = JIRA(
+            self.jira = jira_mod.JIRA(
                 server=self.jira_url,
                 basic_auth=(self.jira_username, self.jira_token),
                 options={"verify": self.verify_ssl},
