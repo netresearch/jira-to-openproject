@@ -36,6 +36,23 @@ from src.migrations.status_migration import StatusMigration
 from src.migrations.relation_migration import RelationMigration
 from src.migrations.priority_migration import PriorityMigration
 from src.migrations.simpletasks_migration import SimpleTasksMigration
+from src.migrations.resolution_migration import ResolutionMigration
+from src.migrations.labels_migration import LabelsMigration
+from src.migrations.versions_migration import VersionsMigration
+from src.migrations.components_migration import ComponentsMigration
+from src.migrations.attachments_migration import AttachmentsMigration
+from src.migrations.estimates_migration import EstimatesMigration
+from src.migrations.affects_versions_migration import AffectsVersionsMigration
+from src.migrations.security_levels_migration import SecurityLevelsMigration
+from src.migrations.votes_migration import VotesMigration
+from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
+from src.migrations.story_points_migration import StoryPointsMigration
+from src.migrations.sprint_epic_migration import SprintEpicMigration
+from src.migrations.remote_links_migration import RemoteLinksMigration
+from src.migrations.category_defaults_migration import CategoryDefaultsMigration
+from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.migrations.inline_refs_migration import InlineRefsMigration
+from src.migrations.native_tags_migration import NativeTagsMigration
 from src.migrations.watcher_migration import WatcherMigration
 from src.migrations.time_entry_migration import TimeEntryMigration
 from src.migrations.user_migration import UserMigration
@@ -147,6 +164,23 @@ def _build_component_factories(
         "relations": lambda: RelationMigration(jira_client=jira_client, op_client=op_client),
         "priorities": lambda: PriorityMigration(jira_client=jira_client, op_client=op_client),
         "simpletasks": lambda: SimpleTasksMigration(jira_client=jira_client, op_client=op_client),
+        "resolutions": lambda: ResolutionMigration(jira_client=jira_client, op_client=op_client),
+        "labels": lambda: LabelsMigration(jira_client=jira_client, op_client=op_client),
+        "versions": lambda: VersionsMigration(jira_client=jira_client, op_client=op_client),
+        "components": lambda: ComponentsMigration(jira_client=jira_client, op_client=op_client),
+        "attachments": lambda: AttachmentsMigration(jira_client=jira_client, op_client=op_client),
+        "estimates": lambda: EstimatesMigration(jira_client=jira_client, op_client=op_client),
+        "affects_versions": lambda: AffectsVersionsMigration(jira_client=jira_client, op_client=op_client),
+        "security_levels": lambda: SecurityLevelsMigration(jira_client=jira_client, op_client=op_client),
+        "votes_reactions": lambda: VotesMigration(jira_client=jira_client, op_client=op_client),
+        "customfields_generic": lambda: CustomFieldsGenericMigration(jira_client=jira_client, op_client=op_client),
+        "story_points": lambda: StoryPointsMigration(jira_client=jira_client, op_client=op_client),
+        "sprint_epic": lambda: SprintEpicMigration(jira_client=jira_client, op_client=op_client),
+        "remote_links": lambda: RemoteLinksMigration(jira_client=jira_client, op_client=op_client),
+        "category_defaults": lambda: CategoryDefaultsMigration(jira_client=jira_client, op_client=op_client),
+        "attachment_provenance": lambda: AttachmentProvenanceMigration(jira_client=jira_client, op_client=op_client),
+        "inline_refs": lambda: InlineRefsMigration(jira_client=jira_client, op_client=op_client),
+        "native_tags": lambda: NativeTagsMigration(jira_client=jira_client, op_client=op_client),
         "accounts": lambda: AccountMigration(jira_client=jira_client, op_client=op_client),
     }
 

@@ -1,0 +1,160 @@
+"""Migrate Jira Story Points to OpenProject via numeric CF fallback.
+
+Creates/ensures a WorkPackage custom field "Story Points" (float) and writes the
+Jira story points value per issue.
+
+Detection strategy:
+- Prefer `fields.storyPoints` if present
+- Fallback to common custom field key `fields.customfield_10016`
+- As last resort, scan `fields` attributes for a numeric value where the
+  attribute name contains both 'story' and 'point' (case-insensitive)
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from src.clients.jira_client import JiraClient
+from src.clients.openproject_client import OpenProjectClient
+from src.display import configure_logging
+from src.migrations.base_migration import BaseMigration, register_entity_types
+from src.models import ComponentResult
+
+try:
+    from src.config import logger as logger  # type: ignore
+    from src import config
+except Exception:  # noqa: BLE001
+    logger = configure_logging("INFO", None)
+    from src import config  # type: ignore  # noqa: PLC0415
+
+
+STORY_POINTS_CF_NAME = "Story Points"
+
+
+@register_entity_types("story_points")
+class StoryPointsMigration(BaseMigration):  # noqa: D101
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+        super().__init__(jira_client=jira_client, op_client=op_client)
+        import src.mappings as mappings  # noqa: PLC0415
+
+        self.mappings = mappings.Mappings()
+
+    def _ensure_story_points_cf(self) -> int:
+        """Ensure the Story Points CF exists; return its ID."""
+        try:
+            cf = self.op_client.get_custom_field_by_name(STORY_POINTS_CF_NAME)
+            cf_id = int(cf.get("id")) if isinstance(cf, dict) else None
+            if cf_id:
+                return cf_id
+        except Exception:  # noqa: BLE001
+            logger.info("Story Points CF not found; will create")
+
+        # Create CF via execute_query (float field, global)
+        script = (
+            "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '%s'); "
+            "if !cf; cf = CustomField.new(name: '%s', field_format: 'float', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
+            % (STORY_POINTS_CF_NAME, STORY_POINTS_CF_NAME)
+        )
+        cf_id = self.op_client.execute_query(script)
+        return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
+
+    @staticmethod
+    def _coerce_number(value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except Exception:  # noqa: BLE001
+                return None
+        return None
+
+    @staticmethod
+    def _extract_story_points_from_fields(fields: Any) -> float | None:
+        # Preferred explicit attributes
+        for attr in ("storyPoints", "customfield_10016", "story_points"):
+            if hasattr(fields, attr):
+                num = StoryPointsMigration._coerce_number(getattr(fields, attr, None))
+                if num is not None:
+                    return num
+
+        # Fallback: scan attributes for name containing both story and point
+        try:
+            for name in dir(fields):
+                lname = name.lower()
+                if "story" in lname and "point" in lname:
+                    num = StoryPointsMigration._coerce_number(getattr(fields, name, None))
+                    if num is not None:
+                        return num
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    def _extract(self) -> ComponentResult:  # noqa: D401
+        """Extract Jira story points per issue mapped to a WP."""
+        wp_map = self.mappings.get_mapping("work_package") or {}
+        keys = [str(k) for k in wp_map.keys()]
+        if not keys:
+            return ComponentResult(success=True, data={"sp": {}})
+
+        issues = self.jira_client.batch_get_issues(keys)
+
+        sp_by_key: dict[str, float] = {}
+        for k, issue in issues.items():
+            try:
+                fields = getattr(issue, "fields", None)
+                num = self._extract_story_points_from_fields(fields) if fields else None
+                if isinstance(num, (int, float)):
+                    sp_by_key[k] = float(num)
+            except Exception:  # noqa: BLE001
+                continue
+        return ComponentResult(success=True, data={"sp": sp_by_key})
+
+    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+        data = extracted.data or {}
+        raw: dict[str, float] = data.get("sp", {}) if isinstance(data, dict) else {}
+        # Normalize to strings suitable for CF
+        norm: dict[str, str] = {k: ("%g" % v) for k, v in raw.items()}
+        return ComponentResult(success=True, data={"sp_text": norm})
+
+    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+        cf_id = self._ensure_story_points_cf()
+        if not cf_id:
+            return ComponentResult(success=False, failed=1)
+
+        wp_map = self.mappings.get_mapping("work_package") or {}
+        data = mapped.data or {}
+        text_by_key: dict[str, str] = data.get("sp_text", {}) if isinstance(data, dict) else {}
+
+        updated = 0
+        failed = 0
+
+        for jira_key, text in text_by_key.items():
+            if text is None:
+                continue
+            entry = wp_map.get(jira_key)
+            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+                continue
+            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            try:
+                val = str(text).replace("'", "\\'")
+                set_script = (
+                    "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
+                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
+                    % (wp_id, cf_id, val, val)
+                )
+                ok = self.op_client.execute_query(set_script)
+                if ok:
+                    updated += 1
+                else:
+                    failed += 1
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to apply Story Points for %s", jira_key)
+                failed += 1
+
+        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+
+
+

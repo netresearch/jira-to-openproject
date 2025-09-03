@@ -152,6 +152,21 @@ type ComponentName = Literal[
     "relations",
     "priorities",
     "simpletasks",
+    "versions",
+    "components",
+    "attachments",
+    "estimates",
+    "affects_versions",
+    "security_levels",
+    "votes_reactions",
+    "customfields_generic",
+    "story_points",
+    "sprint_epic",
+    "remote_links",
+    "category_defaults",
+    "attachment_provenance",
+    "inline_refs",
+    "native_tags",
 ]
 
 
