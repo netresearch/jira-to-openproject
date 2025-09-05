@@ -1350,40 +1350,11 @@ class OpenProjectClient:
             "  begin; f.flush; f.fsync; rescue; end\n"
             "end\n"
             "begin; FileUtils.chmod(0644, result_path); rescue; end\n"
-            "begin; puts "
-            "\"RESULT-WROTE: \#{result_path}\"\n"
-            "rescue; end\n"
-            "begin; puts JSON.generate(result); rescue; end\n"
         )
 
-        # Execute via persistent Rails console (also emits JSON to stdout for fast-path)
+        # Execute via persistent Rails console with suppressed output (file-based result only)
         try:
-            output = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=False)
-            # Ensure console indicated result file write
-            try:
-                self._assert_expected_console_notice(
-                    output or "",
-                    expected_prefix="RESULT-WROTE:",
-                    context="bulk_create_records",
-                )
-            except QueryExecutionError:
-                # Continue to poll in case of non-fatal console noise; polling below will decide
-                pass
-            # Fast-path: attempt to parse JSON from console output
-            try:
-                parsed = self._parse_rails_output(output or "")
-                if isinstance(parsed, dict) and {
-                    "status",
-                    "created",
-                    "errors",
-                    "created_count",
-                    "error_count",
-                    "total",
-                }.issubset(set(parsed.keys())):
-                    return parsed
-            except Exception:
-                # Fall back to file retrieval
-                pass
+            _ = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=True)
         except Exception as e:
             _msg = f"Rails execution failed for bulk_create_records: {e}"
             raise QueryExecutionError(_msg) from e
