@@ -5,6 +5,7 @@ Handles the migration of users and their accounts from Jira to OpenProject.
 """
 
 import contextlib
+import time
 import json
 import logging
 import re
@@ -679,15 +680,53 @@ class UserMigration(BaseMigration):
                 script = script_header + script_body
                 self.op_client.execute_query(script, timeout=config.USER_CREATION_TIMEOUT)
 
-                # Retrieve result
-                result_path = self.op_client.transfer_file_from_container(Path(container_output), result_local_path)
-                with result_path.open("r", encoding="utf-8") as f:
-                    res = json.load(f)
-                return {
-                    "updated": int(res.get("updated", 0)),
-                    "skipped": skipped,
-                    "errors": int(res.get("errors", 0)),
-                }
+                # Retrieve result with robust polling (cat fast-path, then docker cp)
+                # 1) Try lightweight cat with retries
+                try:
+                    for _ in range(10):  # ~5s total
+                        try:
+                            stdout, stderr, rc = self.op_client.docker_client.execute_command(
+                                f"cat {container_output}",
+                            )
+                        except Exception:
+                            stdout, rc = "", 1
+                        if rc == 0 and stdout.strip():
+                            try:
+                                res = json.loads(stdout.strip())
+                                return {
+                                    "updated": int(res.get("updated", 0)),
+                                    "skipped": skipped,
+                                    "errors": int(res.get("errors", 0)),
+                                }
+                            except Exception:
+                                # If JSON parse fails, fall back to cp path
+                                break
+                        time.sleep(0.5)
+                except Exception:
+                    # Fall through to docker cp
+                    pass
+
+                # 2) Fallback: docker cp with retries
+                attempts = 0
+                while attempts < 10:
+                    try:
+                        result_path = self.op_client.transfer_file_from_container(
+                            Path(container_output),
+                            result_local_path,
+                        )
+                        with result_path.open("r", encoding="utf-8") as f:
+                            res = json.load(f)
+                        return {
+                            "updated": int(res.get("updated", 0)),
+                            "skipped": skipped,
+                            "errors": int(res.get("errors", 0)),
+                        }
+                    except Exception:
+                        attempts += 1
+                        time.sleep(0.5)
+
+                # If both approaches failed, report a single error increment
+                return {"updated": 0, "skipped": skipped, "errors": 1}
             except Exception as e:
                 self.logger.exception("Backfill of Jira user key CF failed: %s", e)
                 return {"updated": 0, "skipped": skipped, "errors": 1}
@@ -796,6 +835,19 @@ class UserMigration(BaseMigration):
             created = result.get("created", 0)
             total = result.get("total", 0)
             failed = result.get("failed", 0)
+
+            # Always ensure the 'Jira user key' CF is populated for mapped users,
+            # even when no users needed creation in this run.
+            try:
+                backfill_stats = self.backfill_jira_user_key_cf()
+                self.logger.info(
+                    "Backfilled Jira user key CF: updated=%s skipped=%s errors=%s",
+                    backfill_stats.get("updated", 0),
+                    backfill_stats.get("skipped", 0),
+                    backfill_stats.get("errors", 0),
+                )
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("Failed to backfill Jira user key CF: %s", e)
 
             # Success if no failures occurred (even if no users needed creation)
             is_success = failed == 0

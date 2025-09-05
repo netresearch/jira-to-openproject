@@ -348,6 +348,92 @@ class EnhancedUserAssociationMigrator:
         # Validate retry configuration
         self._validate_retry_config()
 
+        # Cache of OpenProject users for fast resolution heuristics
+        self._op_users_cache: list[dict[str, Any]] | None = None
+
+    def _get_op_users_index(
+        self,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        """Return indexes of OpenProject users by login, email, and Jira user key CF.
+
+        Returns:
+            Tuple of (by_login, by_email, by_jira_key)
+        """
+        if self._op_users_cache is None:
+            try:
+                users = self.op_client.get_users() or []
+            except Exception:
+                users = []
+            self._op_users_cache = [u for u in users if isinstance(u, dict)]
+
+        by_login: dict[str, dict[str, Any]] = {}
+        by_email: dict[str, dict[str, Any]] = {}
+        by_jira_key: dict[str, dict[str, Any]] = {}
+
+        for user in self._op_users_cache:
+            login = (user.get("login") or "").lower()
+            if login:
+                by_login[login] = user
+
+            email_val = (user.get("mail") or user.get("email") or "").lower()
+            if email_val:
+                by_email[email_val] = user
+
+            jira_key_cf = (user.get("jira_user_key") or user.get("jira_key") or "").lower()
+            if jira_key_cf:
+                by_jira_key[jira_key_cf] = user
+
+        return by_login, by_email, by_jira_key
+
+    def _resolve_openproject_user_id(
+        self,
+        username: str | None,
+        email: str | None,
+        account_id: str | None,
+    ) -> int | None:
+        """Resolve an OpenProject user ID using multiple heuristics.
+
+        Tries (in order): login==username, Jira user key CF==username, Jira user key CF==account_id,
+        mail==email, login==email local-part.
+        """
+        by_login, by_email, by_jira_key = self._get_op_users_index()
+
+        # 1) Direct login match
+        if username:
+            u = by_login.get(username.lower())
+            if u and u.get("id"):
+                return int(u["id"])  # type: ignore[arg-type]
+
+            # 2) Jira user key CF equals username
+            u = by_jira_key.get(username.lower())
+            if u and u.get("id"):
+                return int(u["id"])  # type: ignore[arg-type]
+
+        # 3) Jira user key CF equals account_id
+        if account_id:
+            u = by_jira_key.get(account_id.lower())
+            if u and u.get("id"):
+                return int(u["id"])  # type: ignore[arg-type]
+
+        # 4) Email match
+        if email:
+            em = email.lower()
+            u = by_email.get(em)
+            if u and u.get("id"):
+                return int(u["id"])  # type: ignore[arg-type]
+
+            # 5) Email local-part as login
+            try:
+                local_part = em.split("@", 1)[0]
+            except Exception:
+                local_part = em
+            if local_part:
+                u = by_login.get(local_part)
+                if u and u.get("id"):
+                    return int(u["id"])  # type: ignore[arg-type]
+
+        return None
+
     def _safe_metrics_increment(
         self,
         counter_name: str,
@@ -597,15 +683,17 @@ class EnhancedUserAssociationMigrator:
         """Create enhanced user mappings from basic user mapping."""
         self.logger.info("Creating enhanced user mappings from basic mapping")
 
-        for jira_username, op_user_id in self.user_mapping.items():
-            # Get additional user info from Jira if possible
-            jira_user_info = self._get_jira_user_info(jira_username)
+        for jira_key, entry in self.user_mapping.items():
+            # user_mapping is keyed by Jira user key; values include jira_name/email
+            op_user_id = entry if isinstance(entry, int) else entry.get("openproject_id")
+            jira_username = entry.get("jira_name") if isinstance(entry, dict) else None
+            jira_user_info = self._get_jira_user_info(jira_username or jira_key)
             op_user_info = (
                 self._get_openproject_user_info(op_user_id) if op_user_id else None
             )
 
             mapping = UserAssociationMapping(
-                jira_username=jira_username,
+                jira_username=jira_username or jira_key,
                 jira_user_id=(
                     jira_user_info.get("accountId") if jira_user_info else None
                 ),
@@ -634,7 +722,10 @@ class EnhancedUserAssociationMigrator:
                 lastRefreshed=self._get_current_timestamp(),
             )
 
-            self.enhanced_user_mappings[jira_username] = mapping
+            # Index by both Jira key and Jira username for robust lookups
+            self.enhanced_user_mappings[jira_key] = mapping
+            if jira_username:
+                self.enhanced_user_mappings[jira_username] = mapping
 
     def _get_current_timestamp(self) -> str:
         """Get current timestamp in ISO format.
@@ -955,6 +1046,24 @@ class EnhancedUserAssociationMigrator:
             return result
 
         username = assignee_data["username"]
+        # New: deterministic resolver shortcut before cache/staleness path
+        try:
+            resolved = self._resolve_openproject_user_id(
+                username=username,
+                email=assignee_data.get("email"),
+                account_id=assignee_data.get("account_id"),
+            )
+            if resolved:
+                work_package_data["assigned_to_id"] = resolved
+                self.logger.debug(
+                    "Resolved assignee %s to OpenProject user %d via heuristics",
+                    username,
+                    resolved,
+                )
+                return result
+        except Exception:
+            # Fall through to existing logic on any resolver error
+            pass
 
         try:
             # Prefer cached mapping when present and active to satisfy direct-mapped tests
@@ -1070,6 +1179,24 @@ class EnhancedUserAssociationMigrator:
             return result
 
         username = author_data["username"]
+        # New: deterministic resolver shortcut before cache/staleness path
+        try:
+            resolved = self._resolve_openproject_user_id(
+                username=username,
+                email=author_data.get("email"),
+                account_id=author_data.get("account_id"),
+            )
+            if resolved:
+                work_package_data["author_id"] = resolved
+                self.logger.debug(
+                    "Resolved author %s to OpenProject user %d via heuristics",
+                    username,
+                    resolved,
+                )
+                return result
+        except Exception:
+            # Fall through on resolver error
+            pass
 
         try:
             # Prefer cached mapping directly to satisfy unit tests with static fixtures

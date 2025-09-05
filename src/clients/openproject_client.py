@@ -1230,7 +1230,19 @@ class OpenProjectClient:
         self.transfer_file_to_container(local_json, container_json)
 
         # Result file path in container and local debug path
-        result_name = result_basename or f"bulk_result_{model.lower()}_{os.urandom(3).hex()}.json"
+        # Always ensure uniqueness to avoid collisions across batches
+        if result_basename:
+            base = str(result_basename)
+            if not base.endswith(".json"):
+                base = f"{base}.json"
+            unique_suffix = f"_{int(time.time())}_{os.getpid()}_{os.urandom(2).hex()}"
+            # Insert suffix before .json
+            if base.lower().endswith(".json"):
+                result_name = base[:-5] + unique_suffix + ".json"
+            else:
+                result_name = base + unique_suffix
+        else:
+            result_name = f"bulk_result_{model.lower()}_{int(time.time())}_{os.getpid()}_{os.urandom(3).hex()}.json"
         container_result = Path("/tmp") / result_name  # noqa: S108
         local_result = temp_dir / result_name
 
@@ -1238,6 +1250,7 @@ class OpenProjectClient:
         header = (
             "require 'json'\n"
             "require 'logger'\n"
+            "begin; require 'fileutils'; rescue; end\n"
             f"model_name = '{model}'\n"
             f"data_path = '{container_json.as_posix()}'\n"
             f"result_path = '{container_result.as_posix()}'\n"
@@ -1332,22 +1345,79 @@ class OpenProjectClient:
             "  'error_count' => errors.length,\n"
             "  'total' => data.length\n"
             "}\n"
-            "File.write(result_path, JSON.generate(result))\n"
+            "File.open(result_path, 'w') do |f|\n"
+            "  f.write(JSON.generate(result))\n"
+            "  begin; f.flush; f.fsync; rescue; end\n"
+            "end\n"
+            "begin; FileUtils.chmod(0644, result_path); rescue; end\n"
+            "begin; puts "
+            "\"RESULT-WROTE: \#{result_path}\"\n"
+            "rescue; end\n"
+            "begin; puts JSON.generate(result); rescue; end\n"
         )
 
-        # Execute via persistent Rails console (file-only flow; ignore stdout)
+        # Execute via persistent Rails console (also emits JSON to stdout for fast-path)
         try:
-            output = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=True)
+            output = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=False)
+            # Ensure console indicated result file write
+            try:
+                self._assert_expected_console_notice(
+                    output or "",
+                    expected_prefix="RESULT-WROTE:",
+                    context="bulk_create_records",
+                )
+            except QueryExecutionError:
+                # Continue to poll in case of non-fatal console noise; polling below will decide
+                pass
+            # Fast-path: attempt to parse JSON from console output
+            try:
+                parsed = self._parse_rails_output(output or "")
+                if isinstance(parsed, dict) and {
+                    "status",
+                    "created",
+                    "errors",
+                    "created_count",
+                    "error_count",
+                    "total",
+                }.issubset(set(parsed.keys())):
+                    return parsed
+            except Exception:
+                # Fall back to file retrieval
+                pass
         except Exception as e:
             _msg = f"Rails execution failed for bulk_create_records: {e}"
             raise QueryExecutionError(_msg) from e
 
-        # Poll-copy result back to local
-        max_wait_seconds = 30
+        # Poll-copy result back to local (allow slow writes on busy systems)
+        max_wait_seconds_env = os.environ.get("J2O_BULK_RESULT_WAIT_SECONDS")
+        try:
+            max_wait_seconds = int(max_wait_seconds_env) if max_wait_seconds_env else 180
+        except Exception:
+            max_wait_seconds = 180
         poll_interval = 1.0
         waited = 0.0
         copied = False
         while waited < max_wait_seconds:
+            # First, try lightweight read via cat to avoid cp edge cases
+            try:
+                stdout, stderr, rc = self.docker_client.execute_command(
+                    f"cat {quote(container_result.as_posix())}",
+                )
+                if rc == 0 and stdout:
+                    try:
+                        local_result.parent.mkdir(parents=True, exist_ok=True)
+                        with local_result.open("w", encoding="utf-8") as f:
+                            f.write(stdout)
+                        copied = True
+                        break
+                    except Exception:  # noqa: BLE001
+                        # Fall through to cp fallback
+                        pass
+            except Exception:  # noqa: BLE001
+                # If cat fails (file not ready yet), continue polling
+                pass
+
+            # Fallback: use docker cp path to retrieve the file when present
             try:
                 self.transfer_file_from_container(container_result, local_result)
                 copied = True

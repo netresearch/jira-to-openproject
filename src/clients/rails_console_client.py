@@ -337,11 +337,14 @@ class RailsConsoleClient:
         # Conditionally include result printing based on suppress_output flag
         result_print_line = "" if suppress_output else "puts result.inspect"
 
-        template = """
+        # Two execution templates:
+        # - expression_template: expects `command` to be an expression; assigns to `result`
+        # - script_template: executes arbitrary multi-line script (used when suppress_output=True)
+        expression_template = """
         # Print start marker
         %s
 
-        # Execute the actual command
+        # Execute the actual command (expects an expression)
         begin
           result = nil  # Initialize result variable
           result = %s  # Assign the actual result
@@ -364,15 +367,47 @@ class RailsConsoleClient:
         end # %s
         """
 
+        script_template = """
+        # Print start marker
+        %s
+
+        # Execute multi-line script content
+        begin
+          %s
+        rescue => e
+          # Guard all error prints to avoid secondary exceptions that can cause IRB recursion
+          begin; %s; rescue; end
+          begin; puts "Ruby error: #{e.class}: #{e.message}"; rescue; end
+          begin
+            bt = e.backtrace || []
+            puts bt.join("\\n")[0..2000]
+          rescue
+            # ignore any error while printing backtrace
+          end
+        ensure
+          # Always print end marker even if any of the above fails
+          begin; %s; rescue; end
+        end # %s
+        """
+
         end_with_comment = script_end_comment_out
-        wrapped_command = template % (
-            start_marker_cmd,
-            command,
-            result_print_line,
-            error_marker_cmd,
-            end_marker_cmd,
-            end_with_comment,
-        )
+        if suppress_output:
+            wrapped_command = script_template % (
+                start_marker_cmd,
+                command,
+                error_marker_cmd,
+                end_marker_cmd,
+                end_with_comment,
+            )
+        else:
+            wrapped_command = expression_template % (
+                start_marker_cmd,
+                command,
+                result_print_line,
+                error_marker_cmd,
+                end_marker_cmd,
+                end_with_comment,
+            )
 
         command_path = self.file_manager.join(debug_session_dir, "ruby_command.rb")
         with command_path.open("w") as f:
