@@ -413,13 +413,23 @@ class RailsConsoleClient:
         with command_path.open("w") as f:
             f.write(wrapped_command)
 
-        # Use state-machine semantics: wait for script-end echo, then ensure tail contains EXEC_END
-        tmux_output = self._send_command_to_tmux(
-            wrapped_command,
-            timeout,
-            wait_for_line=end_marker_out,
-            script_end_marker=script_end_comment_out,
-        )
+        # Execute in tmux
+        if suppress_output:
+            # For suppressed multi-line scripts, avoid marker waits entirely to reduce fragility/noise
+            tmux_output = self._send_command_to_tmux(
+                wrapped_command,
+                timeout,
+                wait_for_line=None,
+                script_end_marker=None,
+            )
+        else:
+            # Use state-machine semantics: wait for script-end echo, then ensure tail contains EXEC_END
+            tmux_output = self._send_command_to_tmux(
+                wrapped_command,
+                timeout,
+                wait_for_line=end_marker_out,
+                script_end_marker=script_end_comment_out,
+            )
 
         tmux_output_path = self.file_manager.join(debug_session_dir, "tmux_output.txt")
         with tmux_output_path.open("w") as f:
@@ -429,6 +439,10 @@ class RailsConsoleClient:
             debug_session_dir,
             f"TMUX OUTPUT RECEIVED: {time.strftime('%Y-%m-%d %H:%M:%S')}\nSize: {len(tmux_output)} bytes\n",
         )
+
+        # For suppressed output calls, return early to avoid marker parsing and console noise
+        if suppress_output:
+            return ""
 
         # Robust, line-anchored marker parsing to avoid false positives from echoed source lines
         all_lines = tmux_output.split("\n")

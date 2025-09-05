@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock, Semaphore
 from typing import Any, Literal, TypedDict
+import unicodedata
 
 import requests
 
@@ -366,20 +367,26 @@ class EnhancedUserAssociationMigrator:
                 users = []
             self._op_users_cache = [u for u in users if isinstance(u, dict)]
 
+        def _norm(s: str) -> str:
+            try:
+                return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").lower().strip()
+            except Exception:
+                return (s or "").lower().strip()
+
         by_login: dict[str, dict[str, Any]] = {}
         by_email: dict[str, dict[str, Any]] = {}
         by_jira_key: dict[str, dict[str, Any]] = {}
 
         for user in self._op_users_cache:
-            login = (user.get("login") or "").lower()
+            login = _norm(user.get("login") or "")
             if login:
                 by_login[login] = user
 
-            email_val = (user.get("mail") or user.get("email") or "").lower()
+            email_val = _norm(user.get("mail") or user.get("email") or "")
             if email_val:
                 by_email[email_val] = user
 
-            jira_key_cf = (user.get("jira_user_key") or user.get("jira_key") or "").lower()
+            jira_key_cf = _norm(user.get("jira_user_key") or user.get("jira_key") or "")
             if jira_key_cf:
                 by_jira_key[jira_key_cf] = user
 
@@ -398,33 +405,41 @@ class EnhancedUserAssociationMigrator:
         """
         by_login, by_email, by_jira_key = self._get_op_users_index()
 
+        def _norm(s: str | None) -> str:
+            if not s:
+                return ""
+            try:
+                return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").lower().strip()
+            except Exception:
+                return s.lower().strip()
+
         # 1) Direct login match
         if username:
-            u = by_login.get(username.lower())
+            u = by_login.get(_norm(username))
             if u and u.get("id"):
                 return int(u["id"])  # type: ignore[arg-type]
 
             # 2) Jira user key CF equals username
-            u = by_jira_key.get(username.lower())
+            u = by_jira_key.get(_norm(username))
             if u and u.get("id"):
                 return int(u["id"])  # type: ignore[arg-type]
 
         # 3) Jira user key CF equals account_id
         if account_id:
-            u = by_jira_key.get(account_id.lower())
+            u = by_jira_key.get(_norm(account_id))
             if u and u.get("id"):
                 return int(u["id"])  # type: ignore[arg-type]
 
         # 4) Email match
         if email:
-            em = email.lower()
+            em = _norm(email)
             u = by_email.get(em)
             if u and u.get("id"):
                 return int(u["id"])  # type: ignore[arg-type]
 
             # 5) Email local-part as login
             try:
-                local_part = em.split("@", 1)[0]
+                local_part = (em.split("@", 1)[0] or "").strip()
             except Exception:
                 local_part = em
             if local_part:
