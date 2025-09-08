@@ -8,8 +8,14 @@ import shutil
 import subprocess
 import time
 from typing import Any
+from datetime import datetime, timezone
+import inspect
 
 from src.display import configure_logging
+try:
+    from src import config  # type: ignore
+except Exception:  # noqa: BLE001
+    config = None
 from src.utils.file_manager import FileManager
 
 logger = configure_logging("INFO", None)
@@ -341,58 +347,84 @@ class RailsConsoleClient:
         # - expression_template: expects `command` to be an expression; assigns to `result`
         # - script_template: executes arbitrary multi-line script (used when suppress_output=True)
         expression_template = """
-        # Print start marker
         %s
-
-        # Execute the actual command (expects an expression)
         begin
           result = nil  # Initialize result variable
           result = %s  # Assign the actual result
-
-          # Print the result (conditionally)
           %s
         rescue => e
-          # Guard all error prints to avoid secondary exceptions that can cause IRB recursion
           begin; %s; rescue; end
           begin; puts "Ruby error: #{e.class}: #{e.message}"; rescue; end
           begin
             bt = e.backtrace || []
             puts bt.join("\\n")[0..2000]
           rescue
-            # ignore any error while printing backtrace
           end
         ensure
-          # Always print end marker even if any of the above fails
           begin; %s; rescue; end
         end # %s
         """
 
         script_template = """
-        # Print start marker
         %s
-
-        # Execute multi-line script content
         begin
           %s
         rescue => e
-          # Guard all error prints to avoid secondary exceptions that can cause IRB recursion
           begin; %s; rescue; end
           begin; puts "Ruby error: #{e.class}: #{e.message}"; rescue; end
           begin
             bt = e.backtrace || []
             puts bt.join("\\n")[0..2000]
           rescue
-            # ignore any error while printing backtrace
           end
         ensure
-          # Always print end marker even if any of the above fails
           begin; %s; rescue; end
         end # %s
         """
 
         end_with_comment = script_end_comment_out
+        # Build provenance header for every console execution
+        def _provenance_hint() -> str:
+            try:
+                stack = inspect.stack()
+                path = None
+                func = None
+                for fr in stack[2:12]:
+                    filename = fr.filename
+                    if "/src/" in filename:
+                        path = filename.split("/src/")[-1]
+                        func = fr.function
+                        break
+                parts: list[str] = ["j2o:"]
+                if path:
+                    parts.append(
+                        path.replace("migrations/", "migration/")
+                        .replace("clients/", "client/")
+                        .replace("_migration.py", "")
+                        .replace(".py", "")
+                    )
+                else:
+                    parts.append("rails/console")
+                if func:
+                    parts.append(func)
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                parts.append(f"ts={ts}")
+                proj = None
+                try:
+                    if config and getattr(config, "jira_config", None):
+                        proj = (config.jira_config or {}).get("project_filter")
+                except Exception:
+                    proj = None
+                if proj:
+                    parts.append(f"project={proj}")
+                return "# " + " ".join(parts)
+            except Exception:
+                return "# j2o: rails/console"
+
+        header_comment = _provenance_hint() + "\n"
+
         if suppress_output:
-            wrapped_command = script_template % (
+            body = script_template % (
                 start_marker_cmd,
                 command,
                 error_marker_cmd,
@@ -400,7 +432,7 @@ class RailsConsoleClient:
                 end_with_comment,
             )
         else:
-            wrapped_command = expression_template % (
+            body = expression_template % (
                 start_marker_cmd,
                 command,
                 result_print_line,
@@ -408,6 +440,7 @@ class RailsConsoleClient:
                 end_marker_cmd,
                 end_with_comment,
             )
+        wrapped_command = header_comment + body
 
         command_path = self.file_manager.join(debug_session_dir, "ruby_command.rb")
         with command_path.open("w") as f:
