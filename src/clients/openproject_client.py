@@ -704,10 +704,9 @@ class OpenProjectClient:
         """
         # Ensure JSON conversion on the Ruby side
         ruby_json_expr = f"({query}).as_json"
-        container_file_quoted = quote(container_file)
-
         # Build Ruby that writes JSON to file without printing large output to console
-        ruby_path_literal = container_file_quoted.replace("'", "\\'")
+        # IMPORTANT: Do not shell-quote here; we need the actual path string in Ruby.
+        ruby_path_literal = str(container_file).replace("'", "\\'")
         ruby_script = (
             "require 'json'\n"
             "begin; require 'fileutils'; rescue; end\n"
