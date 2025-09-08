@@ -777,14 +777,39 @@ class OpenProjectClient:
             with local_tmp.open("w", encoding="utf-8") as f:
                 f.write(ruby_script)
             self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-            runner_cmd = (
-                f"(cd /app || cd /opt/openproject) && "
-                f"bundle exec rails runner {runner_script_path}"
-            )
-            stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
-            if rc != 0:
-                q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
-                raise QueryExecutionError(q_msg)
+
+            # Decide load mode: default to console `load` to avoid tmux pastes but keep low startup cost
+            mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or "console").lower()
+            if mode == "console":
+                try:
+                    _console_output = self.rails_client.execute(
+                        f"load '{runner_script_path}'",
+                        timeout=timeout or 90,
+                        suppress_output=True,
+                    )
+                    self._check_console_output_for_errors(
+                        _console_output or "",
+                        context="execute_large_query_to_json_file(load)",
+                    )
+                except Exception as e:
+                    # Fallback to rails runner on console instability
+                    runner_cmd = (
+                        f"(cd /app || cd /opt/openproject) && "
+                        f"bundle exec rails runner {runner_script_path}"
+                    )
+                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                    if rc != 0:
+                        q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                        raise QueryExecutionError(q_msg) from e
+            else:
+                runner_cmd = (
+                    f"(cd /app || cd /opt/openproject) && "
+                    f"bundle exec rails runner {runner_script_path}"
+                )
+                stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                if rc != 0:
+                    q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                    raise QueryExecutionError(q_msg)
         else:
             # Execute via persistent tmux Rails console (faster than rails runner)
             try:
@@ -1458,14 +1483,32 @@ class OpenProjectClient:
             with local_tmp.open("w", encoding="utf-8") as f:
                 f.write(full_script)
             self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-            runner_cmd = (
-                f"(cd /app || cd /opt/openproject) && "
-                f"bundle exec rails runner {runner_script_path}"
-            )
-            stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
-            if rc != 0:
-                q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
-                raise QueryExecutionError(q_msg)
+            mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or "console").lower()
+            if mode == "console":
+                try:
+                    _console_output = self.rails_client.execute(
+                        f"load '{runner_script_path}'",
+                        timeout=timeout or 120,
+                        suppress_output=True,
+                    )
+                except Exception as e:
+                    runner_cmd = (
+                        f"(cd /app || cd /opt/openproject) && "
+                        f"bundle exec rails runner {runner_script_path}"
+                    )
+                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                    if rc != 0:
+                        q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                        raise QueryExecutionError(q_msg) from e
+            else:
+                runner_cmd = (
+                    f"(cd /app || cd /opt/openproject) && "
+                    f"bundle exec rails runner {runner_script_path}"
+                )
+                stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                if rc != 0:
+                    q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                    raise QueryExecutionError(q_msg)
         else:
             # Execute via persistent Rails console with suppressed output (file-based result only)
             try:
