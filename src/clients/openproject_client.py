@@ -710,8 +710,13 @@ class OpenProjectClient:
         ruby_path_literal = container_file_quoted.replace("'", "\\'")
         ruby_script = (
             "require 'json'\n"
+            "begin; require 'fileutils'; rescue; end\n"
             f"data = {ruby_json_expr}\n"
-            f"File.write('{ruby_path_literal}', JSON.generate(data))\n"
+            f"File.open('{ruby_path_literal}', 'w') do |f|\n"
+            "  f.write(JSON.generate(data))\n"
+            "  begin; f.flush; f.fsync; rescue; end\n"
+            "end\n"
+            f"begin; FileUtils.chmod(0644, '{ruby_path_literal}'); rescue; end\n"
         )
 
         # Execute via persistent tmux Rails console (faster than rails runner)
@@ -757,21 +762,28 @@ class OpenProjectClient:
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"
 
-        # Small retry loop to handle race where file write completes slightly after command returns
+        # Retry loop to handle race where file write completes slightly after command returns
+        wait_env = os.environ.get("J2O_QUERY_RESULT_WAIT_SECONDS")
+        try:
+            max_wait_seconds = int(wait_env) if wait_env else 60
+        except Exception:
+            max_wait_seconds = 60
+        poll_interval = 0.5
+        attempts = max(1, int(max_wait_seconds / poll_interval))
+
         stdout = ""
         stderr = ""
         returncode = 1
-        for attempt in range(8):  # ~2 seconds total with 0.25s sleeps
+        for attempt in range(attempts):
             try:
                 stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
             except Exception as e:
-                # If file not present yet, wait and retry
                 if "No such file or directory" in str(e):
-                    time.sleep(0.25)
+                    time.sleep(poll_interval)
                     continue
                 raise
 
-            if returncode == 0:
+            if returncode == 0 and stdout:
                 if attempt > 0:
                     logger.debug(
                         "Recovered after %d attempts reading container file %s",
@@ -779,12 +791,8 @@ class OpenProjectClient:
                         container_file,
                     )
                 break
-            if stderr and "No such file or directory" in stderr:
-                time.sleep(0.25)
-                continue
-            # Other non-zero error: fail fast
-            msg = f"SSH command failed with code {returncode}: {stderr}"
-            raise QueryExecutionError(msg)
+            # Still not present; keep polling until timeout
+            time.sleep(poll_interval)
 
         if returncode != 0:
             msg = f"SSH command failed with code {returncode}: {stderr}"
