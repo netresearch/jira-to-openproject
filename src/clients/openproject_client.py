@@ -1361,8 +1361,9 @@ class OpenProjectClient:
         )
 
         # Execute via persistent Rails console with suppressed output (file-based result only)
+        output: str | None = None
         try:
-            _ = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=True)
+            output = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=True)
         except Exception as e:
             _msg = f"Rails execution failed for bulk_create_records: {e}"
             raise QueryExecutionError(_msg) from e
