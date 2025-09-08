@@ -1434,13 +1434,45 @@ class OpenProjectClient:
             "begin; FileUtils.chmod(0644, result_path); rescue; end\n"
         )
 
-        # Execute via persistent Rails console with suppressed output (file-based result only)
-        output: str | None = None
+        # Decide execution mode: prefer rails runner for long scripts to avoid pasting into console
+        full_script = header + ruby
+        max_lines_env = os.environ.get("J2O_SCRIPT_RUNNER_MAX_LINES")
+        char_thresh_env = os.environ.get("J2O_SCRIPT_RUNNER_THRESHOLD")
         try:
-            output = self.rails_client.execute(header + ruby, timeout=timeout or 120, suppress_output=True)
-        except Exception as e:
-            _msg = f"Rails execution failed for bulk_create_records: {e}"
-            raise QueryExecutionError(_msg) from e
+            max_lines = int(max_lines_env) if max_lines_env else 10
+        except Exception:
+            max_lines = 10
+        try:
+            char_threshold = int(char_thresh_env) if char_thresh_env else 200
+        except Exception:
+            char_threshold = 200
+
+        script_lines = full_script.count("\n") + 1
+        use_runner = (script_lines >= max_lines) or (len(full_script) >= char_threshold)
+
+        output: str | None = None
+        if use_runner:
+            runner_script_path = f"/tmp/j2o_bulk_{os.urandom(4).hex()}.rb"  # noqa: S108
+            local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+            local_tmp.parent.mkdir(parents=True, exist_ok=True)
+            with local_tmp.open("w", encoding="utf-8") as f:
+                f.write(full_script)
+            self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
+            runner_cmd = (
+                f"(cd /app || cd /opt/openproject) && "
+                f"bundle exec rails runner {runner_script_path}"
+            )
+            stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+            if rc != 0:
+                q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                raise QueryExecutionError(q_msg)
+        else:
+            # Execute via persistent Rails console with suppressed output (file-based result only)
+            try:
+                output = self.rails_client.execute(full_script, timeout=timeout or 120, suppress_output=True)
+            except Exception as e:
+                _msg = f"Rails execution failed for bulk_create_records: {e}"
+                raise QueryExecutionError(_msg) from e
 
         # Poll-copy result back to local (allow slow writes on busy systems)
         max_wait_seconds_env = os.environ.get("J2O_BULK_RESULT_WAIT_SECONDS")
