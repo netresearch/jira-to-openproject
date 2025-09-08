@@ -7,6 +7,9 @@ and export operations from a single command-line tool.
 
 import argparse
 import sys
+import os
+import atexit
+from pathlib import Path
 
 from src.config import logger, update_from_cli_args
 
@@ -43,6 +46,89 @@ def validate_database_configuration() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error("Unexpected error validating database configuration: %s", e)
         sys.exit(1)
+
+
+def _pid_is_running(pid: int) -> bool:
+    """Return True if a process with PID is running (and accessible)."""
+    try:
+        if pid <= 0:
+            return False
+        # On POSIX, signal 0 checks existence without sending a signal
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we may not have permission; treat as running
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_singleton_lock(lock_file: Path) -> None:
+    """Ensure only one migration runs at a time using a PID lock file.
+
+    If a lock exists and the PID is alive, exit. If the PID is stale, remove it.
+    The lock is removed automatically on process exit when possible.
+    """
+    if os.environ.get("J2O_DISABLE_LOCK") in {"1", "true", "True"}:
+        logger.warning("Singleton lock disabled via J2O_DISABLE_LOCK=1")
+        return
+
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    current_pid = os.getpid()
+
+    if lock_file.exists():
+        try:
+            existing = int(lock_file.read_text(encoding="utf-8").strip() or "0")
+        except Exception:
+            existing = 0
+
+        if existing and _pid_is_running(existing):
+            logger.error(
+                "Another migration instance is running (pid=%s). Lock: %s",
+                existing,
+                str(lock_file),
+            )
+            logger.error(
+                "If this is stale, remove the lock or set J2O_DISABLE_LOCK=1 to override (not recommended).",
+            )
+            sys.exit(1)
+        else:
+            # Stale lock
+            try:
+                lock_file.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Create the lock exclusively if possible
+    try:
+        # Use 'x' mode to fail if file suddenly appears between exists() and here
+        with lock_file.open("x", encoding="utf-8") as f:
+            f.write(str(current_pid))
+    except FileExistsError:
+        # Another process raced us
+        try:
+            existing = int(lock_file.read_text(encoding="utf-8").strip() or "0")
+        except Exception:
+            existing = 0
+        logger.error(
+            "Concurrent migration detected (pid=%s). Lock: %s",
+            existing,
+            str(lock_file),
+        )
+        sys.exit(1)
+
+    def _cleanup_lock() -> None:
+        try:
+            # Only remove if the file still contains our PID to avoid clobbering
+            content = lock_file.read_text(encoding="utf-8").strip()
+            if content == str(current_pid):
+                lock_file.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    atexit.register(_cleanup_lock)
 
 
 def main() -> None:
@@ -149,6 +235,15 @@ def main() -> None:
                 sys.exit(1)
             logger.success("Successfully restored from backup: %s", args.restore)
             sys.exit(0)
+
+        # Singleton lock: prevent concurrent runs (cleanup on exit)
+        try:
+            _ensure_singleton_lock(Path("var/run/j2o_migrate.pid"))
+        except SystemExit:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to acquire singleton lock: %s", e)
+            sys.exit(1)
 
         # Check if we should run in tmux
         if args.tmux:
