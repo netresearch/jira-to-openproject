@@ -755,13 +755,20 @@ class OpenProjectClient:
         )
 
         # Choose execution mode: use rails runner for long scripts to avoid pasting into console
-        threshold_env = os.environ.get("J2O_SCRIPT_RUNNER_THRESHOLD")
+        # Use both max lines and char threshold (defaults: 10 lines OR 200 chars)
+        max_lines_env = os.environ.get("J2O_SCRIPT_RUNNER_MAX_LINES")
+        char_thresh_env = os.environ.get("J2O_SCRIPT_RUNNER_THRESHOLD")
         try:
-            runner_threshold = int(threshold_env) if threshold_env else 1000
+            max_lines = int(max_lines_env) if max_lines_env else 10
         except Exception:
-            runner_threshold = 1000
+            max_lines = 10
+        try:
+            char_threshold = int(char_thresh_env) if char_thresh_env else 200
+        except Exception:
+            char_threshold = 200
 
-        use_runner = len(ruby_script) >= runner_threshold
+        script_lines = ruby_script.count("\n") + 1
+        use_runner = (script_lines >= max_lines) or (len(ruby_script) >= char_threshold)
 
         if use_runner:
             runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
