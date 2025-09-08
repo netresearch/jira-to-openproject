@@ -7,6 +7,8 @@ import re
 import secrets
 import time
 from collections.abc import Callable, Iterator
+from datetime import datetime, timezone
+import inspect
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -707,7 +709,41 @@ class OpenProjectClient:
         # Build Ruby that writes JSON to file without printing large output to console
         # IMPORTANT: Do not shell-quote here; we need the actual path string in Ruby.
         ruby_path_literal = str(container_file).replace("'", "\\'")
+        # Build provenance hint: where did this originate?
+        # Compose a concise hint like: "j2o: migration/work_packages/fetch project=NRS ts=..."
+        def _caller_hint(default_component: str) -> str:
+            try:
+                stack = inspect.stack()
+                # Search frames for our modules to extract context
+                path = None
+                func = None
+                for fr in stack[1:10]:
+                    filename = fr.filename
+                    if "/src/migrations/" in filename or "/src/clients/" in filename:
+                        path = filename.split("/src/")[-1]
+                        func = fr.function
+                        break
+                parts: list[str] = ["j2o:"]
+                if path:
+                    parts.append(path.replace("migrations/", "migration/").replace("clients/", "client/").replace("_migration.py", "").replace(".py", ""))
+                else:
+                    parts.append(default_component)
+                if func:
+                    parts.append(func)
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                parts.append(f"ts={ts}")
+                # include project filter if configured
+                proj = (config.jira_config or {}).get("project_filter")
+                if proj:
+                    parts.append(f"project={proj}")
+                return " ".join(parts)
+            except Exception:
+                return f"j2o: {default_component}"
+
+        provenance = _caller_hint("query/json")
+
         ruby_script = (
+            f"# {provenance}\n"
             "require 'json'\n"
             "begin; require 'fileutils'; rescue; end\n"
             f"data = {ruby_json_expr}\n"
@@ -718,45 +754,66 @@ class OpenProjectClient:
             f"begin; FileUtils.chmod(0644, '{ruby_path_literal}'); rescue; end\n"
         )
 
-        # Execute via persistent tmux Rails console (faster than rails runner)
+        # Choose execution mode: use rails runner for long scripts to avoid pasting into console
+        threshold_env = os.environ.get("J2O_SCRIPT_RUNNER_THRESHOLD")
         try:
-            _console_output = self.rails_client.execute(
-                ruby_script,
-                timeout=timeout or 90,
-                suppress_output=True,
+            runner_threshold = int(threshold_env) if threshold_env else 1000
+        except Exception:
+            runner_threshold = 1000
+
+        use_runner = len(ruby_script) >= runner_threshold
+
+        if use_runner:
+            runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
+            local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+            local_tmp.parent.mkdir(parents=True, exist_ok=True)
+            with local_tmp.open("w", encoding="utf-8") as f:
+                f.write(ruby_script)
+            self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
+            runner_cmd = (
+                f"(cd /app || cd /opt/openproject) && "
+                f"bundle exec rails runner {runner_script_path}"
             )
-            # Defensive: detect console errors; rails_console_client will raise RubyError on late errors
-            # If it returns a string with hints of failure, surface as QueryExecutionError
-            self._check_console_output_for_errors(
-                _console_output or "",
-                context="execute_large_query_to_json_file",
-            )
-        except Exception as e:
-            # On console instability (IRB/Reline crash, marker loss), optionally fall back to rails runner
-            if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
-                if not config.migration_config.get("enable_runner_fallback", False):
-                    # Respect user's preference to avoid per-request rails runner fallback
+            stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+            if rc != 0:
+                q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                raise QueryExecutionError(q_msg)
+        else:
+            # Execute via persistent tmux Rails console (faster than rails runner)
+            try:
+                _console_output = self.rails_client.execute(
+                    ruby_script,
+                    timeout=timeout or 90,
+                    suppress_output=True,
+                )
+                self._check_console_output_for_errors(
+                    _console_output or "",
+                    context="execute_large_query_to_json_file",
+                )
+            except Exception as e:
+                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
+                    if not config.migration_config.get("enable_runner_fallback", False):
+                        raise
+                    logger.warning(
+                        "Rails console failed during large query (%s); falling back to rails runner",
+                        type(e).__name__,
+                    )
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
+                    local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+                    local_tmp.parent.mkdir(parents=True, exist_ok=True)
+                    with local_tmp.open("w", encoding="utf-8") as f:
+                        f.write(ruby_script)
+                    self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
+                    runner_cmd = (
+                        f"(cd /app || cd /opt/openproject) && "
+                        f"bundle exec rails runner {runner_script_path}"
+                    )
+                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                    if rc != 0:
+                        q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                        raise QueryExecutionError(q_msg) from e
+                else:
                     raise
-                logger.warning(
-                    "Rails console failed during large query (%s); falling back to rails runner",
-                    type(e).__name__,
-                )
-                runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
-                local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
-                local_tmp.parent.mkdir(parents=True, exist_ok=True)
-                with local_tmp.open("w", encoding="utf-8") as f:
-                    f.write(ruby_script)
-                self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-                runner_cmd = (
-                    f"(cd /app || cd /opt/openproject) && "
-                    f"bundle exec rails runner {runner_script_path}"
-                )
-                stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
-                if rc != 0:
-                    q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
-                    raise QueryExecutionError(q_msg) from e
-            else:
-                raise
 
         # Read file back from container via SSH (avoids tmux buffer limits)
         ssh_command = f"docker exec {self.container_name} cat {container_file}"
@@ -1254,7 +1311,18 @@ class OpenProjectClient:
         local_result = temp_dir / result_name
 
         # Compose minimal Ruby script
+        # Provenance hint for bulk create
+        def _bulk_hint() -> str:
+            try:
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                proj = (config.jira_config or {}).get("project_filter")
+                proj_part = f" project={proj}" if proj else ""
+                return f"j2o: migration/bulk_create model={model}{proj_part} ts={ts}"
+            except Exception:
+                return f"j2o: migration/bulk_create model={model}"
+
         header = (
+            f"# {_bulk_hint()}\n"
             "require 'json'\n"
             "require 'logger'\n"
             "begin; require 'fileutils'; rescue; end\n"
