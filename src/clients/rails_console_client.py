@@ -389,12 +389,24 @@ class RailsConsoleClient:
                 stack = inspect.stack()
                 path = None
                 func = None
-                for fr in stack[2:12]:
+                # Prefer callers under migrations/, and skip client plumbing
+                for fr in stack[2:50]:
                     filename = fr.filename
-                    if "/src/" in filename:
-                        path = filename.split("/src/")[-1]
-                        func = fr.function
-                        break
+                    if "/src/" not in filename:
+                        continue
+                    if any(
+                        skip in filename
+                        for skip in (
+                            "/src/clients/openproject_client.py",
+                            "/src/clients/rails_console_client.py",
+                            "/src/clients/docker_client.py",
+                            "/src/clients/ssh_client.py",
+                        )
+                    ):
+                        continue
+                    path = filename.split("/src/")[-1]
+                    func = fr.function
+                    break
                 parts: list[str] = ["j2o:"]
                 if path:
                     parts.append(
@@ -406,7 +418,7 @@ class RailsConsoleClient:
                 else:
                     parts.append("rails/console")
                 if func:
-                    parts.append(func)
+                    parts.append(f"func={func}")
                 ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 parts.append(f"ts={ts}")
                 proj = None
