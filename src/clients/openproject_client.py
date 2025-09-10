@@ -1,6 +1,7 @@
 """OpenProject client for interacting with OpenProject instances via SSH and Rails console."""
 
 import json
+import subprocess
 import os
 import random
 import re
@@ -491,7 +492,11 @@ class OpenProjectClient:
                         f"(cd /app || cd /opt/openproject) && "
                         f"bundle exec rails runner {container_script_path.as_posix()}"
                     )
-                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                    # Ensure runner executes with the provided timeout (default to 120s if None)
+                    stdout, stderr, rc = self.docker_client.execute_command(
+                        runner_cmd,
+                        timeout=timeout or 120,
+                    )
                     if rc != 0:
                         q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
                         raise QueryExecutionError(q_msg) from e
@@ -710,26 +715,45 @@ class OpenProjectClient:
         # IMPORTANT: Do not shell-quote here; we need the actual path string in Ruby.
         ruby_path_literal = str(container_file).replace("'", "\\'")
         # Build provenance hint: where did this originate?
-        # Compose a concise hint like: "j2o: migration/work_packages/fetch project=NRS ts=..."
+        # Compose a concise hint like: "j2o: migration/work_packages func=_migrate_work_packages project=NRS ts=..."
         def _caller_hint(default_component: str) -> str:
             try:
                 stack = inspect.stack()
-                # Search frames for our modules to extract context
-                path = None
-                func = None
-                for fr in stack[1:10]:
+                # Prefer first non-client frame under src/, ideally from migrations/
+                path: str | None = None
+                func: str | None = None
+                for fr in stack[1:50]:
                     filename = fr.filename
-                    if "/src/migrations/" in filename or "/src/clients/" in filename:
-                        path = filename.split("/src/")[-1]
-                        func = fr.function
-                        break
-                parts: list[str] = ["j2o:"]
+                    if "/src/" not in filename:
+                        continue
+                    # Skip internal client plumbing to surface the actual caller/component
+                    if any(
+                        skip in filename
+                        for skip in (
+                            "/src/clients/openproject_client.py",
+                            "/src/clients/rails_console_client.py",
+                            "/src/clients/docker_client.py",
+                            "/src/clients/ssh_client.py",
+                        )
+                    ):
+                        continue
+                    path = filename.split("/src/")[-1]
+                    func = fr.function
+                    break
+
+                # Derive a concise component label from path
+                component = default_component
                 if path:
-                    parts.append(path.replace("migrations/", "migration/").replace("clients/", "client/").replace("_migration.py", "").replace(".py", ""))
-                else:
-                    parts.append(default_component)
+                    component = (
+                        path.replace("migrations/", "migration/")
+                        .replace("clients/", "client/")
+                        .replace("_migration.py", "")
+                        .replace(".py", "")
+                    )
+
+                parts: list[str] = ["j2o:", component]
                 if func:
-                    parts.append(func)
+                    parts.append(f"func={func}")
                 ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 parts.append(f"ts={ts}")
                 # include project filter if configured
@@ -806,7 +830,10 @@ class OpenProjectClient:
                     f"(cd /app || cd /opt/openproject) && "
                     f"bundle exec rails runner {runner_script_path}"
                 )
-                stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                stdout, stderr, rc = self.docker_client.execute_command(
+                    runner_cmd,
+                    timeout=timeout or 120,
+                )
                 if rc != 0:
                     q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
                     raise QueryExecutionError(q_msg)
@@ -1366,10 +1393,13 @@ class OpenProjectClient:
             "begin; Rails.logger.level = Logger::WARN; rescue; end\n"
             "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end\n"
             "begin; GoodJob.logger = Logger.new(nil); rescue; end\n"
+            "verbose = (ENV['J2O_BULK_RUBY_VERBOSE'] == '1')\n"
+            "begin\n"
             "model = Object.const_get(model_name)\n"
             "data = JSON.parse(File.read(data_path))\n"
             "created = []\n"
             "errors = []\n"
+            "puts \"J2O bulk start: model=#{model_name} total=#{data.length} result=#{result_path}\" if verbose\n"
             "data.each_with_index do |attrs, idx|\n"
             "  begin\n"
             "    rec = model.new\n"
@@ -1389,6 +1419,9 @@ class OpenProjectClient:
             "        if attrs.key?('author_id') && attrs['author_id']\n"
             "          rec.author = User.find_by(id: attrs['author_id'])\n"
             "        end\n"
+            "        # Ruby-side safety defaults when not provided (keeps script minimal)\n"
+            "        rec.status ||= Status.order(:position).first\n"
+            "        rec.priority ||= IssuePriority.order(:position).first\n"
             "        # Keep keys; assign_attributes can safely set *_id again if present\n"
             "      rescue => e\n"
             "        # continue with remaining attributes\n"
@@ -1398,6 +1431,14 @@ class OpenProjectClient:
             "      rec.assign_attributes(attrs)\n"
             "    rescue => e\n"
             "      # If assign fails, proceed to save with preassigned associations only\n"
+            "    end\n"
+            "    # Ensure defaults are applied AFTER assign_attributes to avoid blank overrides\n"
+            "    if model_name == 'WorkPackage'\n"
+            "      begin\n"
+            "        rec.status ||= Status.order(:position).first\n"
+            "        rec.priority ||= IssuePriority.order(:position).first\n"
+            "      rescue => e\n"
+            "      end\n"
             "    end\n"
             "    # Provenance custom fields\n"
             "    begin\n"
@@ -1437,11 +1478,14 @@ class OpenProjectClient:
             "    end\n"
             "    if rec.save\n"
             "      created << {'index' => idx, 'id' => rec.id}\n"
+            "      puts \"J2O bulk item #{idx}: saved id=#{rec.id}\" if verbose\n"
             "    else\n"
             "      errors << {'index' => idx, 'errors' => rec.errors.full_messages}\n"
+            "      puts \"J2O bulk item #{idx}: failed #{rec.errors.full_messages.join(', ')}\" if verbose\n"
             "    end\n"
             "  rescue => e\n"
             "    errors << {'index' => idx, 'errors' => [e.message]}\n"
+            "    puts \"J2O bulk item #{idx}: exception #{e.class}: #{e.message}\" if verbose\n"
             "  end\n"
             "end\n"
             "result = {\n"
@@ -1457,6 +1501,18 @@ class OpenProjectClient:
             "  begin; f.flush; f.fsync; rescue; end\n"
             "end\n"
             "begin; FileUtils.chmod(0644, result_path); rescue; end\n"
+            "puts \"J2O bulk done: created=#{created.length} errors=#{errors.length} total=#{data.length} -> #{result_path}\" if verbose\n"
+            "rescue => top_e\n"
+            "  begin\n"
+            "    err = { 'status' => 'error', 'message' => top_e.message, 'backtrace' => (top_e.backtrace || []).take(20) }\n"
+            "    File.open(result_path + '.error.json', 'w') do |f|\n"
+            "      f.write(JSON.generate(err))\n"
+            "      begin; f.flush; f.fsync; rescue; end\n"
+            "    end\n"
+            "    begin; FileUtils.chmod(0644, result_path + '.error.json'); rescue; end\n"
+            "    puts \"J2O bulk error: #{top_e.class}: #{top_e.message} -> #{result_path}.error.json\" if verbose\n"
+            "  rescue; end\n"
+            "end\n"
         )
 
         # Decide execution mode: prefer rails runner for long scripts to avoid pasting into console
@@ -1484,6 +1540,7 @@ class OpenProjectClient:
                 f.write(full_script)
             self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
             mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or "console").lower()
+            allow_runner_fallback = str(os.environ.get("J2O_ALLOW_RUNNER_FALLBACK", "0")).lower() in {"1", "true"}
             if mode == "console":
                 try:
                     _console_output = self.rails_client.execute(
@@ -1492,23 +1549,65 @@ class OpenProjectClient:
                         suppress_output=True,
                     )
                 except Exception as e:
+                    if not allow_runner_fallback:
+                        raise QueryExecutionError(
+                            "Rails console execution failed and runner fallback is disabled",
+                        ) from e
                     runner_cmd = (
                         f"(cd /app || cd /opt/openproject) && "
                         f"bundle exec rails runner {runner_script_path}"
                     )
-                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                    try:
+                        stdout, stderr, rc = self.docker_client.execute_command(
+                            runner_cmd,
+                            timeout=timeout or 120,
+                            env={"J2O_BULK_RUBY_VERBOSE": os.environ.get("J2O_BULK_RUBY_VERBOSE", "1")},
+                        )
+                    except subprocess.TimeoutExpired as te:  # noqa: PERF203
+                        # Best-effort remote cleanup of the timed-out runner
+                        try:
+                            self.docker_client.execute_command(
+                                f"pkill -f \"rails runner {runner_script_path}\" || true",
+                                timeout=10,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                        raise QueryExecutionError(
+                            f"rails runner timed out for {runner_script_path}",
+                        ) from te
                     if rc != 0:
                         q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
                         raise QueryExecutionError(q_msg) from e
+                    if stdout:
+                        logger.info("runner stdout: %s", stdout[:500])
             else:
                 runner_cmd = (
                     f"(cd /app || cd /opt/openproject) && "
                     f"bundle exec rails runner {runner_script_path}"
                 )
-                stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
+                try:
+                    stdout, stderr, rc = self.docker_client.execute_command(
+                        runner_cmd,
+                        timeout=timeout or 120,
+                        env={"J2O_BULK_RUBY_VERBOSE": os.environ.get("J2O_BULK_RUBY_VERBOSE", "1")},
+                    )
+                except subprocess.TimeoutExpired as te:  # noqa: PERF203
+                    # Best-effort remote cleanup of the timed-out runner
+                    try:
+                        self.docker_client.execute_command(
+                            f"pkill -f \"rails runner {runner_script_path}\" || true",
+                            timeout=10,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    raise QueryExecutionError(
+                        f"rails runner timed out for {runner_script_path}",
+                    ) from te
                 if rc != 0:
                     q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
                     raise QueryExecutionError(q_msg)
+                if stdout:
+                    logger.info("runner stdout: %s", stdout[:500])
         else:
             # Execute via persistent Rails console with suppressed output (file-based result only)
             try:
@@ -1544,7 +1643,20 @@ class OpenProjectClient:
                         pass
             except Exception:  # noqa: BLE001
                 # If cat fails (file not ready yet), continue polling
-                pass
+                # Try to retrieve error JSON if present
+                try:
+                    err_remote = Path(container_result.as_posix() + ".error.json")
+                    err_local = local_result.with_suffix(local_result.suffix + ".error.json")
+                    self.transfer_file_from_container(err_remote, err_local)
+                    # Attach error snippet to logs for visibility
+                    try:
+                        with err_local.open("r", encoding="utf-8") as ef:
+                            err_txt = ef.read()[:500]
+                        logger.error("Bulk runner error: %s", err_txt)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
 
             # Fallback: use docker cp path to retrieve the file when present
             try:
