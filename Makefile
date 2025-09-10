@@ -181,6 +181,20 @@ attach-rails: ## Attach to the tmux Rails console session
 	tmux attach -t $${J2O_OPENPROJECT_TMUX_SESSION_NAME:-rails_console}
 
 # =============================================================================
+# Migration Helpers
+# =============================================================================
+
+.PHONY: migrate-stop migrate-start-ff migrate-status
+migrate-stop: ## Stop all local/remote migration processes and watchers
+	bash scripts/migrate-stop.sh
+
+migrate-start-ff: ## Start NRS migration with fast-forward and larger TE batches
+	bash scripts/migrate-start-fast-forward.sh
+
+migrate-status: ## Show current migration status
+	bash scripts/migrate-status.sh
+
+# =============================================================================
 # Local Development (when not using containers)
 # =============================================================================
 
