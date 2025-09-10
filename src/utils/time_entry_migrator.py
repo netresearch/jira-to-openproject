@@ -11,6 +11,7 @@ This module provides complete time tracking data migration capabilities:
 
 import json
 from datetime import UTC, datetime
+import os
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -570,10 +571,11 @@ class TimeEntryMigrator:
                     ]
 
             # Run complete migration process
+            batch_env = int(os.environ.get("J2O_TIME_ENTRY_BATCH_SIZE", "200"))
             _ = self.run_complete_migration(
                 issue_keys=issue_keys,
                 include_tempo=True,
-                batch_size=50,
+                batch_size=batch_env,
                 dry_run=False,
             )
 
