@@ -1255,12 +1255,31 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                     "project_key": project_key,
                 })
                 if len(batch) >= batch_size:
+                    # Ensure project_id is present on every record in the batch
+                    try:
+                        for _rec in batch:
+                            if 'project_id' not in _rec or _rec.get('project_id') in (None, 0, ''):
+                                _rec['project_id'] = int(op_project_id)
+                    except Exception:
+                        pass
+
+                    # Determine a fallback admin user id once (best-effort)
+                    fallback_admin_user_id: int | str | None = None
+                    try:
+                        admin_id = self.op_client.execute_large_query_to_json_file(
+                            "User.where(admin: true).limit(1).pluck(:id).first",
+                            timeout=60,
+                        )
+                        if isinstance(admin_id, int):
+                            fallback_admin_user_id = admin_id
+                    except Exception:
+                        fallback_admin_user_id = None
                     try:
                         _apply_required_defaults(
                             batch,
                             project_id=int(op_project_id),
                             op_client=self.op_client,
-                            fallback_admin_user_id=None,
+                            fallback_admin_user_id=fallback_admin_user_id,
                         )
                     except Exception as e:
                         self.logger.warning("Defaults application failed for %s: %s", project_key, e)
@@ -1313,18 +1332,83 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                             created_count += int(c or 0)
                     except Exception as e:
                         self.logger.exception("Bulk create failed for %s: %s", project_key, e)
+                        # Fallback: adaptively reduce batch size and retry in smaller chunks
+                        try:
+                            sizes = [max(1, len(batch) // 2), max(10, len(batch) // 4), 5, 1]
+                            for sz in sizes:
+                                if sz >= len(batch) and sz != 1:
+                                    continue
+                                self.logger.info("Retrying %s in %s sub-batches of size %s", project_key, (len(batch) + sz - 1) // sz, sz)
+                                for start in range(0, len(batch), sz):
+                                    sub = batch[start : start + sz]
+                                    meta_slice = work_packages_meta[start : start + sz]
+                                    try:
+                                        sub_res = self.op_client.bulk_create_records(
+                                            "WorkPackage",
+                                            sub,
+                                            timeout=900,
+                                            result_basename=f"work_packages_{project_key}_sz{sz}",
+                                        )
+                                        if isinstance(sub_res, dict):
+                                            created_list = sub_res.get("created", [])
+                                            if isinstance(created_list, list) and created_list:
+                                                try:
+                                                    _ = self.work_package_mapping
+                                                except Exception:
+                                                    self.work_package_mapping = {}
+                                                for item in created_list:
+                                                    try:
+                                                        idx = item.get("index")
+                                                        op_id = item.get("id")
+                                                        if isinstance(idx, int) and 0 <= idx < len(meta_slice):
+                                                            meta = meta_slice[idx]
+                                                            jira_id = meta.get("jira_id")
+                                                            if jira_id is not None:
+                                                                self.work_package_mapping[str(jira_id)] = {
+                                                                    **meta,
+                                                                    "openproject_id": op_id,
+                                                                    "openproject_project_id": int(op_project_id),
+                                                                }
+                                                    except Exception:
+                                                        continue
+                                            c = sub_res.get("created_count") or (len(created_list) if isinstance(created_list, list) else 0)
+                                            created_count += int(c or 0)
+                                    except Exception as sub_e:
+                                        self.logger.warning("Sub-batch failed (%s..%s) for %s: %s", start, start + sz, project_key, sub_e)
+                            self.logger.info("Fallback batching complete for %s; created so far: %s", project_key, created_count)
+                        except Exception as fb_e:
+                            self.logger.warning("Fallback batching aborted for %s: %s", project_key, fb_e)
                     finally:
                         batch = []
                         work_packages_meta = []
 
             # Flush tail batch
             if batch:
+                # Ensure project_id is present on every record in the tail batch
+                try:
+                    for _rec in batch:
+                        if 'project_id' not in _rec or _rec.get('project_id') in (None, 0, ''):
+                            _rec['project_id'] = int(op_project_id)
+                except Exception:
+                    pass
+
+                # Determine a fallback admin user id once (best-effort)
+                fallback_admin_user_id: int | str | None = None
+                try:
+                    admin_id = self.op_client.execute_large_query_to_json_file(
+                        "User.where(admin: true).limit(1).pluck(:id).first",
+                        timeout=60,
+                    )
+                    if isinstance(admin_id, int):
+                        fallback_admin_user_id = admin_id
+                except Exception:
+                    fallback_admin_user_id = None
                 try:
                     _apply_required_defaults(
                         batch,
                         project_id=int(op_project_id),
                         op_client=self.op_client,
-                        fallback_admin_user_id=None,
+                        fallback_admin_user_id=fallback_admin_user_id,
                     )
                 except Exception as e:
                     self.logger.warning("Defaults application failed for %s: %s", project_key, e)
@@ -1377,6 +1461,52 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                         created_count += int(c or 0)
                 except Exception as e:
                     self.logger.exception("Bulk create failed (final) for %s: %s", project_key, e)
+                    # Final fallback for tail batch
+                    try:
+                        sizes = [max(1, len(batch) // 2), max(10, len(batch) // 4), 5, 1]
+                        for sz in sizes:
+                            if sz >= len(batch) and sz != 1:
+                                continue
+                            self.logger.info("Retrying tail %s in %s sub-batches of size %s", project_key, (len(batch) + sz - 1) // sz, sz)
+                            for start in range(0, len(batch), sz):
+                                sub = batch[start : start + sz]
+                                meta_slice = work_packages_meta[start : start + sz]
+                                try:
+                                    sub_res = self.op_client.bulk_create_records(
+                                        "WorkPackage",
+                                        sub,
+                                        timeout=900,
+                                        result_basename=f"work_packages_{project_key}_sz{sz}",
+                                    )
+                                    if isinstance(sub_res, dict):
+                                        created_list = sub_res.get("created", [])
+                                        if isinstance(created_list, list) and created_list:
+                                            try:
+                                                _ = self.work_package_mapping
+                                            except Exception:
+                                                self.work_package_mapping = {}
+                                            for item in created_list:
+                                                try:
+                                                    idx = item.get("index")
+                                                    op_id = item.get("id")
+                                                    if isinstance(idx, int) and 0 <= idx < len(meta_slice):
+                                                        meta = meta_slice[idx]
+                                                        jira_id = meta.get("jira_id")
+                                                        if jira_id is not None:
+                                                            self.work_package_mapping[str(jira_id)] = {
+                                                                **meta,
+                                                                "openproject_id": op_id,
+                                                                "openproject_project_id": int(op_project_id),
+                                                            }
+                                                except Exception:
+                                                    continue
+                                        c = sub_res.get("created_count") or (len(created_list) if isinstance(created_list, list) else 0)
+                                        created_count += int(c or 0)
+                                except Exception as sub_e:
+                                    self.logger.warning("Tail sub-batch failed (%s..%s) for %s: %s", start, start + sz, project_key, sub_e)
+                        self.logger.info("Tail fallback batching complete for %s; created so far: %s", project_key, created_count)
+                    except Exception as fb_e:
+                        self.logger.warning("Tail fallback batching aborted for %s: %s", project_key, fb_e)
 
         except Exception as e:
             self.logger.exception("Failed migrating project %s: %s", project_key, e)
