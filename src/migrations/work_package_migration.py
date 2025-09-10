@@ -198,8 +198,60 @@ class WorkPackageMigration(BaseMigration):
         start_at = 0
         batch_size = config.migration_config.get("batch_size", 100)
 
-        # Use existing JQL pattern from get_all_issues_for_project
+        # Build delta JQL if fast-forward is enabled
+        fast_forward = str(os.environ.get("J2O_FAST_FORWARD", "1")).lower() in {"1", "true"}
+        backoff_seconds = int(os.environ.get("J2O_FF_BACKOFF_SECONDS", "7200"))  # default 2h
         jql = f'project = "{project_key}" ORDER BY created ASC'
+        if fast_forward:
+            try:
+                # Resolve OpenProject project id (existing code later also resolves; do lightweight here)
+                op_project_id = None
+                try:
+                    op_project_id = self.project_mapping.get(project_key, {}).get("openproject_id")
+                except Exception:
+                    op_project_id = None
+                if op_project_id:
+                    # Ensure CF exists and snapshot existing keys/migration dates
+                    _ = self.op_client.ensure_work_package_custom_field("Jira Issue Key", "string")
+                    _ = self.op_client.ensure_work_package_custom_field("Jira Migration Date", "datetime")
+                    snapshot = self.op_client.get_project_wp_cf_snapshot(int(op_project_id))
+                    existing_keys = {
+                        str(row.get("jira_issue_key")).strip()
+                        for row in snapshot
+                        if isinstance(row.get("jira_issue_key"), str) and row.get("jira_issue_key").strip()
+                    }
+                    # Determine last migration timestamp (CF preferred, fallback to updated_at)
+                    import datetime as _dt
+                    def _parse(ts: str | None) -> _dt.datetime | None:
+                        if not ts:
+                            return None
+                        try:
+                            return _dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(_dt.timezone.utc)
+                        except Exception:
+                            return None
+                    last_ts: _dt.datetime | None = None
+                    for row in snapshot:
+                        ts = _parse(row.get("jira_migration_date")) or _parse(row.get("updated_at"))
+                        if ts and (last_ts is None or ts > last_ts):
+                            last_ts = ts
+                    if last_ts is None:
+                        last_ts = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(days=365*10)
+                    # Apply backoff
+                    last_ts = last_ts - _dt.timedelta(seconds=backoff_seconds)
+                    jql_ts = last_ts.strftime("%Y-%m-%d %H:%M")
+                    # Form delta JQL: updated >= last_ts OR key NOT IN existing_keys
+                    if existing_keys:
+                        # Chunk large IN lists if needed later (basic initial implementation)
+                        excluded = ",".join(sorted(existing_keys)[:900])
+                        jql = (
+                            f'project = "{project_key}" AND '
+                            f'(updated >= "{jql_ts}" OR key NOT IN ({excluded})) ORDER BY updated ASC'
+                        )
+                    else:
+                        jql = f'project = "{project_key}" AND updated >= "{jql_ts}" ORDER BY updated ASC'
+            except Exception as _ff_err:
+                logger.warning("Fast-forward JQL construction failed: %s; falling back to full scan", _ff_err)
+                jql = f'project = "{project_key}" ORDER BY created ASC'
         fields = None  # Get all fields
         expand = "changelog"  # Include changelog for history
 

@@ -111,8 +111,17 @@ class TimeEntryMigration(BaseMigration):
                 warnings=[warn],
             )
 
+        # Determine larger batch size for time entries (env overrides default)
         try:
-            result = self.time_entry_migrator.migrate_time_entries_for_issues(migrated_wps)
+            batch_size_env = int((__import__("os").environ.get("J2O_TIME_ENTRY_BATCH_SIZE") or "200"))
+        except Exception:
+            batch_size_env = 200
+
+        try:
+            result = self.time_entry_migrator.migrate_time_entries_for_issues(
+                migrated_wps,
+                batch_size=batch_size_env,
+            )
             success = result.get("status") in ("success", "partial_success")
             errors: list[str] = []
             if result.get("status") == "failed":

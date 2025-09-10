@@ -633,10 +633,10 @@ class TimeEntryMigrator:
         overall_start_time = datetime.now(tz=UTC)
 
         try:
-            # Step 1: Extract Jira work logs
+            # Step 1: Extract Jira work logs (delta awareness to be refined per-issue later)
             self.extract_jira_work_logs_for_issues(issue_keys)
 
-            # Step 2: Extract Tempo entries if requested
+            # Step 2: Extract Tempo entries if requested (global; Jira-side filtering happens in transformer)
             if include_tempo:
                 self.extract_tempo_time_entries()
 

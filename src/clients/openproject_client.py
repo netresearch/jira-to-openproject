@@ -1303,6 +1303,64 @@ class OpenProjectClient:
         msg = "Unable to parse count result."
         raise QueryExecutionError(msg)
 
+    # -------------------------------------------------------------
+    # Work Package Custom Field helpers for fast-forward migrations
+    # -------------------------------------------------------------
+    def ensure_work_package_custom_field(self, name: str, field_format: str = "string") -> dict[str, Any]:
+        """Ensure a WorkPackage custom field exists, create if missing.
+
+        Args:
+            name: Custom field name
+            field_format: OpenProject field_format (e.g., 'string', 'date', 'datetime')
+
+        Returns:
+            Dict with at least {id, name, field_format}
+        """
+        ruby = f"""
+          cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{name}')
+          if !cf
+            cf = CustomField.new(name: '{name}', field_format: '{field_format}', is_required: false, is_for_all: true, type: 'WorkPackageCustomField')
+            cf.save
+          end
+          cf && cf.as_json(only: [:id, :name, :field_format])
+        """
+        try:
+            result = self.execute_json_query(ruby)
+            if isinstance(result, dict) and result.get("id"):
+                return result
+            raise QueryExecutionError("Failed ensuring WorkPackage custom field")
+        except Exception as e:  # noqa: BLE001
+            msg = f"Failed to ensure custom field '{name}': {e}"
+            raise QueryExecutionError(msg) from e
+
+    def get_project_wp_cf_snapshot(self, project_id: int) -> list[dict[str, Any]]:
+        """Return snapshot of WorkPackages in a project with Jira CFs and updated_at.
+
+        Each item: { id, updated_at, jira_issue_key, jira_migration_date }
+        """
+        ruby = f"""
+          cf_key = CustomField.find_by(type: 'WorkPackageCustomField', name: 'Jira Issue Key')
+          cf_mig = CustomField.find_by(type: 'WorkPackageCustomField', name: 'Jira Migration Date')
+          wps = WorkPackage.where(project_id: {project_id}).select(:id, :updated_at)
+          wps.map do |wp|
+            key = nil
+            mig = nil
+            begin
+              key = (cf_key ? wp.custom_value_for(cf_key)&.value : nil)
+            rescue
+            end
+            begin
+              mig = (cf_mig ? wp.custom_value_for(cf_mig)&.value : nil)
+            rescue
+            end
+            { id: wp.id, updated_at: (wp.updated_at&.utc&.iso8601), jira_issue_key: key, jira_migration_date: mig }
+          end
+        """
+        data = self.execute_large_query_to_json_file(ruby, timeout=120)
+        if not isinstance(data, list):
+            raise QueryExecutionError("Invalid snapshot from OpenProject")
+        return data
+
     def bulk_create_records(  # noqa: PLR0915
         self,
         model: str,
@@ -1376,9 +1434,9 @@ class OpenProjectClient:
                 ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 proj = (config.jira_config or {}).get("project_filter")
                 proj_part = f" project={proj}" if proj else ""
-                return f"j2o: migration/bulk_create model={model}{proj_part} ts={ts}"
+                return f"j2o: migration/bulk_create model={model}{proj_part} ts={ts} pid={os.getpid()}"
             except Exception:
-                return f"j2o: migration/bulk_create model={model}"
+                return f"j2o: migration/bulk_create model={model} pid={os.getpid()}"
 
         header = (
             f"# {_bulk_hint()}\n"
@@ -1626,46 +1684,37 @@ class OpenProjectClient:
         waited = 0.0
         copied = False
         while waited < max_wait_seconds:
-            # First, try lightweight read via cat to avoid cp edge cases
-            try:
-                stdout, stderr, rc = self.docker_client.execute_command(
-                    f"cat {quote(container_result.as_posix())}",
-                )
-                if rc == 0 and stdout:
-                    try:
-                        local_result.parent.mkdir(parents=True, exist_ok=True)
-                        with local_result.open("w", encoding="utf-8") as f:
-                            f.write(stdout)
-                        copied = True
-                        break
-                    except Exception:  # noqa: BLE001
-                        # Fall through to cp fallback
-                        pass
-            except Exception:  # noqa: BLE001
-                # If cat fails (file not ready yet), continue polling
-                # Try to retrieve error JSON if present
+            # Avoid noisy SSH errors: first, check for existence using Docker API
+            if self.docker_client.check_file_exists_in_container(container_result):
+                # Attempt direct copy from container to local
                 try:
-                    err_remote = Path(container_result.as_posix() + ".error.json")
+                    self.transfer_file_from_container(container_result, local_result)
+                    copied = True
+                    break
+                except FileNotFoundError:
+                    # Race: file appeared in stat but not yet readable; keep polling
+                    pass
+                except Exception:  # noqa: BLE001
+                    # Fall back to next poll iteration
+                    pass
+
+            # If an error sidecar file exists, fetch it for diagnostics
+            try:
+                err_remote = Path(container_result.as_posix() + ".error.json")
+                if self.docker_client.check_file_exists_in_container(err_remote):
                     err_local = local_result.with_suffix(local_result.suffix + ".error.json")
                     self.transfer_file_from_container(err_remote, err_local)
-                    # Attach error snippet to logs for visibility
                     try:
                         with err_local.open("r", encoding="utf-8") as ef:
                             err_txt = ef.read()[:500]
                         logger.error("Bulk runner error: %s", err_txt)
                     except Exception:
                         pass
-                except Exception:
-                    pass
-
-            # Fallback: use docker cp path to retrieve the file when present
-            try:
-                self.transfer_file_from_container(container_result, local_result)
-                copied = True
-                break
             except Exception:  # noqa: BLE001
-                time.sleep(poll_interval)
-                waited += poll_interval
+                pass
+
+            time.sleep(poll_interval)
+            waited += poll_interval
 
         if not copied:
             _msg = "Result file not found after bulk_create_records execution"
