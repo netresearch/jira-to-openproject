@@ -11,6 +11,8 @@ This module provides complete time tracking data migration capabilities:
 
 import json
 from datetime import UTC, datetime
+import time
+import threading
 import os
 from pathlib import Path
 from typing import Any, TypedDict
@@ -407,7 +409,7 @@ class TimeEntryMigrator:
     def migrate_time_entries_to_openproject(
         self,
         time_entries: list[dict[str, Any]] | None = None,
-        batch_size: int = 50,
+        batch_size: int = 200,
         *,
         dry_run: bool = False,
     ) -> dict[str, Any]:
@@ -474,18 +476,36 @@ class TimeEntryMigrator:
             migration_summary["successful_migrations"] = len(entries_to_migrate)
             return migration_summary
 
+        # Heartbeat configuration (INFO-level progress without DEBUG noise)
+        try:
+            heartbeat_sec = int(os.environ.get("J2O_TIME_ENTRY_HEARTBEAT_SEC", "30"))
+        except Exception:
+            heartbeat_sec = 30
+
         # Prefer batch file-based creation for stability and speed (disabled in unit-test mode)
         use_batch = bool(config.migration_config.get("enable_time_entry_batch", True))
         if config.migration_config.get("unit_test_mode", True):
             use_batch = False
         if use_batch:
             try:
+                # Start a lightweight heartbeat while batch runs
+                _hb_stop = threading.Event()
+                _batch_start = time.time()
+
+                def _hb() -> None:
+                    while not _hb_stop.wait(timeout=max(5, heartbeat_sec)):
+                        elapsed = int(time.time() - _batch_start)
+                        self.logger.info("Time entries: batch create in progress (elapsed=%ss)", elapsed)
+
+                _hb_thread = threading.Thread(target=_hb, daemon=True)
+                _hb_thread.start()
                 batch_result = self.op_client.batch_create_time_entries(entries_to_migrate)
             except Exception as e:  # noqa: BLE001
                 self.logger.warning("Batch create failed: %s", e)
                 migration_summary["errors"].append(str(e))
                 # fall through to per-entry creation on batch failure
             else:
+                _hb_stop.set()
                 created = int(batch_result.get("created", 0))
                 failed = int(batch_result.get("failed", 0))
                 migration_summary["successful_migrations"] += created
@@ -517,13 +537,17 @@ class TimeEntryMigrator:
         step = max(1, batch_size)
         # Determine concurrency from env with safe default
         try:
-            concurrency = int(os.environ.get("J2O_TIME_ENTRY_CONCURRENCY", "4"))
+            concurrency = int(os.environ.get("J2O_TIME_ENTRY_CONCURRENCY", "8"))
         except Exception:
-            concurrency = 4
+            concurrency = 8
 
         from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
 
-        for i in range(0, len(entries_to_migrate), step):
+        total_to_process = len(entries_to_migrate)
+        processed_total = 0
+        last_hb = time.time()
+
+        for i in range(0, total_to_process, step):
             entry_batch = entries_to_migrate[i : i + step]
             # Filter out entries already migrated by external key if present
             filtered_batch: list[dict[str, Any]] = []
@@ -572,6 +596,20 @@ class TimeEntryMigrator:
                             else:
                                 migration_summary["skipped_entries"] += 1
                                 migration_summary["skipped_details"].append({"entry": None, "reason": err})
+
+                        # Heartbeat progress
+                        processed_total += 1
+                        now = time.time()
+                        if now - last_hb >= heartbeat_sec:
+                            self.logger.info(
+                                "Time entries: %d/%d processed (ok=%d, failed=%d, skipped=%d)",
+                                processed_total,
+                                total_to_process,
+                                migration_summary["successful_migrations"],
+                                migration_summary["failed_migrations"],
+                                migration_summary["skipped_entries"],
+                            )
+                            last_hb = now
             else:
                 for entry in entry_batch:
                     is_valid, reason = self._validate_time_entry_with_reason(entry)
@@ -589,6 +627,20 @@ class TimeEntryMigrator:
                     except Exception as e:  # noqa: BLE001
                         migration_summary["failed_migrations"] += 1
                         migration_summary["errors"].append(str(e))
+
+                    # Heartbeat progress for sequential path
+                    processed_total += 1
+                    now = time.time()
+                    if now - last_hb >= heartbeat_sec:
+                        self.logger.info(
+                            "Time entries: %d/%d processed (ok=%d, failed=%d, skipped=%d)",
+                            processed_total,
+                            total_to_process,
+                            migration_summary["successful_migrations"],
+                            migration_summary["failed_migrations"],
+                            migration_summary["skipped_entries"],
+                        )
+                        last_hb = now
 
         migration_summary["created_time_entry_ids"].extend(created_ids)
         processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
