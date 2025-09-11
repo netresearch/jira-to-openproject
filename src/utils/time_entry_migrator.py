@@ -487,27 +487,71 @@ class TimeEntryMigrator:
                 )
                 return migration_summary
 
-        # Per-entry fallback (default path for unit tests) — respect batch_size
+        # Per-entry fallback (default path for unit tests) — respect batch_size, add bounded concurrency
         created_ids: list[int] = []
         step = max(1, batch_size)
+        # Determine concurrency from env with safe default
+        try:
+            concurrency = int(os.environ.get("J2O_TIME_ENTRY_CONCURRENCY", "4"))
+        except Exception:
+            concurrency = 4
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
+
         for i in range(0, len(entries_to_migrate), step):
             entry_batch = entries_to_migrate[i : i + step]
-            for entry in entry_batch:
-                is_valid, reason = self._validate_time_entry_with_reason(entry)
-                if not is_valid:
-                    migration_summary["skipped_entries"] += 1
-                    migration_summary["skipped_details"].append({"entry": entry, "reason": reason})
-                    continue
-                try:
-                    res = self.op_client.create_time_entry(entry)
-                    if isinstance(res, dict) and res.get("id"):
-                        migration_summary["successful_migrations"] += 1
-                        created_ids.append(res["id"])
-                    else:
+            if concurrency > 1 and not dry_run:
+                def _create(entry: dict[str, Any]) -> tuple[bool, int | None, str | None]:
+                    is_valid, reason = self._validate_time_entry_with_reason(entry)
+                    if not is_valid:
+                        return False, None, reason
+                    try:
+                        res = self.op_client.create_time_entry(entry)
+                        if isinstance(res, dict) and res.get("id"):
+                            return True, int(res["id"]), None
+                        return False, None, None
+                    except Exception as e:  # noqa: BLE001
+                        return False, None, str(e)
+
+                with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
+                    futures = [executor.submit(_create, entry) for entry in entry_batch]
+                    for fut in as_completed(futures):
+                        ok, new_id, err = False, None, None
+                        try:
+                            ok, new_id, err = fut.result()
+                        except Exception as e:  # noqa: BLE001
+                            ok, err = False, str(e)
+                        if err:
+                            migration_summary["errors"].append(err)
+                        if ok:
+                            migration_summary["successful_migrations"] += 1
+                            if new_id is not None:
+                                created_ids.append(new_id)
+                        else:
+                            # Distinguish skipped vs failed when _create provided reason
+                            # For concurrency path, we treat invalid entries as skipped
+                            if err is None:
+                                migration_summary["failed_migrations"] += 1
+                            else:
+                                migration_summary["skipped_entries"] += 1
+                                migration_summary["skipped_details"].append({"entry": None, "reason": err})
+            else:
+                for entry in entry_batch:
+                    is_valid, reason = self._validate_time_entry_with_reason(entry)
+                    if not is_valid:
+                        migration_summary["skipped_entries"] += 1
+                        migration_summary["skipped_details"].append({"entry": entry, "reason": reason})
+                        continue
+                    try:
+                        res = self.op_client.create_time_entry(entry)
+                        if isinstance(res, dict) and res.get("id"):
+                            migration_summary["successful_migrations"] += 1
+                            created_ids.append(res["id"])
+                        else:
+                            migration_summary["failed_migrations"] += 1
+                    except Exception as e:  # noqa: BLE001
                         migration_summary["failed_migrations"] += 1
-                except Exception as e:  # noqa: BLE001
-                    migration_summary["failed_migrations"] += 1
-                    migration_summary["errors"].append(str(e))
+                        migration_summary["errors"].append(str(e))
 
         migration_summary["created_time_entry_ids"].extend(created_ids)
         processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()

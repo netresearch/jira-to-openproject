@@ -1358,7 +1358,7 @@
         "description": "Reduce log volume by summarizing 'Watcher unmapped, skipping' per issue/batch; keep detailed entries under DEBUG.",
         "details": "- Count per issue/batch and log once at INFO\n- Gate detailed logs behind DEBUG\n- Preserve metrics for auditing",
         "testStrategy": "Unit test to assert one INFO summary for N unmapped watchers",
-        "status": "pending",
+        "status": "in-progress",
         "dependencies": [],
         "priority": "high",
         "subtasks": []
@@ -1421,7 +1421,7 @@
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-09-11T07:55:12.347Z",
+      "updated": "2025-09-11T07:59:14.615Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
