@@ -113,6 +113,7 @@ class TimeEntryTransformer:
                     "jira_issue_key": issue_key,
                     "jira_author": author_username,
                     "import_timestamp": datetime.now(tz=UTC).isoformat(),
+                    "jira_worklog_key": f"{issue_key}:{work_log.get('id')}" if work_log.get("id") is not None else None,
                 },
             }
 
@@ -202,6 +203,10 @@ class TimeEntryTransformer:
                     "jira_issue_key": issue_key,
                     "tempo_author": author_username,
                     "import_timestamp": datetime.now(tz=UTC).isoformat(),
+                    "jira_worklog_key": (
+                        f"{issue_key}:{tempo_log.get('jiraWorklogId')}" if tempo_log.get("jiraWorklogId") is not None
+                        else (f"tempo:{tempo_log.get('tempoWorklogId')}" if tempo_log.get("tempoWorklogId") is not None else None)
+                    ),
                 },
             }
 
