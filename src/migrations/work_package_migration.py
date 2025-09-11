@@ -849,7 +849,13 @@ class WorkPackageMigration(BaseMigration):
         # Log any warnings from user association migration
         if association_result["warnings"]:
             for warning in association_result["warnings"]:
-                self.logger.warning("User association: %s", warning)
+                # Collapse frequent watcher unmapped logs
+                if isinstance(warning, str) and warning.startswith("Watcher") and "unmapped" in warning:
+                    # Defer aggregated reporting to caller; embed a counter on work_package_data
+                    counters = work_package_data.setdefault("_log_counters", {})
+                    counters["watcher_unmapped"] = counters.get("watcher_unmapped", 0) + 1
+                else:
+                    self.logger.warning("User association: %s", warning)
 
         # Extract user association results
         assigned_to_id = work_package_data.get("assigned_to_id")
@@ -2063,6 +2069,14 @@ def _apply_required_defaults(
                             wp_data = self.prepare_work_package(issue, op_project_id)
                             if wp_data:
                                 work_packages_data.append(wp_data)
+                                # Summarize noisy watcher logs from prepare step (stored in _log_counters)
+                                counters = wp_data.get("_log_counters", {})
+                                if counters.get("watcher_unmapped"):
+                                    self.logger.info(
+                                        "User association: Watchers unmapped for %s: %d (suppressed)",
+                                        issue_key,
+                                        counters["watcher_unmapped"],
+                                    )
 
                                 # Extract audit trail data while we have access to the full Jira issue
                                 # Store it for later processing after work packages are created

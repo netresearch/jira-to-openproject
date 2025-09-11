@@ -1279,7 +1279,7 @@
         "description": "In `src/migrations/work_package_migration.py`, avoid invoking Rails bulk creation when computed `to_create` is empty; ensure logs and metrics reflect early-exit.",
         "details": "- Detect empty `to_create` after map step\n- Skip Rails invocation and file writes\n- Emit concise summary and checkpoint\n- Preserve idempotency and resume semantics",
         "testStrategy": "Add unit test: simulate empty to_create, assert no Rails calls and fast completion",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
         "subtasks": [
@@ -1289,7 +1289,7 @@
             "description": "Refactor work_package_migration.py to compute the to_create list right after the mapping step, storing it in a local variable for subsequent checks.",
             "dependencies": [],
             "details": "In src/migrations/work_package_migration.py, move the logic that populates the to_create list out of the Rails bulk invocation block. After mapping Jira issues to WP attributes, assign the result to a variable `to_create`. Ensure this variable is available for the early-exit check.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           },
           {
@@ -1300,7 +1300,7 @@
               "116.1"
             ],
             "details": "Immediately after computing `to_create`, add an `if not to_create:` block. In this block, log a concise summary, increment metrics, emit a checkpoint, and return or exit the bulk creation function without invoking Rails or writing files.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Unit test simulating empty to_create to ensure no Rails calls are made and function returns early."
           },
           {
@@ -1311,7 +1311,7 @@
               "116.2"
             ],
             "details": "Within the new early-exit block, use the existing logging framework to output a summary message like `No work packages to create, exiting early.` Update metric counters (e.g., `wp_migration.empty_batches`) to reflect this path. Ensure logs follow the same format as successful bulk runs.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Inspect logs and metrics output when running migration with no new work packages."
           },
           {
@@ -1322,7 +1322,7 @@
               "116.2"
             ],
             "details": "Check that the migration still writes a checkpoint file or updates the resume cursor when exiting early. Refactor checkpoint logic so it is invoked both in the normal bulk path and in the early-exit block. Confirm that rerunning the migration does not reprocess the same issues.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Simulate a mid-migration resume scenario with no new packages and validate that the checkpoint and resume pointer are correctly updated."
           },
           {
@@ -1336,7 +1336,7 @@
               "116.4"
             ],
             "details": "In the test suite, add cases where the mapping produces an empty list and assert that Rails bulk creation and file writes are skipped, logs and metrics are emitted, and checkpoint is updated. Update docs in docs/migrations.md to include the early-exit behavior and required resume semantics.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Use pytest to create fixtures that simulate no new work packages and assert migrations behave as expected."
           }
         ]
@@ -1347,7 +1347,7 @@
         "description": "Use last successful checkpoint timestamp to build JQL (updated >= ts) for project-scoped issue extraction; integrate with existing fast-forward flag.",
         "details": "- Read timestamp from .migration_checkpoints.db\n- Build JQL with updated >= last_ts for project\n- Fall back to full if missing\n- Update checkpoint on success",
         "testStrategy": "Functional test with mocked Jira client to ensure reduced issue set when checkpoint present",
-        "status": "pending",
+        "status": "in-progress",
         "dependencies": [],
         "priority": "high",
         "subtasks": []
@@ -1421,7 +1421,7 @@
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-09-11T07:02:42.261Z",
+      "updated": "2025-09-11T07:55:12.347Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",
