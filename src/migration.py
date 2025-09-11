@@ -1192,12 +1192,12 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         if (not component_result.success) or _component_has_errors(component_result):
                             results.overall["status"] = "failed"
 
-                        # Print component summary based on details dictionary
+                        # Print component summary based on details dictionary (fallback to top-level fields)
                         details = component_result.details or {}
-                        success_count = details.get("success_count", 0)
-                        failed_count = details.get("failed_count", 0)
-                        total_count = details.get("total_count", 0)
-                        component_time = details.get("time", 0)
+                        success_count = details.get("success_count", component_result.success_count)
+                        failed_count = details.get("failed_count", component_result.failed_count)
+                        total_count = details.get("total_count", component_result.total_count)
+                        component_time = details.get("time", details.get("duration_seconds", 0))
 
                         # Enhanced logging with performance metrics
                         had_errors = _component_has_errors(component_result)
