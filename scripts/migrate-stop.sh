@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Stop all local and remote (if configured) migration processes and watchers.
+# Stop only local migration processes started from this repo. Remote kills are gated.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 cd "$repo_root"
@@ -29,13 +29,10 @@ for pat in "${patterns[@]}"; do
   pkill -f -KILL "$pat" 2>/dev/null || true
 done
 
-echo "[migrate-stop] Killing local watchers (tail/sed/ssh/tmux)..." >&2
+echo "[migrate-stop] Killing local log tailers..." >&2
 watchers=(
   "tail -F $LOG_FILE"
   "tail -n +1 -f $LOG_FILE"
-  "sed -n 1,160p"
-  "ssh sobol\\.nr"
-  "tmux new-session -s rails_console"
 )
 for w in "${watchers[@]}"; do
   pkill -f -KILL "$w" 2>/dev/null || true
@@ -52,19 +49,24 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-if [[ -n "${J2O_OPENPROJECT_SERVER:-}" && -n "${J2O_OPENPROJECT_USER:-}" ]]; then
-  if [[ -n "${J2O_OPENPROJECT_CONTAINER:-}" ]]; then
-    echo "[migrate-stop] Killing remote rails runner processes in container '$J2O_OPENPROJECT_CONTAINER'..." >&2
-    ssh -o BatchMode=yes -o ConnectTimeout=6 "${J2O_OPENPROJECT_USER}@${J2O_OPENPROJECT_SERVER}" \
-      "C=\"${J2O_OPENPROJECT_CONTAINER}\"; if docker ps --format '{{.Names}}' | grep -q '^'\"\$C\"'$'; then \
-         docker exec -i \$C sh -lc \"pkill -f -9 'rails runner .*j2o_runner_' || true; pkill -f -9 'j2o_runner_.*\\.rb' || true\"; \
-       fi" || true
+# Remote actions are DISABLED by default. Opt-in via J2O_MIGRATE_STOP_REMOTE_OK=1
+if [[ "${J2O_MIGRATE_STOP_REMOTE_OK:-0}" == "1" ]]; then
+  if [[ -n "${J2O_OPENPROJECT_SERVER:-}" && -n "${J2O_OPENPROJECT_USER:-}" ]]; then
+    if [[ -n "${J2O_OPENPROJECT_CONTAINER:-}" ]]; then
+      echo "[migrate-stop] (remote-ok) Killing remote rails runner processes in container '$J2O_OPENPROJECT_CONTAINER'..." >&2
+      ssh -o BatchMode=yes -o ConnectTimeout=6 "${J2O_OPENPROJECT_USER}@${J2O_OPENPROJECT_SERVER}" \
+        "C=\"${J2O_OPENPROJECT_CONTAINER}\"; if docker ps --format '{{.Names}}' | grep -q '^'\"\$C\"'$'; then \
+           docker exec -i \$C sh -lc \"pkill -f -9 'rails runner .*j2o_runner_' || true; pkill -f -9 'j2o_runner_.*\\.rb' || true\"; \
+         fi" || true
+    fi
+    if [[ -n "${J2O_OPENPROJECT_TMUX_SESSION_NAME:-}" ]]; then
+      echo "[migrate-stop] (remote-ok) Killing remote tmux session '$J2O_OPENPROJECT_TMUX_SESSION_NAME'..." >&2
+      ssh -o BatchMode=yes -o ConnectTimeout=6 "${J2O_OPENPROJECT_USER}@${J2O_OPENPROJECT_SERVER}" \
+        "tmux kill-session -t ${J2O_OPENPROJECT_TMUX_SESSION_NAME} 2>/dev/null || true" || true
+    fi
   fi
-  if [[ -n "${J2O_OPENPROJECT_TMUX_SESSION_NAME:-}" ]]; then
-    echo "[migrate-stop] Killing remote tmux session '$J2O_OPENPROJECT_TMUX_SESSION_NAME'..." >&2
-    ssh -o BatchMode=yes -o ConnectTimeout=6 "${J2O_OPENPROJECT_USER}@${J2O_OPENPROJECT_SERVER}" \
-      "tmux kill-session -t ${J2O_OPENPROJECT_TMUX_SESSION_NAME} 2>/dev/null || true" || true
-  fi
+else
+  echo "[migrate-stop] Remote kills disabled (set J2O_MIGRATE_STOP_REMOTE_OK=1 to enable)." >&2
 fi
 
 echo "[migrate-stop] Done." >&2
