@@ -937,6 +937,94 @@ class WorkPackageMigration(BaseMigration):
 
         return work_package
 
+    def _extract_issue_meta(self, issue: Any) -> dict[str, Any]:
+        """Extract non-AR metadata from a Jira issue for reporting.
+
+        Safe best-effort extraction from either jira.Issue or dict-like payloads.
+        Does not mutate inputs and never raises.
+        """
+        meta: dict[str, Any] = {}
+        try:
+            # Handle jira.Issue style
+            if hasattr(issue, "key") and hasattr(issue, "fields"):
+                f = getattr(issue, "fields", None)
+                meta["jira_key"] = getattr(issue, "key", None)
+                meta["jira_id"] = getattr(issue, "id", None)
+                if f is not None:
+                    def _name(obj: Any) -> Any:
+                        try:
+                            return getattr(obj, "name", None)
+                        except Exception:
+                            return None
+                    meta["issuetype_id"] = getattr(getattr(f, "issuetype", None), "id", None)
+                    meta["issuetype_name"] = _name(getattr(f, "issuetype", None))
+                    meta["status_id"] = getattr(getattr(f, "status", None), "id", None)
+                    meta["status_name"] = _name(getattr(f, "status", None))
+                    meta["priority_id"] = getattr(getattr(f, "priority", None), "id", None)
+                    meta["priority_name"] = _name(getattr(f, "priority", None))
+                    meta["reporter"] = getattr(getattr(f, "reporter", None), "name", None)
+                    meta["assignee"] = getattr(getattr(f, "assignee", None), "name", None)
+                    meta["created"] = getattr(f, "created", None)
+                    meta["updated"] = getattr(f, "updated", None)
+                    meta["duedate"] = getattr(f, "duedate", None)
+                    try:
+                        labels = list(getattr(f, "labels", []) or [])
+                    except Exception:
+                        labels = []
+                    meta["labels"] = labels
+                    try:
+                        comps = getattr(f, "components", []) or []
+                        meta["components"] = [getattr(c, "name", None) for c in comps if c]
+                    except Exception:
+                        meta["components"] = []
+                    # Optional relations
+                    try:
+                        parent = getattr(f, "parent", None)
+                        if parent is not None:
+                            meta["parent_key"] = getattr(parent, "key", None)
+                    except Exception:
+                        pass
+            else:
+                # Dict-like payloads (tests / fallback)
+                d = issue or {}
+                fields = d.get("fields") if isinstance(d, dict) else {}
+                meta["jira_key"] = (d.get("key") if isinstance(d, dict) else None)
+                meta["jira_id"] = (d.get("id") if isinstance(d, dict) else None)
+                def _get(path_keys: list[str]) -> Any:
+                    cur: Any = fields if isinstance(fields, dict) else {}
+                    for k in path_keys:
+                        if not isinstance(cur, dict):
+                            return None
+                        cur = cur.get(k)
+                    return cur
+                meta["issuetype_id"] = _get(["issuetype", "id"])
+                meta["issuetype_name"] = _get(["issuetype", "name"])
+                meta["status_id"] = _get(["status", "id"])
+                meta["status_name"] = _get(["status", "name"])
+                meta["priority_id"] = _get(["priority", "id"])
+                meta["priority_name"] = _get(["priority", "name"])
+                meta["reporter"] = _get(["reporter", "name"]) or _get(["reporter", "displayName"]) 
+                meta["assignee"] = _get(["assignee", "name"]) or _get(["assignee", "displayName"]) 
+                meta["created"] = _get(["created"]) or d.get("created")
+                meta["updated"] = _get(["updated"]) or d.get("updated")
+                meta["duedate"] = _get(["duedate"]) or d.get("duedate")
+                labels = _get(["labels"]) or []
+                if not isinstance(labels, list):
+                    labels = []
+                meta["labels"] = labels
+                comps = _get(["components"]) or []
+                if isinstance(comps, list):
+                    meta["components"] = [c.get("name") for c in comps if isinstance(c, dict)]
+                else:
+                    meta["components"] = []
+                parent = _get(["parent"]) or {}
+                if isinstance(parent, dict):
+                    meta["parent_key"] = parent.get("key")
+        except Exception:
+            # Never fail migration because of meta extraction
+            pass
+        return meta
+
     def prepare_work_package(
         self,
         jira_issue: dict[str, Any],
@@ -1308,11 +1396,17 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                     jira_key = getattr(issue, "key", None)
                 except Exception:
                     jira_key = None
-                work_packages_meta.append({
-                    "jira_id": jira_id,
-                    "jira_key": jira_key,
-                    "project_key": project_key,
-                })
+                # Enrich meta with non-AR fields for reporting/debug
+                meta = {"jira_id": jira_id, "jira_key": jira_key, "project_key": project_key}
+                try:
+                    extra = self._extract_issue_meta(issue)
+                    # Prefer our already extracted ids/keys
+                    extra.pop("jira_id", None)
+                    extra.pop("jira_key", None)
+                    meta.update(extra)
+                except Exception:
+                    pass
+                work_packages_meta.append(meta)
                 if len(batch) >= batch_size:
                     # Ensure project_id is present on every record in the batch
                     try:
@@ -2307,14 +2401,25 @@ def _apply_required_defaults(
                 # Ensure each work package has all required fields
                 work_packages_meta: list[dict[str, Any]] = []
                 for wp in work_packages_data:
-                    # Preserve Jira linkage for result mapping by index
-                    work_packages_meta.append(
-                        {
-                            "jira_id": wp.get("jira_id"),
-                            "jira_key": wp.get("jira_key"),
-                            "subject": wp.get("subject"),
-                        },
-                    )
+                    # Preserve Jira linkage for result mapping by index and enrich
+                    meta = {
+                        "jira_id": wp.get("jira_id"),
+                        "jira_key": wp.get("jira_key"),
+                        "subject": wp.get("subject"),
+                    }
+                    try:
+                        issue_like = {
+                            "key": wp.get("jira_key"),
+                            "id": wp.get("jira_id"),
+                            "fields": {},
+                        }
+                        extra = self._extract_issue_meta(issue_like)
+                        extra.pop("jira_id", None)
+                        extra.pop("jira_key", None)
+                        meta.update(extra)
+                    except Exception:
+                        pass
+                    work_packages_meta.append(meta)
 
                     # Centralized sanitation to avoid AR unknown attribute errors
                     self._sanitize_wp_dict(wp)
