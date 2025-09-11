@@ -120,7 +120,6 @@ class TimeEntryMigration(BaseMigration):
         try:
             result = self.time_entry_migrator.migrate_time_entries_for_issues(
                 migrated_wps,
-                batch_size=batch_size_env,
             )
             success = result.get("status") in ("success", "partial_success")
             errors: list[str] = []

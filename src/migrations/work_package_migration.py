@@ -3,6 +3,7 @@ Handles the migration of issues from Jira to work packages in OpenProject.
 """
 
 import json
+import os
 import shutil
 import time
 from collections.abc import Iterator
@@ -2421,6 +2422,46 @@ def _apply_required_defaults(
                 self.logger.info(
                     f"Saved debug copy of work packages data to {debug_json_path}",
                 )
+
+                # Early idempotency short-circuit: if all mapped Jira IDs already have openproject_id, skip Rails
+                try:
+                    # Build index for later result mapping while checking existing mapping
+                    to_create: list[dict[str, Any]] = []
+                    to_create_meta: list[dict[str, Any]] = []
+                    for meta, wp in zip(work_packages_meta, work_packages_data):
+                        jira_id_meta = meta.get("jira_id")
+                        existing = None
+                        if jira_id_meta is not None:
+                            existing = self.work_package_mapping.get(jira_id_meta)
+                        if existing and existing.get("openproject_id"):
+                            # Already created in a previous run; skip creating again
+                            continue
+                        to_create.append(wp)
+                        to_create_meta.append(meta)
+
+                    if not to_create:
+                        self.logger.info(
+                            f"No new work packages to create for project {project_key}; skipping Rails bulk",
+                        )
+                        project_tracker.add_log_item(
+                            f"No-op: {project_key} (0 new of {len(work_packages_data)})",
+                        )
+                        project_tracker.increment()
+                        processed_projects.add(project_key)
+                        successful_projects.append(
+                            {"project_key": project_key, "created_count": 0},
+                        )
+                        # Proceed to next project without invoking Rails
+                        continue
+
+                    # Narrow payload to only new items
+                    work_packages_data = to_create
+                    work_packages_meta = to_create_meta
+
+                except Exception as e:  # Defensive: do not block creation if filtering fails
+                    self.logger.warning(
+                        f"Idempotency filter failed for project {project_key}: {e}; proceeding with full payload",
+                    )
 
                 # Bulk create via generic OpenProject client helper (minimal Ruby)
                 try:

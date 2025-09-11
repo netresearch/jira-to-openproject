@@ -1272,11 +1272,156 @@
         "dependencies": [],
         "priority": "medium",
         "subtasks": []
+      },
+      {
+        "id": 116,
+        "title": "Short-circuit WP Rails bulk when no work packages to create",
+        "description": "In `src/migrations/work_package_migration.py`, avoid invoking Rails bulk creation when computed `to_create` is empty; ensure logs and metrics reflect early-exit.",
+        "details": "- Detect empty `to_create` after map step\n- Skip Rails invocation and file writes\n- Emit concise summary and checkpoint\n- Preserve idempotency and resume semantics",
+        "testStrategy": "Add unit test: simulate empty to_create, assert no Rails calls and fast completion",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Compute to_create immediately after mapping",
+            "description": "Refactor work_package_migration.py to compute the to_create list right after the mapping step, storing it in a local variable for subsequent checks.",
+            "dependencies": [],
+            "details": "In src/migrations/work_package_migration.py, move the logic that populates the to_create list out of the Rails bulk invocation block. After mapping Jira issues to WP attributes, assign the result to a variable `to_create`. Ensure this variable is available for the early-exit check.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement early-exit when to_create is empty",
+            "description": "Add a conditional check to skip Rails bulk creation and file writes if the computed to_create list is empty.",
+            "dependencies": [
+              "116.1"
+            ],
+            "details": "Immediately after computing `to_create`, add an `if not to_create:` block. In this block, log a concise summary, increment metrics, emit a checkpoint, and return or exit the bulk creation function without invoking Rails or writing files.",
+            "status": "pending",
+            "testStrategy": "Unit test simulating empty to_create to ensure no Rails calls are made and function returns early."
+          },
+          {
+            "id": 3,
+            "title": "Update logging and metrics for early-exit path",
+            "description": "Enhance the logging and metrics emission to capture the early-exit case distinctly from the normal bulk path.",
+            "dependencies": [
+              "116.2"
+            ],
+            "details": "Within the new early-exit block, use the existing logging framework to output a summary message like `No work packages to create, exiting early.` Update metric counters (e.g., `wp_migration.empty_batches`) to reflect this path. Ensure logs follow the same format as successful bulk runs.",
+            "status": "pending",
+            "testStrategy": "Inspect logs and metrics output when running migration with no new work packages."
+          },
+          {
+            "id": 4,
+            "title": "Ensure idempotency and resume semantics are preserved",
+            "description": "Verify that skipping the bulk invocation does not break the migration's checkpointing and idempotency features.",
+            "dependencies": [
+              "116.2"
+            ],
+            "details": "Check that the migration still writes a checkpoint file or updates the resume cursor when exiting early. Refactor checkpoint logic so it is invoked both in the normal bulk path and in the early-exit block. Confirm that rerunning the migration does not reprocess the same issues.",
+            "status": "pending",
+            "testStrategy": "Simulate a mid-migration resume scenario with no new packages and validate that the checkpoint and resume pointer are correctly updated."
+          },
+          {
+            "id": 5,
+            "title": "Write unit tests and update documentation",
+            "description": "Add unit tests for the early-exit logic and update developer documentation to describe the new behavior.",
+            "dependencies": [
+              "116.1",
+              "116.2",
+              "116.3",
+              "116.4"
+            ],
+            "details": "In the test suite, add cases where the mapping produces an empty list and assert that Rails bulk creation and file writes are skipped, logs and metrics are emitted, and checkpoint is updated. Update docs in docs/migrations.md to include the early-exit behavior and required resume semantics.",
+            "status": "pending",
+            "testStrategy": "Use pytest to create fixtures that simulate no new work packages and assert migrations behave as expected."
+          }
+        ]
+      },
+      {
+        "id": 117,
+        "title": "Enable WP delta/fast-forward based on checkpoints",
+        "description": "Use last successful checkpoint timestamp to build JQL (updated >= ts) for project-scoped issue extraction; integrate with existing fast-forward flag.",
+        "details": "- Read timestamp from .migration_checkpoints.db\n- Build JQL with updated >= last_ts for project\n- Fall back to full if missing\n- Update checkpoint on success",
+        "testStrategy": "Functional test with mocked Jira client to ensure reduced issue set when checkpoint present",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 118,
+        "title": "Aggregate unmapped watcher logs to summaries",
+        "description": "Reduce log volume by summarizing 'Watcher unmapped, skipping' per issue/batch; keep detailed entries under DEBUG.",
+        "details": "- Count per issue/batch and log once at INFO\n- Gate detailed logs behind DEBUG\n- Preserve metrics for auditing",
+        "testStrategy": "Unit test to assert one INFO summary for N unmapped watchers",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 119,
+        "title": "Time entries: add bounded concurrency and larger batches",
+        "description": "Increase time entry migration throughput by batching and parallelizing OP create calls with safe backoff and connection pooling.",
+        "details": "- Config/env: J2O_TIME_ENTRY_BATCH_SIZE, J2O_TIME_ENTRY_CONCURRENCY\n- Implement semaphore-limited concurrency in migrator\n- Maintain ordering and error aggregation",
+        "testStrategy": "Integration test with stub OP client measuring throughput and correctness",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 120,
+        "title": "Time entries: hard idempotency via external key mapping",
+        "description": "Deduplicate time entries using a stable external key (JIRA issueKey + workLogId) persisted in OP (custom field/comment) and local mapping; skip existing.",
+        "details": "- Compute external_id\n- Lookup local mapping and OP by field/tag\n- Skip or update if exists; write mapping file",
+        "testStrategy": "Unit test for duplicate prevention; idempotent re-run yields zero creations",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 121,
+        "title": "Fix security init Path warning",
+        "description": "Address 'cannot access local variable Path' during security init by importing Path or avoiding shadowing in `src/migration.py`.",
+        "details": "- Ensure correct import/use of Path\n- Add test to prevent regression",
+        "testStrategy": "Run migration init path in test; assert no warning logs",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 122,
+        "title": "Skip backup on idempotent runs with CLI gating",
+        "description": "Honor `--no-backup` for idempotent/no-op runs; detect no-op plan and skip backup automatically unless forced.",
+        "details": "- Add preflight detection of no-op plan\n- Respect explicit flags; document behavior",
+        "testStrategy": "Functional test ensuring backup skipped when plan is empty",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 123,
+        "title": "Unify config-driven concurrency across components",
+        "description": "Expose and honor `max_concurrent` consistently for components; centralize in config with sane defaults and env overrides.",
+        "details": "- Wire through `max_concurrent` param from config\n- Apply to users, WPs, time entries where relevant",
+        "testStrategy": "Unit tests confirming concurrency value is applied and bounded",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
       }
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-08-21T07:54:07.929Z",
+      "updated": "2025-09-11T07:02:42.261Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",

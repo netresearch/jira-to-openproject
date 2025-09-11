@@ -197,10 +197,6 @@ node_modules/
 *.sw?
 # OS specific
 
-# Task files
-# tasks.json
-# tasks/
-
 # Security and Cryptographic Keys - NEVER commit these!
 *.pem
 *.key
@@ -221,3 +217,7 @@ auth_keys
 .envrc.local
 .env
 .chunkhound*
+
+# Task files
+# tasks.json
+# tasks/ 
