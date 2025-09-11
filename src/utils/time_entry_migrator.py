@@ -447,12 +447,24 @@ class TimeEntryMigrator:
         # Build set of existing external keys to enforce idempotency
         existing_keys: set[str] = set()
         try:
-            # Query a slice of recent entries to reduce cost; callers can enhance if needed
+            # Query recent time entries and collect provenance CF if present
             recent = self.op_client.get_time_entries(limit=2000)
             for te in recent:
-                # Read provenance from custom fields if available
-                # Note: openproject_client creates CF 'Jira Worklog Key' when present
-                pass  # placeholder for extended snapshot handling
+                # Expect a custom field mapping in response in future; be defensive for now
+                cf_value = None
+                # Some adapters may include custom_fields array
+                for k in ("custom_fields", "customFields", "cfs"):
+                    vals = te.get(k) if isinstance(te, dict) else None
+                    if isinstance(vals, dict):
+                        cf_value = cf_value or vals.get("Jira Worklog Key")
+                    elif isinstance(vals, list):
+                        for item in vals:
+                            if isinstance(item, dict) and item.get("name") == "Jira Worklog Key":
+                                cf_value = cf_value or item.get("value")
+                # Fallback: look for meta passthroughs if any
+                cf_value = cf_value or te.get("jira_worklog_key")
+                if isinstance(cf_value, str) and cf_value:
+                    existing_keys.add(cf_value)
         except Exception:
             # Non-fatal; continue without snapshot
             existing_keys = set()
