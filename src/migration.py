@@ -417,10 +417,12 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
 
         # Create a backup if not disabled
         backup_path = None
+        # Heuristic no-op plan detection (placeholder for future preflight analysis)
+        plan_noop = False
         if not config.migration_config.get(
             "no_backup",
             False,
-        ) and not config.migration_config.get("dry_run", False):
+        ) and not config.migration_config.get("dry_run", False) and not plan_noop:
             config.logger.info("Creating backup before migration...")
             backup_path = create_backup()
             if backup_path:
