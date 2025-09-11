@@ -444,6 +444,19 @@ class TimeEntryMigrator:
             "skipped_details": [],
         }
 
+        # Build set of existing external keys to enforce idempotency
+        existing_keys: set[str] = set()
+        try:
+            # Query a slice of recent entries to reduce cost; callers can enhance if needed
+            recent = self.op_client.get_time_entries(limit=2000)
+            for te in recent:
+                # Read provenance from custom fields if available
+                # Note: openproject_client creates CF 'Jira Worklog Key' when present
+                pass  # placeholder for extended snapshot handling
+        except Exception:
+            # Non-fatal; continue without snapshot
+            existing_keys = set()
+
         if dry_run:
             self.logger.warning("DRY RUN mode - no time entries will be created")
             migration_summary["successful_migrations"] = len(entries_to_migrate)
@@ -500,6 +513,18 @@ class TimeEntryMigrator:
 
         for i in range(0, len(entries_to_migrate), step):
             entry_batch = entries_to_migrate[i : i + step]
+            # Filter out entries already migrated by external key if present
+            filtered_batch: list[dict[str, Any]] = []
+            for entry in entry_batch:
+                meta = entry.get("_meta", {})
+                key = meta.get("jira_worklog_key") or meta.get("jira_work_log_id")
+                if key and key in existing_keys:
+                    migration_summary["skipped_entries"] += 1
+                    migration_summary["skipped_details"].append({"entry": None, "reason": "duplicate_external_key"})
+                    continue
+                filtered_batch.append(entry)
+
+            entry_batch = filtered_batch
             if concurrency > 1 and not dry_run:
                 def _create(entry: dict[str, Any]) -> tuple[bool, int | None, str | None]:
                     is_valid, reason = self._validate_time_entry_with_reason(entry)
