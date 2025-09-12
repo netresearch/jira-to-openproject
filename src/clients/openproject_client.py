@@ -1457,12 +1457,16 @@ class OpenProjectClient:
             "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end\n"
             "begin; GoodJob.logger = Logger.new(nil); rescue; end\n"
             "verbose = (ENV['J2O_BULK_RUBY_VERBOSE'] == '1')\n"
+            "progress_file = ENV['J2O_BULK_PROGRESS_FILE']\n"
+            "begin; FileUtils.rm_f(progress_file); rescue; end if progress_file\n"
+            "progress_n = (ENV['J2O_BULK_PROGRESS_N'] || '50').to_i\n"
             "begin\n"
             "model = Object.const_get(model_name)\n"
             "data = JSON.parse(File.read(data_path))\n"
             "created = []\n"
             "errors = []\n"
             "puts \"J2O bulk start: model=#{model_name} total=#{data.length} result=#{result_path}\" if verbose\n"
+            "begin; File.open(progress_file, 'a'){|f| f.write(\"START total=#{data.length}\\n\") }; rescue; end if progress_file\n"
             "data.each_with_index do |attrs, idx|\n"
             "  begin\n"
             "    rec = model.new\n"
@@ -1546,6 +1550,13 @@ class OpenProjectClient:
             "      errors << {'index' => idx, 'errors' => rec.errors.full_messages}\n"
             "      puts \"J2O bulk item #{idx}: failed #{rec.errors.full_messages.join(', ')}\" if verbose\n"
             "    end\n"
+            "    if progress_n > 0 && ((idx + 1) % progress_n == 0)\n"
+            "      begin; File.open(progress_file, 'a'){|f| f.write('.') }; rescue; end if progress_file\n"
+            "      puts '.' if verbose\n"
+            "    end\n"
+            "    if verbose && progress_n > 0 && ((idx + 1) % (progress_n * 10) == 0)\n"
+            "      puts \"processed=#{idx + 1}/#{data.length}\"\n"
+            "    end\n"
             "  rescue => e\n"
             "    errors << {'index' => idx, 'errors' => [e.message]}\n"
             "    puts \"J2O bulk item #{idx}: exception #{e.class}: #{e.message}\" if verbose\n"
@@ -1565,6 +1576,7 @@ class OpenProjectClient:
             "end\n"
             "begin; FileUtils.chmod(0644, result_path); rescue; end\n"
             "puts \"J2O bulk done: created=#{created.length} errors=#{errors.length} total=#{data.length} -> #{result_path}\" if verbose\n"
+            "begin; File.open(progress_file, 'a'){|f| f.write(\"\\nDONE #{created.length}/#{data.length}\\n\") }; rescue; end if progress_file\n"
             "rescue => top_e\n"
             "  begin\n"
             "    err = { 'status' => 'error', 'message' => top_e.message, 'backtrace' => (top_e.backtrace || []).take(20) }\n"
@@ -1674,7 +1686,9 @@ class OpenProjectClient:
         else:
             # Execute via persistent Rails console with suppressed output (file-based result only)
             try:
-                output = self.rails_client.execute(full_script, timeout=timeout or 120, suppress_output=True)
+                # Allow opt-in console progress visibility
+                suppress = (os.environ.get("J2O_BULK_PROGRESS_CONSOLE", "0") != "1")
+                output = self.rails_client.execute(full_script, timeout=timeout or 120, suppress_output=suppress)
             except Exception as e:
                 _msg = f"Rails execution failed for bulk_create_records: {e}"
                 raise QueryExecutionError(_msg) from e
