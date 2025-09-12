@@ -114,6 +114,9 @@ class TimeEntryTransformer:
                     "jira_author": author_username,
                     "import_timestamp": datetime.now(tz=UTC).isoformat(),
                     "jira_worklog_key": f"{issue_key}:{work_log.get('id')}" if work_log.get("id") is not None else None,
+                    # Carry source timestamps for fast-forward/upsert logic
+                    "jira_created_at": work_log.get("created"),
+                    "jira_updated_at": work_log.get("updated"),
                 },
             }
 

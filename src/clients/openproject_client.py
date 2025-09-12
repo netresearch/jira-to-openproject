@@ -132,7 +132,12 @@ class OpenProjectClient:
             "tmux_session_name",
             "rails_console",
         )
-        self.command_timeout = command_timeout
+        # Allow env override for long-running remote operations
+        try:
+            env_timeout = int(os.environ.get("J2O_OPENPROJECT_TIMEOUT", "0"))
+        except Exception:
+            env_timeout = 0
+        self.command_timeout = env_timeout if env_timeout > 0 else command_timeout
         self.retry_count = retry_count
         self.retry_delay = retry_delay
 
@@ -3280,7 +3285,6 @@ class OpenProjectClient:
         # Build Ruby expression (not a block) that returns the array directly
         query = (
             f"TimeEntry{where_clause}.limit({limit}).includes(:work_package, :user, :activity)"
-
             ".map do |entry| "
             "{ id: entry.id, "
             "work_package_id: entry.work_package_id, "
@@ -3288,7 +3292,8 @@ class OpenProjectClient:
             "user_id: entry.user_id, user_name: entry.user&.name, "
             "activity_id: entry.activity_id, activity_name: entry.activity&.name, "
             "hours: entry.hours.to_f, spent_on: entry.spent_on.to_s, "
-            "comments: entry.comments, created_at: entry.created_at.to_s, updated_at: entry.updated_at.to_s } end"
+            "comments: entry.comments, created_at: entry.created_at.to_s, updated_at: entry.updated_at.to_s, "
+            "custom_fields: (begin cf = entry.custom_field_values; cf.respond_to?(:to_json) ? cf : {}; rescue; {} end) } end"
         )
 
         try:

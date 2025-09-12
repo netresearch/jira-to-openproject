@@ -214,7 +214,8 @@ class WorkPackageMigration(BaseMigration):
                 if op_project_id:
                     # Ensure CF exists and snapshot existing keys/migration dates
                     _ = self.op_client.ensure_work_package_custom_field("Jira Issue Key", "string")
-                    _ = self.op_client.ensure_work_package_custom_field("Jira Migration Date", "datetime")
+                    # OpenProject WP CF supports 'date' but not 'datetime'
+                    _ = self.op_client.ensure_work_package_custom_field("Jira Migration Date", "date")
                     snapshot = self.op_client.get_project_wp_cf_snapshot(int(op_project_id))
                     existing_keys = {
                         str(row.get("jira_issue_key")).strip()
@@ -1445,14 +1446,14 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                             result_basename=f"work_packages_{project_key}",
                         )
                         if isinstance(res, dict):
-                            # Persist the bulk result for diagnostics
+                            # Persist the bulk result for diagnostics (include paired meta)
                             try:
                                 debug_path = (
                                     Path(self.data_dir)
                                     / f"bulk_result_{project_key}_{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}.json"
                                 )
                                 with debug_path.open("w", encoding="utf-8") as f:
-                                    json.dump(res, f, indent=2)
+                                    json.dump({"result": res, "meta": work_packages_meta}, f, indent=2)
                                 self.logger.info("Saved bulk result to %s", debug_path)
                             except Exception:
                                 pass
@@ -1574,14 +1575,14 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                         result_basename=f"work_packages_{project_key}",
                     )
                     if isinstance(res, dict):
-                        # Persist the bulk result for diagnostics
+                        # Persist the bulk result for diagnostics (include paired meta)
                         try:
                             debug_path = (
                                 Path(self.data_dir)
                                 / f"bulk_result_{project_key}_{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}.json"
                             )
                             with debug_path.open("w", encoding="utf-8") as f:
-                                json.dump(res, f, indent=2)
+                                json.dump({"result": res, "meta": work_packages_meta}, f, indent=2)
                             self.logger.info("Saved bulk result to %s", debug_path)
                         except Exception:
                             pass
