@@ -99,6 +99,49 @@ class TimeEntryMigrator:
         # Load mappings if available
         self._load_mappings()
 
+        # Fast-forward / upsert controls
+        self._ff_enabled: bool = False
+        self._ff_field: str = "updated"  # or 'created'
+        self._ff_cutoff: datetime | None = None
+        self._upsert_enabled: bool = False
+
+    # == Timestamp helpers ==
+    @staticmethod
+    def _parse_ts(ts: str | None) -> datetime | None:
+        if not ts or not isinstance(ts, str):
+            return None
+        ts = ts.strip()
+        # Try multiple common formats (OP Ruby .to_s and Jira ISO)
+        fmts = [
+            "%Y-%m-%d %H:%M:%S %Z",
+            "%Y-%m-%d %H:%M:%S %z",
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%dT%H:%M:%SZ",
+        ]
+        for fmt in fmts:
+            try:
+                return datetime.strptime(ts, fmt)
+            except Exception:
+                continue
+        # As a last resort, try dropping timezone suffix like '+0000'
+        try:
+            if ts.endswith("+0000"):
+                return datetime.strptime(ts[:-5], "%Y-%m-%dT%H:%M:%S.%f")
+        except Exception:
+            pass
+        return None
+
+    def _ff_accept(self, created: str | None, updated: str | None) -> bool:
+        if not self._ff_enabled or not self._ff_cutoff:
+            return True
+        probe = updated if self._ff_field == "updated" else created
+        ts = self._parse_ts(probe)
+        if not ts:
+            return False  # drop if we cannot determine recency
+        return ts > self._ff_cutoff
+
     def _load_mappings(self) -> None:
         """Load existing mappings from migration data files."""
         try:
@@ -216,14 +259,22 @@ class TimeEntryMigrator:
 
                 if work_logs:
                     # Add issue_key to each work log for later processing
+                    filtered_logs = []
                     for log in work_logs:
                         log["issue_key"] = issue_key
+                        # Fast-forward filter
+                        try:
+                            if self._ff_accept(log.get("created"), log.get("updated")):
+                                filtered_logs.append(log)
+                        except Exception:
+                            # On parse errors, conservatively drop
+                            continue
 
-                    extracted_logs[issue_key] = work_logs
-                    total_logs += len(work_logs)
+                    extracted_logs[issue_key] = filtered_logs
+                    total_logs += len(filtered_logs)
                     self.logger.debug(
                         "Extracted %d work logs for %s",
-                        len(work_logs),
+                        len(filtered_logs),
                         issue_key,
                     )
                 else:
@@ -293,10 +344,20 @@ class TimeEntryMigrator:
 
             result_entries: list[dict[str, Any]] = []
             if tempo_entries:
-                self.extracted_tempo_entries = tempo_entries
-                self.migration_results["tempo_entries_extracted"] = len(tempo_entries)
-                self.migration_results["total_work_logs_found"] += len(tempo_entries)
-                result_entries = tempo_entries
+                # Fast-forward filter for Tempo using created/updated
+                filtered = []
+                for te in tempo_entries:
+                    created = te.get("created")
+                    updated = te.get("updated")
+                    try:
+                        if self._ff_accept(created, updated):
+                            filtered.append(te)
+                    except Exception:
+                        continue
+                self.extracted_tempo_entries = filtered
+                self.migration_results["tempo_entries_extracted"] = len(filtered)
+                self.migration_results["total_work_logs_found"] += len(filtered)
+                result_entries = filtered
 
                 # Save to file if requested
                 if save_to_file:
@@ -783,6 +844,32 @@ class TimeEntryMigrator:
 
         try:
             # Step 1: Extract Jira work logs (delta awareness to be refined per-issue later)
+            # Configure fast-forward once per run
+            try:
+                self._ff_enabled = os.environ.get("J2O_TIME_ENTRY_FAST_FORWARD", "0").lower() in ("1", "true", "yes")
+                self._ff_field = os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower() in ("created", "updated") and os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower() or "updated"
+            except Exception:
+                self._ff_enabled = False
+                self._ff_field = "updated"
+
+            # Compute cutoff from existing OP entries if enabled
+            if self._ff_enabled:
+                try:
+                    # Gather recent entries and compute max created/updated
+                    recent = self.op_client.get_time_entries(limit=2000)
+                    best: datetime | None = None
+                    for te in recent:
+                        probe = te.get("updated_at") if self._ff_field == "updated" else te.get("created_at")
+                        ts = self._parse_ts(str(probe) if probe is not None else None)
+                        if ts and (best is None or ts > best):
+                            best = ts
+                    self._ff_cutoff = best
+                    if best:
+                        self.logger.info("Fast-forward enabled: cutoff=%s field=%s", best.isoformat(), self._ff_field)
+                except Exception as e:  # noqa: BLE001
+                    self.logger.warning("Failed to compute fast-forward cutoff: %s", e)
+                    self._ff_cutoff = None
+
             self.extract_jira_work_logs_for_issues(issue_keys)
 
             # Step 2: Extract Tempo entries if requested (global; Jira-side filtering happens in transformer)
