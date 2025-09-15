@@ -108,6 +108,100 @@ def _component_has_errors(result: ComponentResult | None) -> bool:  # noqa: C901
         return True
     return int(getattr(result, "failed_issues", 0)) > 0
 
+# Helper: robustly extract success/failed/total counts for summaries
+def _extract_counts(result: ComponentResult) -> tuple[int, int, int]:
+    """Return (success_count, failed_count, total_count) using robust fallbacks.
+
+    Priority:
+    1) details.success_count/failed_count/total_count
+    2) model fields success_count/failed_count/total_count
+    3) derive from common detail/data shapes (e.g., total_created/total_issues,
+       total_time_entries {migrated, failed}, generic 'total'/'error_count')
+    4) final fallback: total = success + failed
+    """
+    try:
+        details = getattr(result, "details", None) or {}
+
+        # 1) Direct counts in details dict
+        if isinstance(details, dict):
+            d_succ = int(details.get("success_count", 0) or 0)
+            d_fail = int(details.get("failed_count", 0) or 0)
+            d_total = int(details.get("total_count", 0) or 0)
+        else:
+            d_succ = d_fail = d_total = 0
+
+        # 2) Model-level fields
+        m_succ = int(getattr(result, "success_count", 0) or 0)
+        m_fail = int(getattr(result, "failed_count", 0) or 0)
+        m_total = int(getattr(result, "total_count", 0) or 0)
+
+        success_count = d_succ or m_succ
+        failed_count = d_fail or m_fail
+        total_count = d_total or m_total
+
+        # 3) Derive from common shapes when still missing
+        if (success_count == 0 and failed_count == 0) or total_count == 0:
+            # Work packages: total_created / total_issues (either in details or data)
+            def _find(key: str) -> int:
+                try:
+                    if isinstance(details, dict) and key in details:
+                        return int(details.get(key, 0) or 0)
+                except Exception:
+                    pass
+                data = getattr(result, "data", None)
+                try:
+                    if isinstance(data, dict) and key in data:
+                        return int(data.get(key, 0) or 0)
+                except Exception:
+                    pass
+                return 0
+
+            total_created = _find("total_created")
+            total_issues = _find("total_issues") or _find("total")
+
+            if total_created or total_issues:
+                success_count = success_count or total_created
+                # If we have total_issues and no failed_count, derive failed
+                if total_issues:
+                    total_count = total_count or total_issues
+                    if failed_count == 0 and success_count:
+                        failed_count = max(total_count - success_count, 0)
+
+            # Time entries: total_time_entries { migrated, failed }
+            if (success_count == 0 and failed_count == 0) or total_count == 0:
+                te = None
+                if isinstance(details, dict):
+                    te = details.get("total_time_entries")
+                if te and isinstance(te, dict):
+                    migrated = int(te.get("migrated", 0) or 0)
+                    failed = int(te.get("failed", 0) or 0)
+                    success_count = success_count or migrated
+                    failed_count = failed_count or failed
+                    total_count = total_count or (migrated + failed)
+
+            # Generic totals: derive even if total is present but success/failed missing
+            err_cnt = _find("error_count")
+            tot = _find("total")
+            if tot or err_cnt:
+                if total_count == 0 and tot:
+                    total_count = tot
+                if failed_count == 0 and err_cnt:
+                    failed_count = err_cnt
+                if success_count == 0 and total_count >= failed_count:
+                    success_count = total_count - failed_count
+
+        # 4) Final fallback
+        if total_count == 0:
+            total_count = success_count + failed_count
+
+        return int(success_count), int(failed_count), int(total_count)
+    except Exception:
+        # Extremely defensive fallback
+        sc = int(getattr(result, "success_count", 0) or 0)
+        fc = int(getattr(result, "failed_count", 0) or 0)
+        tc = int(getattr(result, "total_count", 0) or (sc + fc))
+        return sc, fc, tc
+
 # Add StateManager class for tests
 class StateManager:
     """State manager class for testing purposes."""
@@ -1192,11 +1286,9 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         if (not component_result.success) or _component_has_errors(component_result):
                             results.overall["status"] = "failed"
 
-                        # Print component summary based on details dictionary (fallback to top-level fields)
+                        # Print component summary based on robust count extraction
                         details = component_result.details or {}
-                        success_count = details.get("success_count", component_result.success_count)
-                        failed_count = details.get("failed_count", component_result.failed_count)
-                        total_count = details.get("total_count", component_result.total_count)
+                        success_count, failed_count, total_count = _extract_counts(component_result)
                         component_time = details.get("time", details.get("duration_seconds", 0))
 
                         # Enhanced logging with performance metrics
