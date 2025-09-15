@@ -240,6 +240,7 @@ class WorkPackageMigration(BaseMigration):
                         last_ts = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(days=365*10)
                     # Apply backoff
                     last_ts = last_ts - _dt.timedelta(seconds=backoff_seconds)
+                    # Jira JQL expects local time without seconds; use ISO-like pattern
                     jql_ts = last_ts.strftime("%Y-%m-%d %H:%M")
                     # Form delta JQL: updated >= last_ts OR key NOT IN existing_keys
                     if existing_keys:

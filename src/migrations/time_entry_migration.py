@@ -19,6 +19,7 @@ from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 from src.utils.time_entry_migrator import TimeEntryMigrator
+from src import config
 
 try:
     from src.config import logger as logger  # type: ignore
@@ -59,11 +60,22 @@ class TimeEntryMigration(BaseMigration):
             logger.error("Failed to read work_package_mapping.json: %s", e)
             return []
 
+        # Optional project filter from CLI (applied earlier into config.jira_config['projects'])
+        allowed_projects = [
+            str(p).upper().strip()
+            for p in (config.jira_config.get("projects") or [])
+            if str(p).strip()
+        ]
+
         migrated: list[dict[str, Any]] = []
         for entry in raw.values():
             jira_key = entry.get("jira_key")
             wp_id = entry.get("openproject_id")
             if jira_key and wp_id:
+                if allowed_projects:
+                    key_u = str(jira_key).upper()
+                    if not any(key_u.startswith(f"{proj}-") for proj in allowed_projects):
+                        continue
                 migrated.append(
                     {
                         "jira_key": jira_key,
@@ -72,6 +84,12 @@ class TimeEntryMigration(BaseMigration):
                         "project_id": entry.get("openproject_project_id"),
                     },
                 )
+
+        logger.info(
+            "Loaded %d migrated work packages%s",
+            len(migrated),
+            f" for projects {allowed_projects}" if allowed_projects else "",
+        )
 
         return migrated
 

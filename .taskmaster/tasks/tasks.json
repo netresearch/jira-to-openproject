@@ -1417,11 +1417,80 @@
         "dependencies": [],
         "priority": "high",
         "subtasks": []
+      },
+      {
+        "id": 124,
+        "title": "Fix migration summary count display and implement fallback logic",
+        "description": "Update the migration summary printer and CLI wrapper to correctly read success, failed, and total counts from ComponentResult fields when counts are missing in the details dict, preventing “0/0 items” summaries.",
+        "details": "In src/migration.py, locate the summary‐printing function(s) that iterate over ComponentResult or similar structures. Change the code so that when the details dict for a component does not contain its own count entries (e.g. 'success_count', 'failed_count', 'total_count'), the printer falls back to using the properties ComponentResult.success_count, ComponentResult.failed_count, and ComponentResult.total_count. Similarly, update any wrapper or CLI code that renders the overall migration summary (for example in a main() or run() function) to use the same fallback logic. Ensure that the formatting (e.g. “3/1 items succeeded/failed”) remains consistent. Add appropriate null or missing‐key checks before accessing detail keys to avoid KeyError. Example change:\n\n```python\n# before\ncount = details.get('success_count', 0)\n# after\ncount = details.get('success_count') if 'success_count' in details else result.success_count\n```",
+        "testStrategy": "Write unit tests for the summary printer that cover both paths: (1) when details['success_count','failed_count','total_count'] are present and the output uses those; and (2) when details dict is empty or missing keys, and the output uses ComponentResult properties. Use pytest and capsys to capture stdout, instantiate fake ComponentResult objects with known counts, and assert that the printed summary matches \"{success}/{failed}/{total}\". Also add an integration‐style test that runs the CLI entrypoint on a small mock migration run, verifying the final summary line reflects the correct aggregated counts rather than “0/0 items.”",
+        "status": "done",
+        "dependencies": [
+          33
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 125,
+        "title": "Enable time tracking module in OpenProject before time entry migration",
+        "description": "Add a helper in OpenProjectClient to enable the 'time_tracking' module on a project and invoke it once per project in TimeEntryMigrator before importing time entries.",
+        "details": "1. In src/clients/openproject_client.py, implement a new method enable_project_module(project_id: int, module_name: str = 'time_tracking'):  \n   a. Call the OpenProject API endpoint POST /api/v3/projects/{project_id}/modules with payload {'module': module_name}.  \n   b. Handle idempotency by catching 409 or checking existing modules via GET /api/v3/projects/{project_id}/modules before POST.  \n   c. Raise a clear exception on failure.  \n2. In src/migrations/time_entry_migrator.py, update migrate_time_entries_for_issues(issue_worklogs):  \n   a. Extract unique project_ids from the worklogs.  \n   b. For each project_id, call openproject_client.enable_project_module(project_id).  \n   c. Only invoke the helper once per project.  \n   d. Proceed to import time entries after modules are enabled.  \n3. Ensure the OpenProjectClient instance is injected into TimeEntryMigrator (per DI pattern from Task 33).  \n4. Add logging at INFO level when enabling modules.",
+        "testStrategy": "1. Unit test for OpenProjectClient.enable_project_module:  \n   a. Mock the HTTP session to return 200 on POST and a list on GET; assert correct URLs, headers, and payloads.  \n   b. Simulate module already enabled (GET returns module); verify no POST is performed.  \n   c. Simulate API errors (500 or 409); assert exception is raised or handled as designed.  \n2. Unit test for TimeEntryMigrator.migrate_time_entries_for_issues:  \n   a. Create fake worklogs for multiple issues across a few project_ids (including duplicates).  \n   b. Inject a mock OpenProjectClient; track calls to enable_project_module.  \n   c. Invoke migrate_time_entries_for_issues and assert enable_project_module called exactly once per unique project_id, before any create_time_entry calls.  \n3. Integration smoke test (optional): on a test OpenProject instance, run a small set of time entries and observe that the time and costs module is enabled for the project.",
+        "status": "done",
+        "dependencies": [
+          25,
+          33
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 126,
+        "title": "Time entries: implement timestamp-based fast-forward and optional upsert",
+        "description": "Add a fast-forward mode to skip already-migrated time entries based on created/updated timestamps and scaffold an optional upsert flag for future updates.",
+        "details": "1. Environment flags\n   - J2O_TIME_ENTRY_FAST_FORWARD: when set to 1, enable fast-forward filtering\n   - J2O_TIME_ENTRY_FF_FIELD: choose cutoff field, either “created” or “updated”\n   - J2O_TIME_ENTRY_UPSERT: scaffold flag (default off) for future entry upserts\n2. Cutoff computation\n   - For each work package being migrated, query OpenProject for existing time entries and find the maximum timestamp of the selected FF_FIELD (created or updated).\n   - Compute a global cutoff per work package or per batch based on that maximum.\n3. Tempo log filtering\n   - Before migration, fetch all Jira/Tempo time logs, then filter out any log whose selected timestamp field is on or before the computed cutoff.\n4. Integration with migration pipeline\n   - Insert fast-forward logic immediately after log retrieval and before deduplication or external key mapping.\n   - Ensure that when J2O_TIME_ENTRY_FAST_FORWARD is unset or zero, all entries pass through unchanged.\n5. Upset scaffolding\n   - Read J2O_TIME_ENTRY_UPSERT flag and expose a boolean in the migrator interface.\n   - Add placeholders in the entry migration code to branch to an “upsertEntry” method for future implementation.\n6. Configuration & documentation\n   - Update README and configuration reference with descriptions of the three flags and example usage.",
+        "testStrategy": "1. Unit tests for cutoff computation:\n   a. Mock OP API to return sample entries with varying created/updated timestamps; verify that computeCutoff(workPackageId, field) returns the correct max timestamp.\n2. Filtering tests:\n   a. Create a list of synthetic Tempo log objects with created/updated fields before, at, and after a given cutoff; assert that only logs after cutoff are passed through when FF is enabled, and all logs when disabled.\n3. Integration tests:\n   a. Enable J2O_TIME_ENTRY_FAST_FORWARD with FF_FIELD=created; run migration against a test Jira project and stub OP client; verify no entries older than cutoff are attempted.\n   b. Repeat with FF_FIELD=updated and ensure filtering aligns with the updated timestamps.\n4. Flag behavior:\n   a. With J2O_TIME_ENTRY_UPSERT unset, assert that code paths do not invoke upsert scaffolding (use spies/mocks).\n   b. When set, confirm the flag is read and the migrator enters the upsert branch placeholder.\n5. End-to-end manual validation:\n   a. Run the full migrator with FAST_FORWARD enabled in a staging environment with known existing entries; verify only new time logs are created in OpenProject.",
+        "status": "done",
+        "dependencies": [
+          120
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 127,
+        "title": "Implement Work Package Description and Field Mapping",
+        "description": "Extend the WorkPackage migration to map and set descriptions, assignees, dates, and labels/components using the Jira-wiki to OpenProject converter, enforcing idempotent compare-before-write semantics.",
+        "details": "1. In src/migrations/work_package_migration.py, augment the bulk create/update pipeline to populate the `description` field:\n   a. Retrieve `issue.fields.description` (Jira wiki markup).\n   b. Sanitize raw markup (strip disallowed HTML, scripts).\n   c. Invoke the Jira-wiki→OpenProject converter from Task 18 to produce markdown or HTML.\n2. Map additional fields per issue:\n   • Assignee/Responsible: lookup Jira user key → OpenProject user ID; handle unmapped users with configurable fallback.\n   • Start/Due dates: read `issue.fields.created`/`issue.fields.duedate`, convert to ISO 8601.\n   • Labels/Components: collect `issue.fields.labels` and `issue.fields.components`; for each tag or component, attempt to assign to native OP tags or map into a custom field if tag does not exist.\n3. Enforce idempotency using the framework from Task 16:\n   • Before writing, fetch existing WP via API and compare description and mapped fields.\n   • Only call update if any field differs.\n4. Ensure the extension supports both new WP creation and update code paths without altering execution triggers.\n5. Add unit tests alongside implementation.",
+        "testStrategy": "Unit Tests:\n • Converter integration: mock Task 18 converter to return known output; verify that the migration calls it exactly once per description and sets the converted text in the payload.\n • Field mapping: create a fake Jira issue object with assignee, dates, labels, components; assert that the generated OP work package payload includes correct user IDs, ISO date strings, and tags/custom-field entries.\n • Idempotency: simulate an existing WP whose fields match the Jira issue; verify that the update API is not invoked. Then change one field and confirm exactly one update call with only the delta.\n • Sanitization: feed dangerous HTML (e.g. `<script>` tags) in the description; assert that sanitized and cleaned output is used.\nIntegration Tests:\n • Run the extended migration on a sample Jira project with mixed issues; confirm that new WPs are created with correct descriptions and mapped fields and that rerunning does not produce duplicates or unnecessary updates.",
+        "status": "pending",
+        "dependencies": [
+          16,
+          18
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 128,
+        "title": "Backfill Descriptions and Metadata for SRVEP Work Packages",
+        "description": "Idempotently update existing SRVEP work packages by filling empty or outdated descriptions and backfilling selected metadata fields (assignee, labels, components, reporter, parent key, and Jira key).",
+        "details": "1. Scope Selection: Query all work packages in the SRVEP project. Filter for those with empty or stale descriptions (compare stored text against Jira source) or missing custom fields: Labels, Components, Reporter, Parent Key, and Jira Key.\n2. Data Retrieval: For each package, fetch the latest metadata from the Jira API or internal mapping (assignee username, label list, component list, reporter account, parent issue key, Jira issue key).\n3. Change Detection: Compare current OpenProject values against the source. If any field differs, prepare a patch payload containing only the changed properties.\n4. Idempotent Update: Send update requests via the OpenProjectClient only when differences are detected. Skip packages with no delta.\n5. Assignee Resolution: Map Jira assignee to OpenProject user. If unmapped, log a warning and leave the field unchanged.\n6. Summary Reporting: After processing all items, generate a per-item summary indicating work package ID, updated fields, skipped items, and any errors.\n7. Logging and Dry-Run: Support a dry-run mode where changes are logged but not sent. Ensure detailed logs for auditing.\n8. Non-destructive Behavior: Do not override manually curated fields if they match or if resolution failed. Respect existing data when no update is needed.",
+        "testStrategy": "Unit Tests:\n- Mock OpenProjectClient and JiraClient. Test scenarios for empty description, outdated description, missing metadata fields, and fully up-to-date items. Verify update calls only occur when expected and payloads include correct field diffs.\n- Verify that unmapped assignees produce warnings and do not block other updates.\n- Simulate dry-run mode: ensure no API calls but correct log output.\nIntegration Tests:\n- Run against a staging OpenProject instance seeded with sample SRVEP packages. Validate that descriptions and custom fields are correctly backfilled and that re-running the task yields zero changes.\n- Confirm summary report matches the actual number of updated, skipped, and errored items.\nRegression Tests:\n- Add test cases for boundary conditions (e.g., extremely long descriptions, invalid label names) to ensure graceful handling.",
+        "status": "pending",
+        "dependencies": [
+          12,
+          16,
+          124
+        ],
+        "priority": "high",
+        "subtasks": []
       }
     ],
     "metadata": {
       "created": "2024-06-22T12:00:00Z",
-      "updated": "2025-09-11T07:59:14.615Z",
+      "updated": "2025-09-15T11:52:34.076Z",
       "version": "1.0.0",
       "projectName": "Jira to OpenProject Migration Tool",
       "projectDescription": "A comprehensive tool for migrating project management data from Jira Server 9.11 to OpenProject 15",

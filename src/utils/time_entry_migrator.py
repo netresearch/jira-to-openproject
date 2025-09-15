@@ -771,9 +771,9 @@ class TimeEntryMigrator:
                     pid = issue.get("project_id")
                     if isinstance(pid, int):
                         project_ids.add(pid)
-                # Map to OpenProject module name: 'time_tracking'
+                # OpenProject module for Time and costs is 'costs'
                 for pid in sorted(project_ids):
-                    _ = self.op_client.enable_project_modules(pid, ["time_tracking"])  # fire-and-forget
+                    _ = self.op_client.enable_project_modules(pid, ["costs"])  # fire-and-forget
             except Exception:
                 # Non-fatal; continue with migration
                 pass

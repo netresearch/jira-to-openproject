@@ -47,6 +47,6 @@ def test_time_entry_migrator_enables_time_tracking_once_per_project(monkeypatch,
     assert len(calls) == 2
     called_projects = sorted(call.args[0] for call in calls)
     assert called_projects == [10, 11]
-    # Ensure correct module name
+    # Ensure correct module name ('costs' in OpenProject)
     for call in calls:
-        assert call.args[1] == ["time_tracking"]
+        assert call.args[1] == ["costs"]

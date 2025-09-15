@@ -910,8 +910,11 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         )
 
         try:
+            # Use local alias to avoid any potential shadowing of Path in this scope
+            from pathlib import Path as _Path  # noqa: PLC0415
+
             security_config = SecurityConfig(
-                encryption_key_path=Path("config/security/keys"),
+                encryption_key_path=_Path("config/security/keys"),
                 audit_log_path=config.get_path("logs") / "audit",
                 rate_limit_requests=100,
                 rate_limit_window=60,
@@ -1087,8 +1090,13 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         config.logger.info("Running security validation and audit logging...")
         try:
             if security_manager and hasattr(security_manager, "audit_logger"):
+                # Use proper enum + required args for audit logger
+                from src.utils.advanced_security import AuditEventType  # noqa: PLC0415
+
                 security_manager.audit_logger.log_migration_event(
-                    event_type="migration_started",
+                    event_type=AuditEventType.MIGRATION_START,
+                    migration_id=migration_timestamp,
+                    user_id="system",
                     details={
                         "components": components,
                         "batch_size": batch_size,
@@ -1096,6 +1104,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         "stop_on_error": stop_on_error,
                         "dry_run": config.migration_config.get("dry_run", False),
                     },
+                    success=True,
                 )
             config.logger.info("Security validation and audit logging completed")
         except Exception as e:
@@ -1558,14 +1567,18 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         # Log security audit for migration failure
         try:
             if "security_manager" in locals() and security_manager and hasattr(security_manager, "audit_logger"):
+                from src.utils.advanced_security import AuditEventType  # noqa: PLC0415
+
                 security_manager.audit_logger.log_migration_event(
-                    event_type="MIGRATION_FAILED",
+                    event_type=AuditEventType.MIGRATION_FAILED,
                     migration_id=migration_timestamp,
+                    user_id="system",
                     details={
                         "migration_id": migration_timestamp,
                         "error": str(e),
                         "error_type": type(e).__name__,
                     },
+                    success=False,
                 )
         except Exception as audit_error:  # noqa: BLE001
             config.logger.warning(
