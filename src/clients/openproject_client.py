@@ -3296,25 +3296,29 @@ class OpenProjectClient:
 
         where_clause = f".where({', '.join(conditions)})" if conditions else ""
 
-        # Build Ruby expression (not a block) that returns the array directly
+        # Build Ruby expression that avoids relying on a 'work_package' association (use explicit lookup)
         query = (
-            f"TimeEntry{where_clause}.limit({limit}).includes(:work_package, :user, :activity)"
+            f"TimeEntry{where_clause}.limit({limit})"
             ".map do |entry| "
+            "wp = (begin WorkPackage.find_by(id: entry.work_package_id); rescue; nil end); "
+            "act = (begin entry.activity; rescue; nil end); usr = (begin entry.user; rescue; nil end); "
             "{ id: entry.id, "
             "work_package_id: entry.work_package_id, "
-            "work_package_subject: entry.work_package&.subject, "
-            "user_id: entry.user_id, user_name: entry.user&.name, "
-            "activity_id: entry.activity_id, activity_name: entry.activity&.name, "
+            "work_package_subject: (wp ? wp.subject : nil), "
+            "user_id: entry.user_id, user_name: (usr ? usr.name : nil), "
+            "activity_id: entry.activity_id, activity_name: (act ? act.name : nil), "
             "hours: entry.hours.to_f, spent_on: entry.spent_on.to_s, "
             "comments: entry.comments, created_at: entry.created_at.to_s, updated_at: entry.updated_at.to_s, "
             "custom_fields: (begin cf = entry.custom_field_values; cf.respond_to?(:to_json) ? cf : {}; rescue; {} end) } end"
         )
 
         try:
+            # Use a unique container file to avoid collisions across concurrent calls
+            unique_name = f"/tmp/j2o_time_entries_{os.getpid()}_{int(time.time())}_{os.urandom(2).hex()}.json"  # noqa: S108
             result = self.execute_large_query_to_json_file(
                 query,
-                container_file="/tmp/j2o_time_entries.json",  # noqa: S108
-                timeout=60,
+                container_file=unique_name,
+                timeout=120,
             )
             return result if isinstance(result, list) else []
         except Exception as e:
