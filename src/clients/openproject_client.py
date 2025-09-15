@@ -3796,6 +3796,53 @@ class OpenProjectClient:
             msg = f"Failed to get enhanced project data for ID {project_id}: {e}"
             raise QueryExecutionError(msg) from e
 
+    def enable_project_modules(self, project_id: int, modules: list[str]) -> bool:
+        """Ensure the given project has the specified modules enabled.
+
+        Idempotent: adds any missing modules to `enabled_module_names` and saves the project.
+
+        Args:
+            project_id: OpenProject project ID
+            modules: List of module identifiers (e.g., ['time_tracking'])
+
+        Returns:
+            True if the modules are enabled (already or after change), False on error
+        """
+        if not modules:
+            return True
+        # Build Ruby script that ensures all modules are present
+        mods_json = json.dumps([str(m) for m in modules])
+        script = f"""
+        begin
+          p = Project.find({int(project_id)})
+          names = p.enabled_module_names.map(&:to_s)
+          desired = {mods_json}
+          added = false
+          desired.each do |m|
+            unless names.include?(m)
+              names << m
+              added = true
+            end
+          end
+          if added
+            p.enabled_module_names = names
+            p.save!
+          end
+          {{ changed: added, enabled: names }}
+        rescue => e
+          {{ error: e.message }}
+        end
+        """
+        try:
+            result = self.execute_json_query(script)
+            if isinstance(result, dict) and not result.get("error"):
+                return True
+            logger.warning("Failed to enable modules on project %s: %s", project_id, result)
+            return False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Exception enabling modules on project %s: %s", project_id, e)
+            return False
+
     def batch_get_users_by_ids(self, user_ids: list[int]) -> dict[int, dict]:
         """Retrieve multiple users in batches."""
         if not user_ids:

@@ -703,6 +703,20 @@ class TimeEntryMigrator:
                         "work_package_id"
                     ]
 
+            # Ensure required project modules are enabled (Time and costs)
+            try:
+                project_ids: set[int] = set()
+                for issue in migrated_issues:
+                    pid = issue.get("project_id")
+                    if isinstance(pid, int):
+                        project_ids.add(pid)
+                # Map to OpenProject module name: 'time_tracking'
+                for pid in sorted(project_ids):
+                    _ = self.op_client.enable_project_modules(pid, ["time_tracking"])  # fire-and-forget
+            except Exception:
+                # Non-fatal; continue with migration
+                pass
+
             # Run complete migration process
             batch_env = int(os.environ.get("J2O_TIME_ENTRY_BATCH_SIZE", "200"))
             _ = self.run_complete_migration(
