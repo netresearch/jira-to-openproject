@@ -831,7 +831,7 @@ class WorkPackageMigration(BaseMigration):
                 status_op_id = None
 
         # Enhanced user association migration with comprehensive edge case handling
-        work_package_data = {
+        work_package = {
             "project_id": project_id,
             "type_id": type_id,
             "subject": subject,
@@ -844,7 +844,7 @@ class WorkPackageMigration(BaseMigration):
         # Use enhanced user association migrator for robust user mapping
         association_result = self.enhanced_user_migrator.migrate_user_associations(
             jira_issue=jira_issue,
-            work_package_data=work_package_data,
+            work_package_data=work_package,
             preserve_creator_via_rails=True,
         )
 
@@ -854,20 +854,20 @@ class WorkPackageMigration(BaseMigration):
                 # Collapse frequent watcher unmapped logs
                 if isinstance(warning, str) and warning.startswith("Watcher") and "unmapped" in warning:
                     # Defer aggregated reporting to caller; embed a counter on work_package_data
-                    counters = work_package_data.setdefault("_log_counters", {})
+                    counters = work_package.setdefault("_log_counters", {})
                     counters["watcher_unmapped"] = counters.get("watcher_unmapped", 0) + 1
                 else:
                     self.logger.warning("User association: %s", warning)
 
         # Extract user association results
-        assigned_to_id = work_package_data.get("assigned_to_id")
-        author_id = work_package_data.get("author_id")
-        watcher_ids = work_package_data.get("watcher_ids", [])
+        assigned_to_id = work_package.get("assigned_to_id")
+        author_id = work_package.get("author_id")
+        watcher_ids = work_package.get("watcher_ids", [])
 
         # Enhanced timestamp migration with comprehensive datetime preservation
         timestamp_result = self.enhanced_timestamp_migrator.migrate_timestamps(
             jira_issue=jira_issue,
-            work_package_data=work_package_data,
+            work_package_data=work_package,
             use_rails_for_immutable=True,
         )
 
@@ -889,7 +889,7 @@ class WorkPackageMigration(BaseMigration):
             description = jira_reference
 
         # Update work package data with description (work_package_data was created earlier)
-        work_package = work_package_data
+        work_package = work_package
         work_package["description"] = description
 
         # Add optional fields if available
@@ -936,6 +936,61 @@ class WorkPackageMigration(BaseMigration):
             except (FileNotFoundError, RuntimeError) as e:
                 self.logger.warning(f"Custom field mapping not available: {e}")
                 # Continue without custom field mapping
+
+        # Add raw jira id and key for debugging
+        work_package["jira_issue_id"] = jira_id
+        work_package["jira_issue_key"] = jira_key
+
+        # Attach standardized J2O Origin CFs
+        try:
+            if not hasattr(self, "_j2o_wp_cf_ids_full") or not isinstance(self._j2o_wp_cf_ids_full, dict):
+                cf_specs = (
+                    ("J2O Origin System", "string"),
+                    ("J2O Origin ID", "string"),
+                    ("J2O Origin Key", "string"),
+                    ("J2O Origin URL", "string"),
+                    ("J2O First Migration Date", "date"),
+                    ("J2O Last Update Date", "date"),
+                )
+                cf_ids: dict[str, int] = {}
+                for name, fmt in cf_specs:
+                    try:
+                        cf = self.op_client.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField")
+                        if isinstance(cf, dict) and cf.get("id"):
+                            cf_ids[name] = int(cf["id"])  # type: ignore[arg-type]
+                    except Exception:
+                        continue
+                self._j2o_wp_cf_ids_full = cf_ids
+
+            cf_vals: list[dict[str, object]] = []
+            cf_map = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
+            if cf_map.get("J2O Origin System"):
+                cf_vals.append({"id": cf_map["J2O Origin System"], "value": "Jira Server on-prem 9.11"})
+            if cf_map.get("J2O Origin ID") and jira_id:
+                cf_vals.append({"id": cf_map["J2O Origin ID"], "value": str(jira_id)})
+            if cf_map.get("J2O Origin Key") and jira_key:
+                cf_vals.append({"id": cf_map["J2O Origin Key"], "value": jira_key})
+            base_url = (config.jira_config or {}).get("J2O_JIRA_URL") or (config.jira_config or {}).get("url")
+            if cf_map.get("J2O Origin URL") and jira_key and base_url:
+                try:
+                    url_val = "/".join([str(base_url).rstrip("/"), "browse", str(jira_key)])
+                except Exception:
+                    url_val = f"{base_url}/browse/{jira_key}"
+                cf_vals.append({"id": cf_map["J2O Origin URL"], "value": url_val})
+            from datetime import date as _date
+            today_str = _date.today().isoformat()
+            if cf_map.get("J2O First Migration Date"):
+                cf_vals.append({"id": cf_map["J2O First Migration Date"], "value": today_str})
+            if cf_map.get("J2O Last Update Date"):
+                cf_vals.append({"id": cf_map["J2O Last Update Date"], "value": today_str})
+            if cf_vals:
+                existing = work_package.get("custom_fields")
+                if isinstance(existing, list):
+                    work_package["custom_fields"] = existing + cf_vals
+                else:
+                    work_package["custom_fields"] = cf_vals
+        except Exception:
+            pass
 
         return work_package
 
@@ -1071,6 +1126,41 @@ class WorkPackageMigration(BaseMigration):
                 "jira_id": jira_issue.get("id", ""),
                 "_links": {},
             }
+
+            # Attach origin mapping custom fields for provenance
+            try:
+                if not hasattr(self, "_j2o_wp_cf_ids") or not isinstance(self._j2o_wp_cf_ids, dict):
+                    # Ensure minimal set of provenance CFs (WP scope)
+                    cf_names = (
+                        ("J2O Origin System", "string"),
+                        ("J2O External ID", "string"),
+                        ("J2O External Key", "string"),
+                    )
+                    cf_ids: dict[str, int] = {}
+                    for n, fmt in cf_names:
+                        try:
+                            cf = self.op_client.ensure_custom_field(n, field_format=fmt, cf_type="WorkPackageCustomField")
+                            if isinstance(cf, dict) and cf.get("id"):
+                                cf_ids[n] = int(cf["id"])  # type: ignore[arg-type]
+                        except Exception:
+                            continue
+                    self._j2o_wp_cf_ids = cf_ids
+
+                cf_vals: list[dict[str, object]] = []
+                cf_map = getattr(self, "_j2o_wp_cf_ids", {}) or {}
+                # Populate values
+                if cf_map.get("J2O Origin System"):
+                    cf_vals.append({"id": cf_map["J2O Origin System"], "value": "jira"})
+                ext_id = jira_issue.get("id")
+                if cf_map.get("J2O External ID") and ext_id:
+                    cf_vals.append({"id": cf_map["J2O External ID"], "value": str(ext_id)})
+                if cf_map.get("J2O External Key") and jira_key:
+                    cf_vals.append({"id": cf_map["J2O External Key"], "value": jira_key})
+                if cf_vals:
+                    work_package["custom_fields"] = cf_vals
+            except Exception:
+                # Non-fatal: continue without provenance CFs
+                pass
 
             # Add type if available (explicit type_id and _links for compatibility)
             issue_type = jira_issue.get("issue_type", {})
