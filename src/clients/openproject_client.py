@@ -912,6 +912,16 @@ class OpenProjectClient:
                     )
                 break
             # Still not present; keep polling until timeout
+            # Emit a lightweight heartbeat every ~5 seconds so runs don't look hung
+            try:
+                if attempt and (attempt % max(1, int(5 / poll_interval)) == 0):
+                    logger.info(
+                        "Waiting for query result file %s (waited %.1fs)",
+                        container_file,
+                        attempt * poll_interval,
+                    )
+            except Exception:
+                pass
             time.sleep(poll_interval)
 
         if returncode != 0:
@@ -1338,6 +1348,237 @@ class OpenProjectClient:
             msg = f"Failed to ensure custom field '{name}': {e}"
             raise QueryExecutionError(msg) from e
 
+    def ensure_custom_field(self, name: str, *, field_format: str = "string", cf_type: str = "WorkPackageCustomField") -> dict[str, Any]:
+        """Ensure a CustomField exists for the given type, create if missing."""
+        ruby = f"""
+          cf = CustomField.find_by(type: '{cf_type}', name: '{name}')
+          if !cf
+            cf = CustomField.new(name: '{name}', field_format: '{field_format}', is_required: false, type: '{cf_type}')
+            begin
+              cf.is_for_all = true
+            rescue
+            end
+            cf.save
+          end
+          cf && cf.as_json(only: [:id, :name, :field_format, :type])
+        """
+        try:
+            result = self.execute_json_query(ruby)
+            if isinstance(result, dict) and result.get("id"):
+                return result
+            raise QueryExecutionError(f"Failed ensuring {cf_type} '{name}'")
+        except Exception as e:  # noqa: BLE001
+            msg = f"Failed to ensure custom field '{name}' ({cf_type}): {e}"
+            raise QueryExecutionError(msg) from e
+
+    def ensure_origin_custom_fields(self) -> dict[str, list[dict[str, Any]]]:
+        """Ensure origin mapping CFs exist for WP, Project, User, TimeEntry."""
+        ensured: dict[str, list[dict[str, Any]]] = {"work_package": [], "project": [], "user": [], "time_entry": []}
+
+        for name, fmt in (
+            ("J2O Origin System", "string"),
+            ("J2O Origin ID", "string"),
+            ("J2O Origin Key", "string"),
+            ("J2O Origin URL", "string"),
+            ("J2O Project Key", "string"),
+            ("J2O Project ID", "string"),
+            ("J2O First Migration Date", "date"),
+            ("J2O Last Update Date", "date"),
+        ):
+            try:
+                ensured["work_package"].append(
+                    self.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField")
+                )
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("Failed ensuring WP CF %s: %s", name, e)
+
+        # NOTE: This OpenProject instance does not support Project custom fields via this path.
+        # Persist origin for projects using project attributes (see upsert_project_origin_attributes).
+        ensured["project"] = []
+
+        for name, fmt in (
+            ("J2O Origin System", "string"),
+            ("J2O User ID", "string"),
+            ("J2O User Key", "string"),
+            ("J2O External URL", "string"),
+        ):
+            try:
+                ensured["user"].append(self.ensure_custom_field(name, field_format=fmt, cf_type="UserCustomField"))
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("Failed ensuring User CF %s: %s", name, e)
+
+        for name, fmt in (
+            ("J2O Origin Worklog Key", "string"),
+            ("J2O Origin Issue ID", "string"),
+            ("J2O Origin Issue Key", "string"),
+            ("J2O Origin System", "string"),
+            ("J2O First Migration Date", "date"),
+            ("J2O Last Update Date", "date"),
+        ):
+            try:
+                ensured["time_entry"].append(
+                    self.ensure_custom_field(name, field_format=fmt, cf_type="TimeEntryCustomField")
+                )
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("Failed ensuring TE CF %s: %s", name, e)
+
+        return ensured
+
+    def upsert_project_origin_attributes(
+        self,
+        project_id: int,
+        *,
+        origin_system: str,
+        project_key: str,
+        external_id: str | None = None,
+        external_url: str | None = None,
+    ) -> bool:
+        """Persist origin metadata into Project attributes (description) idempotently.
+
+        We embed a small, machine-readable block between HTML comment markers so we can
+        replace it deterministically on subsequent runs without duplicating data.
+
+        Args:
+            project_id: OpenProject project ID
+            origin_system: e.g. "jira"
+            project_key: upstream project key (e.g. "SRVEP")
+            external_id: upstream immutable project id (stringified)
+            external_url: upstream canonical URL
+
+        Returns:
+            True on success, False otherwise.
+        """
+        # Escape braces in f-string; Ruby string content uses literal markers.
+        marker_start = "<!-- J2O_ORIGIN_START -->"
+        marker_end = "<!-- J2O_ORIGIN_END -->"
+        payload = (
+            f"system={origin_system};key={project_key};id={external_id or ''};url={external_url or ''}"
+        )
+        # Ruby script to insert/replace the origin block in description
+        script = (
+            "project = Project.find(%d)\n" % project_id
+            + f"marker_start = '{marker_start}'\n"
+            + f"marker_end = '{marker_end}'\n"
+            + f"payload = '{payload}'.dup\n"
+            + "desc = project.description.to_s\n"
+            + "block = ['\\n', marker_start, '\\n', payload, '\\n', marker_end, '\\n'].join\n"
+            + "start_idx = desc.index(marker_start)\n"
+            + "end_idx = desc.index(marker_end)\n"
+            + "if start_idx && end_idx && end_idx > start_idx\n"
+            + "  pre = desc[0...start_idx]\n"
+            + "  post = desc[(end_idx + marker_end.length)..-1] || ''\n"
+            + "  desc = pre + block + post\n"
+            + "else\n"
+            + "  desc = desc + block\n"
+            + "end\n"
+            + "project.update_columns(description: desc)\n"
+            + "{ success: true }.to_json\n"
+        )
+        try:
+            result = self.execute_query_to_json_file(script)
+            return bool(isinstance(result, dict) and result.get("success"))
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to upsert project origin attributes for %s: %s", project_id, e)
+            return False
+
+    def upsert_project_attribute(
+        self,
+        project_id: int,
+        *,
+        name: str,
+        value: str,
+        field_format: str = "string",
+    ) -> bool:
+        """Create/enable a Project attribute (ProjectCustomField) and set its value for a project.
+
+        This uses ProjectCustomField (STI on custom_fields) and ProjectCustomFieldProjectMapping,
+        storing the actual value in CustomValue for customized_type='Project'.
+        """
+        ruby = f"""
+          pid = {project_id}
+          name = '{name}'.dup
+          fmt  = '{field_format}'.dup
+          val  = '{value}'.dup
+
+          # Ensure attribute definition
+          # Section is required for project attributes
+          begin
+            section = CustomFieldSection.find_or_create_by!(type: 'ProjectCustomFieldSection', name: 'J2O Origin')
+          rescue => e
+            section = nil
+          end
+
+          cf = ProjectCustomField.find_by(name: name)
+          if !cf
+            cf = ProjectCustomField.new(
+              name: name,
+              field_format: fmt,
+              is_required: false,
+              is_filter: false,
+              searchable: true,
+              editable: true,
+              admin_only: false
+            )
+            begin
+              cf.custom_field_section_id = section.id if section && cf.respond_to?(:custom_field_section_id=)
+            rescue
+            end
+            begin
+              cf.is_for_all = false if cf.respond_to?(:is_for_all=)
+            rescue
+            end
+            cf.save!
+          end
+
+          # If cf existed without section, attach it
+          if (!cf.custom_field_section_id || cf.custom_field_section_id.nil?) && section
+            begin
+              cf.update!(custom_field_section_id: section.id)
+            rescue
+            end
+          end
+
+          # Ensure mapping enabled for this project
+          ProjectCustomFieldProjectMapping.find_or_create_by!(project_id: pid, custom_field_id: cf.id)
+
+          # Upsert value
+          cv = CustomValue.find_or_initialize_by(customized_type: 'Project', customized_id: pid, custom_field_id: cf.id)
+          cv.value = val
+          cv.save!
+
+          {{ success: true, custom_field_id: cf.id, value: cv.value }}.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(ruby)
+            return bool(isinstance(result, dict) and result.get("success"))
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to upsert project attribute %s for %s: %s", name, project_id, e)
+            return False
+
+    def rename_project_attribute(self, *, old_name: str, new_name: str) -> bool:
+        """Rename a Project attribute (ProjectCustomField) if it exists.
+
+        Returns True if renamed or already at new_name; False if missing or failed.
+        """
+        ruby = f"""
+          old_name = '{old_name}'.dup
+          new_name = '{new_name}'.dup
+          cf = ProjectCustomField.find_by(name: old_name)
+          if cf
+            cf.update!(name: new_name)
+            {{ success: true, id: cf.id }}.to_json
+          else
+            cf2 = ProjectCustomField.find_by(name: new_name)
+            {{ success: !!cf2, id: (cf2 ? cf2.id : nil) }}.to_json
+          end
+        """
+        try:
+            result = self.execute_query_to_json_file(ruby)
+            return bool(isinstance(result, dict) and result.get("success"))
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to rename project attribute %s -> %s: %s", old_name, new_name, e)
+            return False
+
     def get_project_wp_cf_snapshot(self, project_id: int) -> list[dict[str, Any]]:
         """Return snapshot of WorkPackages in a project with Jira CFs and updated_at.
 
@@ -1358,7 +1599,7 @@ class OpenProjectClient:
               mig = (cf_mig ? wp.custom_value_for(cf_mig)&.value : nil)
             rescue
             end
-            { id: wp.id, updated_at: (wp.updated_at&.utc&.iso8601), jira_issue_key: key, jira_migration_date: mig }
+            {{ id: wp.id, updated_at: (wp.updated_at&.utc&.iso8601), jira_issue_key: key, jira_migration_date: mig }}
           end
         """
         data = self.execute_large_query_to_json_file(ruby, timeout=120)
@@ -1432,6 +1673,10 @@ class OpenProjectClient:
         container_result = Path("/tmp") / result_name  # noqa: S108
         local_result = temp_dir / result_name
 
+        # Progress file within the container, mirrored locally for monitoring
+        container_progress = Path("/tmp") / (result_name + ".progress")  # noqa: S108
+        local_progress = local_result.with_suffix(local_result.suffix + ".progress")
+
         # Compose minimal Ruby script
         # Provenance hint for bulk create
         def _bulk_hint() -> str:
@@ -1451,6 +1696,9 @@ class OpenProjectClient:
             f"model_name = '{model}'\n"
             f"data_path = '{container_json.as_posix()}'\n"
             f"result_path = '{container_result.as_posix()}'\n"
+            # Ensure progress ENV defaults are present in both console and runner modes
+            f"ENV['J2O_BULK_PROGRESS_FILE'] ||= '{container_progress.as_posix()}'\n"
+            "ENV['J2O_BULK_PROGRESS_N'] ||= (ENV['J2O_BULK_PROGRESS_N'] || '50')\n"
         )
         ruby = (
             "begin; Rails.logger.level = Logger::WARN; rescue; end\n"
@@ -1499,6 +1747,33 @@ class OpenProjectClient:
             "    rescue => e\n"
             "      # If assign fails, proceed to save with preassigned associations only\n"
             "    end\n"
+            "    # Assign custom fields passed via attrs['custom_fields'] (array of {id, value})\n"
+            "    begin\n"
+            "      if attrs.key?('custom_fields') && attrs['custom_fields'].respond_to?(:each)\n"
+            "        cf_map = {}\n"
+            "        attrs['custom_fields'].each do |cfh|\n"
+            "          begin\n"
+            "            cid = (cfh['id'] || cfh[:id]).to_i\n"
+            "            val = cfh['value'] || cfh[:value]\n"
+            "            next if cid <= 0 || val.nil?\n"
+            "            cf_map[cid] = val\n"
+            "          rescue; end\n"
+            "        end\n"
+            "        if cf_map.any?\n"
+            "          begin\n"
+            "            existing = nil\n"
+            "            begin; existing = rec.custom_field_values; rescue; end\n"
+            "            if existing.respond_to?(:merge)\n"
+            "              rec.custom_field_values = existing.merge(cf_map)\n"
+            "            else\n"
+            "              rec.custom_field_values = cf_map\n"
+            "            end\n"
+            "          rescue; end\n"
+            "        end\n"
+            "      end\n"
+            "    rescue => e\n"
+            "      # ignore CF assignment errors here\n"
+            "    end\n"
             "    # Ensure defaults are applied AFTER assign_attributes to avoid blank overrides\n"
             "    if model_name == 'WorkPackage'\n"
             "      begin\n"
@@ -1519,7 +1794,13 @@ class OpenProjectClient:
             "            cf.save\n"
             "          end\n"
             "          begin\n"
-            "            rec.custom_field_values = { cf.id => key }\n"
+            "            existing = nil\n"
+            "            begin; existing = rec.custom_field_values; rescue; end\n"
+            "            if existing.respond_to?(:merge)\n"
+            "              rec.custom_field_values = existing.merge({ cf.id => key })\n"
+            "            else\n"
+            "              rec.custom_field_values = { cf.id => key }\n"
+            "            end\n"
             "          rescue => e\n"
             "            # ignore CF assignment errors here\n"
             "          end\n"
@@ -1636,7 +1917,11 @@ class OpenProjectClient:
                         stdout, stderr, rc = self.docker_client.execute_command(
                             runner_cmd,
                             timeout=timeout or 120,
-                            env={"J2O_BULK_RUBY_VERBOSE": os.environ.get("J2O_BULK_RUBY_VERBOSE", "1")},
+                            env={
+                                "J2O_BULK_RUBY_VERBOSE": os.environ.get("J2O_BULK_RUBY_VERBOSE", "1"),
+                                "J2O_BULK_PROGRESS_FILE": container_progress.as_posix(),
+                                "J2O_BULK_PROGRESS_N": os.environ.get("J2O_BULK_PROGRESS_N", "50"),
+                            },
                         )
                     except subprocess.TimeoutExpired as te:  # noqa: PERF203
                         # Best-effort remote cleanup of the timed-out runner
@@ -1664,7 +1949,11 @@ class OpenProjectClient:
                     stdout, stderr, rc = self.docker_client.execute_command(
                         runner_cmd,
                         timeout=timeout or 120,
-                        env={"J2O_BULK_RUBY_VERBOSE": os.environ.get("J2O_BULK_RUBY_VERBOSE", "1")},
+                        env={
+                            "J2O_BULK_RUBY_VERBOSE": os.environ.get("J2O_BULK_RUBY_VERBOSE", "1"),
+                            "J2O_BULK_PROGRESS_FILE": container_progress.as_posix(),
+                            "J2O_BULK_PROGRESS_N": os.environ.get("J2O_BULK_PROGRESS_N", "50"),
+                        },
                     )
                 except subprocess.TimeoutExpired as te:  # noqa: PERF203
                     # Best-effort remote cleanup of the timed-out runner
@@ -1702,6 +1991,16 @@ class OpenProjectClient:
         poll_interval = 1.0
         waited = 0.0
         copied = False
+        # Stall detection and heartbeats
+        stall_env = os.environ.get("J2O_BULK_STALL_SECONDS")
+        try:
+            stall_seconds = int(stall_env) if stall_env else 120
+        except Exception:
+            stall_seconds = 120
+        last_progress_len = -1
+        last_progress_change_at = 0.0
+        last_heartbeat_logged = -10.0
+        runner_script_known = 'runner_script_path' in locals()
         while waited < max_wait_seconds:
             # Avoid noisy SSH errors: first, check for existence using Docker API
             if self.docker_client.check_file_exists_in_container(container_result):
@@ -1730,6 +2029,72 @@ class OpenProjectClient:
                     except Exception:
                         pass
             except Exception:  # noqa: BLE001
+                pass
+
+            # Probe progress file occasionally to provide live feedback and detect stalls
+            try:
+                if self.docker_client.check_file_exists_in_container(container_progress):
+                    # Copy progress file locally at a modest cadence
+                    if (waited - last_heartbeat_logged) >= 5.0:
+                        try:
+                            self.transfer_file_from_container(container_progress, local_progress)
+                            prog_text = ""
+                            try:
+                                with local_progress.open("r", encoding="utf-8") as pf:
+                                    prog_text = pf.read()
+                            except Exception:
+                                prog_text = ""
+                            prog_len = len(prog_text)
+                            # Count dots as a rough processed counter
+                            processed_est = prog_text.count('.')
+                            # Extract total from START line if present
+                            total_est = None
+                            try:
+                                for line in prog_text.splitlines():
+                                    if line.startswith("START total="):
+                                        total_est = int(line.split("=", 1)[1])
+                                        break
+                            except Exception:
+                                total_est = None
+                            logger.info(
+                                "Bulk progress: ~%s%s processed (waited %.0fs)",
+                                processed_est,
+                                f"/{total_est}" if total_est is not None else "",
+                                waited,
+                            )
+                            if prog_len != last_progress_len:
+                                last_progress_len = prog_len
+                                last_progress_change_at = waited
+                            elif (waited - last_progress_change_at) >= stall_seconds:
+                                # Consider the run stalled; attempt to stop runner and error out
+                                try:
+                                    if runner_script_known:
+                                        self.docker_client.execute_command(
+                                            f"pkill -f \"rails runner {runner_script_path}\" || true",
+                                            timeout=10,
+                                        )
+                                except Exception:
+                                    pass
+                                raise QueryExecutionError(
+                                    f"bulk_create_records stalled for {stall_seconds}s without progress"
+                                )
+                            last_heartbeat_logged = waited
+                        except Exception:
+                            # Ignore progress read errors; continue polling
+                            pass
+            except Exception:
+                pass
+
+            # Periodic heartbeat even without progress file
+            try:
+                if (waited - last_heartbeat_logged) >= 10.0:
+                    logger.info(
+                        "Waiting for bulk result file %s (waited %.0fs)",
+                        container_result,
+                        waited,
+                    )
+                    last_heartbeat_logged = waited
+            except Exception:
                 pass
 
             time.sleep(poll_interval)
@@ -3205,13 +3570,13 @@ class OpenProjectClient:
             # ignore association errors here; validations will surface below
           end
 
-          # Provenance CF for time entries: Jira Worklog Key
+          # Provenance CF for time entries: J2O Origin Worklog Key
           begin
             key = {time_entry_data.get('_meta', {}).get('jira_worklog_key')!r}
             if key
-              cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')
+              cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
               if !cf
-                cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string',
+                cf = CustomField.new(name: 'J2O Origin Worklog Key', field_format: 'string',
                   is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
                 cf.save
               end
@@ -3730,6 +4095,29 @@ class OpenProjectClient:
               wp.assigned_to = User.find(wp_data['assigned_to_id'])
             end
 
+            # Assign provenance custom fields if provided as [{id,value}]
+            begin
+              cf_items = wp_data['custom_fields']
+              if cf_items && cf_items.respond_to?(:each)
+                cf_map = {{}}
+                cf_items.each do |cf|
+                  begin
+                    cid = (cf['id'] || cf[:id])
+                    val = (cf['value'] || cf[:value])
+                    cf_map[cid] = val if cid
+                  rescue
+                  end
+                end
+                if cf_map.any?
+                  begin
+                    wp.custom_field_values = cf_map
+                  rescue
+                  end
+                end
+              end
+            rescue
+            end
+
             # Save the work package
             if wp.save
               created_count += 1
@@ -3784,8 +4172,11 @@ class OpenProjectClient:
             identifier: project.identifier,
             description: project.description,
             status: project.status,
-            created_on: project.created_on,
-            updated_on: project.updated_on
+            created_at: project.created_at,
+            updated_at: project.updated_at,
+            # Back-compat keys (map *_on to *_at)
+            created_on: project.created_at,
+            updated_on: project.updated_at
           }},
           statistics: {{
             work_package_count: work_package_count,
@@ -3878,8 +4269,11 @@ class OpenProjectClient:
             type: wp.type.name,
             author: wp.author.name,
             assignee: wp.assigned_to&.name,
-            created_on: wp.created_on,
-            updated_on: wp.updated_on
+            created_at: wp.created_at,
+            updated_at: wp.updated_at,
+            # Back-compat keys (map *_on to *_at)
+            created_on: wp.created_at,
+            updated_on: wp.updated_at
           }}
         end
         """
