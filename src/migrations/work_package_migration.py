@@ -2214,6 +2214,9 @@ def _apply_required_defaults(
                     f"Preparing {len(issues)} work packages for project {project_key}",
                 )
 
+                # Track Jira keys processed in this project for CF bumping
+                updated_keys: list[str] = []
+
                 for i, issue in enumerate(issues):
                     try:
                         # Handle both dictionary and jira.Issue objects
@@ -2227,6 +2230,13 @@ def _apply_required_defaults(
                             issue_key = issue.get("key", "Unknown")
                             issue_id = issue.get("id", "Unknown")
                             issue_summary = issue.get("summary", "Unknown")
+
+                        # Collect Jira key for potential Last Update Date CF bump
+                        try:
+                            if isinstance(issue_key, str) and issue_key:
+                                updated_keys.append(issue_key)
+                        except Exception:
+                            pass
 
                         if (
                             i % 10 == 0 or i == len(issues) - 1
@@ -2633,6 +2643,19 @@ def _apply_required_defaults(
                 self.logger.info(
                     f"Saved debug copy of work packages data to {debug_json_path}",
                 )
+
+                # Proactively stamp 'J2O Last Update Date' for processed issues (update path)
+                try:
+                    from datetime import date as _date  # local import to avoid top-level pollution
+                    self.op_client.set_wp_last_update_date_by_keys(
+                        int(op_project_id), updated_keys, _date.today().isoformat()
+                    )
+                except Exception as _cf_err:
+                    self.logger.debug(
+                        "Skipping Last Update Date CF bump for project %s: %s",
+                        project_key,
+                        _cf_err,
+                    )
 
                 # Early idempotency short-circuit: if all mapped Jira IDs already have openproject_id, skip Rails
                 try:
