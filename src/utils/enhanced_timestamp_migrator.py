@@ -730,13 +730,12 @@ class EnhancedTimestampMigrator:
                         f"# Update {field_name} for work package {wp_id} (Jira: {jira_key})",
                         "begin",
                         f"  wp = WorkPackage.find({wp_id})",
-                        f"  wp.{field_name} = DateTime.parse('{timestamp}')",
-                        "  wp.save(validate: false)  # Skip validations for metadata updates",
-                        f"  operations << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, "
-                        f"field: {json.dumps(field_name)}, status: 'success'}}"
+                        f"  wp.update_columns({field_name}: DateTime.parse('{timestamp}'))",
+                        f"  operations << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, ",
+                        f"field: {json.dumps(field_name)}, status: 'success'}}",
                         "rescue => e",
-                        f"  errors << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, "
-                        f"field: {json.dumps(field_name)}, error: e.message}}"
+                        f"  errors << {{jira_key: {escaped_jira_key}, wp_id: {wp_id}, ",
+                        f"field: {json.dumps(field_name)}, error: e.message}}",
                         "end",
                         "",
                     ],
