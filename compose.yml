@@ -109,7 +109,7 @@ services:
 
   # PostgreSQL for data storage
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     # SECURITY: No port exposure needed - internal service only
     # NOTE: PostgreSQL Alpine runs as dedicated 'postgres' user (not root) by default - no custom user needed
     env_file:
