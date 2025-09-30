@@ -313,11 +313,6 @@ class TestConvenienceFunctions:
         result = generate_config_from_template(template, variables)
         assert result.is_valid is True
 
-    # def test_apply_config_overrides_function(self):
-    #     # This function doesn't exist in the implementation
-    #     # TODO: Implement standalone apply_config_overrides function
-    #     pass
-
     def test_validate_config_function(self, temp_dir) -> None:
         config = {"test": "value"}
         config_path = temp_dir / "config.yaml"
@@ -325,21 +320,6 @@ class TestConvenienceFunctions:
 
         result = validate_configuration(config_path)
         assert result.is_valid is True
-
-    # def test_backup_config_function(self, temp_dir):
-    #     # This function doesn't exist in the implementation
-    #     # TODO: Implement standalone backup_config function
-    #     pass
-
-    # def test_restore_config_function(self, temp_dir):
-    #     # This function doesn't exist in the implementation
-    #     # TODO: Implement standalone restore_config function
-    #     pass
-
-    # def test_encrypt_decrypt_config_functions(self):
-    #     # These functions don't exist in the implementation
-    #     # TODO: Implement standalone encrypt_config and decrypt_config functions
-    #     pass
 
 
 if __name__ == "__main__":

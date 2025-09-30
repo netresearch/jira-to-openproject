@@ -65,35 +65,10 @@ class TestBatchProcessor:
 
         assert len(result["data"]) == 20
 
-    # def test_process_items_memory_aware(self):
-    #     """Test memory-aware processing strategy."""
-    #     # BatchStrategy.MEMORY_AWARE doesn't exist in the actual implementation
-    #     # TODO: Implement memory-aware processing if needed
-    #     pass
-
-    # def test_process_items_performance_adaptive(self):
-    #     """Test performance-adaptive processing strategy."""
-    #     # BatchStrategy.PERFORMANCE_ADAPTIVE doesn't exist in the actual implementation
-    #     # TODO: Implement performance-adaptive processing if needed
-    #     pass
-
-    # def test_process_items_hybrid(self):
-    #     """Test hybrid processing strategy."""
-    #     # BatchStrategy.HYBRID doesn't exist in the actual implementation
-    #     # TODO: Implement hybrid processing if needed
-    #     pass
-
-    # def test_error_handling(self):
-    #     """Test error handling in batch processing."""
-    #     # This test uses BatchStrategy.SEQUENTIAL which doesn't exist
-    #     # TODO: Implement error handling tests with actual API
-    #     pass
-
-    # def test_retry_logic(self):
-    #     """Test retry logic in batch processing."""
-    #     # This test uses BatchStrategy.SEQUENTIAL which doesn't exist
-    #     # TODO: Implement retry logic tests with actual API
-    #     pass
+    # Note: legacy sketches for additional batch strategies (memory-aware,
+    # performance-adaptive, hybrid) were removed when the implementation was
+    # simplified to the parallel/sequential flows above. Tests will be added if
+    # those strategies ever materialise.
 
     def test_simple_timeout(self) -> None:
         """Test basic timeout behavior."""
@@ -131,53 +106,9 @@ class TestBatchProcessor:
             with pytest.raises(concurrent.futures.TimeoutError):
                 future.result(timeout=1)
 
-    # def test_batch_timeout_direct(self):
-    #     """Test timeout handling directly in batch processor."""
-    #     # This test uses BatchProcessor which doesn't exist
-    #     # TODO: Implement timeout tests with actual API
-    #     pass
-
-    # def test_batch_timeout_debug(self):
-    #     """Debug the timeout handling."""
-    #     # This test uses BatchProcessor which doesn't exist
-    #     # TODO: Implement timeout tests with actual API
-    #     pass
-
-    # def test_batch_processor_timeout(self):
-    #     """Test timeout handling in batch processing."""
-    #     # This test uses BatchStrategy.PARALLEL which doesn't exist
-    #     # TODO: Implement timeout tests with actual API
-    #     pass
-
-    # def test_metrics_collection(self):
-    #     """Test metrics collection during processing."""
-    #     # This test uses BatchStrategy.SEQUENTIAL which doesn't exist
-    #     # TODO: Implement metrics tests with actual API
-    #     pass
-
-    # def test_get_performance_summary(self):
-    #     """Test performance summary generation."""
-    #     # This test uses BatchStrategy.SEQUENTIAL which doesn't exist
-    #     # TODO: Implement performance summary tests with actual API
-    #     pass
-
-    # def test_reset_metrics(self):
-    #     """Test metrics reset functionality."""
-    #     # This test uses BatchStrategy.SEQUENTIAL which doesn't exist
-    #     # TODO: Implement metrics reset tests with actual API
-    #     pass
-
-    # def test_batch_operation_dataclass(self):
-    #     """Test BatchOperation dataclass."""
-    #     # BatchOperation and BatchStrategy don't exist in the actual implementation
-    #     # TODO: Implement BatchOperation dataclass if needed
-    #     pass
-
-    # def test_unknown_strategy(self):
-    #     """Test handling of unknown batch strategy."""
-    #     # This test uses BatchProcessor and BatchStrategy which don't exist
-    #     # TODO: Implement unknown strategy tests with actual API
-    #     pass
+    # Additional scenarios (metrics collection, alternative strategies, etc.)
+    # will be covered once the batch processor exposes those hooks in the
+    # production implementation.
 
 
 class TestBatchConfig:

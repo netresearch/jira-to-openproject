@@ -89,6 +89,22 @@ python src/main.py migrate --dry-run --components users
 5. **Reset state**: restore snapshots or wipe the rehearsal OpenProject instance before the next run.
 6. **Production cutover**: swap `.env` to production credentials and rerun the migration without `--dry-run`.
 
+### Optional Tooling
+
+- **Web dashboard** (`src/dashboard`): FastAPI + Vue UI for monitoring migration progress. Requires Redis; skip if a CLI progress log is sufficient.
+- **Automated testing suite** (`src/utils/automated_testing_suite.py`): scaffolding for generating test stubs. Experimental—enable only if you plan to grow automated regression coverage.
+- **Integration testing framework** (`src/utils/integration_testing_framework.py`): utilities for mock/real environment setup. Use when rehearsals need scripted data generation.
+- **Comprehensive logging** (`src/utils/comprehensive_logging.py`): structured JSON logging, metrics collection, and health checks. Optional enhancement over the standard logging already in place.
+
+## Post-Migration Cleanup
+
+After the final cutover:
+
+1. Rotate/revoke Jira and OpenProject API tokens that were used during the migration.
+2. Archive `var/logs`, `var/data`, and `var/results` if you need an audit trail, then purge local copies.
+3. Remove temporary rehearsal snapshots and any encrypted configuration backups you created.
+4. Tear down the local `.venv` or containers, and archive this repository if no further migrations are planned.
+
 ## Architecture
 
 ### System Overview

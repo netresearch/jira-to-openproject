@@ -32,6 +32,7 @@ This file explains repo-wide conventions and where to find scoped rules.
 - Retired the advanced security and large-scale optimizer stacks; the migration runs as a single-operator tool authenticated by API tokens.
 - Rehearsal runs are expected: document snapshots, dry-runs, and state resets for operators.
 - Supported/tested stack is Jira Server 9.x and OpenProject 16.x; other versions are best effort only.
+- Optional subsystems (dashboard, automated testing suite, integration framework, comprehensive logging) are “opt-in”; operators can skip them without impacting the core migration CLI.
 
 ## Index of scoped AGENTS.md
 - `src/AGENTS.md` — migrations, clients, CLI, sanitization rules
