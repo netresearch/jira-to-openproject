@@ -29,6 +29,9 @@ This file explains repo-wide conventions and where to find scoped rules.
 - Incorporated Taskmaster, Cursor rule, and security guidance as global references only.
 - Standardized minimal checks on `uv` commands; narrowed mypy to `src/config_loader.py` because the wider codebase is not yet type-clean.
 - Documented that pytest-based suites require the containerized environment (host sandbox lacks PyPI access for build deps).
+- Retired the advanced security and large-scale optimizer stacks; the migration runs as a single-operator tool authenticated by API tokens.
+- Rehearsal runs are expected: document snapshots, dry-runs, and state resets for operators.
+- Supported/tested stack is Jira Server 9.x and OpenProject 16.x; other versions are best effort only.
 
 ## Index of scoped AGENTS.md
 - `src/AGENTS.md` — migrations, clients, CLI, sanitization rules
@@ -68,7 +71,7 @@ Key knobs:
 - Reliability: `tenacity`, `pybreaker`, `structlog`
 - Storage/State: `sqlalchemy`, `redis`, `psutil`, `jsonschema`
 - Web (optional): `fastapi`, `uvicorn`, `websockets`, `jinja2`, `aiofiles`
-- Security: `cryptography`, `bcrypt`
+- Security: `cryptography`
 - Tests/Dev: `pytest`, `pytest-xdist`, `pytest-asyncio`, `pytest-cov`, `black`, `isort`, `flake8`, `mypy`, `ruff`, `pre-commit`
 
 ## Git and CI

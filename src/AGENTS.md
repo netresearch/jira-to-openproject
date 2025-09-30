@@ -25,7 +25,8 @@
 
 ## Security & safety
 - Never hardcode credentials; load secrets from env or Docker secrets (`.env` excluded from VCS).
-- Validate Jira/OpenProject identifiers (length, whitelist) before remote calls; reuse helpers in `src/utils/enhanced_*` modules.
+- Validate Jira/OpenProject identifiers (length, whitelist) before remote calls; reuse helpers in the sanitization helpers under `src/utils/enhanced_*`.
+- Authentication is limited to Jira/OpenProject API tokens; the former `SecurityManager` and audit modules were retired for the admin-only workflow.
 - Keep remote Rails interactions idempotent; persist results to `var/data` and capture logs under `var/logs`.
 - Guard file operations with safe paths under `var/`; avoid deleting OpenProject data outside dedicated cleanup utilities.
 
@@ -34,6 +35,7 @@
 - Confirm JSON payload sanitization removes `_links` and respects ID flattening before invoking Rails scripts.
 - Run the commands in this section plus `uv run python -m pytest tests/unit/test_wp_json_clean.py -q` when touching work-package flows.
 - Refresh docs (`README.md`, `docs/DEVELOPER_GUIDE.md`) if workflows or required env vars change.
+- Call out rehearsal runs (dry-run, logs review, state reset) when updating guides or release notes.
 
 ## Good vs. bad examples
 - Good: `src/migrations/work_package_migration.py` — demonstrates chunked extract/map/load with retries and rich diagnostics.
@@ -51,3 +53,6 @@
 - Flagged cleanup script as legacy to steer new work toward migration abstractions.
 - Limited mypy coverage to `src/config_loader.py` pending broader cleanup of type errors across migrations and clients.
 - Host sandbox lacks PyPI connectivity, so run pytest targets inside the project containers instead of locally.
+- Retired the advanced security and large-scale optimizer modules; keep migrations simple and focused on single-operator runs.
+- Target environment tested against Jira Server 9.x and OpenProject 16.x; other versions are “best effort”.
+- The automated test-suite generator remains experimental; treat it as optional scaffolding until requirements solidify.

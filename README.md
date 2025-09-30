@@ -25,6 +25,15 @@ A robust, modular migration toolset for transferring project management data fro
 
 ## Quick Start
 
+> ⚠️ **Scope**: J2O is designed for a trusted administrator running migrations with Jira/OpenProject API tokens. Interactive user authentication and the former "advanced security" stack have been removed to keep the tool lightweight for single-operator runs.
+
+### Supported Targets
+
+- Jira Server/Data Center 9.x (validated on 9.11)
+- OpenProject 16.x (validated on 16.0)
+
+Earlier or later releases may work, but they are not part of the supported/tested matrix.
+
 ### Installation
 
 ```bash
@@ -70,6 +79,15 @@ python src/main.py migrate --config custom_config.yaml --components all
 # Dry run mode
 python src/main.py migrate --dry-run --components users
 ```
+
+### Rehearsal Workflow
+
+1. **Seed rehearsal data**: snapshot Jira/OpenProject using your existing backup process.
+2. **Configure credentials**: point `.env` at rehearsal endpoints/API tokens.
+3. **Run a rehearsal**: invoke the CLI with `--dry-run` or a limited component list to verify mappings.
+4. **Review artefacts**: inspect `var/data`, `var/logs`, and the generated mapping JSON for discrepancies.
+5. **Reset state**: restore snapshots or wipe the rehearsal OpenProject instance before the next run.
+6. **Production cutover**: swap `.env` to production credentials and rerun the migration without `--dry-run`.
 
 ## Architecture
 

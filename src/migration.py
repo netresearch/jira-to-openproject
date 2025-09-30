@@ -903,49 +903,9 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             config.logger.warning(f"Skipping advanced configuration manager init: {e}")
             config_manager = None
 
-        # Initialize advanced security system
-        from src.utils.advanced_security import (  # noqa: PLC0415
-            SecurityConfig,
-            SecurityManager,
-        )
-
-        try:
-            # Use local alias to avoid any potential shadowing of Path in this scope
-            from pathlib import Path as _Path  # noqa: PLC0415
-
-            security_config = SecurityConfig(
-                encryption_key_path=_Path("config/security/keys"),
-                audit_log_path=config.get_path("logs") / "audit",
-                rate_limit_requests=100,
-                rate_limit_window=60,
-                password_min_length=12,
-                session_timeout=3600,
-                max_login_attempts=5,
-                lockout_duration=900,
-            )
-            security_manager = SecurityManager(security_config)
-            config.logger.info("Advanced security system initialized")
-        except Exception as e:  # noqa: BLE001
-            config.logger.warning(f"Failed to initialize security system: {e}")
-            config.logger.warning("Continuing without security features")
-            security_manager = None
-
-        # Initialize large-scale optimizer for performance
-        from src.utils.large_scale_optimizer import (  # noqa: PLC0415
-            LargeScaleOptimizer,
-            get_optimized_config_for_size,
-        )
-
-        try:
-            large_scale_config = get_optimized_config_for_size(
-                100000,
-            )  # Default to 100k+ optimization
-            large_scale_optimizer = LargeScaleOptimizer(large_scale_config)
-            config.logger.info("Large-scale optimizer initialized")
-        except Exception as e:  # noqa: BLE001
-            config.logger.warning(f"Failed to initialize large-scale optimizer: {e}")
-            config.logger.warning("Continuing without performance optimization")
-            large_scale_optimizer = None
+        # Advanced security and large-scale optimizers were removed in favour of the
+        # simpler, admin-only execution model. Keep placeholders for compatibility.
+        security_manager = None
 
         # Initialize comprehensive logging and monitoring
         from src.utils.comprehensive_logging import (  # noqa: PLC0415
@@ -1086,34 +1046,10 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             else:
                 raise
 
-        # Run security validation and audit logging
-        config.logger.info("Running security validation and audit logging...")
-        try:
-            if security_manager and hasattr(security_manager, "audit_logger"):
-                # Use proper enum + required args for audit logger
-                from src.utils.advanced_security import AuditEventType  # noqa: PLC0415
-
-                security_manager.audit_logger.log_migration_event(
-                    event_type=AuditEventType.MIGRATION_START,
-                    migration_id=migration_timestamp,
-                    user_id="system",
-                    details={
-                        "components": components,
-                        "batch_size": batch_size,
-                        "max_concurrent": max_concurrent,
-                        "stop_on_error": stop_on_error,
-                        "dry_run": config.migration_config.get("dry_run", False),
-                    },
-                    success=True,
-                )
-            config.logger.info("Security validation and audit logging completed")
-        except Exception as e:
-            config.logger.error(f"Security validation failed: {e}")
-            if not config.migration_config.get("force", False):
-                raise
-            config.logger.warning(
-                "Continuing despite security validation failure due to --force flag",
-            )
+        # Security manager removed; log the simplified execution model for clarity.
+        config.logger.info(
+            "Security manager skipped (admin-operated migration authenticated via API tokens)",
+        )
 
         # Define lazy factories for all migration components
         available_component_factories = _build_component_factories(
@@ -1531,59 +1467,17 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         # Stop monitoring
         await stop_monitoring()
 
-        # Log security audit completion
-        try:
-            # Local import for enum/type to avoid cross-dependency during tests
-            from src.utils.advanced_security import AuditEventType  # noqa: PLC0415
-
-            if security_manager and hasattr(security_manager, "audit_logger"):
-                security_manager.audit_logger.log_migration_event(
-                    migration_id=migration_timestamp,
-                    event_type=AuditEventType.MIGRATION_COMPLETE,
-                    user_id="system",
-                    details={
-                        "migration_id": migration_timestamp,
-                        "success": results.overall["status"] == "success",
-                        "total_components": len(results.components),
-                        "successful_components": sum(
-                            1 for c in results.components.values() if c.success
-                        ),
-                        "total_seconds": total_seconds,
-                    },
-                )
-                config.logger.info("Security audit logging completed")
-            else:
-                config.logger.debug("Security audit logger not initialized; skipping audit log write")
-        except Exception as e:  # noqa: BLE001
-            config.logger.warning(f"Security audit logging failed: {e}")
-        else:
-            return results
+        config.logger.info(
+            "Migration complete; security audit logging module disabled",
+        )
+        return results
 
     except Exception as e:  # noqa: BLE001
         # Handle unexpected errors at the top level
         config.logger.exception(e)
         config.logger.error("Unexpected error during migration: %s", e)
 
-        # Log security audit for migration failure
-        try:
-            if "security_manager" in locals() and security_manager and hasattr(security_manager, "audit_logger"):
-                from src.utils.advanced_security import AuditEventType  # noqa: PLC0415
-
-                security_manager.audit_logger.log_migration_event(
-                    event_type=AuditEventType.MIGRATION_FAILED,
-                    migration_id=migration_timestamp,
-                    user_id="system",
-                    details={
-                        "migration_id": migration_timestamp,
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                    },
-                    success=False,
-                )
-        except Exception as audit_error:  # noqa: BLE001
-            config.logger.warning(
-                f"Security audit logging failed during error handling: {audit_error}",
-            )
+        # Security module removed; standard error logging above is sufficient.
 
         # Create a basic result object
         return MigrationResult(

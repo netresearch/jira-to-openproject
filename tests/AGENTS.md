@@ -48,3 +48,4 @@
 - Flagged dashboard smoke test as legacy to encourage idiomatic pytest patterns.
 - Narrowed mypy scope to `tests/unit/__init__.py` because broader suites fail TypedDict checks and need cleanup.
 - Host sandbox lacks PyPI connectivity, so execute pytest suites inside the containers or another online environment.
+- Retired security/large-scale optimizer suites now that those modules were removed; focus coverage on migration flows and sanitization.

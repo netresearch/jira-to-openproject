@@ -189,19 +189,8 @@ class TestMigrationIntegration:
     async def test_security_integration(self, framework) -> None:
         """Test security features integration."""
         async with framework.test_context():
-            # Mock security manager
-            with patch("src.utils.advanced_security.SecurityManager") as mock_security:
-                mock_security_manager = AsyncMock()
-                mock_security_manager.validate_access.return_value = True
-                mock_security_manager.audit_log.return_value = True
-                mock_security.return_value = mock_security_manager
-
-                # Test security validation
-                assert await self._test_security_validation(framework)
-
-                # Verify security was called
-                mock_security_manager.validate_access.assert_called_once()
-                mock_security_manager.audit_log.assert_called_once()
+            # Security module removed; ensure validation helper still succeeds.
+            assert await self._test_security_validation(framework)
 
     @pytest.mark.asyncio
     async def test_configuration_management_integration(self, framework) -> None:

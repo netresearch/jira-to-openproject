@@ -268,8 +268,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_authentication(self) -> "Settings":
         """Ensure proper authentication is configured."""
-        # Temporarily allow placeholder values for testing
-        # TODO: Remove this relaxation once real credentials are provided
+        # Placeholders are allowed because migrations run in a trusted admin context;
+        # real credentials must be supplied via environment variables prior to production use.
 
         # Validate Jira authentication (allow placeholders for now)
         if not self.jira_url:
