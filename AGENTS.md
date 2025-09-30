@@ -1,163 +1,42 @@
-# Jira → OpenProject Migration Tool — AGENT.md
+<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2025-09-30 -->
+# AGENTS.md (root)
+This file explains repo-wide conventions and where to find scoped rules.
+**Precedence:** the *closest* `AGENTS.md` to your changes wins. Root holds global defaults only.
 
-This file is the single source of truth for AI coding tools. It describes how to build, test, run, and contribute to this project. It follows the AGENT.md guidance so any agent can work effectively in this codebase. See spec reference: [AGENT.md RFC](https://ampcode.com/AGENT.md).
+## Global rules
+- Keep diffs small, land tests with code, and ask before heavy deps, e2e suites, or repo-wide rewrites.
+- Follow Taskmaster workflow tools in `.github/instructions/taskmaster.md`/`.cursor/rules/*` for planning and status updates.
+- Merge guidance from tool-specific files (`.github/instructions/*.md`, `.cursor/rules/*.mdc`, `docs/SECURITY.md`) with the nearest scoped file.
 
-## Project Overview
+## Minimal pre-commit checks
+- Typecheck: `uv run --no-cache mypy src/config_loader.py`
+- Lint/format: `python -m compileall src tests`
+- Unit tests: Container-only via `make dev-test` (host sandbox blocks PyPI access)
 
-Jira to OpenProject (J2O) is a Python 3.13+ toolset for migrating data from Jira Server 9.11 into OpenProject 15. It supports users, projects, work packages, custom fields, statuses, workflows, attachments, and time logs with resilient, restartable processing.
+## House Rules (Defaults)
+- Commits: atomic, Conventional Commits (`feat(scope): …`, `fix: …`), keep PRs <≈300 net LOC.
+- Types & design: treat warnings as errors for touched code, embrace SOLID/KISS/DRY/YAGNI, prefer composition and Law of Demeter.
+- Dependencies: add only stable, compatible releases; document justification for new transitive risk.
+- Verification: rely on primary sources/specs; choose safer path when guidance conflicts and record it.
+- API/versioning: public APIs follow SemVer; update OpenAPI and migration notes on breaking changes.
+- Security/compliance: keep secrets out of VCS, run/heed secret scans, validate and sanitize all external input.
+- Observability: emit structured logs/metrics/traces; keep runbooks current for migrations and seeds.
+- Accessibility: target WCAG 2.2 AA for any UI changes; use automated checks when available.
+- Licensing: respect upstream licenses and update third-party notices with SPDX identifiers as required.
 
-- Language/runtime: Python 3.13+
-- Packaging: `setuptools`, lock/install via `uv`
-- CLI entry point: `j2o` (configured via `pyproject.toml`)
-- Containerization: Docker + Docker Compose, non-root user by default
-- Optional services: PostgreSQL, Redis (for caching/idempotency)
-- Web dashboard: FastAPI + Uvicorn (optional admin/ops UI)
+## Decision Log
+- Trimmed legacy root narrative and delegated specifics to scoped files per repo agentization plan.
+- Incorporated Taskmaster, Cursor rule, and security guidance as global references only.
+- Standardized minimal checks on `uv` commands; narrowed mypy to `src/config_loader.py` because the wider codebase is not yet type-clean.
+- Documented that pytest-based suites require the containerized environment (host sandbox lacks PyPI access for build deps).
 
-Key references: @README.md, @src/README.md, @.env.example
+## Index of scoped AGENTS.md
+- `src/AGENTS.md` — migrations, clients, CLI, sanitization rules
+- `src/dashboard/AGENTS.md` — FastAPI dashboard, websockets, frontend assets
+- `tests/AGENTS.md` — pytest suites, fixtures, markers
 
-## Repository Structure
-
-```
-src/
-  clients/                 # Jira/OpenProject/SSH/Docker/Rails clients
-  migrations/              # Extract → Map → Load component migrations
-  models/                  # Dataclasses and schemas
-  mappings/                # Mapping helpers & loaders
-  utils.py                 # Shared utilities
-  config.py                # Access point to runtime configuration
-  config_loader.py         # Loads YAML + .env + environment
-  main.py                  # CLI entry (also exposed as `j2o`)
-
-tests/
-  unit/ functional/ integration/ end_to_end/ utils/
-
-Dockerfile, Dockerfile.test, Makefile, pyproject.toml, .env.example
-```
-
-## Build, Run, and Common Commands
-
-The project uses `uv` for dependency management and Docker Compose for dev/test environments. A Makefile provides convenient targets. All commands should be run from the repository root.
-
-### Local (no containers)
-
-- Install deps (locked):
-  - `uv sync --frozen`
-- Run tests quickly:
-  - `python -m pytest -n auto`
-- Type-checking:
-  - `mypy src`
-- Lint/format:
-  - `flake8 src tests`
-  - `black src tests`
-  - `isort src tests`
-- Full quick loop (recommended):
-  - `make dev-test` (fast local tests with `-n auto`)
-
-### Docker/Compose development
-
-- Build images: `docker compose build` or `make build`
-- Start app only: `make dev`
-- Start stack: `make up`
-- Stop: `make down` (or `make stop` to stop without removing)
-- Logs: `make logs` or `make logs-app`
-- Shell into app: `make shell`
-- Execute command: `make exec CMD="python --version"`
-- Install IRB config into remote OpenProject container: `make install-irbrc`
-- Start/attach Rails tmux session: `make start-rails` / `make attach-rails`
-
-### Testing (Compose-managed test container)
-
-- Run tests: `make test` (spins up test service, runs `pytest -n auto`)
-- Verbose: `make test-verbose`
-- Coverage: `make test-coverage`
-- Slow (integration/E2E): `make test-slow`
-- Fast (unit only): `make test-fast`
-
-### Application execution
-
-- CLI entry point (after install): `j2o --help`
-- Direct module:
-  - `python src/main.py migrate --components users,projects,workpackages`
-  - Dry run: `python src/main.py migrate --dry-run --components users`
-
-## Development Environment
-
-### Requirements
-
-- Python 3.13+
-- Docker and Docker Compose (for containerized dev/test)
-- `uv` (installed in containers and used locally)
-
-### Environment variables
-
-Copy `.env.example` to `.env` and update values. Minimum required for service profiles:
-
-- PostgreSQL: `POSTGRES_PASSWORD`
-- Jira: `J2O_JIRA_URL`, `J2O_JIRA_USERNAME`, `J2O_JIRA_API_TOKEN`
-- OpenProject: `J2O_OPENPROJECT_URL`, `J2O_OPENPROJECT_API_TOKEN` (or `J2O_OPENPROJECT_API_KEY`)
-
-Optional (remote operations): `J2O_OPENPROJECT_SERVER`, `J2O_OPENPROJECT_USER`, `J2O_OPENPROJECT_CONTAINER`, `J2O_OPENPROJECT_TMUX_SESSION_NAME`
-
-Directories: `J2O_DATA_DIR`, `J2O_BACKUP_DIR`, `J2O_RESULTS_DIR`
-
-See @.env.example for full documentation.
-
-## Code Style and Conventions
-
-This project enforces modern Python standards (Python ≥3.13):
-
-- Formatting: Black (line length 88 for code; Ruff line length 120)
-- Imports: isort (profile "black")
-- Linting: Ruff (select = ["ALL"]) and Flake8
-- Types: Mypy (target 3.13) with strict-ish defaults (opted non-strict project wide, strict where helpful)
-
-Language-level guidance:
-
-- Use built-in generic types: `list[str]`, `dict[str, int]`, etc.
-- Use the union pipe operator: `int | str`, optionals as `T | None`.
-- Import ABCs from `collections.abc` (e.g., `Callable`, `Mapping`).
-
-Error handling and execution style:
-
-- Exceptions, not return codes, for error paths.
-- Optimistic execution pattern: assume success, diagnose on failure with targeted `try/except` and rich diagnostics.
-- Use `tenacity` for retries on transient failures; use `pybreaker` for circuit breaking of flaky dependencies.
-- Log with `structlog` and preserve context.
-
-Security and validation:
-
-- Validate all external inputs (Jira keys, URLs, file paths). Use whitelists and length limits where applicable.
-- Avoid interpolation in generated code/scripts; prefer safe builders/serialization.
-- Never commit secrets; use environment variables or Docker secrets.
-
-## Architecture and Design Patterns
-
-High-level layered design (see @src/README.md):
-
-- `clients/`:
-  - `JiraClient`: Jira REST interactions
-  - `OpenProjectClient`: High-level OpenProject operations; generates Ruby scripts executed via Rails console
-  - `SSHClient`: SSH connectivity, command execution
-  - `DockerClient`: Container ops (copy/exec) over SSH
-  - `RailsConsoleClient`: tmux-backed Rails console execution
-- `migrations/`:
-  - `BaseMigration`: abstract E→M→L flow (`run`, `_extract`, `_map`, `_load`, `_test`)
-  - Concrete migrations: users, projects, work packages, custom fields, statuses, workflows, links, issue types
-- Resilience: retries, checkpointing, partial-proceed on failures, structured error files in `var/data` and logs in `var/logs/`
-
-## Testing Guidelines
-
-- Test framework: `pytest`
-- Concurrency: `-n auto` (pytest-xdist) by default in Makefile targets
-- Markers (configured in `pyproject.toml`): `unit`, `functional`, `integration`, `end_to_end`, `slow`, plus infra markers
-- Discovery patterns:
-  - Files: `tests/**/test_*.py`
-  - Classes: `Test*`
-  - Functions: `test_*`
-- Typical flows:
-  - Quick local loop: `make dev-test` or `python -m pytest -n auto`
-  - Full coverage: `make test-coverage`
-  - Targeted suite: `python -m pytest tests/unit -n auto -q`
+## When instructions conflict
+- The nearest `AGENTS.md` wins. Explicit user prompts override files.
 - In tests, prefer explicit assertions and minimal fixture coupling. Use environment isolation for external-service tests.
 
 ## Security Considerations
@@ -313,4 +192,3 @@ tmux new-session -s rails_console \; \
   - Add tests that assert generated `work_packages_*.json` contain no `_links` (payload cleanliness). Keep these tests fast and independent of Rails.
   - Retain unit tests for Python sanitization helpers (e.g., `_sanitize_wp_dict`), ensuring extraction of IDs and removal of `_links`.
 - Simplicity principle: if the Ruby script grows beyond minimal load-and-save responsibilities, refactor logic back into Python. Prefer analyzing and classifying errors in Python, not in Ruby.
-

@@ -87,7 +87,7 @@ def test_migration_record_snapshot_consistency(self, state_manager):
 ### **Prerequisites**
 ```bash
 # Install test dependencies
-pip install pytest pytest-asyncio pytest-mock psutil
+pip install pytest pytest-asyncio psutil
 
 # Ensure all source modules are importable
 export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
