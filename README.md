@@ -7,9 +7,9 @@ A robust, modular migration toolset for transferring project management data fro
 **Migration Components:**
 - **Customer Migration:** Tempo Customers → Top-level OpenProject projects
 - **Account Migration:** Tempo Accounts → Custom field values on projects
-- **Project Migration:** Jira Projects → Sub-projects under customer hierarchy
+- **Project Migration:** Jira projects → Sub-projects under customer hierarchy with lead membership, module enablement, and Jira provenance custom fields
 - **Work Package Migration:** Issues → Work packages with full metadata
-- **User Migration:** Jira users → OpenProject users with role mapping
+- **User Migration:** Jira users → OpenProject users with role mapping, full J2O provenance (origin system/ID/key/URL), locale→language syncing, and avatar backfills. Legacy "Jira user key" / "Tempo Account" custom fields are retired automatically.
 - **Custom Field Migration:** Field definitions and values
 - **Status & Workflow Migration:** Status creation and workflow configuration guidance
 - **Attachment Migration:** Issue attachments → Work package files
@@ -71,13 +71,13 @@ make start-rails ATTACH=true
 
 ```bash
 # Run specific migration components
-python src/main.py migrate --components users,projects,workpackages
+uv run python -m src.main migrate --components users,projects,workpackages --no-confirm
 
 # Run with custom configuration
-python src/main.py migrate --config custom_config.yaml --components all
+uv run python -m src.main migrate --config custom_config.yaml --components all --no-confirm
 
 # Dry run mode
-python src/main.py migrate --dry-run --components users
+uv run python -m src.main migrate --dry-run --components users --no-confirm
 ```
 
 ### Rehearsal Workflow
@@ -89,12 +89,20 @@ python src/main.py migrate --dry-run --components users
 5. **Reset state**: restore snapshots or wipe the rehearsal OpenProject instance before the next run.
 6. **Production cutover**: swap `.env` to production credentials and rerun the migration without `--dry-run`.
 
+### Metadata Validation Checklist
+
+- Run `uv run --active --no-cache python scripts/data_qa.py --projects <KEY>` after rehearsals. Investigate any `⚠️` warnings about missing project modules or zero start-date coverage—rerun `migrate --components projects`/`work_packages` to refresh caches when needed.
+- Jira start-date precedence is `customfield_18690` → `customfield_12590` → `customfield_11490` → `customfield_15082`; when they are empty we fall back to the first Jira status transition whose category is *In Progress*. Confirm Jira histories include that transition or relax expectations when the project never moved into that category.
+- Confirm project modules (`work_package_tracking`, `wiki`, `time_tracking`, `costs`) stay enabled post-migration; the project component now toggles them automatically and persists provenance in the `Jira Project Lead` custom field.
+
 ### Optional Tooling
 
 - **Web dashboard** (`src/dashboard`): FastAPI + Vue UI for monitoring migration progress. Requires Redis; skip if a CLI progress log is sufficient.
 - **Automated testing suite** (`src/utils/automated_testing_suite.py`): scaffolding for generating test stubs. Experimental—enable only if you plan to grow automated regression coverage.
 - **Integration testing framework** (`src/utils/integration_testing_framework.py`): utilities for mock/real environment setup. Use when rehearsals need scripted data generation.
 - **Comprehensive logging** (`src/utils/comprehensive_logging.py`): structured JSON logging, metrics collection, and health checks. Optional enhancement over the standard logging already in place.
+- **Rails metadata writes**: `migration.enable_rails_meta_writes` (default `true`) must remain enabled to preserve author attribution, timestamps, and audit trails in OpenProject via the enhanced Rails helpers.
+- **Data QA script** (`scripts/data_qa.py`): summarises cached migration artefacts (issue/work-package counts, attachments). Run it after rehearsals/cutover to spot mismatches quickly.
 
 ## Post-Migration Cleanup
 

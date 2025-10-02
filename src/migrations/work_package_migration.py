@@ -44,6 +44,13 @@ class WorkPackageMigration(BaseMigration):
     4. Handling attachments, comments, and relationships
     """
 
+    START_DATE_FIELD_IDS_DEFAULT = [
+        "customfield_18690",  # Target start
+        "customfield_12590",  # Change start date
+        "customfield_11490",  # Start
+        "customfield_15082",  # Key Result: Start
+    ]
+
     # Define mapping file pattern constant
     WORK_PACKAGE_MAPPING_FILE_PATTERN = "work_package_mapping_{}.json"
 
@@ -95,6 +102,12 @@ class WorkPackageMigration(BaseMigration):
             op_client=op_client,
         )
 
+        # Preload Jira status category information for history-based start date inference
+        (
+            self.status_category_by_id,
+            self.status_category_by_name,
+        ) = self._build_status_category_lookup()
+
         # Initialize enhanced audit trail migrator
         self.enhanced_audit_trail_migrator = EnhancedAuditTrailMigrator(
             jira_client=jira_client,
@@ -105,6 +118,8 @@ class WorkPackageMigration(BaseMigration):
 
         # Load existing mappings
         self._load_mappings()
+
+        self.start_date_fields = self._load_start_date_fields()
 
         # Logging
         self.logger.debug(
@@ -178,6 +193,52 @@ class WorkPackageMigration(BaseMigration):
             user_mapping=user_mapping,
             work_package_mapping=work_package_mapping,
         )
+
+    def _load_start_date_fields(self) -> list[str]:
+        fields = list(self.START_DATE_FIELD_IDS_DEFAULT)
+        extra = config.migration_config.get("start_date_custom_fields")
+        extras: list[str] = []
+        if isinstance(extra, str):
+            extras = [item.strip() for item in extra.split(",") if item and item.strip()]
+        elif isinstance(extra, list):
+            extras = [str(item).strip() for item in extra if item]
+        for field_id in extras:
+            if field_id and field_id not in fields:
+                fields.append(field_id)
+        return fields
+
+    def _build_status_category_lookup(self) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        """Load Jira statuses and map their categories by id/name."""
+
+        statuses = self._load_from_json("jira_statuses.json", default=None)
+        fetched = False
+        if not statuses:
+            try:
+                statuses = self.jira_client.get_all_statuses()
+                fetched = True
+            except Exception:
+                statuses = []
+
+        id_lookup: dict[str, dict[str, Any]] = {}
+        name_lookup: dict[str, dict[str, Any]] = {}
+        for status in statuses or []:
+            if not isinstance(status, dict):
+                continue
+            status_id = str(status.get("id") or "").strip()
+            status_name = str(status.get("name") or "").strip()
+            category = status.get("statusCategory") or {}
+            if status_id:
+                id_lookup[status_id] = category
+            if status_name:
+                name_lookup[status_name.lower()] = category
+
+        if fetched and statuses:
+            try:
+                self._save_to_json(statuses, "jira_statuses.json")
+            except Exception:
+                pass
+
+        return id_lookup, name_lookup
 
     def iter_project_issues(self, project_key: str) -> Iterator[Issue]:
         """Generate issues for a project with memory-efficient pagination.
@@ -893,6 +954,9 @@ class WorkPackageMigration(BaseMigration):
         work_package["description"] = description
 
         # Add optional fields if available
+        start_date = self._resolve_start_date(jira_issue)
+        if start_date:
+            work_package["start_date"] = start_date
         if status_op_id:
             work_package["status_id"] = status_op_id
         if assigned_to_id:
@@ -994,6 +1058,143 @@ class WorkPackageMigration(BaseMigration):
 
         return work_package
 
+    def _resolve_start_date(self, issue: Any) -> str | None:
+        """Resolve start date from configured Jira custom fields."""
+
+        candidates: list[str] = list(self.start_date_fields)
+
+        # jira.Issue style access
+        if hasattr(issue, "fields"):
+            fields_obj = getattr(issue, "fields", None)
+            for field_id in candidates:
+                try:
+                    value = getattr(fields_obj, field_id)
+                except AttributeError:
+                    value = None
+                if value:
+                    normalized = self.enhanced_timestamp_migrator._normalize_timestamp(str(value))
+                    if normalized:
+                        return normalized.split("T", 1)[0]
+
+        # Raw dict fields from jira.Issue
+        raw_fields = {}
+        if hasattr(issue, "raw"):
+            raw_fields = getattr(issue, "raw", {}).get("fields", {})
+        if isinstance(issue, dict):
+            raw_fields = issue.get("fields", issue)
+
+        if isinstance(raw_fields, dict):
+            for field_id in candidates:
+                value = raw_fields.get(field_id)
+                if value:
+                    normalized = self.enhanced_timestamp_migrator._normalize_timestamp(str(value))
+                    if normalized:
+                        return normalized.split("T", 1)[0]
+
+        # Fallback: derive start date from Jira status history
+        history_start = self._resolve_start_date_from_history(issue)
+        if history_start:
+            return history_start
+
+        return None
+
+    def _resolve_start_date_from_history(self, issue: Any) -> str | None:
+        """Infer start date from the first transition into an 'In Progress' category."""
+
+        histories = self._extract_changelog_histories(issue)
+        if not histories:
+            return None
+
+        # Sort histories chronologically (oldest first) using their created timestamp
+        normalized_histories: list[tuple[str, Any]] = []
+        for history in histories:
+            created_raw = self._get_attr(history, "created")
+            if not created_raw:
+                continue
+            normalized = self.enhanced_timestamp_migrator._normalize_timestamp(str(created_raw))
+            if not normalized:
+                continue
+            normalized_histories.append((normalized, history))
+
+        normalized_histories.sort(key=lambda pair: pair[0])
+
+        for normalized, history in normalized_histories:
+            items = self._get_attr(history, "items") or []
+            for item in items:
+                field_name = str(self._get_attr(item, "field") or "").lower()
+                if field_name != "status":
+                    continue
+
+                status_id = str(self._get_attr(item, "to") or "").strip()
+                status_name = str(self._get_attr(item, "toString") or "").strip().lower()
+
+                category = {}
+                if status_id and status_id in self.status_category_by_id:
+                    category = self.status_category_by_id[status_id] or {}
+                elif status_name and status_name in self.status_category_by_name:
+                    category = self.status_category_by_name[status_name] or {}
+
+                if not category and status_name:
+                    # Attempt loose lookup by name if exact match missing
+                    category = next(
+                        (val for key, val in self.status_category_by_name.items() if key == status_name),
+                        {},
+                    )
+
+                if self._is_in_progress_category(category):
+                    return normalized.split("T", 1)[0]
+
+        return None
+
+    @staticmethod
+    def _get_attr(obj: Any, key: str) -> Any:
+        """Safely fetch attribute/key from Jira objects or dicts."""
+
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    def _extract_changelog_histories(self, issue: Any) -> list[Any]:
+        """Return changelog histories from either jira.Issue or dict payloads."""
+
+        if hasattr(issue, "changelog") and getattr(issue, "changelog"):
+            histories = getattr(issue.changelog, "histories", None)
+            if histories:
+                return list(histories)
+
+        raw = getattr(issue, "raw", None)
+        if isinstance(raw, dict):
+            histories = raw.get("changelog", {}).get("histories")
+            if isinstance(histories, list):
+                return histories
+
+        if isinstance(issue, dict):
+            histories = issue.get("changelog", {}).get("histories")
+            if isinstance(histories, list):
+                return histories
+
+        return []
+
+    @staticmethod
+    def _is_in_progress_category(category: dict[str, Any]) -> bool:
+        """Return True when the status category represents 'In Progress'."""
+
+        if not category:
+            return False
+
+        key = str(category.get("key", "")).lower()
+        name = str(category.get("name", "")).lower()
+        cat_id = str(category.get("id", "")).lower()
+
+        in_progress_keys = {"indeterminate", "in_progress", "in-progress"}
+        if key in in_progress_keys:
+            return True
+        if name == "in progress":
+            return True
+        if cat_id == "4":  # Jira default id for In Progress category
+            return True
+        return False
+
     def _extract_issue_meta(self, issue: Any) -> dict[str, Any]:
         """Extract non-AR metadata from a Jira issue for reporting.
 
@@ -1002,6 +1203,9 @@ class WorkPackageMigration(BaseMigration):
         """
         meta: dict[str, Any] = {}
         try:
+            start_date = self._resolve_start_date(issue)
+            if start_date:
+                meta["start_date"] = start_date
             # Handle jira.Issue style
             if hasattr(issue, "key") and hasattr(issue, "fields"):
                 f = getattr(issue, "fields", None)
@@ -1126,6 +1330,10 @@ class WorkPackageMigration(BaseMigration):
                 "jira_id": jira_issue.get("id", ""),
                 "_links": {},
             }
+
+            start_date = self._resolve_start_date(jira_issue)
+            if start_date:
+                work_package["start_date"] = start_date
 
             # Attach origin mapping custom fields for provenance
             try:
