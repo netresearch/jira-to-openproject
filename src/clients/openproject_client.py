@@ -885,7 +885,7 @@ class OpenProjectClient:
         # Retry loop to handle race where file write completes slightly after command returns
         wait_env = os.environ.get("J2O_QUERY_RESULT_WAIT_SECONDS")
         try:
-            max_wait_seconds = int(wait_env) if wait_env else 60
+            max_wait_seconds = int(wait_env) if wait_env else 600
         except Exception:
             max_wait_seconds = 60
         poll_interval = 0.5
@@ -896,12 +896,13 @@ class OpenProjectClient:
         returncode = 1
         for attempt in range(attempts):
             try:
-                stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
+                stdout, stderr, returncode = self.ssh_client.execute_command(
+                    ssh_command,
+                    check=False,
+                )
             except Exception as e:
-                if "No such file or directory" in str(e):
-                    time.sleep(poll_interval)
-                    continue
-                raise
+                # Unexpected transport error; bubble it up immediately
+                raise QueryExecutionError(str(e)) from e
 
             if returncode == 0 and stdout:
                 if attempt > 0:
@@ -911,17 +912,23 @@ class OpenProjectClient:
                         container_file,
                     )
                 break
-            # Still not present; keep polling until timeout
-            # Emit a lightweight heartbeat every ~5 seconds so runs don't look hung
-            try:
+
+            # Non-zero return code with no stdout. Treat "file not yet present" as a retry case,
+            # otherwise escalate after the loop.
+            if "No such file or directory" in (stderr or ""):
+                # Emit a lightweight heartbeat every ~5 seconds so runs don't look hung
                 if attempt and (attempt % max(1, int(5 / poll_interval)) == 0):
                     logger.info(
                         "Waiting for query result file %s (waited %.1fs)",
                         container_file,
                         attempt * poll_interval,
                     )
-            except Exception:
-                pass
+                time.sleep(poll_interval)
+                continue
+
+            # Any other stderr/returncode is considered a hard failure
+            if returncode != 0:
+                break
             time.sleep(poll_interval)
 
         if returncode != 0:
@@ -1360,6 +1367,12 @@ class OpenProjectClient:
             end
             cf.save
           end
+          if cf && cf.type == 'UserCustomField'
+            begin
+              cf.activate! if cf.respond_to?(:active?) && !cf.active?
+            rescue
+            end
+          end
           cf && cf.as_json(only: [:id, :name, :field_format, :type])
         """
         try:
@@ -1369,6 +1382,39 @@ class OpenProjectClient:
             raise QueryExecutionError(f"Failed ensuring {cf_type} '{name}'")
         except Exception as e:  # noqa: BLE001
             msg = f"Failed to ensure custom field '{name}' ({cf_type}): {e}"
+            raise QueryExecutionError(msg) from e
+
+    def remove_custom_field(self, name: str, *, cf_type: str | None = None) -> dict[str, int]:
+        """Remove CustomField records matching the provided name/type."""
+
+        name_literal = json.dumps(name)
+        type_filter = ""
+        if cf_type:
+            type_literal = json.dumps(cf_type)
+            type_filter = f"scope = scope.where(type: {type_literal})\n"
+
+        ruby = (
+            f"scope = CustomField.where(name: {name_literal})\n"
+            f"{type_filter}"
+            "removed = 0\n"
+            "scope.find_each do |cf|\n"
+            "  begin\n"
+            "    cf.destroy\n"
+            "    removed += 1\n"
+            "  rescue => e\n"
+            "    Rails.logger.warn(\"Failed to destroy custom field #{cf.id}: #{e.message}\")\n"
+            "  end\n"
+            "end\n"
+            "{ removed: removed }.to_json\n"
+        )
+
+        try:
+            result = self.execute_json_query(ruby)
+            if isinstance(result, dict):
+                return {"removed": int(result.get("removed", 0) or 0)}
+            raise QueryExecutionError("Unexpected response removing custom field")
+        except Exception as e:  # noqa: BLE001
+            msg = f"Failed to remove custom field '{name}'"
             raise QueryExecutionError(msg) from e
 
     def ensure_origin_custom_fields(self) -> dict[str, list[dict[str, Any]]]:
@@ -1423,6 +1469,251 @@ class OpenProjectClient:
                 self.logger.warning("Failed ensuring TE CF %s: %s", name, e)
 
         return ensured
+
+    def get_roles(self) -> list[dict[str, Any]]:
+        """Return OpenProject roles (id, name, builtin flag)."""
+
+        ruby = "Role.all.map { |r| r.as_json(only: [:id, :name, :builtin]) }"
+        try:
+            result = self.execute_json_query(ruby)
+            if isinstance(result, list):
+                return result
+            raise QueryExecutionError("Unexpected OpenProject role payload")
+        except Exception as e:  # noqa: BLE001
+            msg = f"Failed to fetch OpenProject roles: {e}"
+            raise QueryExecutionError(msg) from e
+
+    def get_groups(self) -> list[dict[str, Any]]:
+        """Return existing OpenProject groups with member IDs."""
+
+        ruby = (
+            "Group.includes(:users).order(:name).map do |g| "
+            "  { id: g.id, name: g.name, user_ids: g.users.pluck(:id) }"
+            "end"
+        )
+        try:
+            result = self.execute_json_query(ruby)
+            if isinstance(result, list):
+                return result
+            raise QueryExecutionError("Unexpected OpenProject group payload")
+        except Exception as e:  # noqa: BLE001
+            msg = f"Failed to fetch OpenProject groups: {e}"
+            raise QueryExecutionError(msg) from e
+
+    def sync_group_memberships(self, assignments: list[dict[str, Any]]) -> dict[str, int]:
+        """Ensure each group has the provided membership list."""
+
+        if not assignments:
+            return {"updated": 0, "errors": 0}
+
+        temp_dir = Path(self.file_manager.data_dir) / "group_sync"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        payload_path = temp_dir / f"group_memberships_{os.getpid()}_{int(time.time())}.json"
+        result_path = temp_dir / (payload_path.name + ".result")
+
+        try:
+            with payload_path.open("w", encoding="utf-8") as handle:
+                json.dump(assignments, handle)
+
+            container_input = Path("/tmp") / payload_path.name  # noqa: S108
+            container_output = Path("/tmp") / (payload_path.name + ".result")  # noqa: S108
+            self.transfer_file_to_container(payload_path, container_input)
+
+            ruby = (
+                "require 'json'\n"
+                f"input_path = '{container_input.as_posix()}'\n"
+                f"output_path = '{container_output.as_posix()}'\n"
+                "rows = JSON.parse(File.read(input_path))\n"
+                "updated = 0\n"
+                "errors = []\n"
+                "rows.each do |row|\n"
+                "  name = row['name']\n"
+                "  next unless name && !name.strip.empty?\n"
+                "  begin\n"
+                "    group = Group.find_or_create_by(name: name)\n"
+                "    desired_ids = Array(row['user_ids']).map(&:to_i).reject(&:nil?).uniq.sort\n"
+                "    current_ids = group.user_ids.sort\n"
+                "    if desired_ids != current_ids\n"
+                "      group.user_ids = desired_ids\n"
+                "      group.save\n"
+                "      updated += 1\n"
+                "    end\n"
+                "  rescue => e\n"
+                "    errors << { name: name, error: e.message }\n"
+                "  end\n"
+                "end\n"
+                "File.write(output_path, { updated: updated, errors: errors.length }.to_json)\n"
+                "nil\n"
+            )
+
+            self.execute_query(ruby, timeout=90)
+
+            summary = self._read_result_file(container_output, result_path)
+            return {
+                "updated": int(summary.get("updated", 0)),
+                "errors": int(summary.get("errors", 0)),
+            }
+        finally:
+            with suppress(OSError):
+                payload_path.unlink()
+            with suppress(OSError):
+                result_path.unlink()
+
+    def assign_group_roles(
+        self,
+        assignments: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        """Assign OpenProject groups to projects with given role IDs."""
+
+        if not assignments:
+            return {"updated": 0, "errors": 0}
+
+        temp_dir = Path(self.file_manager.data_dir) / "group_roles"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        payload_path = temp_dir / f"group_roles_{os.getpid()}_{int(time.time())}.json"
+        result_path = temp_dir / (payload_path.name + ".result")
+
+        try:
+            with payload_path.open("w", encoding="utf-8") as handle:
+                json.dump(assignments, handle)
+
+            container_input = Path("/tmp") / payload_path.name  # noqa: S108
+            container_output = Path("/tmp") / (payload_path.name + ".result")  # noqa: S108
+            self.transfer_file_to_container(payload_path, container_input)
+
+            ruby = (
+                "require 'json'\n"
+                f"input_path = '{container_input.as_posix()}'\n"
+                f"output_path = '{container_output.as_posix()}'\n"
+                "rows = JSON.parse(File.read(input_path))\n"
+                "updated = 0\n"
+                "errors = []\n"
+                "rows.each do |row|\n"
+                "  begin\n"
+                "    name = row['group_name']\n"
+                "    project_id = row['project_id'].to_i\n"
+                "    role_ids = Array(row['role_ids']).map(&:to_i).reject(&:nil?).uniq\n"
+                "    next if name.nil? || name.empty? || project_id <= 0 || role_ids.empty?\n"
+                "    group = Group.find_by(name: name)\n"
+                "    project = Project.find_by(id: project_id)\n"
+                "    next unless group && project\n"
+                "    member = Member.find_or_initialize_by(project: project, principal: group)\n"
+                "    existing_ids = Array(member.role_ids).map(&:to_i)\n"
+                "    new_ids = (existing_ids + role_ids).uniq\n"
+                "    if member.new_record? || new_ids.sort != existing_ids.sort\n"
+                "      member.role_ids = new_ids\n"
+                "      member.save\n"
+                "      updated += 1\n"
+                "    end\n"
+                "  rescue => e\n"
+                "    errors << { group: row['group_name'], project: row['project_id'], error: e.message }\n"
+                "  end\n"
+                "end\n"
+                "File.write(output_path, { updated: updated, errors: errors.length }.to_json)\n"
+                "nil\n"
+            )
+
+            self.execute_query(ruby, timeout=90)
+
+            summary = self._read_result_file(container_output, result_path)
+            return {
+                "updated": int(summary.get("updated", 0)),
+                "errors": int(summary.get("errors", 0)),
+            }
+        finally:
+            with suppress(OSError):
+                payload_path.unlink()
+            with suppress(OSError):
+                result_path.unlink()
+
+    def assign_user_roles(
+        self,
+        *,
+        project_id: int,
+        user_id: int,
+        role_ids: list[int],
+    ) -> dict[str, Any]:
+        """Ensure a user has the given roles on a project."""
+
+        valid_role_ids = [int(r) for r in role_ids if isinstance(r, (int, str)) and int(r) > 0]
+        if not valid_role_ids:
+            return {"success": False, "error": "role_ids empty"}
+
+        head = (
+            f"project_id = {int(project_id)}\n"
+            f"user_id = {int(user_id)}\n"
+            f"role_ids = {json.dumps(valid_role_ids)}\n"
+        )
+        body = """
+project = Project.find_by(id: project_id)
+user = User.find_by(id: user_id)
+
+unless project && user
+  return { success: false, error: 'project or user not found' }.to_json
+end
+
+desired = Array(role_ids).map(&:to_i).reject { |rid| rid <= 0 }
+if desired.empty?
+  return { success: false, error: 'no roles specified' }.to_json
+end
+
+member = Member.find_or_initialize_by(project: project, principal: user)
+existing = Array(member.role_ids).map(&:to_i)
+
+if member.new_record? || (existing.sort != desired.sort)
+  member.role_ids = desired
+  changed = true
+else
+  changed = false
+end
+
+if member.save
+  { success: true, changed: changed, role_ids: member.role_ids }.to_json
+else
+  { success: false, error: member.errors.full_messages.join(', ') }.to_json
+end
+"""
+        script = head + body
+        result = self.execute_query_to_json_file(script, timeout=90)
+        if isinstance(result, dict):
+            return result
+        return {"success": False, "error": "unexpected response"}
+
+    def _read_result_file(
+        self,
+        container_path: Path,
+        local_path: Path,
+    ) -> dict[str, Any]:
+        """Helper to read JSON results from container with cat fallback."""
+
+        for attempt in range(10):
+            try:
+                stdout, _stderr, rc = self.docker_client.execute_command(
+                    f"cat {container_path.as_posix()}"
+                )
+            except Exception:  # noqa: BLE001
+                stdout, rc = "", 1
+
+            if rc == 0 and stdout.strip():
+                try:
+                    return json.loads(stdout)
+                except json.JSONDecodeError:
+                    break
+
+            time.sleep(0.5)
+
+        try:
+            copied = self.transfer_file_from_container(container_path, local_path)
+        except FileTransferError as exc:
+            self.logger.warning(
+                "Result file missing in container after polling: %s (%s)",
+                container_path,
+                exc,
+            )
+            return {"updated": 0, "errors": 1, "missing_result": True}
+
+        with copied.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
 
     def upsert_project_origin_attributes(
         self,
@@ -1781,6 +2072,7 @@ class OpenProjectClient:
             "begin; File.open(progress_file, 'a'){|f| f.write(\"START total=#{data.length}\\n\") }; rescue; end if progress_file\n"
             "data.each_with_index do |attrs, idx|\n"
             "  begin\n"
+            "    pref_attrs = nil\n"
             "    rec = model.new\n"
             "    # Minimal association pre-assignments for WorkPackage to satisfy validations\n"
             "    if model_name == 'WorkPackage'\n"
@@ -1804,6 +2096,13 @@ class OpenProjectClient:
             "        # Keep keys; assign_attributes can safely set *_id again if present\n"
             "      rescue => e\n"
             "        # continue with remaining attributes\n"
+            "      end\n"
+            "    end\n"
+            "    if model_name == 'User'\n"
+            "      begin\n"
+            "        pref_attrs = attrs.delete('pref_attributes')\n"
+            "      rescue\n"
+            "        pref_attrs = nil\n"
             "      end\n"
             "    end\n"
             "    begin\n"
@@ -1846,7 +2145,7 @@ class OpenProjectClient:
             "      rescue => e\n"
             "      end\n"
             "    end\n"
-            "    # Provenance custom fields\n"
+            "    # Provenance and preference handling\n"
             "    begin\n"
             "      if model_name == 'WorkPackage'\n"
             "        key = attrs['jira_issue_key'] || attrs['jira_key']\n"
@@ -1865,28 +2164,19 @@ class OpenProjectClient:
             "            else\n"
             "              rec.custom_field_values = { cf.id => key }\n"
             "            end\n"
-            "          rescue => e\n"
-            "            # ignore CF assignment errors here\n"
-            "          end\n"
-            "        end\n"
-            "      elsif model_name == 'User'\n"
-            "        key = attrs['jira_user_key']\n"
-            "        if key\n"
-            "          cf = CustomField.find_by(type: 'UserCustomField', name: 'Jira user key')\n"
-            "          if !cf\n"
-            "            cf = CustomField.new(name: 'Jira user key', field_format: 'string',\n"
-            "              is_required: false, is_for_all: true, type: 'UserCustomField')\n"
-            "            cf.save\n"
-            "          end\n"
-            "          begin\n"
-            "            rec.custom_field_values = { cf.id => key }\n"
-            "          rescue => e\n"
-            "            # ignore CF assignment errors here\n"
+            "          rescue\n"
             "          end\n"
             "        end\n"
             "      end\n"
-            "    rescue => e\n"
-            "      # ignore provenance CF errors\n"
+            "      if model_name == 'User' && pref_attrs.respond_to?(:each)\n"
+            "        pref = rec.pref || rec.build_pref\n"
+            "        pref_attrs.each do |k, v|\n"
+            "          setter = \"#{k}=\"\n"
+            "          pref.public_send(setter, v) if pref.respond_to?(setter)\n"
+            "        end\n"
+            "        begin; pref.save; rescue; end\n"
+            "      end\n"
+            "    rescue\n"
             "    end\n"
             "    if rec.save\n"
             "      created << {'index' => idx, 'id' => rec.id}\n"
@@ -2752,14 +3042,30 @@ class OpenProjectClient:
 
         try:
             # Route through centralized helper for uniform behavior
-            # Include the 'mail' attribute and the 'Jira user key' custom field if present
+            # Include the 'mail' attribute and the J2O provenance custom fields if present
             file_path = self._generate_unique_temp_filename("users")
             ruby_query = (
-                "cf = CustomField.find_by(type: 'UserCustomField', name: 'Jira user key'); "
-                "User.all.map do |u| v = (cf ? u.custom_value_for(cf)&.value : nil); "
-                "u.as_json.merge({'mail' => u.mail, 'jira_user_key' => v}) end"
+                "cf_origin_system = CustomField.find_by(type: 'UserCustomField', name: 'J2O Origin System'); "
+                "cf_origin_id = CustomField.find_by(type: 'UserCustomField', name: 'J2O User ID'); "
+                "cf_origin_key = CustomField.find_by(type: 'UserCustomField', name: 'J2O User Key'); "
+                "cf_origin_url = CustomField.find_by(type: 'UserCustomField', name: 'J2O External URL'); "
+                "User.all.map do |u|\n"
+                "  next unless u.is_a?(::User)\n"
+                "  data = u.as_json\n"
+                "  data['mail'] = u.mail\n"
+                "  data['j2o_origin_system'] = (cf_origin_system ? u.custom_value_for(cf_origin_system)&.value : nil)\n"
+                "  data['j2o_user_id'] = (cf_origin_id ? u.custom_value_for(cf_origin_id)&.value : nil)\n"
+                "  data['j2o_user_key'] = (cf_origin_key ? u.custom_value_for(cf_origin_key)&.value : nil)\n"
+                "  data['j2o_external_url'] = (cf_origin_url ? u.custom_value_for(cf_origin_url)&.value : nil)\n"
+                "  pref = (u.respond_to?(:pref) ? u.pref : nil)\n"
+                "  data['time_zone'] = (pref ? pref.time_zone : nil)\n"
+                "  if pref && pref.respond_to?(:language)\n"
+                "    data['language'] = pref.language\n"
+                "  end\n"
+                "  data\n"
+                "end.compact"
             )
-            json_data = self.execute_large_query_to_json_file(ruby_query, container_file=file_path, timeout=60)
+            json_data = self.execute_large_query_to_json_file(ruby_query, container_file=file_path, timeout=180)
         except QueryExecutionError:
             # Propagate specific high-signal errors (tests assert exact messages)
             raise
@@ -3241,14 +3547,27 @@ class OpenProjectClient:
             # Execute command to write JSON to file - use a simple command that returns minimal output
             # Split into Python variable interpolation (f-string) and Ruby script (raw string)
             file_path_interpolated = f"'{file_path}'"
-            selector = (
-                "Project.where(parent_id: nil).select(:id, :name, :identifier, :description, :status_code)"
-                if top_level_only
-                else "Project.all.select(:id, :name, :identifier, :description, :status_code)"
-            )
+            scope = "Project.where(parent_id: nil)" if top_level_only else "Project.all"
             write_query = (
-                f"projects = {selector}.as_json; File.write({file_path_interpolated}, "
-                f"JSON.pretty_generate(projects)); nil"
+                "require 'json'\n"
+                + "projects = "
+                + scope
+                + ".includes(:enabled_modules).map do |p|\n"
+                "  {\n"
+                "    id: p.id,\n"
+                "    name: p.name,\n"
+                "    identifier: p.identifier,\n"
+                "    description: p.description.to_s,\n"
+                "    status: (p.respond_to?(:status) ? p.status&.name : nil),\n"
+                "    status_code: p.status_code,\n"
+                "    parent_id: p.parent_id,\n"
+                "    public: p.public?,\n"
+                "    active: p.active?,\n"
+                "    enabled_modules: p.enabled_module_names\n"
+                "  }\n"
+                "end\n"
+                + f"File.write({file_path_interpolated}, JSON.pretty_generate(projects))\n"
+                + "nil"
             )
 
             # Execute the write command - verify console output and fallback if needed
@@ -3354,19 +3673,26 @@ class OpenProjectClient:
                 if isinstance(project, dict) and project.get("id"):
                     # For OpenProject projects, identifier might be optional or missing
                     # Accept projects with at least an ID and name
+                    enabled_modules = project.get("enabled_modules") or []
+                    if isinstance(enabled_modules, list):
+                        enabled_modules = sorted({str(mod) for mod in enabled_modules if mod})
+                    else:
+                        enabled_modules = []
+
                     validated_project = {
                         "id": project.get("id"),
                         "name": project.get("name", ""),
                         "identifier": project.get(
                             "identifier",
                             f"project-{project.get('id')}",
-                        ),  # Generate if missing
+                        ),
                         "description": project.get("description", ""),
-                        "public": project.get("public", False),
-                        "status": project.get(
-                            "status_code",
-                            1,
-                        ),  # Use status_code from DB
+                        "public": bool(project.get("public", False)),
+                        "status": project.get("status"),
+                        "status_code": project.get("status_code"),
+                        "parent_id": project.get("parent_id"),
+                        "active": project.get("active"),
+                        "enabled_modules": enabled_modules,
                     }
                     validated_projects.append(validated_project)
                     logger.debug("Validated project: %s", validated_project)
@@ -3614,7 +3940,8 @@ class OpenProjectClient:
           begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end
           begin; GoodJob.logger = Logger.new(nil); rescue; end
           time_entry = TimeEntry.new(
-            work_package_id: {work_package_id},
+            entity_id: {work_package_id},
+            entity_type: 'WorkPackage',
             user_id: {user_id},
             logged_by_id: {user_id},
             activity_id: {activity_id},
@@ -3627,7 +3954,7 @@ class OpenProjectClient:
           begin
             wp = WorkPackage.find_by(id: {work_package_id})
             if wp
-              time_entry.work_package = wp
+              time_entry.entity = wp
               time_entry.project = wp.project
             end
           rescue => e
@@ -3657,7 +3984,7 @@ class OpenProjectClient:
           if time_entry.save
             {{
               id: time_entry.id,
-              work_package_id: time_entry.work_package_id,
+              work_package_id: time_entry.entity_id,
               user_id: time_entry.user_id,
               activity_id: time_entry.activity_id,
               hours: time_entry.hours.to_f,
@@ -3792,6 +4119,67 @@ class OpenProjectClient:
         except Exception as e:
             msg = f"Failed to create issue priority {name}: {e}"
             raise QueryExecutionError(msg) from e
+
+    def ensure_local_avatars_enabled(self) -> bool:
+        """Enable local avatar uploads if disabled."""
+
+        ruby = (
+            "settings = Setting.plugin_openproject_avatars || {}\n"
+            "if ActiveModel::Type::Boolean.new.cast(settings['enable_local_avatars'])\n"
+            "  { enabled: true }.to_json\n"
+            "else\n"
+            "  settings['enable_local_avatars'] = true\n"
+            "  Setting.plugin_openproject_avatars = settings\n"
+            "  { enabled: true }.to_json\n"
+            "end\n"
+        )
+        result = self.execute_query_to_json_file(ruby)
+        return bool(isinstance(result, dict) and result.get("enabled"))
+
+    def set_user_avatar(
+        self,
+        *,
+        user_id: int,
+        container_path: Path,
+        filename: str,
+        content_type: str,
+    ) -> dict[str, Any]:
+        """Upload and assign a local avatar for a user."""
+
+        safe_content_type = (content_type or "image/png").replace("'", "")
+        safe_filename = filename.replace("'", "")
+        head = (
+            f"user_id = {int(user_id)}\n"
+            f"file_path = '{container_path.as_posix()}'\n"
+            f"filename = '{safe_filename}'\n"
+            f"content_type = '{safe_content_type}'\n"
+        )
+        body = """require 'rack/test'
+require 'avatars/update_service'
+
+result = { success: false }
+user = User.find_by(id: user_id)
+if user.nil?
+  result = { success: false, error: 'user not found' }
+elsif !OpenProject::Avatars::AvatarManager.local_avatars_enabled?
+  result = { success: false, error: 'local avatars disabled' }
+else
+  uploader = Rack::Test::UploadedFile.new(file_path, content_type, true)
+  service = ::Avatars::UpdateService.new(user)
+  outcome = service.replace(uploader)
+  if outcome.success?
+    result = { success: true }
+  else
+    result = { success: false, error: outcome.errors.full_messages.join(', ') }
+  end
+end
+result.to_json
+"""
+        script = head + body
+        response = self.execute_query_to_json_file(script, timeout=180)
+        if isinstance(response, dict):
+            return response
+        return {"success": False, "error": "unexpected response"}
 
     # ----- Watchers helpers -----
     def find_watcher(self, work_package_id: int, user_id: int) -> dict[str, Any] | None:
@@ -3999,12 +4387,14 @@ class OpenProjectClient:
             "      activity_id: entry[:activity_id],",
             "      hours: entry[:hours],",
             "      spent_on: Date.parse(entry[:spent_on]),",
-            "      comments: entry[:comments]",
+            "      comments: entry[:comments],",
+            "      entity_id: entry[:work_package_id],",
+            "      entity_type: 'WorkPackage'",
             "    )",
             "    begin",
             "      wp = WorkPackage.find_by(id: entry[:work_package_id])",
             "      if wp",
-            "        te.work_package = wp",
+            "        te.entity = wp",
             "        te.project = wp.project",
             "      end",
             "    rescue => e",
@@ -4742,4 +5132,4 @@ class OpenProjectClient:
                 msg,
             )
 
-        return rf"{safe_model}\.where({field}: {values_json}).map(&:as_json)"
+        return f"{safe_model}.where({field}: {values_json}).map(&:as_json)"
