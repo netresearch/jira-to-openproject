@@ -1107,20 +1107,44 @@ class ProjectMigration(BaseMigration):
                     " rescue => e; end;"
                 )
                 create_script = (
-                    f"{ensure_cfs} "
-                    f"p = Project.create!(name: '{name_escaped}', "
-                    f"identifier: '{identifier_escaped}', "
-                    f"description: '{desc_escaped}', public: false); "
-                    f"p.enabled_module_names = ['work_package_tracking', 'wiki']; "
-                    f"p.save!; "
-                    f"if {cf_key_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_key_id}); cv.value = '{jira_key}'; cv.save; end; "
-                    f"if {cf_id_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_id_id}); cv.value = '{jira_project.get('id', '')}'; cv.save; end; "
-                    f"if {cf_url_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_url_id}); cv.value = '{jira_base}'; cv.save; end; "
-                    f"p.as_json"
+                    "begin\n"
+                    f"{ensure_cfs}"
+                    f"p = Project.find_by(identifier: '{identifier_escaped}');\n"
+                    "created = false;\n"
+                    "if !p\n"
+                    f"  p = Project.new(name: '{name_escaped}', identifier: '{identifier_escaped}', description: '{desc_escaped}', public: false);\n"
+                    "  if defined?(ProjectType)\n"
+                    "    begin\n"
+                    "      default_project_type = ProjectType.respond_to?(:active) ? ProjectType.active.first : nil\n"
+                    "      default_project_type ||= ProjectType.first\n"
+                    "      if !default_project_type\n"
+                    "        next_position = (ProjectType.maximum(:position) || 0) + 1\n"
+                    "        default_project_type = ProjectType.create!(name: 'Standard', position: next_position)\n"
+                    "      end\n"
+                    "      p.project_type = default_project_type if default_project_type && p.respond_to?(:project_type=)\n"
+                    "    rescue => type_error\n"
+                    "      Rails.logger.warn(\"Failed to assign project type: #{type_error.message}\")\n"
+                    "    end\n"
+                    "  end\n"
+                    "  p.save!;\n"
+                    "  p.enabled_module_names = ['work_package_tracking', 'wiki'];\n"
+                    "  p.save!;\n"
+                    "  created = true;\n"
+                    "end;\n"
+                    f"if {cf_key_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_key_id}); cv.value = '{jira_key}'; cv.save; end;\n"
+                    f"if {cf_id_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_id_id}); cv.value = '{jira_project.get('id', '')}'; cv.save; end;\n"
+                    f"if {cf_url_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_url_id}); cv.value = '{jira_base}'; cv.save; end;\n"
+                    "{ id: p.id, name: p.name, identifier: p.identifier, created_new: created }\n"
+                    "rescue => e\n"
+                    "  { error: e.message, error_class: e.class.name }\n"
+                    "end"
                 )
 
                 try:
                     result = self.op_client.execute_query_to_json_file(create_script)
+
+                    if isinstance(result, dict) and result.get("error"):
+                        raise QueryExecutionError(result.get("error"))
 
                     # Validate that we got a proper project result
                     if not isinstance(result, dict) or not result.get("id"):
@@ -1167,6 +1191,34 @@ class ProjectMigration(BaseMigration):
                         )
 
                 except QueryExecutionError as e:
+                    existing_project_details = self._get_existing_project_details(identifier)
+                    if existing_project_details:
+                        logger.info(
+                            "Project '%s' already exists in OpenProject with ID %s (detected during creation retry)",
+                            project_data["name"],
+                            existing_project_details.get("id"),
+                        )
+                        created_projects.append(
+                            {
+                                "jira_key": project_data["jira_key"],
+                                "openproject_id": existing_project_details.get("id"),
+                                "name": existing_project_details.get("name"),
+                                "identifier": existing_project_details.get("identifier"),
+                                "created_new": False,
+                                "jira_lead": project_data.get("lead"),
+                                "jira_lead_display": project_data.get("lead_display"),
+                            },
+                        )
+                        try:
+                            self._post_project_setup(int(existing_project_details.get("id")), project_data)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug(
+                                "Post-setup skipped for existing project %s after fallback: %s",
+                                project_data.get("jira_key"),
+                                exc,
+                            )
+                        continue
+
                     error_msg = f"Rails validation error: {e}"
                     logger.exception(
                         "Rails validation error creating project '%s': %s",
