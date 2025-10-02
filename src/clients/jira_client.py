@@ -281,31 +281,92 @@ class JiraClient:
         raise JiraAuthenticationError(msg) from None
 
     def get_projects(self) -> list[dict[str, Any]]:
-        """Get all projects from Jira.
+        """Get all projects from Jira with enriched metadata."""
 
-        Returns:
-            List of project dictionaries with key, name, and ID
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
 
+        def _sanitize_str(value: Any) -> str:
+            if value is None:
+                return ""
+            return str(value)
+
+        projects_details: list[dict[str, Any]] = []
+
         try:
             projects = self.jira.projects()
-            result = [
-                {"key": project.key, "name": project.name, "id": project.id}
-                for project in projects
-            ]
-
             if not projects:
                 logger.warning("No projects found in Jira")
+                return []
 
-            return result  # noqa: TRY300
-        except Exception as e:
+            for project in projects:
+                detail = None
+                try:
+                    detail = self.jira.project(project.id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "Failed to fetch detailed project metadata for %s: %s",
+                        project.key,
+                        exc,
+                    )
+
+                raw_detail = getattr(detail, "raw", {}) or {}
+
+                project_category = raw_detail.get("projectCategory") or {}
+                if not isinstance(project_category, dict):
+                    project_category = {}
+
+                category_name = _sanitize_str(project_category.get("name")) if project_category else ""
+                category_id = _sanitize_str(project_category.get("id")) if project_category else ""
+
+                lead_info = raw_detail.get("lead") or {}
+                if not isinstance(lead_info, dict):
+                    lead_info = {}
+
+                lead_login = lead_info.get("name") or lead_info.get("key")
+                lead_display = lead_info.get("displayName")
+
+                avatar_urls = raw_detail.get("avatarUrls") or {}
+                if not isinstance(avatar_urls, dict):
+                    avatar_urls = {}
+                preferred_avatar_url = ""
+                for size_key in ("128x128", "64x64", "48x48", "32x32", "24x24", "16x16"):
+                    candidate = avatar_urls.get(size_key)
+                    if candidate:
+                        preferred_avatar_url = str(candidate)
+                        break
+
+                project_type = raw_detail.get("projectTypeKey") or getattr(project, "projectTypeKey", None)
+
+                browse_url = f"{self.base_url}/browse/{project.key}"
+
+                description = raw_detail.get("description") or ""
+                if description is None:
+                    description = ""
+
+                projects_details.append(
+                    {
+                        "key": project.key,
+                        "name": project.name,
+                        "id": project.id,
+                        "project_type_key": project_type,
+                        "project_category": project_category,
+                        "project_category_name": category_name,
+                        "project_category_id": category_id,
+                        "description": description,
+                        "lead": lead_login,
+                        "lead_display": lead_display,
+                        "avatar_urls": avatar_urls,
+                        "avatar_url": preferred_avatar_url,
+                        "url": raw_detail.get("self"),
+                        "browse_url": browse_url,
+                        "archived": raw_detail.get("archived", False),
+                    },
+                )
+
+            return projects_details
+        except Exception as e:  # noqa: BLE001
             error_msg = f"Failed to get projects: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
@@ -543,17 +604,34 @@ class JiraClient:
 
             logger.info("Retrieved %s users from Jira API", len(users))
 
-            # Convert user objects to dictionaries
-            return [
-                {
+            # Convert user objects to dictionaries with provenance metadata
+            enriched_users = []
+            for user in users:
+                avatar_urls = getattr(user, "avatarUrls", None)
+                if avatar_urls:
+                    try:
+                        avatar_urls = {
+                            str(k): str(v)
+                            for k, v in dict(avatar_urls).items()
+                            if v
+                        }
+                    except Exception:  # noqa: BLE001
+                        avatar_urls = None
+                jira_user = {
                     "key": getattr(user, "key", None),
                     "name": getattr(user, "name", None),
                     "displayName": getattr(user, "displayName", None),
                     "emailAddress": getattr(user, "emailAddress", ""),
                     "active": getattr(user, "active", True),
+                    "accountId": getattr(user, "accountId", None),
+                    "timeZone": getattr(user, "timeZone", None) or getattr(user, "timezone", None),
+                    "locale": getattr(user, "locale", None),
+                    "self": getattr(user, "self", None),
+                    "avatarUrls": avatar_urls,
                 }
-                for user in users
-            ]
+                enriched_users.append(jira_user)
+
+            return enriched_users
 
         except Exception as e:
             error_msg = f"Failed to get users: {e!s}"
@@ -583,6 +661,17 @@ class JiraClient:
             user = self.jira.user(user_key)
 
             if user:
+                avatar_urls = getattr(user, "avatarUrls", None)
+                if avatar_urls:
+                    try:
+                        avatar_urls = {
+                            str(k): str(v)
+                            for k, v in dict(avatar_urls).items()
+                            if v
+                        }
+                    except Exception:  # noqa: BLE001
+                        avatar_urls = None
+
                 return {
                     "accountId": getattr(user, "accountId", None),
                     "displayName": getattr(user, "displayName", None),
@@ -590,6 +679,9 @@ class JiraClient:
                     "active": getattr(user, "active", True),
                     "key": getattr(user, "key", None),
                     "name": getattr(user, "name", None),
+                    "timeZone": getattr(user, "timeZone", None) or getattr(user, "timezone", None),
+                    "locale": getattr(user, "locale", None),
+                    "avatarUrls": avatar_urls,
                 }
 
             return None  # noqa: TRY300
@@ -600,6 +692,226 @@ class JiraClient:
                 logger.debug("User not found: %s", user_key)
                 return None
             error_msg = f"Failed to get user info for {user_key}: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    def download_user_avatar(self, avatar_url: str) -> tuple[bytes, str] | None:
+        """Download a Jira user avatar and return (bytes, content_type)."""
+
+        if not avatar_url:
+            return None
+
+        session = getattr(self.jira, "_session", None)
+        if session is None:
+            msg = "Jira session not initialized"
+            raise JiraConnectionError(msg)
+
+        try:
+            response = session.get(avatar_url, stream=True, timeout=30)
+            response.raise_for_status()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to download avatar %s: %s", avatar_url, exc)
+            return None
+
+        content_type = response.headers.get("Content-Type", "image/png")
+        try:
+            data = response.content
+        finally:
+            response.close()
+
+        if not data:
+            return None
+
+        return data, content_type
+
+    def get_groups(self) -> list[dict[str, Any]]:
+        """Retrieve all Jira groups visible to the migration user."""
+
+        logger.info("Fetching Jira groups via groups picker endpoint")
+
+        try:
+            response = self._make_request(
+                "/rest/api/2/groups/picker",
+                params={
+                    "query": "",
+                    "maxResults": 1000,
+                    "includeInactive": "true",
+                },
+            )
+            if response.status_code != HTTP_OK:
+                msg = f"Failed to fetch Jira groups: HTTP {response.status_code}"
+                raise JiraApiError(msg)
+
+            payload = response.json() or {}
+            groups = payload.get("groups", [])
+            logger.info("Retrieved %s Jira groups", len(groups))
+            normalized: list[dict[str, Any]] = []
+            for group in groups:
+                normalized.append(
+                    {
+                        "name": group.get("name"),
+                        "groupId": group.get("groupId"),
+                        "html": group.get("html"),
+                        "labels": group.get("labels", []),
+                    },
+                )
+            return normalized
+        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+            raise
+        except Exception as e:
+            error_msg = f"Failed to get Jira groups: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    def get_group_members(self, group_name: str) -> list[dict[str, Any]]:
+        """Retrieve members for a Jira group, handling pagination."""
+
+        if not group_name:
+            return []
+
+        members: list[dict[str, Any]] = []
+        start_at = 0
+        max_results = 100
+
+        logger.debug("Fetching members for Jira group '%s'", group_name)
+
+        try:
+            while True:
+                response = self._make_request(
+                    "/rest/api/2/group/member",
+                    params={
+                        "groupname": group_name,
+                        "includeInactiveUsers": "true",
+                        "maxResults": max_results,
+                        "startAt": start_at,
+                    },
+                )
+                if response.status_code != HTTP_OK:
+                    msg = (
+                        "Failed to fetch group members"
+                        f" for {group_name}: HTTP {response.status_code}"
+                    )
+                    raise JiraApiError(msg)
+
+                payload = response.json() or {}
+                values = payload.get("values", [])
+                for entry in values:
+                    members.append(
+                        {
+                            "accountId": entry.get("accountId"),
+                            "key": entry.get("key"),
+                            "name": entry.get("name"),
+                            "displayName": entry.get("displayName"),
+                            "emailAddress": entry.get("emailAddress"),
+                            "active": entry.get("active", True),
+                        },
+                    )
+
+                start_at += len(values)
+                is_last = payload.get("isLast")
+                total = payload.get("total")
+                if is_last or not values:
+                    break
+                if total is not None and start_at >= int(total):
+                    break
+
+            logger.debug(
+                "Loaded %s members for Jira group '%s'",
+                len(members),
+                group_name,
+            )
+            return members
+        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+            raise
+        except Exception as e:
+            error_msg = f"Failed to get Jira group members for {group_name}: {e!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from e
+
+    def get_project_roles(self, project_key: str) -> list[dict[str, Any]]:
+        """Retrieve Jira project roles and their actors for a project."""
+
+        if not project_key:
+            return []
+
+        logger.debug("Fetching Jira project roles for '%s'", project_key)
+
+        try:
+            role_map_response = self._make_request(
+                f"/rest/api/2/project/{project_key}/role",
+            )
+            if role_map_response.status_code != HTTP_OK:
+                msg = (
+                    "Failed to fetch Jira project roles"
+                    f" for {project_key}: HTTP {role_map_response.status_code}"
+                )
+                raise JiraApiError(msg)
+
+            role_map = role_map_response.json() or {}
+            roles: list[dict[str, Any]] = []
+
+            for role_name, role_url in role_map.items():
+                if not isinstance(role_url, str):
+                    continue
+
+                detail_path = role_url
+                if role_url.startswith(self.base_url):
+                    detail_path = role_url[len(self.base_url) :]
+                if not detail_path.startswith("/"):
+                    detail_path = f"/{detail_path}"
+
+                detail_response = self._make_request(detail_path)
+                if detail_response.status_code != HTTP_OK:
+                    logger.warning(
+                        "Skipping Jira role '%s' for project '%s' due to HTTP %s",
+                        role_name,
+                        project_key,
+                        detail_response.status_code,
+                    )
+                    continue
+
+                detail = detail_response.json() or {}
+                actors = []
+                for actor in detail.get("actors", []):
+                    actors.append(
+                        {
+                            "type": actor.get("type"),
+                            "name": actor.get("name"),
+                            "displayName": actor.get("displayName"),
+                            "accountId": (
+                                (actor.get("actorUser") or {}).get("accountId")
+                                or actor.get("accountId")
+                            ),
+                            "userKey": (
+                                (actor.get("actorUser") or {}).get("key")
+                                or actor.get("userKey")
+                            ),
+                            "groupName": (
+                                (actor.get("actorGroup") or {}).get("name")
+                                or actor.get("groupName")
+                            ),
+                        },
+                    )
+
+                roles.append(
+                    {
+                        "id": detail.get("id"),
+                        "name": detail.get("name") or role_name,
+                        "description": detail.get("description"),
+                        "actors": actors,
+                    },
+                )
+
+            logger.debug(
+                "Discovered %s Jira project roles for '%s'",
+                len(roles),
+                project_key,
+            )
+            return roles
+        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+            raise
+        except Exception as e:
+            error_msg = f"Failed to fetch Jira project roles for {project_key}: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 

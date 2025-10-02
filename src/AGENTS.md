@@ -25,7 +25,7 @@
 - When composing Rails console Ruby from Python, split the script into a parameterized head (f-string interpolation) and a literal body block so escaping stays predictable.
 - User provenance flow now removes the obsolete "Jira user key" and "Tempo Account" custom fields so J2O_* attributes remain the canonical origin source.
 - On user updates, also map Jira locale → OpenProject `UserPreference.language` and backfill avatars through `Avatars::UpdateService` (skip silently when Jira exposes no avatar URLs).
-- Project migration assigns Jira project leads to the OpenProject project (Project admin role), persists the lead in a project custom attribute, and enables standard modules including time tracking and costs.
+- Project migration assigns Jira project leads to the OpenProject project (Project admin role), persists lead/category/type/URL/avatar provenance, and enables modules adaptively (Tempo-linked projects get time tracking/costs; projects with categories/types enable calendar/news).
 - Work package migration maps configured Jira start-date custom fields into OpenProject `start_date` while keeping the raw custom fields for auditing.
 - If those custom fields are absent, derive `start_date` from the first Jira status transition whose category equals *In Progress* to keep planning timelines meaningful.
 - Follow `BaseMigration` conventions for logging (`self.logger`), idempotent JSON caches (`_load_from_json`/`_save_to_json`), and mapping updates via `config.mappings` so downstream components stay consistent.

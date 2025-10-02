@@ -9,7 +9,14 @@ from unittest.mock import MagicMock, Mock, mock_open, patch
 import pytest
 
 from src import config
-from src.migrations.project_migration import ProjectMigration
+from src.migrations.project_migration import (
+    PROJECT_AVATAR_CF_NAME,
+    PROJECT_CATEGORY_CF_NAME,
+    PROJECT_LEAD_CF_NAME,
+    PROJECT_TYPE_CF_NAME,
+    PROJECT_URL_CF_NAME,
+    ProjectMigration,
+)
 
 
 class TestProjectMigration(unittest.TestCase):
@@ -751,3 +758,140 @@ def test_bulk_migrate_projects_empty_and_none_values(project_migration) -> None:
     assert (
         "description: ''" in executed_script
     ), "None description should become empty string"
+
+
+def test_determine_project_modules_tempo_accounts(project_migration) -> None:
+    jira_project = {"key": "TEST", "has_tempo_account": True}
+    modules = project_migration._determine_project_modules(jira_project)
+    assert "time_tracking" in modules
+    assert "costs" in modules
+
+
+def test_determine_project_modules_category_enables_news(project_migration) -> None:
+    jira_project = {"key": "TEST", "project_category_name": "NR: IT Services"}
+    modules = project_migration._determine_project_modules(jira_project)
+    assert "calendar" in modules
+    assert "news" in modules
+
+
+def test_persist_project_metadata_upserts_attributes(project_migration) -> None:
+    project_migration.op_client.upsert_project_attribute.reset_mock()
+
+    jira_project = {
+        "project_category_name": "NR: IT Services",
+        "project_type_key": "service_desk",
+        "browse_url": "https://jira.example.com/browse/TEST",
+        "avatar_url": "https://jira.example.com/secure/projectavatar?avatarId=123",
+    }
+
+    project_migration._persist_project_metadata(42, jira_project)
+
+    called_names = {
+        call.kwargs["name"] for call in project_migration.op_client.upsert_project_attribute.call_args_list
+    }
+
+    assert PROJECT_CATEGORY_CF_NAME in called_names
+    assert PROJECT_TYPE_CF_NAME in called_names
+    assert PROJECT_URL_CF_NAME in called_names
+    assert PROJECT_AVATAR_CF_NAME in called_names
+
+
+def test_persist_project_metadata_sanitizes_values(project_migration) -> None:
+    project_migration.op_client.upsert_project_attribute.reset_mock()
+
+    jira_project = {
+        "project_category_name": "R&D's Initiatives",
+        "project_type_key": "software",
+        "browse_url": "https://jira.example.com/browse/RND",
+        "avatar_url": "https://jira.example.com/avatar?id=1&size=64x64",
+    }
+
+    project_migration._persist_project_metadata(99, jira_project)
+
+    calls = project_migration.op_client.upsert_project_attribute.call_args_list
+    category_val = None
+    avatar_val = None
+    for call in calls:
+        if call.kwargs.get("name") == PROJECT_CATEGORY_CF_NAME:
+            category_val = call.kwargs.get("value")
+        if call.kwargs.get("name") == PROJECT_AVATAR_CF_NAME:
+            avatar_val = call.kwargs.get("value")
+
+    assert category_val is not None
+    assert "R\'D" in category_val
+    assert avatar_val is not None
+    assert "avatar" in avatar_val
+
+@patch("src.migrations.project_migration.logger")
+def test_assign_project_lead_happy_path(mock_logger: MagicMock) -> None:
+    """Assign project lead should grant role membership and persist provenance."""
+
+    migration = ProjectMigration.__new__(ProjectMigration)
+    migration.op_client = MagicMock()
+    migration._extract_jira_lead = Mock(return_value=("sebastian", "Sebastian Mendel"))
+    migration._lookup_op_user_id = Mock(return_value=42)
+    migration._get_role_id = Mock(side_effect=lambda name: 7 if name == "project admin" else None)
+
+    migration._assign_project_lead(303202, {"key": "SRVAC"})
+
+    migration.op_client.assign_user_roles.assert_called_once_with(
+        project_id=303202,
+        user_id=42,
+        role_ids=[7],
+    )
+    migration.op_client.upsert_project_attribute.assert_called_once_with(
+        project_id=303202,
+        name=PROJECT_LEAD_CF_NAME,
+        value="Sebastian Mendel (sebastian)",
+        field_format="string",
+    )
+    mock_logger.debug.assert_not_called()
+
+
+@patch("src.migrations.project_migration.logger")
+def test_assign_project_lead_missing_user_mapping(mock_logger: MagicMock) -> None:
+    """Skip assignment when the Jira lead cannot be mapped to OpenProject."""
+
+    migration = ProjectMigration.__new__(ProjectMigration)
+    migration.op_client = MagicMock()
+    migration._extract_jira_lead = Mock(return_value=("ghost.user", "Ghost"))
+    migration._lookup_op_user_id = Mock(return_value=None)
+    migration._get_role_id = Mock(return_value=7)
+
+    migration._assign_project_lead(1, {"key": "SRVAC"})
+
+    migration.op_client.assign_user_roles.assert_not_called()
+    migration.op_client.upsert_project_attribute.assert_not_called()
+    mock_logger.debug.assert_called_once()
+
+
+@patch("src.migrations.project_migration.logger")
+def test_assign_project_lead_role_fallback_and_error_logging(
+    mock_logger: MagicMock,
+) -> None:
+    """Fallback to member role and log errors while still persisting provenance."""
+
+    migration = ProjectMigration.__new__(ProjectMigration)
+    migration.op_client = MagicMock()
+    migration._extract_jira_lead = Mock(return_value=("tappert", None))
+    migration._lookup_op_user_id = Mock(return_value=24)
+    migration._get_role_id = Mock(side_effect=[None, 5])
+    migration.op_client.assign_user_roles.return_value = {
+        "success": False,
+        "error": "role missing",
+    }
+
+    migration._assign_project_lead(99, {"key": "SRVAC"})
+
+    migration.op_client.assign_user_roles.assert_called_once_with(
+        project_id=99,
+        user_id=24,
+        role_ids=[5],
+    )
+    migration.op_client.upsert_project_attribute.assert_called_once_with(
+        project_id=99,
+        name=PROJECT_LEAD_CF_NAME,
+        value="tappert",
+        field_format="string",
+    )
+    assert any("Failed to assign project lead" in str(call.args[0]) for call in mock_logger.debug.call_args_list)

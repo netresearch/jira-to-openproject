@@ -51,6 +51,7 @@ from src.migrations.sprint_epic_migration import SprintEpicMigration
 from src.migrations.remote_links_migration import RemoteLinksMigration
 from src.migrations.category_defaults_migration import CategoryDefaultsMigration
 from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.migrations.group_migration import GroupMigration
 from src.migrations.inline_refs_migration import InlineRefsMigration
 from src.migrations.native_tags_migration import NativeTagsMigration
 from src.migrations.watcher_migration import WatcherMigration
@@ -246,6 +247,7 @@ def _build_component_factories(
     """
     return {
         "users": lambda: UserMigration(jira_client=jira_client, op_client=op_client),
+        "groups": lambda: GroupMigration(jira_client=jira_client, op_client=op_client),
         "custom_fields": lambda: CustomFieldMigration(jira_client=jira_client, op_client=op_client),
         "companies": lambda: CompanyMigration(jira_client=jira_client, op_client=op_client),
         "projects": lambda: ProjectMigration(jira_client=jira_client, op_client=op_client),
@@ -1061,20 +1063,39 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         if not components:
             default_components: list[ComponentName] = [
                 "users",
+                "groups",
                 "custom_fields",
                 "companies",
                 "projects",
+                "priorities",
                 "link_types",
                 "issue_types",
                 "status_types",
                 "work_packages",
+                "versions",
+                "components",
+                "labels",
+                "resolutions",
+                "story_points",
+                "estimates",
+                "security_levels",
+                "votes_reactions",
+                "remote_links",
+                "relations",
+                "watchers",
+                "attachments",
+                "attachment_provenance",
+                "native_tags",
+                "inline_refs",
+                "category_defaults",
+                "affects_versions",
+                "sprint_epic",
+                "customfields_generic",
                 "time_entries",
             ]
 
-            # Add accounts only if it's available
             if "accounts" in available_component_factories:
-                # Add accounts after companies and before projects
-                default_components.insert(3, "accounts")
+                default_components.insert(4, "accounts")
 
             components = default_components
 

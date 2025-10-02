@@ -7,7 +7,7 @@ A robust, modular migration toolset for transferring project management data fro
 **Migration Components:**
 - **Customer Migration:** Tempo Customers → Top-level OpenProject projects
 - **Account Migration:** Tempo Accounts → Custom field values on projects
-- **Project Migration:** Jira projects → Sub-projects under customer hierarchy with lead membership, module enablement, and Jira provenance custom fields
+- **Project Migration:** Jira projects → Sub-projects under customer hierarchy with lead membership, adaptive module enablement, and Jira provenance (key/ID/category/type/URL/avatar)
 - **Work Package Migration:** Issues → Work packages with full metadata
 - **User Migration:** Jira users → OpenProject users with role mapping, full J2O provenance (origin system/ID/key/URL), locale→language syncing, and avatar backfills. Legacy "Jira user key" / "Tempo Account" custom fields are retired automatically.
 - **Custom Field Migration:** Field definitions and values
@@ -93,7 +93,7 @@ uv run python -m src.main migrate --dry-run --components users --no-confirm
 
 - Run `uv run --active --no-cache python scripts/data_qa.py --projects <KEY>` after rehearsals. Investigate any `⚠️` warnings about missing project modules or zero start-date coverage—rerun `migrate --components projects`/`work_packages` to refresh caches when needed.
 - Jira start-date precedence is `customfield_18690` → `customfield_12590` → `customfield_11490` → `customfield_15082`; when they are empty we fall back to the first Jira status transition whose category is *In Progress*. Confirm Jira histories include that transition or relax expectations when the project never moved into that category.
-- Confirm project modules (`work_package_tracking`, `wiki`, `time_tracking`, `costs`) stay enabled post-migration; the project component now toggles them automatically and persists provenance in the `Jira Project Lead` custom field.
+- Confirm project modules (`work_package_tracking`, `wiki`, `time_tracking`, `costs`, `calendar`, `news`) stay enabled post-migration; the project component now enables time tracking/costs for Tempo-linked projects and calendar/news when categories or project types are present, then persists provenance (`Jira Project Lead`, `Jira Project Category`, `Jira Project Type`, `Jira Project URL`, `Jira Project Avatar URL`).
 
 ### Optional Tooling
 
