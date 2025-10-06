@@ -25,7 +25,24 @@ class PriorityMigration(BaseMigration):
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        self.mappings = mappings.Mappings()
+        try:
+            self.mappings = config.mappings
+        except Exception:  # noqa: BLE001
+            self.mappings = mappings.Mappings(data_dir=config.get_path("data"))
+
+    def run(self) -> ComponentResult:
+        """Execute the extract → map → load pipeline for priorities."""
+
+        extracted = self._extract()
+        if not extracted.success:
+            return extracted
+
+        mapped = self._map(extracted)
+        if not mapped.success:
+            return mapped
+
+        loaded = self._load(mapped)
+        return loaded
 
     def _extract(self) -> ComponentResult:  # noqa: D401
         """Extract Jira priorities (names and order)."""
@@ -134,4 +151,3 @@ class PriorityMigration(BaseMigration):
             failed += len(updates)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
-
