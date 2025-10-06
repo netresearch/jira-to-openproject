@@ -98,6 +98,14 @@ class ProjectMigration(BaseMigration):
 
         self._jira_project_detail_cache: dict[str, Any] = {}
         self._role_lookup = self._build_role_lookup()
+        filters = config.migration_config.get("jira_project_filter")
+        if isinstance(filters, str):
+            filters = [filters]
+        self.project_filters = {
+            str(f).upper()
+            for f in (filters or [])
+            if isinstance(f, (str, bytes)) and str(f).strip()
+        }
 
     def extract_jira_projects(self) -> list[dict[str, Any]]:
         """Extract projects from Jira.
@@ -384,6 +392,18 @@ class ProjectMigration(BaseMigration):
         op_user_id = self._lookup_op_user_id(lead_login)
         if not op_user_id:
             logger.debug("No OpenProject mapping for Jira project lead %s", lead_login)
+            display_value = lead_display or lead_login
+            if display_value:
+                try:
+                    safe_value = self._sanitize_cf_value(display_value if not lead_display else f"{lead_display} ({lead_login})")
+                    self.op_client.upsert_project_attribute(
+                        project_id=op_project_id,
+                        name=PROJECT_LEAD_CF_NAME,
+                        value=safe_value,
+                        field_format="string",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Failed to upsert textual project lead attribute: %s", exc)
             return
 
         role_id = self._get_role_id("project admin") or self._get_role_id("member")
@@ -401,18 +421,15 @@ class ProjectMigration(BaseMigration):
                 )
 
         # Persist lead information as project attribute for provenance
-        display_value = lead_display or lead_login
-        if display_value:
-            try:
-                value = f"{display_value} ({lead_login})" if lead_display else lead_login
-                self.op_client.upsert_project_attribute(
-                    project_id=op_project_id,
-                    name=PROJECT_LEAD_CF_NAME,
-                    value=value,
-                    field_format="string",
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Failed to upsert project lead attribute: %s", exc)
+        try:
+            self.op_client.upsert_project_attribute(
+                project_id=op_project_id,
+                name=PROJECT_LEAD_CF_NAME,
+                value=str(op_user_id),
+                field_format="user",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to upsert project lead attribute: %s", exc)
 
     @staticmethod
     def _sanitize_cf_value(value: str) -> str:
@@ -735,6 +752,8 @@ class ProjectMigration(BaseMigration):
             # Note: no refresh here; we haven't written anything yet. Reuse cached list during analysis.
 
             jira_key = jira_project.get("key", "")
+            if self.project_filters and str(jira_key).upper() not in self.project_filters:
+                continue
             jira_name = jira_project.get("name", "")
 
             self._populate_additional_metadata(jira_project)
@@ -1308,6 +1327,8 @@ class ProjectMigration(BaseMigration):
         for project in created_projects:
             jira_key = project.get("jira_key")
             if jira_key:
+                if self.project_filters and str(jira_key).upper() not in self.project_filters:
+                    continue
                 jira_project = next(
                     (p for p in self.jira_projects if p.get("key") == jira_key),
                     {},
@@ -1338,6 +1359,8 @@ class ProjectMigration(BaseMigration):
         for error in errors:
             jira_key = error.get("jira_key")
             if jira_key:
+                if self.project_filters and str(jira_key).upper() not in self.project_filters:
+                    continue
                 jira_project = next(
                     (p for p in self.jira_projects if p.get("key") == jira_key),
                     {},

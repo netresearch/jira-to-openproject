@@ -842,8 +842,8 @@ def test_assign_project_lead_happy_path(mock_logger: MagicMock) -> None:
     migration.op_client.upsert_project_attribute.assert_called_once_with(
         project_id=303202,
         name=PROJECT_LEAD_CF_NAME,
-        value="Sebastian Mendel (sebastian)",
-        field_format="string",
+        value="42",
+        field_format="user",
     )
     mock_logger.debug.assert_not_called()
 
@@ -861,7 +861,10 @@ def test_assign_project_lead_missing_user_mapping(mock_logger: MagicMock) -> Non
     migration._assign_project_lead(1, {"key": "SRVAC"})
 
     migration.op_client.assign_user_roles.assert_not_called()
-    migration.op_client.upsert_project_attribute.assert_not_called()
+    migration.op_client.upsert_project_attribute.assert_called_once()
+    call = migration.op_client.upsert_project_attribute.call_args
+    assert call.kwargs["field_format"] == "string"
+    assert "ghost.user" in call.kwargs["value"]
     mock_logger.debug.assert_called_once()
 
 
@@ -891,7 +894,7 @@ def test_assign_project_lead_role_fallback_and_error_logging(
     migration.op_client.upsert_project_attribute.assert_called_once_with(
         project_id=99,
         name=PROJECT_LEAD_CF_NAME,
-        value="tappert",
-        field_format="string",
+        value="24",
+        field_format="user",
     )
     assert any("Failed to assign project lead" in str(call.args[0]) for call in mock_logger.debug.call_args_list)
