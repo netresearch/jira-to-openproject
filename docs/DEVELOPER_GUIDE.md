@@ -11,6 +11,15 @@ python scripts/test_helper.py smoke
 
 # Full test suite with coverage (~5-10min)
 python scripts/test_helper.py full
+
+# Run the unit suite inside the container (ensures libffi/cffi and other system deps exist)
+make container-test
+
+# Override the subset executed in Docker (example: integration-only)
+make container-test-integration
+
+# Run a containerised rehearsal (starts mocks, runs users→groups→projects→work_packages, collects artefacts)
+python scripts/run_rehearsal.py --collect --stop
 ```
 
 ## Test Organization
@@ -123,6 +132,7 @@ pytest tests/unit/test_security_validation.py -k {component}
 3. **Optimistic Execution**: Operations attempted first, validation in handlers
 4. **Test Coverage**: Unit and functional tests for all public methods
 5. **Security**: Input validation for user-provided data
+6. **Checkpoint Hygiene**: Use `--reset-wp-checkpoints` after restoring rehearsal snapshots or when the SQLite store is rotated; the migration auto-rebuilds it on demand.
 
 ### Common Issues to Fix
 

@@ -467,13 +467,11 @@ class TestEnhancedAuditTrailMigrator:
 
         work_package_mapping = {"TEST-123": 1001}
 
-        with patch.object(migrator, "execute_rails_audit_operations") as mock_execute:
-            mock_execute.return_value = True
-            result = migrator.process_stored_changelog_data(work_package_mapping)
+        result = migrator.process_stored_changelog_data(work_package_mapping)
 
         assert result is True
         assert len(migrator.rails_operations) == 2  # Two audit events
-        mock_execute.assert_called_once()
+        assert migrator.migration_results["comments_processed"] == 0
 
     def test_process_stored_changelog_data_no_mapping(
         self,
@@ -483,7 +481,6 @@ class TestEnhancedAuditTrailMigrator:
         """Test processing changelog data with missing work package mapping."""
         migrator = migrator_with_mocks
 
-        # Pre-populate cache
         migrator.changelog_data = {
             "TEST-123": sample_changelog_data,
             "TEST-456": sample_changelog_data,
@@ -491,12 +488,46 @@ class TestEnhancedAuditTrailMigrator:
 
         work_package_mapping = {"TEST-123": 1001}  # Missing TEST-456
 
-        with patch.object(migrator, "execute_rails_audit_operations") as mock_execute:
-            mock_execute.return_value = True
-            result = migrator.process_stored_changelog_data(work_package_mapping)
+        result = migrator.process_stored_changelog_data(work_package_mapping)
 
         assert result is True
         assert len(migrator.rails_operations) == 2  # Only TEST-123 processed
+        assert migrator.migration_results["orphaned_events"] == 1
+
+    def test_process_stored_changelog_data_with_comments(
+        self,
+        migrator_with_mocks,
+        sample_changelog_data,
+        sample_user_mapping,
+    ) -> None:
+        """Ensure comments are queued alongside changelog events."""
+        migrator = migrator_with_mocks
+        migrator.user_mapping = sample_user_mapping
+
+        comment_payload = [{
+            "id": "c1",
+            "created": "2023-01-17T12:00:00.000+0000",
+            "author": {"name": "john.doe"},
+            "body": "Reviewed change",
+        }]
+
+        migrator.changelog_data = {
+            "TEST-123": {
+                "jira_issue_key": "TEST-123",
+                "changelog_entries": sample_changelog_data,
+                "comments": comment_payload,
+            },
+        }
+
+        work_package_mapping = {"TEST-123": {"openproject_id": 1001}}
+
+        result = migrator.process_stored_changelog_data(work_package_mapping)
+
+        assert result is True
+        operations = migrator.rails_operations
+        assert any(op.get("operation") == "create_comment_event" for op in operations)
+        assert migrator.migration_results["comments_processed"] == 1
+
 
     @patch("subprocess.run")
     def test_execute_rails_audit_operations_success(
@@ -522,7 +553,11 @@ class TestEnhancedAuditTrailMigrator:
 
         result = migrator.execute_rails_audit_operations()
 
-        assert result is True
+        assert result["status"] == "success"
+        assert result["processed"] == 1
+        assert result["total"] == 1
+        assert migrator.rails_operations == []
+        assert migrator.migration_results["rails_execution_success"] is True
         mock_subprocess.assert_called_once()
 
     @patch("subprocess.run")
@@ -551,7 +586,12 @@ class TestEnhancedAuditTrailMigrator:
 
         result = migrator.execute_rails_audit_operations()
 
-        assert result is False
+        assert result["status"] == "error"
+        assert result["processed"] == 0
+        assert result["total"] == 1
+        assert result["errors"] == ["Error occurred"]
+        assert migrator.rails_operations  # operations remain for retry
+        assert migrator.migration_results["rails_execution_success"] is False
         mock_subprocess.assert_called_once()
 
     @patch("subprocess.run")
@@ -566,7 +606,7 @@ class TestEnhancedAuditTrailMigrator:
 
         result = migrator.execute_rails_audit_operations()
 
-        assert result is True
+        assert result == {"status": "skipped", "processed": 0, "total": 0, "errors": []}
         mock_subprocess.assert_not_called()
 
     def test_generate_audit_creation_script(self, migrator_with_mocks) -> None:

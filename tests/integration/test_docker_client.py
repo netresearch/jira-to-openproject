@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 #!/usr/bin/env python3
 """Test module for DockerClient.
 
@@ -10,7 +15,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-import pytest
 
 from src.clients.docker_client import DockerClient
 

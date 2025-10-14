@@ -84,6 +84,8 @@ class EnhancedAuditTrailMigrator:
             "user_attribution_failures": 0,
             "errors": [],
             "warnings": [],
+            "comments_processed": 0,
+            "rails_execution_success": False,
         }
 
         # Rails operations queue
@@ -484,8 +486,10 @@ class EnhancedAuditTrailMigrator:
         """Process all stored changelog data and create audit events.
 
         Args:
-            work_package_mapping: Mapping of Jira IDs to OpenProject work packages
+            work_package_mapping: Mapping of Jira IDs to OpenProject work packages.
 
+        Returns:
+            True when changelog data is queued successfully.
         """
         if not self.changelog_data:
             self.logger.info("No stored changelog data to process")
@@ -519,13 +523,14 @@ class EnhancedAuditTrailMigrator:
                     continue
 
                 # Transform changelog entries to audit events
-                # changelog_info may be a list of entries or a dict with keys
                 if isinstance(changelog_info, list):
                     entries = changelog_info
                     issue_key = jira_id
+                    comments: list[dict[str, Any]] = []
                 else:
                     entries = changelog_info.get("changelog_entries", [])
                     issue_key = changelog_info.get("jira_issue_key", jira_id)
+                    comments = changelog_info.get("comments", []) or []
 
                 audit_events = self.transform_changelog_to_audit_events(
                     entries,
@@ -540,19 +545,29 @@ class EnhancedAuditTrailMigrator:
                     if cid not in grouped:
                         grouped[cid] = ev.copy()
                     else:
-                        # Merge changes dictionaries
                         merged = grouped[cid].get("changes", {}) or {}
                         for k, v in (ev.get("changes", {}) or {}).items():
                             merged[k] = v
                         grouped[cid]["changes"] = merged
 
-                # Queue one operation per changelog entry
-                for _cid, event in grouped.items():
+                for event in grouped.values():
                     self.rails_operations.append(
                         {"operation": "create_audit_event", "data": event},
                     )
 
                 self.migration_results["processed_entries"] += len(entries)
+
+                if comments:
+                    comment_events = self.transform_comments_to_audit_events(
+                        comments,
+                        issue_key,
+                        openproject_work_package_id,
+                    )
+                    for comment_event in comment_events:
+                        self.rails_operations.append(
+                            {"operation": "create_comment_event", "data": comment_event},
+                        )
+                    self.migration_results["comments_processed"] += len(comment_events)
 
             except Exception as e:
                 error_msg = (
@@ -562,45 +577,50 @@ class EnhancedAuditTrailMigrator:
                 self.migration_results["errors"].append(error_msg)
                 self.migration_results["failed_migrations"] += 1
 
-        # Execute queued operations when done
-        exec_result = self.execute_rails_audit_operations()
-        return bool(exec_result is True)
+        return True
+
 
     def execute_rails_audit_operations(
         self,
         work_package_mapping: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> dict[str, Any]:
         """Execute queued Rails operations for audit event creation.
 
         Args:
             work_package_mapping: Mapping of Jira IDs to OpenProject work packages
 
         Returns:
-            Execution results
-
+            Summary dict with execution status
         """
-        # First, process any stored changelog data
         if work_package_mapping is not None:
-            self.process_stored_changelog_data(work_package_mapping)
+            queued_success = self.process_stored_changelog_data(work_package_mapping)
+            if not queued_success and not self.rails_operations:
+                return {
+                    "status": "error",
+                    "processed": 0,
+                    "total": 0,
+                    "errors": ["Failed to queue audit trail operations from changelog data"],
+                }
 
         if not self.rails_operations:
             self.logger.info("No audit trail Rails operations to execute")
-            # Tests expect boolean True when nothing to execute
-            return True
+            return {
+                "status": "skipped",
+                "processed": 0,
+                "total": 0,
+                "errors": [],
+            }
 
         self.logger.info(
             f"Executing {len(self.rails_operations)} audit trail Rails operations",
         )
 
-        # Optional feature flag to use the OpenProject client for reliable, non-interactive script execution
-        # Default remains subprocess path to preserve existing test expectations
         try:
             from src import config as _cfg  # noqa: PLC0415
             use_client_exec = bool(_cfg.migration_config.get("audit_use_client", False))
         except Exception:  # noqa: BLE001
             use_client_exec = False
 
-        # Normalize operations into a plain list of event dicts
         events: list[dict[str, Any]] = []
         for op in self.rails_operations:
             if isinstance(op, dict) and "operation" in op:
@@ -608,53 +628,87 @@ class EnhancedAuditTrailMigrator:
             else:
                 data = op
             if isinstance(data, dict):
-                # Ensure expected keys exist for downstream script
                 if "work_package_id" not in data and "openproject_work_package_id" in data:
                     data["work_package_id"] = data["openproject_work_package_id"]
                 events.append(data)
 
+        total_ops = len(events)
+        processed = 0
+        errors: list[str] = []
+        status = "error"
+
         if use_client_exec:
             try:
-                # Generate a Ruby runner that expects `input_data` (provided by the client) as events list
                 ruby_runner = self._generate_audit_creation_runner_from_input()
-
                 result = self.op_client.execute_script_with_data(ruby_runner, events)
-                if isinstance(result, dict) and result.get("status") == "success":
-                    self.logger.success("Successfully executed audit event operations via client")
-                    # Clear queue on success
-                    self.rails_operations.clear()
-                    return True
 
-                self.logger.error("Audit event execution via client failed: %s", result)
-                return False
+                if isinstance(result, dict):
+                    status = str(result.get("status", "error"))
+                    processed = int(result.get("processed", 0) or 0)
+                    if result.get("errors"):
+                        errors = list(result.get("errors"))
+                elif isinstance(result, bool):
+                    status = "success" if result else "error"
+                    processed = total_ops if result else 0
+                else:
+                    status = "success"
+                    processed = total_ops
+
+                if status == "success":
+                    self.logger.success("Successfully executed audit event operations via client")
+                    self.rails_operations.clear()
+                else:
+                    if not errors:
+                        errors = [f"Unexpected audit execution response: {result}"]
+                    self.logger.error("Audit event execution via client failed: %s", result)
             except Exception as e:  # noqa: BLE001
                 error_msg = f"Failed to execute audit Rails operations via client: {e}"
                 self.logger.exception(error_msg)
                 self.migration_results["errors"].append(error_msg)
-                return False
+                errors = [error_msg]
+        else:
+            try:
+                ruby_script = self._generate_audit_creation_script(self.rails_operations)
 
-        # Fallback: maintain legacy subprocess execution path for compatibility with existing tests
-        try:
-            # Create Ruby script with inline data for legacy path
-            ruby_script = self._generate_audit_creation_script(self.rails_operations)
+                import subprocess
+                completed = subprocess.run([
+                    "bash",
+                    "-lc",
+                    ruby_script,
+                ], check=False, capture_output=True, text=True)
+                if completed.returncode == 0:
+                    self.logger.success("Successfully executed audit event operations")
+                    status = "success"
+                    processed = total_ops
+                    self.rails_operations.clear()
+                else:
+                    stderr = completed.stderr.strip()
+                    error_msg = stderr or "Unknown Rails execution error"
+                    self.logger.error(f"Rails audit operations failed: {error_msg}")
+                    errors = [error_msg]
+            except Exception as e:  # noqa: BLE001
+                error_msg = f"Failed to execute audit Rails operations: {e}"
+                self.logger.exception(error_msg)
+                self.migration_results["errors"].append(error_msg)
+                errors = [error_msg]
 
-            import subprocess
-            completed = subprocess.run([
-                "bash",
-                "-lc",
-                ruby_script,
-            ], check=False, capture_output=True, text=True)
-            if completed.returncode == 0:
-                self.logger.success("Successfully executed audit event operations")
-                return True
-            self.logger.error(f"Rails audit operations failed: {completed.stderr}")
-            return False
+        if status == "success":
+            processed = min(processed, total_ops)
+            self.migration_results["successful_migrations"] += processed
+            self.migration_results["rails_execution_success"] = True
+        else:
+            self.migration_results["failed_migrations"] += total_ops
+            self.migration_results["rails_execution_success"] = False
+            if errors:
+                self.migration_results["errors"].extend(errors)
 
-        except Exception as e:  # noqa: BLE001
-            error_msg = f"Failed to execute audit Rails operations: {e}"
-            self.logger.exception(error_msg)
-            self.migration_results["errors"].append(error_msg)
-            return False
+        return {
+            "status": status,
+            "processed": processed,
+            "total": total_ops,
+            "errors": errors,
+        }
+
 
     def _generate_audit_creation_script(self, operations: list[dict[str, Any]]) -> str:
         """Generate Ruby script for creating audit events.

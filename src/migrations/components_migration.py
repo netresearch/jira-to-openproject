@@ -22,9 +22,7 @@ except Exception:  # noqa: BLE001
 class ComponentsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
-
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
     @staticmethod
     def _issue_project_key(issue_key: str) -> str:
@@ -233,5 +231,23 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
             failed += len(updates)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+    def run(self) -> ComponentResult:
+        """Execute component migration pipeline."""
+        self.logger.info("Starting components migration")
 
+        extracted = self._extract()
+        if not extracted.success:
+            self.logger.error("Components extraction failed: %s", extracted.message or extracted.error)
+            return extracted
 
+        mapped = self._map(extracted)
+        if not mapped.success:
+            self.logger.error("Components mapping failed: %s", mapped.message or mapped.error)
+            return mapped
+
+        loaded = self._load(mapped)
+        if loaded.success:
+            self.logger.info("Components migration completed (updated=%s, failed=%s)", loaded.updated, loaded.failed)
+        else:
+            self.logger.error("Components migration encountered failures (failed=%s)", loaded.failed)
+        return loaded

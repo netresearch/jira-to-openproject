@@ -38,6 +38,7 @@ DEFAULT_PROJECT_MODULES = [
 ]
 
 PROJECT_LEAD_CF_NAME = "Jira Project Lead"
+PROJECT_LEAD_DISPLAY_CF_NAME = "Jira Project Lead Display"
 PROJECT_CATEGORY_CF_NAME = "Jira Project Category"
 PROJECT_TYPE_CF_NAME = "Jira Project Type"
 PROJECT_URL_CF_NAME = "Jira Project URL"
@@ -395,13 +396,21 @@ class ProjectMigration(BaseMigration):
             display_value = lead_display or lead_login
             if display_value:
                 try:
-                    safe_value = self._sanitize_cf_value(display_value if not lead_display else f"{lead_display} ({lead_login})")
+                    safe_value = self._sanitize_cf_value(lead_login)
                     self.op_client.upsert_project_attribute(
                         project_id=op_project_id,
                         name=PROJECT_LEAD_CF_NAME,
                         value=safe_value,
                         field_format="string",
                     )
+                    if lead_display:
+                        safe_display = self._sanitize_cf_value(lead_display)
+                        self.op_client.upsert_project_attribute(
+                            project_id=op_project_id,
+                            name=PROJECT_LEAD_DISPLAY_CF_NAME,
+                            value=safe_display,
+                            field_format="string",
+                        )
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("Failed to upsert textual project lead attribute: %s", exc)
             return
@@ -430,6 +439,18 @@ class ProjectMigration(BaseMigration):
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("Failed to upsert project lead attribute: %s", exc)
+
+        if lead_display:
+            try:
+                safe_display = self._sanitize_cf_value(lead_display)
+                self.op_client.upsert_project_attribute(
+                    project_id=op_project_id,
+                    name=PROJECT_LEAD_DISPLAY_CF_NAME,
+                    value=safe_display,
+                    field_format="string",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Failed to upsert project lead display attribute: %s", exc)
 
     @staticmethod
     def _sanitize_cf_value(value: str) -> str:
@@ -1130,30 +1151,30 @@ class ProjectMigration(BaseMigration):
                     f"{ensure_cfs}"
                     f"p = Project.find_by(identifier: '{identifier_escaped}');\n"
                     "created = false;\n"
-                    "if !p\n"
-                    f"  p = Project.new(name: '{name_escaped}', identifier: '{identifier_escaped}', description: '{desc_escaped}', public: false);\n"
-                    "  if defined?(ProjectType)\n"
-                    "    begin\n"
-                    "      default_project_type = ProjectType.respond_to?(:active) ? ProjectType.active.first : nil\n"
-                    "      default_project_type ||= ProjectType.first\n"
-                    "      if !default_project_type\n"
-                    "        next_position = (ProjectType.maximum(:position) || 0) + 1\n"
-                    "        default_project_type = ProjectType.create!(name: 'Standard', position: next_position)\n"
-                    "      end\n"
-                    "      p.project_type = default_project_type if default_project_type && p.respond_to?(:project_type=)\n"
-                    "    rescue => type_error\n"
-                    "      Rails.logger.warn(\"Failed to assign project type: #{type_error.message}\")\n"
-                    "    end\n"
-                    "  end\n"
-                    "  if defined?(Type) && p.respond_to?(:types=)\n"
-                    "    begin\n"
-                    "      default_types = Type.where.not(id: nil)\n"
-                    "      p.types = default_types if default_types.any?\n"
-                    "    rescue => type_error\n"
-                    "      Rails.logger.warn(\"Failed to assign work package types: #{type_error.message}\")\n"
-                    "    end\n"
-                    "  end\n"
-                    "  p.save!;\n"
+            "if !p\n"
+            f"  p = Project.new(name: '{name_escaped}', identifier: '{identifier_escaped}', description: '{desc_escaped}', public: false);\n"
+            "  if p.respond_to?(:workspace_type=)\n"
+            "    begin\n"
+            "      p.workspace_type = 'project'\n"
+            "    rescue => e\n"
+            "      Rails.logger.warn(\"Failed to assign workspace_type: #{e.message}\")\n"
+            "    end\n"
+            "  end\n"
+            "  if defined?(Type) && p.respond_to?(:types=)\n"
+            "    begin\n"
+            "      default_types = Type.where.not(id: nil)\n"
+            "      if default_types.empty?\n"
+            "        color = defined?(Color) ? (Color.respond_to?(:active) ? Color.active.first : Color.first) : nil\n"
+            "        color ||= Color.create!(name: 'J2O Blue', hexcode: '#0A84FF') if defined?(Color)\n"
+            "        position = (Type.maximum(:position) || 0) + 1\n"
+            "        default_types = [Type.create!(name: 'Standard', position: position, color_id: color&.id)]\n"
+            "      end\n"
+            "      p.types = default_types if default_types.any?\n"
+            "    rescue => type_error\n"
+            "      Rails.logger.warn(\"Failed to assign work package types: #{type_error.message}\")\n"
+            "    end\n"
+            "  end\n"
+            "  p.save!;\n"
                     "  p.enabled_module_names = ['work_package_tracking', 'wiki'];\n"
                     "  p.save!;\n"
                     "  created = true;\n"

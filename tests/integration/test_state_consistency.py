@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 """State consistency tests for the migration tool.
 Tests data integrity under concurrent access, partial failures, and state corruption scenarios.
 
@@ -14,7 +19,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.migrations.base_migration import BaseMigration, MigrationError
 from src.utils.state_manager import StateCorruptionError, StateManager

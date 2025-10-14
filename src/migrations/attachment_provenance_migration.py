@@ -27,9 +27,7 @@ except Exception:  # noqa: BLE001
 class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
-
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
     @staticmethod
     def _get(val: Any, key: str, default: Any = None) -> Any:
@@ -126,5 +124,23 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
         failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+    def run(self) -> ComponentResult:
+        """Execute attachment provenance migration pipeline."""
+        self.logger.info("Starting attachment provenance migration")
 
+        extracted = self._extract()
+        if not extracted.success:
+            self.logger.error("Attachment provenance extraction failed: %s", extracted.message or extracted.error)
+            return extracted
 
+        mapped = self._map(extracted)
+        if not mapped.success:
+            self.logger.error("Attachment provenance mapping failed: %s", mapped.message or mapped.error)
+            return mapped
+
+        loaded = self._load(mapped)
+        if loaded.success:
+            self.logger.info("Attachment provenance migration completed (updated=%s, failed=%s)", loaded.updated, loaded.failed)
+        else:
+            self.logger.error("Attachment provenance migration encountered failures (failed=%s)", loaded.failed)
+        return loaded

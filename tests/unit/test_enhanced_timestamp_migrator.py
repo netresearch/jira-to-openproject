@@ -2,6 +2,7 @@
 """Unit tests for EnhancedTimestampMigrator."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -325,7 +326,136 @@ class TestEnhancedTimestampMigrator:
         result = migrator_with_mocks._extract_all_timestamps(mock_issue)
 
         assert "created_at" in result
-        assert len(result) >= 1  # At least created timestamp
+
+    def test_extract_start_date_precedence(self, migrator_with_mocks) -> None:
+        """Start date should honor configured precedence across custom fields."""
+
+        first_value = "2024-07-01T08:00:00+02:00"
+        second_value = "2024-07-02T09:00:00+02:00"
+
+        fields = SimpleNamespace(
+            customfield_18690=first_value,
+            customfield_12590=second_value,
+            customfield_11490=None,
+            customfield_15082=None,
+        )
+        issue = SimpleNamespace(
+            fields=fields,
+            raw={
+                "fields": {
+                    "customfield_18690": first_value,
+                    "customfield_12590": second_value,
+                },
+            },
+        )
+
+        timestamps = migrator_with_mocks._extract_all_timestamps(issue)
+
+        assert "start_date" in timestamps
+        assert timestamps["start_date"]["jira_field"] == "customfield_18690"
+
+        work_package: dict[str, str] = {}
+        migrator_with_mocks._migrate_start_date(timestamps, work_package)
+        assert work_package["start_date"] == "2024-07-01"
+
+    def test_extract_start_date_fallback_field(self, migrator_with_mocks) -> None:
+        """Fallback to the next configured custom field when earlier ones are empty."""
+
+        fallback_value = "2024-08-15T10:30:00+02:00"
+
+        fields = SimpleNamespace(
+            customfield_18690=None,
+            customfield_12590=fallback_value,
+            customfield_11490=None,
+            customfield_15082=None,
+        )
+        issue = SimpleNamespace(
+            fields=fields,
+            raw={
+                "fields": {
+                    "customfield_12590": fallback_value,
+                },
+            },
+        )
+
+        timestamps = migrator_with_mocks._extract_all_timestamps(issue)
+
+        assert "start_date" in timestamps
+        assert timestamps["start_date"]["jira_field"] == "customfield_12590"
+
+        work_package: dict[str, str] = {}
+        migrator_with_mocks._migrate_start_date(timestamps, work_package)
+        assert work_package["start_date"] == "2024-08-15"
+
+    def test_extract_start_date_missing_fields(self, migrator_with_mocks) -> None:
+        """Return no start date when none of the configured fields have values."""
+
+        fields = SimpleNamespace(
+            customfield_18690=None,
+            customfield_12590=None,
+            customfield_11490=None,
+            customfield_15082=None,
+        )
+        issue = SimpleNamespace(
+            fields=fields,
+            raw={"fields": {}},
+        )
+
+        timestamps = migrator_with_mocks._extract_all_timestamps(issue)
+
+        assert "start_date" not in timestamps
+
+    def test_generate_timestamp_preservation_script(self, migrator_with_mocks) -> None:
+        """Rails script generation should validate keys and escape payload safely."""
+        migrator_with_mocks._rails_operations_cache = [
+            {
+                "jira_key": "PROJ-1",
+                "type": "set_created_at",
+                "timestamp": "2024-01-01T00:00:00Z",
+            },
+        ]
+        mapping = {
+            "1": {"jira_key": "PROJ-1", "openproject_id": 77},
+        }
+
+        script = migrator_with_mocks._generate_timestamp_preservation_script(mapping)
+
+        assert "WorkPackage.find(77)" in script
+        assert 'jira_key: "PROJ-1"' in script
+        assert "set_created_at" in script
+
+    def test_generate_timestamp_preservation_script_rejects_bad_key(self, migrator_with_mocks) -> None:
+        """Invalid Jira keys should raise an exception to prevent injection."""
+        migrator_with_mocks._rails_operations_cache = [
+            {
+                "jira_key": "bad-key",
+                "type": "set_updated_at",
+                "timestamp": "2024-01-01T00:00:00Z",
+            },
+        ]
+        mapping = {"1": {"jira_key": "bad-key", "openproject_id": 77}}
+
+        with pytest.raises(ValueError):
+            migrator_with_mocks._generate_timestamp_preservation_script(mapping)
+
+    def test_execute_rails_timestamp_operations_flushes_cache(self, migrator_with_mocks) -> None:
+        """Queued operations should be executed and cache cleared."""
+        migrator_with_mocks._rails_operations_cache = [
+            {"jira_key": "PROJ-1", "type": "set_created_at", "timestamp": "2024-01-01T00:00:00Z"},
+            {"jira_key": "PROJ-2", "type": "set_updated_at", "timestamp": "2024-01-02T00:00:00Z"},
+        ]
+        migrator_with_mocks.op_client.rails_client.execute.return_value = {"status": "ok"}
+
+        mapping = {
+            "1": {"jira_key": "PROJ-1", "openproject_id": 201},
+            "2": {"jira_key": "PROJ-2", "openproject_id": 202},
+        }
+
+        result = migrator_with_mocks.execute_rails_timestamp_operations(mapping)
+
+        assert result["processed"] == 2
+        assert migrator_with_mocks._rails_operations_cache == []
+        migrator_with_mocks.op_client.rails_client.execute.assert_called_once()
 
     def test_is_date_field_validation(self, migrator_with_mocks) -> None:
         """Test date field validation logic."""

@@ -13,7 +13,6 @@ from typing import Any
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
-from src.mappings import Mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -32,9 +31,7 @@ RESOLUTION_CF_NAME = "Resolution"
 class ResolutionMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
-
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
     def _ensure_resolution_cf(self) -> int:
         """Ensure the Resolution CF exists; return its ID."""

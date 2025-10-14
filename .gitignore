@@ -1,3 +1,6 @@
+.beads/*.db
+.beads/*.db-*
+
 # Large generated files
 repomix-output.txt
 

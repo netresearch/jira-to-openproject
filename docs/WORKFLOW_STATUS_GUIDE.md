@@ -5,15 +5,15 @@
 This guide covers migrating Jira statuses and configuring OpenProject workflows. OpenProject handles workflows differently than Jira:
 
 - All statuses are available to all work package types by default
-- Custom workflow configurations require manual setup through Admin interface
-- The migration tool automates status creation and provides configuration guidance
+- The migration tool now automates status creation and populates workflow transitions for configured roles via the `workflows` component
+- Manual validation in the OpenProject admin UI is still recommended to confirm role-based permissions and edge-case transitions
 
 ## Automated Migration Process
 
 ### 1. Run Status Migration
 
 ```bash
-python src/main.py migrate --components status workflow --force
+python src/main.py migrate --components status_types workflows --force
 ```
 
 This single command:
@@ -29,7 +29,8 @@ This single command:
 - Extracts workflow definitions from Jira
 - Analyzes workflow transitions for each issue type
 - Generates workflow mapping file (`var/data/workflow_mapping.json`)
-- Creates workflow configuration documentation
+- Creates OpenProject workflow transition records for mapped roles
+- Produces workflow configuration documentation for audit purposes
 
 ### 2. Review Generated Files
 
@@ -58,9 +59,9 @@ The migration tool uses this priority order for mapping Jira statuses to OpenPro
 | Done | Closed | Completed work |
 | Custom | Custom | Project-specific statuses |
 
-## Manual Workflow Configuration
+## Manual Validation
 
-After running the migration, manually configure workflows in OpenProject:
+After running the migration, review the generated transitions in OpenProject and adjust only if project-specific rules require it:
 
 ### 1. Access Workflow Configuration
 
@@ -73,9 +74,9 @@ After running the migration, manually configure workflows in OpenProject:
 For each work package type:
 
 1. Select **Role** (e.g., Project admin, Developer, etc.)
-2. Configure status transitions based on the generated workflow mapping
-3. Set permissions for each transition
-4. Save configuration
+2. Confirm the automatically-created transitions match expectations
+3. Adjust permissions or add guard conditions for edge cases as needed
+4. Save configuration changes
 
 ### 3. Validation Steps
 

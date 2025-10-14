@@ -11,6 +11,8 @@ from typing import ClassVar
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 from src.clients.jira_client import (
     JiraApiError,
     JiraAuthenticationError,

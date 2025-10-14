@@ -26,9 +26,11 @@ Project and work-package migrations now enrich OpenProject with Jira provenance,
 
 ## Action Items
 
-- [x] Add start-date precedence tests in `tests/unit/test_enhanced_timestamp_migrator.py`.
-- [x] Add work-package level test ensuring `_resolve_start_date` respects precedence and integrates with migrator output.
-- [x] Add project migration tests validating `_assign_project_lead` idempotency and module enablement invocation.
-- [x] Extend `scripts/data_qa.py` with warnings for missing module snapshots / zero start-date coverage.
-- [x] Refresh `README.md` and `src/AGENTS.md` with explicit validation guidance.
-- [x] Mark this ADR *Accepted* once tests/docs land.
+**All items completed and tracked in bd: j2o-94 (closed)**
+
+- Start-date precedence tests in `tests/unit/test_enhanced_timestamp_migrator.py`
+- Work-package level test ensuring `_resolve_start_date` respects precedence
+- Project migration tests validating `_assign_project_lead` idempotency and module enablement
+- Extended `scripts/data_qa.py` with warnings for missing module snapshots
+- Refreshed `README.md` and `src/AGENTS.md` with explicit validation guidance
+- Marked ADR *Accepted* once tests/docs landed

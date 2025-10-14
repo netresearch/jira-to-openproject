@@ -253,6 +253,81 @@ class OpenProjectClient:
             self.container_name,
         )
 
+    def ensure_reporting_project(self, identifier: str, name: str) -> int:
+        """Ensure a dedicated OpenProject project exists for reporting artefacts.
+
+        Creates the project when missing, enables the wiki module, and returns its ID.
+
+        Args:
+            identifier: Desired project identifier (lowercase/hyphenated)
+            name: Human readable project name
+
+        Returns:
+            OpenProject project ID
+
+        Raises:
+            QueryExecutionError: when creation fails or no project can be ensured
+        """
+
+        clean_identifier = re.sub(r"[^a-z0-9-]", "-", identifier.lower()).strip("-")
+        clean_identifier = re.sub(r"-+", "-", clean_identifier) or "j2o-reporting"
+        clean_name = name.strip() or "Jira Dashboards"
+
+        script = (
+            "begin\n"
+            "  user = User.admin.first || User.active.first || User.first\n"
+            "  raise 'no admin user available' unless user\n"
+            f"  identifier = '{clean_identifier}'\n"
+            f"  display_name = '{clean_name.replace("'", "\\'")}'\n"
+            "  project = Project.find_by(identifier: identifier)\n"
+            "  created = false\n"
+            "  unless project\n"
+            "    if defined?(::Projects::CreateService)\n"
+            "      service = ::Projects::CreateService.new(user: user)\n"
+            "      params = { name: display_name, identifier: identifier, public: false, active: false, enabled_module_names: ['wiki'], workspace_type: 'project' }\n"
+            "      result = service.call(**params)\n"
+            "      unless result.success?\n"
+            "        raise result.errors.full_messages.join(', ')\n"
+            "      end\n"
+            "      project = result.result\n"
+            "    else\n"
+            "      project = Project.new(name: display_name, identifier: identifier)\n"
+            "      project.public = false if project.respond_to?(:public=)\n"
+            "      project.active = false if project.respond_to?(:active=)\n"
+            "      project.workspace_type = 'project' if project.respond_to?(:workspace_type=)\n"
+            "      project.enabled_module_names = ['wiki'] if project.respond_to?(:enabled_module_names=)\n"
+            "      project.save!\n"
+            "    end\n"
+            "    created = true\n"
+            "  end\n"
+            "  if project.enabled_module_names.exclude?('wiki')\n"
+            "    project.enabled_module_names = (project.enabled_module_names + ['wiki']).uniq\n"
+            "    project.save!\n"
+            "  end\n"
+            "  if project.respond_to?(:workspace_type=) && project.workspace_type != 'project'\n"
+            "    project.workspace_type = 'project'\n"
+            "    project.save!\n"
+            "  end\n"
+            "  { success: true, id: project.id, created: created, identifier: project.identifier }\n"
+            "rescue => e\n"
+            "  { success: false, error: e.message }\n"
+            "end\n"
+        )
+
+        result = self.execute_query_to_json_file(script, timeout=180)
+        if not isinstance(result, dict):
+            raise QueryExecutionError(f"Unexpected response when ensuring reporting project: {result!r}")
+        if not result.get("success"):
+            raise QueryExecutionError(
+                f"Failed to ensure reporting project '{clean_identifier}': {result.get('error')}",
+            )
+        project_id = int(result.get("id", 0) or 0)
+        if project_id <= 0:
+            raise QueryExecutionError(
+                f"Reporting project '{clean_identifier}' returned invalid id: {project_id}",
+            )
+        return project_id
+
     def _generate_unique_temp_filename(self, base_name: str) -> str:
         """Generate a temporary filename; stable for tests, unique in prod.
 
@@ -1585,31 +1660,39 @@ class OpenProjectClient:
                 "require 'json'\n"
                 f"input_path = '{container_input.as_posix()}'\n"
                 f"output_path = '{container_output.as_posix()}'\n"
-                "rows = JSON.parse(File.read(input_path))\n"
                 "updated = 0\n"
                 "errors = []\n"
-                "rows.each do |row|\n"
-                "  begin\n"
-                "    name = row['group_name']\n"
-                "    project_id = row['project_id'].to_i\n"
-                "    role_ids = Array(row['role_ids']).map(&:to_i).reject(&:nil?).uniq\n"
-                "    next if name.nil? || name.empty? || project_id <= 0 || role_ids.empty?\n"
-                "    group = Group.find_by(name: name)\n"
-                "    project = Project.find_by(id: project_id)\n"
-                "    next unless group && project\n"
-                "    member = Member.find_or_initialize_by(project: project, principal: group)\n"
-                "    existing_ids = Array(member.role_ids).map(&:to_i)\n"
-                "    new_ids = (existing_ids + role_ids).uniq\n"
-                "    if member.new_record? || new_ids.sort != existing_ids.sort\n"
-                "      member.role_ids = new_ids\n"
-                "      member.save\n"
-                "      updated += 1\n"
+                "begin\n"
+                "  File.write(output_path, { updated: 0, errors: 0, status: 'initialised' }.to_json)\n"
+                "  rows = JSON.parse(File.read(input_path))\n"
+                "  Array(rows).each do |row|\n"
+                "    begin\n"
+                "      name = row['group_name']\n"
+                "      project_id = row['project_id'].to_i\n"
+                "      role_ids = Array(row['role_ids']).map(&:to_i).reject(&:nil?).uniq\n"
+                "      next if name.nil? || name.empty? || project_id <= 0 || role_ids.empty?\n"
+                "      group = Group.find_by(name: name)\n"
+                "      project = Project.find_by(id: project_id)\n"
+                "      next unless group && project\n"
+                "      member = Member.find_or_initialize_by(project: project, principal: group)\n"
+                "      existing_ids = Array(member.role_ids).map(&:to_i)\n"
+                "      new_ids = (existing_ids + role_ids).uniq\n"
+                "      if member.new_record? || new_ids.sort != existing_ids.sort\n"
+                "        member.role_ids = new_ids\n"
+                "        member.save\n"
+                "        updated += 1\n"
+                "      end\n"
+                "    rescue => e\n"
+                "      errors << { group: row['group_name'], project: row['project_id'], error: e.message }\n"
                 "    end\n"
-                "  rescue => e\n"
-                "    errors << { group: row['group_name'], project: row['project_id'], error: e.message }\n"
                 "  end\n"
+                "rescue => e\n"
+                "  errors << { error: e.message }\n"
+                "ensure\n"
+                "  summary = { updated: updated, errors: errors.length }\n"
+                "  summary[:error_details] = errors if errors.any?\n"
+                "  File.write(output_path, summary.to_json)\n"
                 "end\n"
-                "File.write(output_path, { updated: updated, errors: errors.length }.to_json)\n"
                 "nil\n"
             )
 
@@ -1649,12 +1732,12 @@ project = Project.find_by(id: project_id)
 user = User.find_by(id: user_id)
 
 unless project && user
-  return { success: false, error: 'project or user not found' }.to_json
+  return { success: false, error: 'project or user not found' }
 end
 
 desired = Array(role_ids).map(&:to_i).reject { |rid| rid <= 0 }
 if desired.empty?
-  return { success: false, error: 'no roles specified' }.to_json
+  return { success: false, error: 'no roles specified' }
 end
 
 member = Member.find_or_initialize_by(project: project, principal: user)
@@ -1668,9 +1751,9 @@ else
 end
 
 if member.save
-  { success: true, changed: changed, role_ids: member.role_ids }.to_json
+  { success: true, changed: changed, role_ids: member.role_ids }
 else
-  { success: false, error: member.errors.full_messages.join(', ') }.to_json
+  { success: false, error: member.errors.full_messages.join(', ') }
 end
 """
         script = head + body
@@ -1678,6 +1761,91 @@ end
         if isinstance(result, dict):
             return result
         return {"success": False, "error": "unexpected response"}
+
+    def sync_workflow_transitions(
+        self,
+        transitions: list[dict[str, int]],
+        role_ids: list[int],
+    ) -> dict[str, int]:
+        """Ensure workflow transitions exist for the provided type/status/role combinations."""
+
+        if not transitions or not role_ids:
+            return {"created": 0, "existing": 0, "errors": 0}
+
+        temp_dir = Path(self.file_manager.data_dir) / "workflow_sync"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        payload_path = temp_dir / f"workflow_transitions_{os.getpid()}_{int(time.time())}.json"
+        result_path = temp_dir / (payload_path.name + ".result")
+
+        payload = {
+            "transitions": [
+                {
+                    "type_id": int(row.get("type_id", 0)),
+                    "from_status_id": int(row.get("from_status_id", 0)),
+                    "to_status_id": int(row.get("to_status_id", 0)),
+                }
+                for row in transitions
+            ],
+            "role_ids": [int(r) for r in role_ids if int(r) > 0],
+        }
+
+        try:
+            with payload_path.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+
+            container_payload = Path("/tmp") / payload_path.name  # noqa: S108
+            container_output = Path("/tmp") / (payload_path.name + ".result")  # noqa: S108
+            self.transfer_file_to_container(payload_path, container_payload)
+
+            ruby = (
+                "require 'json'\n"
+                f"payload_path = '{container_payload.as_posix()}'\n"
+                f"output_path = '{container_output.as_posix()}'\n"
+                "data = JSON.parse(File.read(payload_path))\n"
+                "transitions = Array(data['transitions'])\n"
+                "role_ids = Array(data['role_ids']).map(&:to_i).reject { |rid| rid <= 0 }.uniq\n"
+                "created = 0\n"
+                "existing = 0\n"
+                "errors = []\n"
+                "seen = {}\n"
+                "transitions.each do |row|\n"
+                "  type_id = row['type_id'].to_i\n"
+                "  from_id = row['from_status_id'].to_i\n"
+                "  to_id = row['to_status_id'].to_i\n"
+                "  next if type_id <= 0 || from_id <= 0 || to_id <= 0\n"
+                "  key = [type_id, from_id, to_id]\n"
+                "  next if seen[key]\n"
+                "  seen[key] = true\n"
+                "  role_ids.each do |role_id|\n"
+                "    begin\n"
+                "      wf = Workflow.find_by(type_id: type_id, role_id: role_id, old_status_id: from_id, new_status_id: to_id)\n"
+                "      if wf\n"
+                "        existing += 1\n"
+                "      else\n"
+                "        Workflow.create!(type_id: type_id, role_id: role_id, old_status_id: from_id, new_status_id: to_id)\n"
+                "        created += 1\n"
+                "      end\n"
+                "    rescue => e\n"
+                "      errors << { type_id: type_id, role_id: role_id, from: from_id, to: to_id, error: e.message }\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "File.write(output_path, { created: created, existing: existing, errors: errors.length }.to_json)\n"
+                "nil\n"
+            )
+
+            self.execute_query(ruby, timeout=180)
+            summary = self._read_result_file(container_output, result_path)
+            return {
+                "created": int(summary.get("created", 0)),
+                "existing": int(summary.get("existing", 0)),
+                "errors": int(summary.get("errors", 0)),
+            }
+        finally:
+            with suppress(OSError):
+                payload_path.unlink()
+            with suppress(OSError):
+                result_path.unlink()
 
     def _read_result_file(
         self,
@@ -1714,6 +1882,262 @@ end
 
         with copied.open("r", encoding="utf-8") as handle:
             return json.load(handle)
+
+    def ensure_project_version(
+        self,
+        project_id: int,
+        *,
+        name: str,
+        description: str | None = None,
+        start_date: str | None = None,
+        due_date: str | None = None,
+        status: str | None = None,
+        sharing: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or update a Version (Sprint/Release) for a project."""
+
+        payload = {
+            "project_id": int(project_id),
+            "name": name,
+            "description": description,
+            "start_date": start_date,
+            "due_date": due_date,
+            "status": status,
+            "sharing": sharing or "none",
+        }
+
+        payload_json = json.dumps(payload)
+        script = f"""
+        require 'json'
+        input = JSON.parse(<<'JSON_DATA')
+{payload_json}
+JSON_DATA
+
+        project = Project.find_by(id: input['project_id'].to_i)
+        unless project
+          return {{ success: false, error: 'project not found' }}.to_json
+        end
+
+        version = project.versions.where(name: input['name']).first_or_initialize
+        was_new = version.new_record?
+        attrs = {{ name: input['name'], sharing: input['sharing'] || 'none' }}
+        attrs[:description] = input['description'] if input['description']
+        attrs[:start_date] = input['start_date'] if input['start_date']
+        attrs[:due_date] = input['due_date'] if input['due_date']
+        attrs[:status] = input['status'] if input['status']
+        version.assign_attributes(attrs)
+
+        changed = version.changed?
+        if changed
+          version.save!
+        else
+          version.save! if was_new
+        end
+
+        {{
+          success: true,
+          id: version.id,
+          created: was_new,
+          updated: changed
+        }}.to_json
+        """
+
+        result = self.execute_query_to_json_file(script, timeout=90)
+        if isinstance(result, dict):
+            return result
+        return {"success": False, "error": "unexpected response"}
+
+    def create_or_update_query(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        project_id: int | None = None,
+        is_public: bool = True,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create or update an OpenProject query (saved filter)."""
+
+        payload = {
+            "name": name,
+            "description": description,
+            "project_id": project_id,
+            "is_public": bool(is_public),
+            "options": options or {},
+        }
+
+        payload_json = json.dumps(payload)
+        script = f"""
+        require 'json'
+        input = JSON.parse(<<'JSON_DATA')
+{payload_json}
+JSON_DATA
+
+        begin
+          project = input['project_id'] ? Project.find_by(id: input['project_id'].to_i) : nil
+          user = User.respond_to?(:admin) ? User.admin.first : nil
+          user ||= User.admin.first
+          user ||= User.where(admin: true).first
+          user ||= User.active.first
+
+          if user.nil?
+            result = {{ success: false, error: 'no available user to own query' }}
+          else
+            query = Query.find_or_initialize_by(name: input['name'], project: project)
+            query.user ||= user
+
+            is_public = !!input['is_public']
+            if query.respond_to?(:public=)
+              query.public = is_public
+            elsif query.respond_to?(:write_attribute) && query.has_attribute?(:public)
+              query.write_attribute(:public, is_public)
+            end
+
+            filters = input.dig('options', 'filters')
+            query.filters = Array(filters) if filters && query.respond_to?(:filters=)
+
+            columns = input.dig('options', 'columns')
+            query.column_names = Array(columns) if columns && query.respond_to?(:column_names=)
+
+            sort = input.dig('options', 'sort')
+            query.sort_criteria = Array(sort) if sort && query.respond_to?(:sort_criteria=)
+
+            group_by = input.dig('options', 'group_by')
+            query.group_by = group_by if group_by && query.respond_to?(:group_by=)
+
+            hierarchies = input.dig('options', 'show_hierarchies')
+            if !hierarchies.nil? && query.respond_to?(:show_hierarchies=)
+              query.show_hierarchies = hierarchies
+            end
+
+            if query.respond_to?(:include_subprojects=) && query.include_subprojects.nil?
+              query.include_subprojects = false
+            end
+
+            created = query.new_record?
+            changed = query.changed?
+            query.save! if created || changed
+
+            result = {{
+              success: true,
+              id: query.id,
+              created: created,
+              updated: changed || created
+            }}
+          end
+        rescue => e
+          result = {{ success: false, error: e.message }}
+        end
+
+        result
+        """
+
+        result = self.execute_query_to_json_file(script, timeout=120)
+        if isinstance(result, dict):
+            return result
+        return {"success": False, "error": "unexpected response"}
+
+    def create_or_update_wiki_page(
+        self,
+        *,
+        project_id: int,
+        title: str,
+        content: str,
+    ) -> dict[str, Any]:
+        """Create or update a Wiki page within a project."""
+
+        payload = {
+            "project_id": int(project_id),
+            "title": title,
+            "content": content,
+        }
+        payload_json = json.dumps(payload)
+
+        script = f"""
+        require 'json'
+        input = JSON.parse(<<'JSON_DATA')
+{payload_json}
+JSON_DATA
+
+        project = Project.find_by(id: input['project_id'])
+        unless project
+          return {{ success: false, error: 'project not found' }}.to_json
+        end
+
+        begin
+          wiki = project.wiki || project.create_wiki(start_page: 'Home')
+          page = wiki.pages.where(title: input['title']).first_or_initialize
+          author = User.admin.first || User.active.first || User.first
+          raise 'no available author for wiki content' unless author
+
+          page.wiki ||= wiki if page.respond_to?(:wiki=)
+          page.author ||= author if page.respond_to?(:author=)
+
+          body_text = input['content'].to_s
+
+          if page.respond_to?(:text=)
+            page.text = body_text
+          elsif page.respond_to?(:content=)
+            page.content = body_text
+          else
+            raise 'wiki page entity does not support text assignment'
+          end
+
+          created = page.new_record?
+          changed = page.changed?
+          page.save!
+
+          # Ensure timestamps/ journaling persists author for updates
+          page.touch if !created && changed && page.respond_to?(:touch)
+
+          {{
+            success: true,
+            id: page.id,
+            updated_on: page.updated_at
+          }}
+        rescue => e
+          {{
+            success: false,
+            error: e.message
+          }}
+        end
+        """
+
+        result = self.execute_query_to_json_file(script, timeout=120)
+        if isinstance(result, dict):
+            return result
+        return {"success": False, "error": "unexpected response"}
+
+    def upsert_project_origin_attributes(
+        self,
+        project_id: int,
+        *,
+        origin_system: str,
+        project_key: str,
+        external_id: str | None = None,
+        external_url: str | None = None,
+    ) -> bool:
+        """Persist origin metadata into Project attributes (description) idempotently.
+
+        We embed a small, machine-readable block between HTML comment markers so we can
+        replace it deterministically on subsequent runs without duplicating data.
+
+        Args:
+            project_id: OpenProject project ID
+            origin_system: e.g. "jira"
+            project_key: upstream project key (e.g. "SRVEP")
+            external_id: upstream immutable project id (stringified)
+            external_url: upstream canonical URL
+
+        Returns:
+            True on success, False otherwise.
+        """
+        # Escape braces in f-string; Ruby string content uses literal markers.
+        marker_start = "<!-- J2O_ORIGIN_START -->"
+        marker_end = "<!-- J2O_ORIGIN_END -->"
+        payload = (
+            f"system={origin_system};key={project_key};id={external_id or ''};url={external_url or ''}"
+        )
 
     def upsert_project_origin_attributes(
         self,

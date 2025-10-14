@@ -75,6 +75,13 @@ class EnhancedTimestampMigrator:
         "IST": "Asia/Kolkata",
     }
 
+    START_DATE_FIELD_IDS_DEFAULT = [
+        "customfield_18690",
+        "customfield_12590",
+        "customfield_11490",
+        "customfield_15082",
+    ]
+
     def __init__(
         self,
         jira_client: JiraClient,
@@ -102,6 +109,7 @@ class EnhancedTimestampMigrator:
 
         # Load Jira timezone configuration
         self.jira_timezone = self._detect_jira_timezone()
+        self.start_date_fields = self._load_start_date_fields()
 
     def _detect_jira_timezone(self) -> str:
         """Detect the timezone used by the Jira instance.
@@ -230,6 +238,19 @@ class EnhancedTimestampMigrator:
             )
             return "UTC"
 
+    def _load_start_date_fields(self) -> list[str]:
+        fields = list(self.START_DATE_FIELD_IDS_DEFAULT)
+        extra = config.migration_config.get("start_date_custom_fields")
+        extras: list[str] = []
+        if isinstance(extra, str):
+            extras = [item.strip() for item in extra.split(",") if item and item.strip()]
+        elif isinstance(extra, list):
+            extras = [str(item).strip() for item in extra if item]
+        for field_id in extras:
+            if field_id and field_id not in fields:
+                fields.append(field_id)
+        return fields
+
     def _validate_jira_key(self, jira_key: str) -> None:
         """Validate JIRA key format using the centralized validator.
 
@@ -307,6 +328,11 @@ class EnhancedTimestampMigrator:
             if due_result["warnings"]:
                 result["warnings"].extend(due_result["warnings"])
 
+            # Migrate start date
+            start_result = self._migrate_start_date(extracted, work_package_data)
+            if start_result["warnings"]:
+                result["warnings"].extend(start_result["warnings"])
+
             # Migrate resolution/closed date
             resolution_result = self._migrate_resolution_date(
                 extracted,
@@ -377,7 +403,30 @@ class EnhancedTimestampMigrator:
 
         # Extract custom date fields
         custom_fields = getattr(jira_issue, "raw", {}).get("fields", {})
+
+        # Start date precedence from configured custom fields
+        for field_id in self.start_date_fields:
+            value = None
+            try:
+                value = getattr(jira_issue.fields, field_id)
+            except AttributeError:
+                value = None
+            if not value and isinstance(custom_fields, dict):
+                value = custom_fields.get(field_id)
+            if value:
+                normalized = self._normalize_timestamp(str(value))
+                if normalized:
+                    timestamps["start_date"] = {
+                        "raw_value": str(value),
+                        "jira_field": field_id,
+                        "openproject_field": "start_date",
+                        "normalized_utc": normalized,
+                    }
+                    break
+
         for field_name, field_value in custom_fields.items():
+            if field_name in self.start_date_fields:
+                continue
             if field_name.startswith("customfield_") and field_value:
                 # Check if this looks like a date/datetime field
                 if self._is_date_field(field_value):
@@ -565,6 +614,27 @@ class EnhancedTimestampMigrator:
             work_package_data["due_date"] = due_date
         else:
             result["warnings"].append("Could not normalize due date")
+
+        return result
+
+    def _migrate_start_date(
+        self,
+        extracted: dict[str, Any],
+        work_package_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Migrate start date (API-friendly)."""
+
+        result = {"warnings": []}
+
+        start_data = extracted.get("start_date")
+        if not start_data:
+            return result
+
+        normalized_utc = start_data.get("normalized_utc")
+        if normalized_utc:
+            work_package_data["start_date"] = normalized_utc.split("T")[0]
+        else:
+            result["warnings"].append("Could not normalize start date")
 
         return result
 

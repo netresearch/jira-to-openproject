@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 #!/usr/bin/env python3
 """Test module for SSHClient.
 
@@ -10,7 +15,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.clients.ssh_client import SSHClient, SSHCommandError, SSHFileTransferError
 

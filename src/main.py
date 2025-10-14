@@ -191,9 +191,21 @@ def main() -> None:
         help="Stop the migration on the first error or exception encountered",
     )
     migrate_parser.add_argument(
+        "--reset-wp-checkpoints",
+        action="store_true",
+        help="Clear the work package fast-forward checkpoint store before running",
+    )
+    migrate_parser.add_argument(
         "--no-confirm",
         action="store_true",
         help="Skip the 'Continue to next component' prompt and run all components without pausing",
+    )
+    migrate_parser.add_argument(
+        "--profile",
+        help=(
+            "Named component profile to run (e.g., 'full', 'metadata_refresh'). "
+            "Profiles expand to predefined component sequences."
+        ),
     )
 
     # Project filtering (limit migration to specific Jira project keys)
@@ -225,7 +237,12 @@ def main() -> None:
         update_from_cli_args(args)
 
         # Lazily import migration helpers now that config is updated
-        from src.migration import restore_backup, run_migration, setup_tmux_session  # noqa: PLC0415
+        from src.migration import (  # noqa: PLC0415
+            PREDEFINED_PROFILES,
+            restore_backup,
+            run_migration,
+            setup_tmux_session,
+        )
 
         # Check if we're restoring from a backup
         if args.restore:
@@ -249,12 +266,40 @@ def main() -> None:
         if args.tmux:
             setup_tmux_session()
 
+        profile_components: list[str] | None = None
+        if args.profile:
+            profile_key = args.profile.lower()
+            if profile_key not in PREDEFINED_PROFILES:
+                logger.error(
+                    "Unknown profile '%s'. Available profiles: %s",
+                    args.profile,
+                    ", ".join(sorted(PREDEFINED_PROFILES.keys())),
+                )
+                sys.exit(1)
+            profile_components = PREDEFINED_PROFILES[profile_key].copy()
+            logger.info(
+                "Using component profile '%s' with %d components",
+                profile_key,
+                len(profile_components),
+            )
+
+        components_to_run = args.components
+        if profile_components:
+            if components_to_run:
+                ordered: list[str] = []
+                for name in profile_components + components_to_run:
+                    if name not in ordered:
+                        ordered.append(name)
+                components_to_run = ordered
+            else:
+                components_to_run = profile_components
+
         # Run the migration with new options
         import asyncio  # noqa: PLC0415
 
         result = asyncio.run(
             run_migration(
-                components=args.components,
+                components=components_to_run,
                 stop_on_error=getattr(args, "stop_on_error", False),
                 no_confirm=getattr(args, "no_confirm", False),
             ),

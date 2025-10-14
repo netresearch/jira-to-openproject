@@ -13,8 +13,8 @@ This directory contains integration tests for the Jira to OpenProject migration 
 ## Running Integration Tests
 
 ```bash
-# Run all integration tests
-pytest tests/integration
+# Run all integration tests (Docker profile with mocks)
+make container-test-integration
 
 # Run a specific test file
 pytest tests/integration/test_filename.py

@@ -166,6 +166,7 @@ class MigrationConfig(BaseModel):
     component_order: list[str] = Field(
         default=[
             "users",
+            "groups",
             "custom_fields",
             "projects",
             "versions",
@@ -183,6 +184,10 @@ class MigrationConfig(BaseModel):
     attachment_path: Path = Field(
         default=Path("data/attachments"), description="Attachment storage path",
     )
+    enable_rails_meta_writes: bool = Field(
+        default=True,
+        description="Enable Rails meta operations for author/timestamp/audit preservation",
+    )
 
     @validator(
         "data_dir", "backup_dir", "results_dir", "mapping_file", "attachment_path",
@@ -198,6 +203,7 @@ class MigrationConfig(BaseModel):
         """Validate migration component order."""
         valid_components = {
             "users",
+            "groups",
             "custom_fields",
             "projects",
             "versions",

@@ -365,6 +365,10 @@ def update_from_cli_args(args: object) -> None:  # noqa: C901
         migration_config["stop_on_error"] = True
         logger.debug("Setting stop_on_error=True from CLI arguments")
 
+    if hasattr(args, "reset_wp_checkpoints") and args.reset_wp_checkpoints:
+        migration_config["reset_wp_checkpoints"] = True
+        logger.debug("Setting reset_wp_checkpoints=True from CLI arguments")
+
     if hasattr(args, "no_confirm") and args.no_confirm:
         migration_config["no_confirm"] = True
         logger.debug("Setting no_confirm=True from CLI arguments")

@@ -17,7 +17,17 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from jira import Issue, JIRAError
+try:
+    from jira.exceptions import JIRAError
+except ImportError:  # pragma: no cover - compatibility for older jira package
+    from jira import JIRAError  # type: ignore  # pragma: no cover
+
+try:
+    from jira.resources import Issue  # type: ignore
+except (ImportError, AttributeError):  # pragma: no cover - fallback for newer releases
+    class Issue:  # type: ignore[misc]
+        pass
+
 from src.clients.enhanced_jira_client import EnhancedJiraClient
 from src.clients.jira_client import JiraClient
 from src.utils.performance_optimizer import PerformanceOptimizer

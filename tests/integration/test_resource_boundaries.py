@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 """Resource boundary tests for the migration tool.
 Tests behavior under memory pressure, rate limiting, network issues, and resource exhaustion.
 
@@ -12,7 +17,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.clients.exceptions import ConnectionError, RateLimitError
 from src.clients.jira_client import JiraClient

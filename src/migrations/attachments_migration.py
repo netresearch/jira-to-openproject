@@ -32,9 +32,7 @@ except Exception:  # noqa: BLE001
 class AttachmentsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
-
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
         # Attachment directory
         try:
             ap = config.migration_config.get("attachment_path")  # type: ignore[assignment]
@@ -256,5 +254,23 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             failed = len(container_ops)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+    def run(self) -> ComponentResult:
+        """Execute attachment migration pipeline."""
+        self.logger.info("Starting attachment migration")
 
+        extracted = self._extract()
+        if not extracted.success:
+            self.logger.error("Attachment extraction failed: %s", extracted.message or extracted.error)
+            return extracted
 
+        mapped = self._map(extracted)
+        if not mapped.success:
+            self.logger.error("Attachment mapping failed: %s", mapped.message or mapped.error)
+            return mapped
+
+        loaded = self._load(mapped)
+        if loaded.success:
+            self.logger.info("Attachment migration completed (updated=%s, failed=%s)", loaded.updated, loaded.failed)
+        else:
+            self.logger.error("Attachment migration encountered failures (failed=%s)", loaded.failed)
+        return loaded

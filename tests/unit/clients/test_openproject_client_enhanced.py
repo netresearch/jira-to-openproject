@@ -9,11 +9,35 @@ Based on Zen's identification of high-risk components in the OpenProject client 
 """
 
 import json
+import sys
+import types
 from pathlib import Path
 from typing import Never
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+if 'jira' not in sys.modules:
+    jira_module = types.ModuleType('jira')
+
+    class _DummyJIRA:  # pragma: no cover - simple stand-in
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class _DummyIssue:  # pragma: no cover - simple stand-in
+        pass
+
+    jira_module.JIRA = _DummyJIRA
+    jira_module.Issue = _DummyIssue
+    exceptions_module = types.ModuleType('jira.exceptions')
+
+    class _DummyJIRAError(Exception):
+        pass
+
+    exceptions_module.JIRAError = _DummyJIRAError
+    jira_module.exceptions = exceptions_module
+    sys.modules['jira'] = jira_module
+    sys.modules['jira.exceptions'] = exceptions_module
 
 from src.clients.openproject_client import (
     FileTransferError,
@@ -515,3 +539,41 @@ class TestResourceLeakPrevention:
 
         # This test documents the potential for temp file accumulation
         # In production, monitoring should alert on repeated cleanup failures
+
+
+class TestEnsureReportingProject:
+    """Smoke tests for ensure_reporting_project to guard against schema regressions."""
+
+    def test_ensure_reporting_project_success_sanitises_identifier(self, op_client):
+        captured_script: dict[str, str] = {}
+
+        def fake_execute(script: str, timeout: int | None = None):
+            captured_script["script"] = script
+            return {
+                "success": True,
+                "id": 123,
+                "created": True,
+                "identifier": "j2o-reporting",
+            }
+
+        op_client.execute_query_to_json_file = MagicMock(side_effect=fake_execute)  # type: ignore[assignment]
+
+        result = op_client.ensure_reporting_project("J2O Reporting!", "Jira Dashboards")
+
+        assert result == 123
+        script = captured_script["script"]
+        assert "identifier = 'j2o-reporting'" in script
+        assert "workspace_type: 'project'" in script
+        assert "enabled_module_names: ['wiki']" in script
+
+    def test_ensure_reporting_project_raises_on_failure(self, op_client):
+        op_client.execute_query_to_json_file = MagicMock(  # type: ignore[assignment]
+            return_value={"success": False, "error": "workspace type invalid"},
+        )
+        with pytest.raises(QueryExecutionError, match="workspace type invalid"):
+            op_client.ensure_reporting_project("reporting", "Dashboards")
+
+    def test_ensure_reporting_project_unexpected_payload(self, op_client):
+        op_client.execute_query_to_json_file = MagicMock(return_value="not-a-dict")  # type: ignore[assignment]
+        with pytest.raises(QueryExecutionError, match="Unexpected response"):
+            op_client.ensure_reporting_project("reporting", "Dashboards")

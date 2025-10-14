@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 """Tests for the main entry point (src/main.py)."""
 
 import argparse

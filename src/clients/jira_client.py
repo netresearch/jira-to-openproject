@@ -9,10 +9,15 @@ import time
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
-from requests import Response
+from requests import Response, exceptions
 
-from jira import Issue
+from jira import Issue, JIRA as AtlassianJIRA
+try:
+    from jira.exceptions import JIRAError as AtlassianJIRAError
+except ImportError:  # pragma: no cover - newer jira packages relocate exceptions
+    from jira import JIRAError as AtlassianJIRAError  # type: ignore[attr-defined]
 from src import config
 from src.display import configure_logging
 from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
@@ -914,6 +919,28 @@ class JiraClient:
             error_msg = f"Failed to fetch Jira project roles for {project_key}: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
+
+    def get_project_permission_scheme(self, project_key: str) -> dict[str, Any]:
+        """Return the permission scheme applied to a Jira project."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        path = f"{self.base_url}/rest/api/2/project/{project_key}/permissionscheme"
+        logger.debug("Fetching Jira permission scheme for project '%s'", project_key)
+
+        try:
+            response = self.jira._session.get(path)  # noqa: SLF001
+            if response.status_code == HTTP_NOT_FOUND:
+                return {}
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {}
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch permission scheme for {project_key}: {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
 
     def get_issue_count(self, project_key: str) -> int:
         """Get the total number of issues in a project.
@@ -1989,6 +2016,442 @@ class JiraClient:
             error_msg = f"Failed to retrieve Tempo work attributes: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
+
+    # ---------------------------------------------------------------------- #
+    # Workflow configuration helpers                                        #
+    # ---------------------------------------------------------------------- #
+
+    def get_workflow_schemes(self) -> list[dict[str, Any]]:
+        """Return configured Jira workflow schemes with issue type mappings."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        url = f"{self.base_url}/rest/api/2/workflowscheme"
+        logger.info("Fetching Jira workflow schemes")
+
+        try:
+            response = self.jira._session.get(url)  # noqa: SLF001
+            response.raise_for_status()
+            payload = response.json()
+            values = payload.get("values") if isinstance(payload, dict) else None
+            schemes = values if isinstance(values, list) else []
+            logger.info("Retrieved %s workflow schemes", len(schemes))
+            return schemes
+        except exceptions.HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            if status == 405:
+                logger.warning(
+                    "GET /rest/api/2/workflowscheme unsupported, falling back to per-project workflow inspection",
+                )
+                return self._get_workflow_schemes_per_project()
+            error_msg = f"Failed to fetch workflow schemes: {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
+        except JiraApiError as exc:
+            if "HTTP 405" in str(exc):
+                logger.warning(
+                    "Workflow scheme endpoint returned 405 (via patched request); using per-project fallback",
+                )
+                return self._get_workflow_schemes_per_project()
+            raise
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch workflow schemes: {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
+
+    def _get_workflow_schemes_per_project(self) -> list[dict[str, Any]]:
+        """Fallback that assembles workflow schemes via project endpoints."""
+
+        project_keys: list[str] = []
+        try:
+            project_mapping = config.mappings.get_mapping("project") or {}
+            project_keys = [str(key) for key in project_mapping.keys()]
+        except Exception:  # noqa: BLE001
+            project_keys = []
+
+        if not project_keys:
+            try:
+                projects = self.get_projects()
+                project_keys = [str(p.get("key")) for p in projects if p.get("key")]
+            except Exception:  # noqa: BLE001
+                project_keys = []
+
+        schemes_by_id: dict[str, dict[str, Any]] = {}
+        for key in project_keys:
+            if not key:
+                continue
+            try:
+                response = self._make_request(f"/rest/api/2/project/{key}/workflowscheme")
+                if response.status_code == HTTP_NOT_FOUND:
+                    continue
+                response.raise_for_status()
+                payload = response.json() or {}
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Failed to fetch workflow scheme for project %s: %s", key, exc)
+                continue
+
+            scheme = payload.get("workflowScheme") or payload
+            if not isinstance(scheme, dict):
+                continue
+
+            scheme_id = str(scheme.get("id") or scheme.get("name") or key)
+            existing = schemes_by_id.get(scheme_id)
+            if existing:
+                mappings = existing.setdefault("issueTypeMappings", {})
+                if isinstance(mappings, dict):
+                    new_mappings = scheme.get("issueTypeMappings") or {}
+                    if isinstance(new_mappings, dict):
+                        mappings.update(new_mappings)
+                existing.setdefault("projects", set()).add(key)
+            else:
+                entry = dict(scheme)
+                entry["projects"] = {key}
+                schemes_by_id[scheme_id] = entry
+
+        for entry in schemes_by_id.values():
+            projects = entry.get("projects")
+            if isinstance(projects, set):
+                entry["projects"] = sorted(projects)
+
+        logger.info(
+            "Discovered %s workflow schemes via per-project fallback",
+            len(schemes_by_id),
+        )
+        return list(schemes_by_id.values())
+
+    def get_workflow_transitions(self, workflow_name: str) -> list[dict[str, Any]]:
+        """Return transitions for a given Jira workflow name."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        safe_name = quote(workflow_name, safe="")
+        url = f"{self.base_url}/rest/api/2/workflow/{safe_name}/transitions"
+        logger.debug("Fetching Jira workflow transitions for '%s'", workflow_name)
+
+        try:
+            response = self.jira._session.get(url)  # noqa: SLF001
+            response.raise_for_status()
+            payload = response.json()
+            transitions = payload.get("transitions") if isinstance(payload, dict) else payload
+            if not isinstance(transitions, list):
+                logger.warning("Unexpected workflow transitions payload for %s", workflow_name)
+                return []
+            logger.debug(
+                "Workflow '%s' returned %s transitions",
+                workflow_name,
+                len(transitions),
+            )
+            return transitions
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch transitions for workflow '{workflow_name}': {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
+
+    def get_workflow_statuses(self, workflow_name: str) -> list[dict[str, Any]]:
+        """Return statuses referenced by a workflow."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        safe_name = quote(workflow_name, safe="")
+        url = f"{self.base_url}/rest/api/2/workflow/{safe_name}"
+        logger.debug("Fetching Jira workflow definition for '%s'", workflow_name)
+
+        try:
+            response = self.jira._session.get(url)  # noqa: SLF001
+            response.raise_for_status()
+            workflow = response.json()
+            if isinstance(workflow, dict):
+                statuses = workflow.get("statuses")
+                if isinstance(statuses, list):
+                    return statuses
+            logger.warning(
+                "Unexpected workflow status payload for %s (type=%s)",
+                workflow_name,
+                type(workflow).__name__,
+            )
+            return []
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch workflow definition for '{workflow_name}': {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
+
+    # ---------------------------------------------------------------------- #
+    # Jira Software (Agile) helpers                                         #
+    # ---------------------------------------------------------------------- #
+
+    def get_boards(self) -> list[dict[str, Any]]:
+        """Return Jira Software boards (Scrum/Kanban)."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        url = f"{self.base_url}/rest/agile/1.0/board"
+        logger.info("Fetching Jira boards")
+
+        try:
+            start_at = 0
+            max_results = 50
+            boards: list[dict[str, Any]] = []
+
+            while True:
+                params = {"startAt": start_at, "maxResults": max_results}
+                response = self.jira._session.get(  # noqa: SLF001
+                    url,
+                    params=params,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                values = payload.get("values") if isinstance(payload, dict) else None
+                batch = values if isinstance(values, list) else []
+                boards.extend(batch)
+
+                is_last = payload.get("isLast", False) if isinstance(payload, dict) else True
+                if is_last or not batch:
+                    break
+                start_at += max_results
+
+            logger.info("Retrieved %s Jira boards", len(boards))
+            return boards
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch Jira boards: {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
+
+    def get_board_configuration(self, board_id: int) -> dict[str, Any]:
+        """Return configuration details for a Jira Software board."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        url = f"{self.base_url}/rest/agile/1.0/board/{board_id}/configuration"
+        logger.debug("Fetching board configuration for %s", board_id)
+
+        try:
+            response = self.jira._session.get(url)  # noqa: SLF001
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Unexpected board configuration payload")
+            return payload
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch Jira board configuration ({board_id}): {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
+
+    def get_board_sprints(self, board_id: int) -> list[dict[str, Any]]:
+        """Return sprints associated with a Jira Software board."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        url = f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint"
+        logger.debug("Fetching sprints for board %s", board_id)
+
+        try:
+            start_at = 0
+            max_results = 50
+            sprints: list[dict[str, Any]] = []
+
+            while True:
+                params = {
+                    "startAt": start_at,
+                    "maxResults": max_results,
+                    "state": "future,active,closed",
+                }
+                try:
+                    response = self.jira._session.get(  # noqa: SLF001
+                        url,
+                        params=params,
+                    )
+                    response.raise_for_status()
+                except JiraApiError as exc:
+                    message = str(exc)
+                    if "doesn't support sprints" in message:
+                        logger.debug(
+                            "Board %s does not support sprints; skipping sprint extraction",
+                            board_id,
+                        )
+                        return []
+                    raise
+                except exceptions.HTTPError as exc:
+                    status = getattr(exc.response, "status_code", None)
+                    if status == HTTP_BAD_REQUEST_MIN and exc.response is not None:
+                        text = exc.response.text or ""
+                        if "doesn't support sprints" in text:
+                            logger.debug(
+                                "Board %s does not support sprints; skipping sprint extraction",
+                                board_id,
+                            )
+                            return []
+                    raise
+                payload = response.json()
+                values = payload.get("values") if isinstance(payload, dict) else None
+                batch = values if isinstance(values, list) else []
+                sprints.extend(batch)
+
+                is_last = payload.get("isLast", False) if isinstance(payload, dict) else True
+                if is_last or not batch:
+                    break
+                start_at += max_results
+
+            logger.debug("Board %s has %s sprints", board_id, len(sprints))
+            return sprints
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch sprints for board {board_id}: {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
+
+    # ---------------------------------------------------------------------- #
+    # Reporting helpers (filters & dashboards)                               #
+    # ---------------------------------------------------------------------- #
+
+    def get_filters(self) -> list[dict[str, Any]]:
+        """Return Jira filters visible to the authenticated user."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        logger.info("Fetching Jira filters")
+        filters: list[dict[str, Any]] = []
+
+        try:
+            def _fetch_favourites() -> list[dict[str, Any]]:
+                fav_resp = self.jira._session.get(  # noqa: SLF001
+                    f"{self.base_url}/rest/api/2/filter/favourite",
+                )
+                fav_resp.raise_for_status()
+                fav_payload = fav_resp.json()
+                return fav_payload if isinstance(fav_payload, list) else []
+
+            def _extract_status_from_error(exc: BaseException | None) -> int | None:
+                current: BaseException | None = exc
+                while current:
+                    if isinstance(current, AtlassianJIRAError):
+                        status = getattr(current, "status_code", None)
+                        if status is not None:
+                            return int(status)
+                        response = getattr(current, "response", None)
+                        if response is not None:
+                            status = getattr(response, "status_code", None)
+                            if status is not None:
+                                return int(status)
+                    response = getattr(current, "response", None)
+                    if response is not None:
+                        status = getattr(response, "status_code", None)
+                        if status is not None:
+                            return int(status)
+                    current = getattr(current, "__cause__", None)
+                return None
+
+            try:
+                response = self.jira._session.get(  # noqa: SLF001
+                    f"{self.base_url}/rest/api/2/filter/search",
+                    params={"startAt": 0, "maxResults": 1000},
+                )
+            except JiraApiError as exc:
+                status = _extract_status_from_error(exc) or _extract_status_from_error(exc.__cause__)
+                if status in (404, 405):
+                    logger.warning(
+                        "Filter search endpoint (status %s) not available; falling back to favourites list",
+                        status,
+                    )
+                    filters = _fetch_favourites()
+                    logger.info("Retrieved %s Jira filters (favourites fallback)", len(filters))
+                    return filters
+                raise
+
+            try:
+                response.raise_for_status()
+                payload = response.json()
+                values = payload.get("values") if isinstance(payload, dict) else None
+                filters = values if isinstance(values, list) else []
+            except (exceptions.HTTPError, AtlassianJIRAError) as exc:
+                status = None
+                if isinstance(exc, exceptions.HTTPError):
+                    status = getattr(exc.response, "status_code", None)
+                else:
+                    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+
+                if status in (404, 405):
+                    logger.warning(
+                        "Filter search endpoint (status %s) not available; falling back to favourites list",
+                        status,
+                    )
+                    filters = _fetch_favourites()
+                else:
+                    raise
+            except JiraApiError as exc:
+                message = str(exc)
+                if "HTTP 404" in message or "HTTP 405" in message:
+                    logger.warning(
+                        "Filter search endpoint not available (%s); falling back to favourites list",
+                        message,
+                    )
+                    filters = _fetch_favourites()
+                else:
+                    raise
+
+            logger.info("Retrieved %s Jira filters", len(filters))
+            return filters
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch Jira filters: {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
+
+    def get_dashboards(self) -> list[dict[str, Any]]:
+        """Return Jira dashboards visible to the authenticated user."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        url = f"{self.base_url}/rest/api/2/dashboard"
+        logger.info("Fetching Jira dashboards")
+
+        try:
+            response = self.jira._session.get(url)  # noqa: SLF001
+            response.raise_for_status()
+            payload = response.json()
+            values = payload.get("dashboards") if isinstance(payload, dict) else None
+            dashboards = values if isinstance(values, list) else []
+            logger.info("Retrieved %s Jira dashboards", len(dashboards))
+            return dashboards
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch Jira dashboards: {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
+
+    def get_dashboard_details(self, dashboard_id: int) -> dict[str, Any]:
+        """Return details for a specific Jira dashboard."""
+
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        url = f"{self.base_url}/rest/api/2/dashboard/{dashboard_id}"
+        logger.debug("Fetching dashboard details for %s", dashboard_id)
+
+        try:
+            response = self.jira._session.get(url)  # noqa: SLF001
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Unexpected dashboard payload")
+            return payload
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Failed to fetch dashboard {dashboard_id}: {exc!s}"
+            logger.exception(error_msg)
+            raise JiraApiError(error_msg) from exc
 
     def get_tempo_all_work_logs_for_project(
         self,

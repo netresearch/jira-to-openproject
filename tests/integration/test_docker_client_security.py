@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 #!/usr/bin/env python3
 """Test module for DockerClient security hardening features.
 
@@ -9,7 +14,6 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.clients.docker_client import DockerClient
 

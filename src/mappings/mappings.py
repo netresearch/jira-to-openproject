@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from src.config import logger
+from src.config import logger, get_path
 from src.utils import data_handler
 
 # We might need other clients or migration classes later
@@ -26,6 +26,7 @@ class Mappings:
     STATUS_MAPPING_FILE = Path("status_mapping.json")
     LINK_TYPE_MAPPING_FILE = Path("link_type_mapping.json")
     CUSTOM_FIELD_MAPPING_FILE = Path("custom_field_mapping.json")
+    SPRINT_MAPPING_FILE = Path("sprint_mapping.json")
     WORK_PACKAGE_MAPPING_FILE_PATTERN = Path(
         "work_package_mapping_{}.json",
     )  # Per project
@@ -36,8 +37,13 @@ class Mappings:
 
     def __init__(  # noqa: D107
         self,
-        data_dir: Path,
+        data_dir: Path | None = None,
     ) -> None:
+        if data_dir is None:
+            try:
+                data_dir = get_path('data')
+            except Exception:
+                data_dir = Path('data')
         self.data_dir: Path = data_dir
 
         # Load all mappings using class attributes for filenames
@@ -49,6 +55,7 @@ class Mappings:
         self.status_mapping = self._load_mapping(self.STATUS_MAPPING_FILE)
         self.link_type_mapping = self._load_mapping(self.LINK_TYPE_MAPPING_FILE)
         self.custom_field_mapping = self._load_mapping(self.CUSTOM_FIELD_MAPPING_FILE)
+        self.sprint_mapping = self._load_mapping(self.SPRINT_MAPPING_FILE)
 
         # Additional mappings that might be added during runtime
         self.issue_type_id_mapping = self._load_mapping(self.ISSUE_TYPE_ID_MAPPING_FILE)
@@ -200,6 +207,7 @@ class Mappings:
             "status_mapping",
             "link_type_mapping",
             "custom_field_mapping",
+            "sprint_mapping",
             "issue_type_id_mapping",
         ]
 

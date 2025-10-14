@@ -5,9 +5,10 @@ Handles the migration of issues from Jira to work packages in OpenProject.
 import json
 import os
 import shutil
+import sqlite3
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,18 @@ class WorkPackageMigration(BaseMigration):
 
         self.start_date_fields = self._load_start_date_fields()
 
+        # Checkpoint/fast-forward tracking
+        self._checkpoint_migration_id = "work_package_migration"
+        try:
+            data_dir_path = self.data_dir if isinstance(self.data_dir, Path) else Path(self.data_dir)
+        except Exception:
+            data_dir_path = Path(".")
+        self._checkpoint_db_path = data_dir_path.parent / ".migration_checkpoints.db"
+        self._project_latest_issue_ts: dict[str, datetime] = {}
+        if config.migration_config.get("reset_wp_checkpoints"):
+            self.logger.info("Resetting work package checkpoint store via CLI flag")
+            self._reset_checkpoint_store()
+
         # Logging
         self.logger.debug(
             "WorkPackageMigration initialized with data dir: %s",
@@ -207,6 +220,272 @@ class WorkPackageMigration(BaseMigration):
                 fields.append(field_id)
         return fields
 
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime | None:
+        """Best-effort parsing for Jira/ISO datetime payloads."""
+        if isinstance(value, datetime):
+            if value.tzinfo:
+                return value.astimezone(UTC)
+            return value.replace(tzinfo=UTC)
+
+        if not isinstance(value, str):
+            return None
+
+        candidate = value.strip()
+        if not candidate:
+            return None
+
+        # Normalize Z suffix to ISO compatible form
+        candidate_iso = candidate.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(candidate_iso)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            else:
+                parsed = parsed.astimezone(UTC)
+            return parsed
+        except ValueError:
+            pass
+
+        patterns = [
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S.%f%z",
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%dT%H:%M",
+        ]
+        for pattern in patterns:
+            try:
+                parsed = datetime.strptime(candidate, pattern)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=UTC)
+                else:
+                    parsed = parsed.astimezone(UTC)
+                return parsed
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _ensure_checkpoint_table(conn: sqlite3.Connection) -> None:
+        """Ensure the migration_checkpoints table exists with expected schema."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS migration_checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                migration_id TEXT NOT NULL,
+                checkpoint_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                data TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                error_message TEXT,
+                retry_count INTEGER DEFAULT 0
+            )
+            """,
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_migration_checkpoints_migration
+                ON migration_checkpoints (migration_id, checkpoint_type, entity_id)
+            """,
+        )
+
+    def _get_checkpoint_timestamp(self, project_key: str) -> datetime | None:
+        """Load the last successful migration timestamp for a project."""
+        db_path = self._checkpoint_db_path
+        try:
+            if not db_path or not Path(db_path).exists():
+                return None
+        except Exception:
+            return None
+
+        try:
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                self._ensure_checkpoint_table(conn)
+                row = conn.execute(
+                    """
+                    SELECT data, updated_at
+                    FROM migration_checkpoints
+                    WHERE migration_id = ?
+                      AND checkpoint_type = ?
+                      AND entity_id = ?
+                      AND status = 'completed'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (self._checkpoint_migration_id, "work_packages", project_key),
+                ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            self._handle_corrupt_checkpoint_db(exc)
+            return None
+        except Exception as exc:  # pragma: no cover - defensive logging only
+            self.logger.debug(
+                "Failed to read checkpoint metadata for %s: %s",
+                project_key,
+                exc,
+            )
+            return None
+
+        if not row:
+            return None
+
+        payload: dict[str, Any] = {}
+        data_raw = row["data"]
+        if isinstance(data_raw, (str, bytes)):
+            try:
+                payload = json.loads(data_raw)
+            except Exception:
+                payload = {}
+
+        timestamp_value = (
+            payload.get("last_success_at")
+            or payload.get("timestamp")
+            or row["updated_at"]
+        )
+        parsed = self._parse_datetime(timestamp_value)
+        return parsed
+
+    def _derive_snapshot_timestamp(self, snapshot: list[dict[str, Any]]) -> datetime | None:
+        """Derive the most recent migration timestamp from existing OpenProject rows."""
+        latest: datetime | None = None
+        for entry in snapshot or []:
+            if not isinstance(entry, dict):
+                continue
+            for key in ("jira_migration_date", "updated_at", "updated_at_utc"):
+                candidate = entry.get(key)
+                parsed = self._parse_datetime(candidate)
+                if parsed and (latest is None or parsed > latest):
+                    latest = parsed
+        return latest
+
+    @staticmethod
+    def _build_key_exclusion_clause(existing_keys: set[str]) -> str | None:
+        """Return a JQL fragment for excluding already-migrated issue keys."""
+        if not existing_keys:
+            return None
+        limited = [
+            key
+            for key in sorted({k.strip() for k in existing_keys if k and k.strip()})
+            if key
+        ][:900]  # Avoid overly long JQL payloads
+        if not limited:
+            return None
+        return f"key NOT IN ({','.join(limited)})"
+
+    def _update_project_checkpoint(
+        self,
+        project_key: str,
+        latest_timestamp: datetime,
+        migrated_count: int,
+    ) -> None:
+        """Persist the latest successful migration timestamp for a project."""
+        db_path = self._checkpoint_db_path
+        try:
+            db_path_obj = Path(db_path)
+        except Exception:
+            return
+
+        try:
+            db_path_obj.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+        payload = {
+            "project_key": project_key,
+            "last_success_at": latest_timestamp.astimezone(UTC).isoformat(),
+            "migrated_count": migrated_count,
+        }
+
+        try:
+            with sqlite3.connect(str(db_path_obj)) as conn:
+                self._ensure_checkpoint_table(conn)
+                conn.execute(
+                    """
+                    DELETE FROM migration_checkpoints
+                    WHERE migration_id = ?
+                      AND checkpoint_type = ?
+                      AND entity_id = ?
+                    """,
+                    (self._checkpoint_migration_id, "work_packages", project_key),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO migration_checkpoints (
+                        migration_id,
+                        checkpoint_type,
+                        entity_id,
+                        status,
+                        data,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self._checkpoint_migration_id,
+                        "work_packages",
+                        project_key,
+                        "completed",
+                        json.dumps(payload),
+                        datetime.now(tz=UTC).isoformat(),
+                        datetime.now(tz=UTC).isoformat(),
+                    ),
+                )
+                conn.commit()
+                self.logger.debug(
+                    "Checkpoint updated for %s at %s (migrated=%s)",
+                    project_key,
+                    latest_timestamp.isoformat(),
+                    migrated_count,
+                )
+        except sqlite3.OperationalError as exc:
+            self.logger.debug(
+                "Checkpoint update failed for %s due to schema error: %s",
+                project_key,
+                exc,
+            )
+            self._handle_corrupt_checkpoint_db(exc)
+        except sqlite3.DatabaseError as exc:
+            self._handle_corrupt_checkpoint_db(exc)
+        except Exception as exc:
+            self.logger.warning(
+                "Failed to update checkpoint for %s: %s",
+                project_key,
+                exc,
+            )
+
+    def _reset_checkpoint_store(self) -> None:
+        """Remove or rotate the checkpoint database file."""
+        try:
+            path = Path(self._checkpoint_db_path)
+        except Exception:
+            return
+
+        if not path:
+            return
+
+        try:
+            if path.exists():
+                rotated = path.with_suffix(f"{path.suffix}.{datetime.now(tz=UTC).strftime('%Y%m%d%H%M%S')}.bak")
+                path.rename(rotated)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Failed to rotate checkpoint store: %s", exc)
+        finally:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _handle_corrupt_checkpoint_db(self, exc: Exception) -> None:
+        """Rename a corrupt checkpoint store and reset it."""
+        self.logger.warning("Checkpoint store appears corrupt: %s. Resetting.", exc)
+        self._reset_checkpoint_store()
+
     def _build_status_category_lookup(self) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
         """Load Jira statuses and map their categories by id/name."""
 
@@ -260,62 +539,84 @@ class WorkPackageMigration(BaseMigration):
         start_at = 0
         batch_size = config.migration_config.get("batch_size", 100)
 
+        # Reset per-project tracking for latest issue timestamps
+        self._project_latest_issue_ts.pop(project_key, None)
+
         # Build delta JQL if fast-forward is enabled
-        fast_forward = str(os.environ.get("J2O_FAST_FORWARD", "1")).lower() in {"1", "true"}
+        fast_forward_flag = str(os.environ.get("J2O_FAST_FORWARD", "1")).lower()
+        fast_forward = fast_forward_flag in {"1", "true", "yes", "on"}
         backoff_seconds = int(os.environ.get("J2O_FF_BACKOFF_SECONDS", "7200"))  # default 2h
-        jql = f'project = "{project_key}" ORDER BY created ASC'
+        base_condition = f'project = "{project_key}"'
+        ordering = "ORDER BY created ASC"
+        jql = f"{base_condition} {ordering}"
+        existing_keys: set[str] = set()
+
         if fast_forward:
+            checkpoint_ts = self._get_checkpoint_timestamp(project_key)
+            snapshot: list[dict[str, Any]] = []
+            op_project_id = None
             try:
-                # Resolve OpenProject project id (existing code later also resolves; do lightweight here)
+                project_entry = self.project_mapping.get(project_key, {}) or {}
+                op_project_id = project_entry.get("openproject_id")
+            except Exception:
                 op_project_id = None
+
+            if op_project_id:
                 try:
-                    op_project_id = self.project_mapping.get(project_key, {}).get("openproject_id")
-                except Exception:
-                    op_project_id = None
-                if op_project_id:
-                    # Ensure CF exists and snapshot existing keys/migration dates
                     _ = self.op_client.ensure_work_package_custom_field("Jira Issue Key", "string")
-                    # OpenProject WP CF supports 'date' but not 'datetime'
                     _ = self.op_client.ensure_work_package_custom_field("Jira Migration Date", "date")
                     snapshot = self.op_client.get_project_wp_cf_snapshot(int(op_project_id))
                     existing_keys = {
                         str(row.get("jira_issue_key")).strip()
                         for row in snapshot
-                        if isinstance(row.get("jira_issue_key"), str) and row.get("jira_issue_key").strip()
+                        if isinstance(row, dict)
+                        and isinstance(row.get("jira_issue_key"), str)
+                        and row.get("jira_issue_key").strip()
                     }
-                    # Determine last migration timestamp (CF preferred, fallback to updated_at)
-                    import datetime as _dt
-                    def _parse(ts: str | None) -> _dt.datetime | None:
-                        if not ts:
-                            return None
-                        try:
-                            return _dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(_dt.timezone.utc)
-                        except Exception:
-                            return None
-                    last_ts: _dt.datetime | None = None
-                    for row in snapshot:
-                        ts = _parse(row.get("jira_migration_date")) or _parse(row.get("updated_at"))
-                        if ts and (last_ts is None or ts > last_ts):
-                            last_ts = ts
-                    if last_ts is None:
-                        last_ts = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(days=365*10)
-                    # Apply backoff
-                    last_ts = last_ts - _dt.timedelta(seconds=backoff_seconds)
-                    # Jira JQL expects local time without seconds; use ISO-like pattern
-                    jql_ts = last_ts.strftime("%Y-%m-%d %H:%M")
-                    # Form delta JQL: updated >= last_ts OR key NOT IN existing_keys
-                    if existing_keys:
-                        # Chunk large IN lists if needed later (basic initial implementation)
-                        excluded = ",".join(sorted(existing_keys)[:900])
-                        jql = (
-                            f'project = "{project_key}" AND '
-                            f'(updated >= "{jql_ts}" OR key NOT IN ({excluded})) ORDER BY updated ASC'
+                    if not checkpoint_ts:
+                        checkpoint_ts = self._derive_snapshot_timestamp(snapshot)
+                except Exception as op_err:  # pragma: no cover - observational logging
+                    self.logger.debug(
+                        "Failed to inspect existing work packages for %s: %s",
+                        project_key,
+                        op_err,
+                    )
+
+            exclusion_clause = self._build_key_exclusion_clause(existing_keys)
+
+            if checkpoint_ts:
+                target_ts = checkpoint_ts
+                effective_cutoff = target_ts - timedelta(seconds=backoff_seconds)
+                cutoff_str = effective_cutoff.strftime("%Y-%m-%d %H:%M")
+                ordering = "ORDER BY updated ASC"
+                if exclusion_clause:
+                    jql = (
+                        f'{base_condition} AND '
+                        f'(updated >= "{cutoff_str}" OR {exclusion_clause}) {ordering}'
+                    )
+                    if len(existing_keys) > 900:
+                        self.logger.debug(
+                            "Truncated existing key exclusion list for %s to first 900 entries",
+                            project_key,
                         )
-                    else:
-                        jql = f'project = "{project_key}" AND updated >= "{jql_ts}" ORDER BY updated ASC'
-            except Exception as _ff_err:
-                logger.warning("Fast-forward JQL construction failed: %s; falling back to full scan", _ff_err)
-                jql = f'project = "{project_key}" ORDER BY created ASC'
+                else:
+                    jql = f'{base_condition} AND updated >= "{cutoff_str}" {ordering}'
+                self.logger.info(
+                    "Fast-forward enabled for %s using checkpoint %s (effective cutoff %s, backoff %ss)",
+                    project_key,
+                    target_ts.isoformat(),
+                    effective_cutoff.isoformat(),
+                    backoff_seconds,
+                )
+            else:
+                if exclusion_clause:
+                    jql = f"{base_condition} AND {exclusion_clause} {ordering}"
+                else:
+                    jql = f"{base_condition} {ordering}"
+                self.logger.info(
+                    "Fast-forward requested for %s but no checkpoint available; using fallback JQL",
+                    project_key,
+                )
         fields = None  # Get all fields
         expand = "changelog"  # Include changelog for history
 
@@ -589,6 +890,18 @@ class WorkPackageMigration(BaseMigration):
                     "changelog": raw.get("changelog"),
                 }
                 all_issues.append(issue_dict)
+
+                try:
+                    fields = issue_dict.get("fields", {}) or {}
+                    updated_dt = self._parse_datetime(fields.get("updated"))
+                    if updated_dt:
+                        current = self._project_latest_issue_ts.get(project_key)
+                        if current is None or updated_dt > current:
+                            self._project_latest_issue_ts[project_key] = updated_dt
+                except Exception:
+                    # Timestamp tracking is best-effort; ignore parsing failures
+                    pass
+
                 issue_count += 1
                 if issue_count % 500 == 0:
                     self.logger.info(
@@ -2893,6 +3206,20 @@ def _apply_required_defaults(
                         successful_projects.append(
                             {"project_key": project_key, "created_count": 0},
                         )
+                        latest_ts = self._project_latest_issue_ts.get(project_key)
+                        if latest_ts:
+                            try:
+                                self._update_project_checkpoint(
+                                    project_key,
+                                    latest_ts,
+                                    migrated_count=0,
+                                )
+                            except Exception as checkpoint_err:  # pragma: no cover - diagnostic only
+                                self.logger.debug(
+                                    "Checkpoint update skipped for %s (no-op branch): %s",
+                                    project_key,
+                                    checkpoint_err,
+                                )
                         # Proceed to next project without invoking Rails
                         continue
 
@@ -2981,6 +3308,20 @@ def _apply_required_defaults(
                 successful_projects.append(
                     {"project_key": project_key, "created_count": created_count},
                 )
+                latest_ts = self._project_latest_issue_ts.get(project_key)
+                if latest_ts:
+                    try:
+                        self._update_project_checkpoint(
+                            project_key,
+                            latest_ts,
+                            migrated_count=created_count,
+                        )
+                    except Exception as checkpoint_err:  # pragma: no cover - diagnostic only
+                        self.logger.warning(
+                            "Failed to persist checkpoint for %s: %s",
+                            project_key,
+                            checkpoint_err,
+                        )
 
         # Save the work package mapping
         data_handler.save(

@@ -8,7 +8,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from jira.resources import Issue
+try:
+    from jira.resources import Issue  # type: ignore
+except (ImportError, AttributeError):  # pragma: no cover - fallback when jira package layout changes
+    class Issue:  # type: ignore[misc]
+        pass
+
 from src.migrations.work_package_migration import WorkPackageMigration
 
 

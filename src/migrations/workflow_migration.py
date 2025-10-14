@@ -1,438 +1,315 @@
-"""Workflow migration module for Jira to OpenProject migration.
+"""Workflow migration: aligns Jira workflows with OpenProject transitions."""
 
-Handles the migration of workflow states and their transitions from Jira to OpenProject.
-"""
+from __future__ import annotations
 
-import json
-from pathlib import Path
+from collections import defaultdict
 from typing import Any
 
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
-from src.display import ProgressTracker, configure_logging
-
-# Get logger from config
-logger = configure_logging("INFO", None)
+from src.migrations.base_migration import BaseMigration, register_entity_types
+from src.models import ComponentResult
 
 
-class WorkflowMigration:
-    """Handles the migration of workflows from Jira to OpenProject.
+@register_entity_types("workflows")
+class WorkflowMigration(BaseMigration):
+    """Synchronise Jira workflow transitions with OpenProject workflow records."""
 
-    This class is responsible for:
-    1. Extracting workflow definitions from Jira
-    2. Creating corresponding workflow states in OpenProject
-    3. Mapping workflow transitions between the systems
-    4. Setting up workflow configurations in OpenProject
-    """
+    def __init__(self, jira_client, op_client) -> None:  # noqa: D107
+        super().__init__(jira_client=jira_client, op_client=op_client)
+        self.mappings = config.mappings
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
-        """Initialize the workflow migration tools.
+    # ------------------------------------------------------------------ #
+    # BaseMigration overrides                                            #
+    # ------------------------------------------------------------------ #
 
-        Args:
-            jira_client: Initialized Jira client instance.
-            op_client: Initialized OpenProject client instance.
-
-        """
-        self.jira_client = jira_client
-        self.op_client = op_client
-        self.jira_statuses: list[dict[str, Any]] = []
-        self.jira_workflows: list[dict[str, Any]] = []
-        self.op_statuses: list[dict[str, Any]] = []
-        self.status_mapping: dict[str, Any] = {}
-        self.workflow_mapping: dict[str, Any] = {}
-
-        self.data_dir: Path = config.get_path("data")
-
-    def extract_jira_workflows(self) -> list[dict[str, Any]]:
-        """Extract workflow definitions from Jira.
-
-        Returns:
-            List of Jira workflow definitions
-
-        """
-        logger.info("Extracting workflows from Jira...")
-
-        self.jira_workflows = self._get_jira_workflows()
-
-        logger.info(
-            f"Extracted {len(self.jira_workflows)} workflows from Jira",
-        )
-
-        self._save_to_json(self.jira_workflows, "jira_workflows.json")
-
-        return self.jira_workflows
-
-    def _get_jira_workflows(self) -> list[dict[str, Any]]:
-        """Get workflow definitions from Jira.
-
-        Returns:
-            List of workflow definitions
-
-        Raises:
-            RuntimeError: When unable to retrieve workflows from Jira
-
-        """
-        try:
-            url = f"{self.jira_client.base_url}/rest/api/2/workflow"
-            response = self.jira_client.jira._session.get(url)  # noqa: SLF001
-            response.raise_for_status()
-            workflows = response.json()
-
-            for workflow in workflows:
-                workflow_name = workflow.get("name", "")
-                url = f"{self.jira_client.base_url}/rest/api/2/workflow/{workflow_name}/transitions"
-
-                try:
-                    response = self.jira_client.jira._session.get(url)  # noqa: SLF001
-                    response.raise_for_status()
-                    transitions = response.json()
-                    workflow["transitions"] = transitions
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to get transitions for workflow {workflow_name}: {e}",
-                    )
-                    workflow["transitions"] = []
-
-            return workflows
-        except Exception as e:
-            logger.exception("Failed to get workflows from Jira: %s", e)
-            msg = f"Unable to retrieve workflows from Jira: {e}"
-            raise RuntimeError(msg) from e
-
-    def extract_jira_statuses(self) -> list[dict[str, Any]]:
-        """Extract workflow statuses from Jira.
-
-        Returns:
-            List of Jira status definitions
-
-        Raises:
-            RuntimeError: When unable to retrieve statuses from Jira
-
-        """
-        logger.info("Extracting statuses from Jira...")
+    def _extract(self) -> ComponentResult:
+        """Gather workflow schemes, transitions, and OpenProject roles."""
 
         try:
-            url = f"{self.jira_client.base_url}/rest/api/2/status"
-            response = self.jira_client.jira._session.get(url)  # noqa: SLF001
-            response.raise_for_status()
-            statuses = response.json()
-
-            logger.info("Extracted %s statuses from Jira", len(statuses))
-
-            self.jira_statuses = statuses
-            self._save_to_json(statuses, "jira_statuses.json")
-
-            return statuses
-        except Exception as e:
-            logger.exception("Failed to get statuses from Jira: %s", e)
-            msg = f"Unable to retrieve statuses from Jira: {e}"
-            raise RuntimeError(msg) from e
-
-    def extract_openproject_statuses(self) -> list[dict[str, Any]]:
-        """Extract workflow statuses from OpenProject.
-
-        Returns:
-            List of OpenProject status definitions
-
-        Raises:
-            RuntimeError: When unable to retrieve statuses from OpenProject
-
-        """
-        logger.info("Extracting statuses from OpenProject...")
-
-        try:
-            self.op_statuses = self.op_client.get_statuses()
-        except Exception as e:
-            logger.exception("Failed to get statuses from OpenProject: %s", e)
-            msg = f"Unable to retrieve statuses from OpenProject: {e}"
-            raise RuntimeError(
-                msg,
-            ) from e
-
-        logger.info(
-            f"Extracted {len(self.op_statuses)} statuses from OpenProject",
-        )
-
-        self._save_to_json(self.op_statuses, "openproject_statuses.json")
-
-        return self.op_statuses
-
-    def create_status_mapping(self) -> dict[str, Any]:
-        """Create a mapping between Jira statuses and OpenProject statuses.
-
-        Returns:
-            Dictionary mapping Jira status IDs to OpenProject status data
-
-        """
-        logger.info("Creating status mapping...")
-
-        if not self.jira_statuses:
-            self.extract_jira_statuses()
-
-        if not self.op_statuses:
-            self.extract_openproject_statuses()
-
-        op_statuses_by_name = {
-            status.get("name", "").lower(): status for status in self.op_statuses
-        }
-
-        mapping = {}
-
-        with ProgressTracker(
-            "Mapping statuses",
-            len(self.jira_statuses),
-            "Recent Status Mappings",
-        ) as tracker:
-            for jira_status in self.jira_statuses:
-                jira_id = jira_status.get("id")
-                jira_name = jira_status.get("name")
-                jira_name_lower = jira_name.lower()
-
-                tracker.update_description(f"Mapping status: {jira_name}")
-
-                op_status = op_statuses_by_name.get(jira_name_lower)
-
-                if op_status:
-                    mapping[jira_id] = {
-                        "jira_id": jira_id,
-                        "jira_name": jira_name,
-                        "openproject_id": op_status.get("id"),
-                        "openproject_name": op_status.get("name"),
-                        "is_closed": op_status.get("isClosed", False),
-                        "matched_by": "name",
-                    }
-                    tracker.add_log_item(
-                        f"Matched by name: {jira_name} → {op_status.get('name')}",
-                    )
-                else:
-                    match_found = False
-                    for op_name, op_status in op_statuses_by_name.items():
-                        if op_name.replace(" ", "").lower() == jira_name_lower.replace(
-                            " ",
-                            "",
-                        ):
-                            mapping[jira_id] = {
-                                "jira_id": jira_id,
-                                "jira_name": jira_name,
-                                "openproject_id": op_status.get("id"),
-                                "openproject_name": op_status.get("name"),
-                                "is_closed": op_status.get("isClosed", False),
-                                "matched_by": "normalized_name",
-                            }
-                            tracker.add_log_item(
-                                f"Matched by normalized name: {jira_name} → {op_status.get('name')}",
-                            )
-                            match_found = True
-                            break
-
-                    if not match_found:
-                        mapping[jira_id] = {
-                            "jira_id": jira_id,
-                            "jira_name": jira_name,
-                            "openproject_id": None,
-                            "openproject_name": None,
-                            "is_closed": False,
-                            "matched_by": "none",
-                        }
-                        tracker.add_log_item(f"No match found: {jira_name}")
-
-                tracker.increment()
-
-        self.status_mapping = mapping
-        from src import config as _cfg
-        _cfg.mappings.set_mapping("status", mapping)
-
-        total_statuses = len(mapping)
-        matched_statuses = sum(
-            1 for status in mapping.values() if status["matched_by"] != "none"
-        )
-        match_percentage = (
-            (matched_statuses / total_statuses) * 100 if total_statuses > 0 else 0
-        )
-
-        logger.info(
-            f"Status mapping created for {total_statuses} statuses",
-        )
-        logger.info(
-            f"Successfully matched {matched_statuses} statuses ({match_percentage:.1f}%)",
-        )
-
-        return mapping
-
-    def create_status_in_openproject(
-        self,
-        jira_status: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Create a status in OpenProject based on a Jira status.
-
-        Args:
-            jira_status: The Jira status definition
-
-        Returns:
-            The created OpenProject status
-
-        """
-        name = jira_status.get("name")
-
-        status_category = jira_status.get("statusCategory", {})
-        category_key = status_category.get("key", "undefined")
-        is_closed = category_key.lower() == "done"
-
-        color = status_category.get("colorName", "#1F75D3")
-
-        logger.info(
-            "Creating status in OpenProject: %s (Closed: %s).",
-            name,
-            is_closed,
-        )
-
-        try:
-            result = self.op_client.create_status(
-                name=name,
-                color=color,
-                is_closed=is_closed,
+            issue_types = self.jira_client.get_issue_types()
+            schemes = self.jira_client.get_workflow_schemes()
+            roles = self.op_client.get_roles()
+        except Exception as exc:  # noqa: BLE001
+            return ComponentResult(
+                success=False,
+                message=f"Failed to extract workflow metadata: {exc}",
+                error=str(exc),
             )
 
-            if result.get("success", False):
-                logger.info("Successfully created status: %s.", name)
-            else:
-                message = "Failed to create status: {} - {}.".format(
-                    name,
-                    result.get("message", "Unknown error"),
-                )
-                logger.error(message)
-                raise RuntimeError(message)
-        except Exception:
-            logger.exception("Error creating status %s.", name)
-            raise
-
-        return result.get("data")
-
-    def migrate_statuses(self) -> dict[str, Any]:
-        """Migrate statuses from Jira to OpenProject.
-
-        Returns:
-            Updated mapping between Jira statuses and OpenProject statuses
-
-        """
-        logger.info("Starting status migration...")
-
-        if not self.jira_statuses:
-            self.extract_jira_statuses()
-
-        if not self.op_statuses:
-            self.extract_openproject_statuses()
-
-        if not self.status_mapping:
-            self.create_status_mapping()
-
-        statuses_to_create = [
-            (jira_id, mapping)
-            for jira_id, mapping in self.status_mapping.items()
-            if mapping["matched_by"] == "none"
-        ]
-
-        logger.info(
-            f"Found {len(statuses_to_create)} statuses that need to be created in OpenProject",
-        )
-
-        with ProgressTracker(
-            "Migrating statuses",
-            len(statuses_to_create),
-            "Recent Statuses",
-        ) as tracker:
-            for _i, (jira_id, mapping) in enumerate(statuses_to_create):
-                jira_status = next(
-                    (s for s in self.jira_statuses if s.get("id") == jira_id),
-                    None,
-                )
-
-                if not jira_status:
-                    logger.warning(
-                        f"Could not find Jira status definition for ID: {jira_id}",
-                    )
-                    tracker.add_log_item(f"Skipped: Unknown Jira status ID {jira_id}")
-                    tracker.increment()
-                    continue
-
-                status_name = jira_status.get("name", "Unknown")
-                tracker.update_description(f"Creating status: {status_name}")
-
-                op_status = self.create_status_in_openproject(jira_status)
-
-                if op_status:
-                    mapping["openproject_id"] = op_status.get("id")
-                    mapping["openproject_name"] = op_status.get("name")
-                    mapping["is_closed"] = op_status.get("isClosed", False)
-                    mapping["matched_by"] = "created"
-                    tracker.add_log_item(
-                        f"Created: {status_name} (ID: {op_status.get('id')})",
-                    )
-                else:
-                    tracker.add_log_item(f"Failed: {status_name}")
-
-                tracker.increment()
-
-        from src import config as _cfg
-        _cfg.mappings.set_mapping("status", self.status_mapping)
-
-        total_statuses = len(self.status_mapping)
-        matched_statuses = sum(
-            1
-            for status in self.status_mapping.values()
-            if status["matched_by"] != "none"
-        )
-        created_statuses = sum(
-            1
-            for status in self.status_mapping.values()
-            if status["matched_by"] == "created"
-        )
-
-        logger.info(
-            f"Status migration complete for {total_statuses} statuses",
-        )
-        match_percentage = (
-            (matched_statuses / total_statuses * 100) if total_statuses > 0 else 0
-        )
-        logger.info(
-            f"Successfully matched {matched_statuses} statuses ({match_percentage:.1f}% of total)",
-        )
-        logger.info(
-            f"- Existing matches: {matched_statuses - created_statuses}",
-        )
-        logger.info("- Newly created: %s", created_statuses)
-
-        return self.status_mapping
-
-    def create_workflow_configuration(self) -> dict[str, Any]:
-        """Create workflow configuration in OpenProject.
-
-        Returns:
-            Result of the workflow configuration
-
-        """
-        logger.info("Creating workflow configuration in OpenProject...")
-
-        result = {
-            "success": True,
-            "message": "Workflow configuration handled automatically by OpenProject",
-            "details": "OpenProject automatically makes all statuses available for all work package types by default.",
+        issue_type_by_id = {
+            str(item.get("id")): item.get("name")
+            for item in issue_types
+            if item.get("id") and item.get("name")
         }
 
-        self._save_to_json(result, "workflow_configuration.json")
+        issue_type_to_workflow: dict[str, str] = {}
+        workflow_names: set[str] = set()
+        for scheme in schemes:
+            mappings = scheme.get("issueTypeMappings") or scheme.get("mappings") or {}
+            if isinstance(mappings, dict):
+                for issue_type_id, workflow_name in mappings.items():
+                    jira_name = issue_type_by_id.get(str(issue_type_id))
+                    if jira_name and isinstance(workflow_name, str) and workflow_name:
+                        issue_type_to_workflow[jira_name] = workflow_name
+                        workflow_names.add(workflow_name)
+            default_workflow = scheme.get("defaultWorkflow")
+            if (
+                isinstance(default_workflow, str)
+                and default_workflow
+                and not issue_type_to_workflow
+            ):
+                # Fallback: apply default workflow to every known issue type if no explicit mappings
+                for name in issue_type_by_id.values():
+                    if name not in issue_type_to_workflow:
+                        issue_type_to_workflow[name] = default_workflow
+                        workflow_names.add(default_workflow)
 
+        workflow_transitions: dict[str, list[dict[str, Any]]] = {}
+        workflow_statuses: dict[str, list[dict[str, Any]]] = {}
+        for workflow_name in workflow_names:
+            try:
+                transitions = self.jira_client.get_workflow_transitions(workflow_name)
+            except Exception:  # noqa: BLE001
+                transitions = []
+            workflow_transitions[workflow_name] = transitions
+
+            try:
+                statuses = self.jira_client.get_workflow_statuses(workflow_name)
+            except Exception:  # noqa: BLE001
+                statuses = []
+            workflow_statuses[workflow_name] = statuses if isinstance(statuses, list) else []
+
+        data = {
+            "issue_type_to_workflow": issue_type_to_workflow,
+            "workflow_transitions": workflow_transitions,
+            "workflow_statuses": workflow_statuses,
+            "roles": roles,
+        }
+
+        return ComponentResult(
+            success=True,
+            data=data,
+            total_count=len(workflow_transitions),
+        )
+
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
+        """Translate Jira workflows into OpenProject workflow transition payloads."""
+
+        if not extracted.success or not isinstance(extracted.data, dict):
+            return ComponentResult(
+                success=False,
+                message="Workflow extraction failed",
+                error=extracted.message or "extract phase returned no data",
+            )
+
+        issue_type_to_workflow: dict[str, str] = extracted.data.get("issue_type_to_workflow", {})
+        workflow_transitions: dict[str, list[dict[str, Any]]] = extracted.data.get(
+            "workflow_transitions",
+            {},
+        )
+        roles: list[dict[str, Any]] = extracted.data.get("roles", [])
+
+        status_mapping = self.mappings.get_mapping("status") or {}
+        issue_type_mapping = self.mappings.get_mapping("issue_type") or {}
+
+        status_by_id = {
+            str(jira_id): entry
+            for jira_id, entry in status_mapping.items()
+            if isinstance(jira_id, str) and isinstance(entry, dict)
+        }
+        status_by_name = {
+            str(entry.get("jira_name", "")).lower(): entry
+            for entry in status_mapping.values()
+            if isinstance(entry, dict) and entry.get("jira_name")
+        }
+
+        desired_role_names = config.migration_config.get(
+            "workflow_roles",
+            ["Project admin", "Project member"],
+        )
+        role_ids = [
+            int(role["id"])
+            for role in roles
+            if int(role.get("id", 0)) > 0 and role.get("name") in desired_role_names
+        ]
+        if not role_ids:
+            role_ids = [int(role["id"]) for role in roles if int(role.get("id", 0)) > 0]
+
+        dedup_transitions: dict[tuple[int, int, int], dict[str, Any]] = {}
+        skipped: list[dict[str, Any]] = []
+
+        for issue_type_name, workflow_name in issue_type_to_workflow.items():
+            mapping_entry = issue_type_mapping.get(issue_type_name)
+            if not isinstance(mapping_entry, dict):
+                skipped.append(
+                    {
+                        "reason": "missing_issue_type_mapping",
+                        "issue_type": issue_type_name,
+                    },
+                )
+                continue
+
+            type_id = int(mapping_entry.get("openproject_id", 0) or 0)
+            if type_id <= 0:
+                skipped.append(
+                    {
+                        "reason": "invalid_openproject_type",
+                        "issue_type": issue_type_name,
+                    },
+                )
+                continue
+
+            for transition in workflow_transitions.get(workflow_name, []):
+                to_block = transition.get("to") or {}
+                to_status_id = str(to_block.get("id") or "").strip()
+                to_entry = status_by_id.get(to_status_id) or status_by_name.get(
+                    str(to_block.get("name", "")).lower(),
+                )
+                if not to_entry:
+                    skipped.append(
+                        {
+                            "reason": "missing_status_mapping",
+                            "issue_type": issue_type_name,
+                            "workflow": workflow_name,
+                            "status_id": to_status_id,
+                        },
+                    )
+                    continue
+
+                op_to = int(to_entry.get("openproject_id", 0) or 0)
+                if op_to <= 0:
+                    continue
+
+                from_status_ids = transition.get("from")
+                if isinstance(from_status_ids, str):
+                    from_status_list = [from_status_ids]
+                elif isinstance(from_status_ids, list):
+                    from_status_list = from_status_ids
+                else:
+                    from_status_list = []
+
+                for from_status_id in from_status_list:
+                    from_entry = (
+                        status_by_id.get(str(from_status_id))
+                        or status_by_name.get(
+                            str(transition.get("name", "")).lower(),
+                        )
+                    )
+                    if not from_entry:
+                        skipped.append(
+                            {
+                                "reason": "missing_status_mapping",
+                                "issue_type": issue_type_name,
+                                "workflow": workflow_name,
+                                "status_id": str(from_status_id),
+                            },
+                        )
+                        continue
+
+                    op_from = int(from_entry.get("openproject_id", 0) or 0)
+                    if op_from <= 0:
+                        continue
+
+                    key = (type_id, op_from, op_to)
+                    dedup_transitions.setdefault(
+                        key,
+                        {
+                            "type_id": type_id,
+                            "from_status_id": op_from,
+                            "to_status_id": op_to,
+                            "jira_issue_type": issue_type_name,
+                            "jira_workflow": workflow_name,
+                        },
+                    )
+
+        mapped = {
+            "transitions": list(dedup_transitions.values()),
+            "role_ids": role_ids,
+            "skipped": skipped,
+        }
+
+        return ComponentResult(
+            success=True,
+            data=mapped,
+            total_count=len(dedup_transitions),
+            details={
+                "transitions_planned": len(dedup_transitions),
+                "skipped": len(skipped),
+            },
+        )
+
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
+        """Create workflow entries in OpenProject."""
+
+        if not mapped.success or not isinstance(mapped.data, dict):
+            return ComponentResult(
+                success=False,
+                message="Workflow mapping failed",
+                error=mapped.message or "map phase returned no data",
+            )
+
+        transitions: list[dict[str, Any]] = mapped.data.get("transitions", [])
+        role_ids: list[int] = mapped.data.get("role_ids", [])
+
+        if not transitions:
+            return ComponentResult(
+                success=True,
+                message="No workflow transitions to synchronise",
+                details={"created": 0, "existing": 0},
+            )
+
+        summary = self.op_client.sync_workflow_transitions(transitions, role_ids)
+        created = int(summary.get("created", 0))
+        existing = int(summary.get("existing", 0))
+        errors = int(summary.get("errors", 0))
+
+        success = errors == 0
+        return ComponentResult(
+            success=success,
+            message="Workflow transitions synchronised",
+            success_count=created,
+            failed_count=errors,
+            details={
+                "created": created,
+                "existing": existing,
+                "errors": errors,
+                "skipped": len(mapped.data.get("skipped", [])),
+            },
+        )
+
+    def run(self) -> ComponentResult:
+        """Execute the workflow migration pipeline (extract → map → load)."""
+
+        self.logger.info("Starting workflow transition migration")
+
+        extracted = self._extract()
+        if not extracted.success:
+            self.logger.error(
+                "Workflow extraction failed: %s",
+                extracted.message or extracted.error,
+            )
+            return extracted
+
+        mapped = self._map(extracted)
+        if not mapped.success:
+            self.logger.error(
+                "Workflow mapping failed: %s",
+                mapped.message or mapped.error,
+            )
+            return mapped
+
+        result = self._load(mapped)
+        if result.success:
+            self.logger.info(
+                "Workflow migration completed (created=%s, existing=%s)",
+                result.details.get("created", 0),
+                result.details.get("existing", 0),
+            )
+        else:
+            self.logger.error(
+                "Workflow migration failed: created=%s existing=%s errors=%s",
+                result.details.get("created", 0),
+                result.details.get("existing", 0),
+                result.details.get("errors", 0),
+            )
         return result
-
-    def _save_to_json(self, data: Any, filename: str) -> None:
-        """Save data to a JSON file.
-
-        Args:
-            data: Data to save
-            filename: Name of the file to save to
-
-        """
-        filepath = Path(self.data_dir) / filename
-        with filepath.open("w") as f:
-            json.dump(data, f, indent=2)
-        logger.info("Saved data to %s", filepath)

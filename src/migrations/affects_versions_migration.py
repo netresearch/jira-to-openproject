@@ -29,9 +29,7 @@ AFFECTS_VERSIONS_CF_NAME = "Affects Versions"
 class AffectsVersionsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
-
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
     def _ensure_cf(self) -> int:
         try:
@@ -118,5 +116,23 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
                 failed += 1
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+    def run(self) -> ComponentResult:
+        """Execute migration pipeline."""
+        self.logger.info("Starting %s migration", self.__class__.__name__)
 
+        extracted = self._extract()
+        if not extracted.success:
+            self.logger.error("%s extraction failed: %s", self.__class__.__name__, extracted.message or extracted.error)
+            return extracted
 
+        mapped = self._map(extracted)
+        if not mapped.success:
+            self.logger.error("%s mapping failed: %s", self.__class__.__name__, mapped.message or mapped.error)
+            return mapped
+
+        loaded = self._load(mapped)
+        if loaded.success:
+            self.logger.info("%s migration completed (updated=%s, failed=%s)", self.__class__.__name__, loaded.updated, loaded.failed)
+        else:
+            self.logger.error("%s migration encountered failures (failed=%s)", self.__class__.__name__, loaded.failed)
+        return loaded

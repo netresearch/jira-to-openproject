@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 #!/usr/bin/env python3
 """Test module for RailsConsoleClient.
 
@@ -10,7 +15,6 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.clients.rails_console_client import (
     CommandExecutionError,

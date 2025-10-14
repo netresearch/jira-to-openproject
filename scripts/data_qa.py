@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
@@ -116,6 +117,13 @@ def summarize(data_dir: Path, projects: list[str] | None) -> None:
 
     attachment_dir = data_dir / "attachments"
     attachment_total = sum(1 for _ in attachment_dir.glob("**/*") if _.is_file()) if attachment_dir.exists() else 0
+    group_mapping = load_json(data_dir / "group_mapping.json") or {}
+    total_groups = len(group_mapping) if isinstance(group_mapping, dict) else 0
+    role_backed = (
+        sum(1 for entry in group_mapping.values() if isinstance(entry, dict) and entry.get("role_backed"))
+        if isinstance(group_mapping, dict)
+        else 0
+    )
 
     known_projects = wp_counts.keys() or jira_counts.keys() or lead_info.keys()
     projects_to_show = iter_projects(projects, known_projects)
@@ -124,6 +132,8 @@ def summarize(data_dir: Path, projects: list[str] | None) -> None:
     print(f"📦 Work package mappings: {len(wp_counts)} project(s)")
     if attachment_total:
         print(f"📎 Local attachments staged: {attachment_total}")
+    if total_groups:
+        print(f"👥 Group mappings cached: {total_groups} (role-backed: {role_backed})")
     print()
 
     for project in projects_to_show:
@@ -195,6 +205,25 @@ def summarize(data_dir: Path, projects: list[str] | None) -> None:
             print(f"  ⚠️ {warning}")
 
         print()
+
+    checkpoint_path = data_dir.parent / ".migration_checkpoints.db"
+    if checkpoint_path.exists():
+        try:
+            with sqlite3.connect(checkpoint_path) as conn:
+                total = conn.execute("SELECT COUNT(*) FROM migration_checkpoints").fetchone()[0]
+                completed = conn.execute(
+                    "SELECT COUNT(*) FROM migration_checkpoints WHERE status='completed'",
+                ).fetchone()[0]
+                latest = conn.execute(
+                    "SELECT MAX(updated_at) FROM migration_checkpoints WHERE updated_at IS NOT NULL",
+                ).fetchone()[0]
+            print("Checkpoint store summary:")
+            print(f"  • Entries: {total} (completed: {completed})")
+            if latest:
+                print(f"  • Last update: {latest}")
+            print()
+        except sqlite3.DatabaseError as exc:
+            print(f"⚠️  Failed to read checkpoint store {checkpoint_path}: {exc}")
 
 
 def main() -> None:

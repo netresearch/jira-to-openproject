@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 #!/usr/bin/env python3
 """Integration tests for batch API idempotency support.
 
@@ -14,7 +19,6 @@ import threading
 import time
 from unittest.mock import patch
 
-import pytest
 
 from src.clients.openproject_client import OpenProjectClient
 from src.utils.idempotency_manager import reset_idempotency_manager

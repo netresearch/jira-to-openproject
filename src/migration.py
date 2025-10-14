@@ -14,9 +14,10 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from types import SimpleNamespace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
@@ -58,6 +59,10 @@ from src.migrations.watcher_migration import WatcherMigration
 from src.migrations.time_entry_migration import TimeEntryMigration
 from src.migrations.user_migration import UserMigration
 from src.migrations.work_package_migration import WorkPackageMigration
+from src.migrations.workflow_migration import WorkflowMigration
+from src.migrations.agile_board_migration import AgileBoardMigration
+from src.migrations.admin_scheme_migration import AdminSchemeMigration
+from src.migrations.reporting_migration import ReportingMigration
 from src.models import ComponentResult, MigrationResult
 from src.performance.migration_performance_manager import (
     MigrationPerformanceManager,
@@ -70,6 +75,60 @@ if TYPE_CHECKING:
     from src.migrations.base_migration import BaseMigration
 
 console = Console()
+
+DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
+    "users",
+    "groups",
+    "custom_fields",
+    "companies",
+    "accounts",
+    "projects",
+    "priorities",
+    "link_types",
+    "issue_types",
+    "status_types",
+    "workflows",
+    "agile_boards",
+    "sprint_epic",
+    "work_packages",
+    "versions",
+    "components",
+    "labels",
+    "resolutions",
+    "story_points",
+    "estimates",
+    "security_levels",
+    "votes_reactions",
+    "remote_links",
+    "relations",
+    "watchers",
+    "attachments",
+    "attachment_provenance",
+    "native_tags",
+    "inline_refs",
+    "category_defaults",
+    "affects_versions",
+    "customfields_generic",
+    "time_entries",
+    "admin_schemes",
+    "reporting",
+]
+
+
+PREDEFINED_PROFILES: dict[str, list[ComponentName]] = {
+    "full": DEFAULT_COMPONENT_SEQUENCE.copy(),
+    "metadata_refresh": [
+        "projects",
+        "issue_types",
+        "status_types",
+        "workflows",
+        "agile_boards",
+        "sprint_epic",
+        "admin_schemes",
+        "reporting",
+    ],
+}
+
 
 # Helper: strictly detect any error condition in a component result
 def _component_has_errors(result: ComponentResult | None) -> bool:  # noqa: C901, PLR0911
@@ -278,6 +337,10 @@ def _build_component_factories(
         "inline_refs": lambda: InlineRefsMigration(jira_client=jira_client, op_client=op_client),
         "native_tags": lambda: NativeTagsMigration(jira_client=jira_client, op_client=op_client),
         "accounts": lambda: AccountMigration(jira_client=jira_client, op_client=op_client),
+        "workflows": lambda: WorkflowMigration(jira_client=jira_client, op_client=op_client),
+        "agile_boards": lambda: AgileBoardMigration(jira_client=jira_client, op_client=op_client),
+        "admin_schemes": lambda: AdminSchemeMigration(jira_client=jira_client, op_client=op_client),
+        "reporting": lambda: ReportingMigration(jira_client=jira_client, op_client=op_client),
     }
 
 
@@ -714,6 +777,24 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                     def get_attachments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
+                    def batch_get_issues(self, keys: list[str]) -> dict[str, SimpleNamespace]:
+                        issues: dict[str, SimpleNamespace] = {}
+                        for key in keys:
+                            attachment = SimpleNamespace(
+                                id=f"{key}-att-1",
+                                filename=f"{key}.txt",
+                                size=128,
+                                content=f"https://mock.jira.local/{key}.txt",
+                                author=SimpleNamespace(accountId="mock-user"),
+                                created="2024-01-01T00:00:00Z",
+                            )
+                            fields = SimpleNamespace(
+                                attachment=[attachment],
+                                comment=SimpleNamespace(comments=[]),
+                            )
+                            issues[key] = SimpleNamespace(key=key, fields=fields)
+                        return issues
+
                     def get_comments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
                         return []
 
@@ -1061,43 +1142,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
 
         # If components parameter is not provided, use default component order
         if not components:
-            default_components: list[ComponentName] = [
-                "users",
-                "groups",
-                "custom_fields",
-                "companies",
-                "projects",
-                "priorities",
-                "link_types",
-                "issue_types",
-                "status_types",
-                "work_packages",
-                "versions",
-                "components",
-                "labels",
-                "resolutions",
-                "story_points",
-                "estimates",
-                "security_levels",
-                "votes_reactions",
-                "remote_links",
-                "relations",
-                "watchers",
-                "attachments",
-                "attachment_provenance",
-                "native_tags",
-                "inline_refs",
-                "category_defaults",
-                "affects_versions",
-                "sprint_epic",
-                "customfields_generic",
-                "time_entries",
-            ]
-
-            if "accounts" in available_component_factories:
-                default_components.insert(4, "accounts")
-
-            components = default_components
+            components = DEFAULT_COMPONENT_SEQUENCE.copy()
 
         # Validate requested components and filter to supported ones
         requested_components = components or []
@@ -1437,6 +1482,39 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             )
             performance_manager.save_performance_report(perf_report_path)
             config.logger.info(f"Performance report saved to: {perf_report_path}")
+
+        focus_components = [
+            "workflows",
+            "agile_boards",
+            "sprint_epic",
+            "admin_schemes",
+            "reporting",
+        ]
+        summary_payload: dict[str, Any] = {
+            "timestamp": migration_timestamp,
+            "overall_status": results.overall.get("status"),
+            "components": {},
+        }
+        for component_name in focus_components:
+            component_result = results.components.get(component_name)
+            if not component_result:
+                continue
+            summary_payload["components"][component_name] = {
+                "success": component_result.success,
+                "message": component_result.message,
+                "details": component_result.details,
+            }
+
+        if summary_payload["components"]:
+            summary_file = f"migration_summary_{migration_timestamp}.json"
+            data_handler.save_results(
+                summary_payload,
+                filename=summary_file,
+            )
+            config.logger.info(
+                "Focused migration summary saved to %s",
+                summary_file,
+            )
 
         # Print final status with performance information
         if results.overall.get("status") == "success":

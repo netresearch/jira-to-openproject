@@ -1,7 +1,11 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 #!/usr/bin/env python3
 """Test script to verify Rails console connection."""
 
-import pytest
 
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.rails_console_client import RailsConsoleClient

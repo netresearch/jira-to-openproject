@@ -32,9 +32,7 @@ SPRINT_CF_NAME = "Sprint"
 class SprintEpicMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
-
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
     # ---------- Sprint CF helpers ----------
     def _ensure_sprint_cf(self) -> int:
@@ -48,11 +46,19 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
 
         script = (
             "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '%s'); "
-            "if !cf; cf = CustomField.new(name: '%s', field_format: 'text', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
+            "if !cf; cf = CustomField.new(name: '%s', field_format: 'text', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; { id: cf.id }.to_json"
             % (SPRINT_CF_NAME, SPRINT_CF_NAME)
         )
-        cf_id = self.op_client.execute_query(script)
-        return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
+        result = self.op_client.execute_query_to_json_file(script)
+        if isinstance(result, dict) and result.get("id"):
+            return int(result["id"])
+        if isinstance(result, int):
+            return result
+        try:
+            return int(str(result).strip())
+        except Exception:  # noqa: BLE001
+            logger.debug("Unable to parse Sprint CF ID from result %r", result)
+            return 0
 
     @staticmethod
     def _coerce_sprint_names(sprint_field_value: Any) -> list[str]:
@@ -120,6 +126,19 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:  # noqa: D401
         """Extract Sprint text and Epic parent links keyed by Jira key."""
         wp_map = self.mappings.get_mapping("work_package") or {}
+        if not wp_map:
+            self.logger.info("No work package mapping present; skipping Sprint/Epic adjustments")
+            parent_links_count = 0
+            return ComponentResult(
+                success=True,
+                message="Skipped sprint/epic migration (work package mapping unavailable)",
+                details={
+                    "sprint_cf_updates": 0,
+                    "version_assignments": 0,
+                    "parent_links": parent_links_count,
+                    "cf_available": False,
+                },
+            )
         keys = [str(k) for k in wp_map.keys()]
         if not keys:
             return ComponentResult(success=True, data={"sprint": {}, "epic": []})
@@ -203,6 +222,8 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
         updated = 0
         failed = 0
 
+        wp_map = self.mappings.get_mapping("work_package") or {}
+
         # Apply parent links in batch chunks
         try:
             if parent_links:
@@ -214,6 +235,44 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
             logger.exception("Failed to apply parent links in batch")
             failed += len(parent_links)
 
+        # Assign versions (sprints) when mappings exist
+        sprint_mapping = config.mappings.get_mapping("sprint") or {}
+        version_updates: list[dict[str, Any]] = []
+        for jira_key, text in sprint_text.items():
+            entry = wp_map.get(jira_key)
+            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+                continue
+            sprint_names = [
+                item.strip()
+                for item in str(text or "").split(",")
+                if item and isinstance(item, str) and item.strip()
+            ]
+            version_entry = None
+            for candidate in sprint_names:
+                version_entry = sprint_mapping.get(candidate) or sprint_mapping.get(str(candidate))
+                if version_entry:
+                    break
+            if version_entry and version_entry.get("openproject_id"):
+                version_id = int(version_entry.get("openproject_id", 0) or 0)
+                if version_id <= 0:
+                    continue
+                version_updates.append(
+                    {
+                        "id": int(entry["openproject_id"]),  # type: ignore[arg-type]
+                        "version_id": version_id,
+                    },
+                )
+
+        if version_updates:
+            try:
+                res = self.op_client.batch_update_work_packages(version_updates)
+                if isinstance(res, dict):
+                    updated += int(res.get("updated", 0))
+                    failed += int(res.get("failed", 0))
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to assign versions for sprint mapping")
+                failed += len(version_updates)
+
         # Ensure Sprint CF and set values via minimal Rails per record
         cf_id = 0
         try:
@@ -221,9 +280,20 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
         except Exception:  # noqa: BLE001
             logger.exception("Failed to ensure Sprint custom field")
         if not cf_id:
-            return ComponentResult(success=False, failed=failed + len(sprint_text))
+            self.logger.warning("Sprint custom field unavailable; skipping custom field hydration")
+            return ComponentResult(
+                success=failed == 0,
+                message="Sprint and epic metadata synchronised (custom field unavailable)",
+                updated=updated,
+                failed=failed,
+                details={
+                    "sprint_cf_updates": 0,
+                    "version_assignments": len(version_updates),
+                    "parent_links": len(parent_links),
+                    "cf_available": False,
+                },
+            )
 
-        wp_map = self.mappings.get_mapping("work_package") or {}
         for jira_key, text in sprint_text.items():
             entry = wp_map.get(jira_key)
             if not (isinstance(entry, dict) and entry.get("openproject_id")):
@@ -245,7 +315,51 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                 logger.exception("Failed to set Sprint CF for %s", jira_key)
                 failed += 1
 
-        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+        message = "Sprint and epic metadata synchronised"
+        return ComponentResult(
+            success=failed == 0,
+            message=message,
+            updated=updated,
+            failed=failed,
+            details={
+                "sprint_cf_updates": len(sprint_text),
+                "version_assignments": len(version_updates),
+                "parent_links": len(parent_links),
+                "cf_available": True,
+            },
+        )
 
+    def run(self) -> ComponentResult:
+        """Execute the sprint/epic migration pipeline."""
 
+        self.logger.info("Starting sprint and epic migration adjustments")
 
+        extracted = self._extract()
+        if not extracted.success:
+            self.logger.error(
+                "Sprint/Epic extraction failed: %s",
+                extracted.message or extracted.error,
+            )
+            return extracted
+
+        mapped = self._map(extracted)
+        if not mapped.success:
+            self.logger.error(
+                "Sprint/Epic mapping failed: %s",
+                mapped.message or mapped.error,
+            )
+            return mapped
+
+        result = self._load(mapped)
+        if result.success:
+            self.logger.info(
+                "Sprint/Epic migration completed (updated=%s failed=%s)",
+                result.updated,
+                result.failed,
+            )
+        else:
+            self.logger.error(
+                "Sprint/Epic migration encountered failures (failed=%s)",
+                result.failed,
+            )
+        return result

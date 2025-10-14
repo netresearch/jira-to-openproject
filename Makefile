@@ -205,6 +205,14 @@ local-install: ## Install dependencies locally (uv)
 dev-test: ## Run tests locally for fast development feedback (recommended for daily use)
 	python -m pytest -n auto $(TEST_OPTS)
 
+container-test: ## Run tests inside the Docker test profile (full dependency stack)
+	docker compose --profile test build test
+	docker compose --profile test run --rm test python -m pytest -m "unit and not slow" $(TEST_OPTS)
+
+container-test-integration: ## Run integration tests inside Docker mocks (slower)
+	docker compose --profile test build test
+	docker compose --profile test run --rm test bash -lc 'python -m pytest -m "integration and not slow" $(TEST_OPTS); status=$$?; if [ $$status -ne 0 ] && [ $$status -ne 5 ]; then exit $$status; fi'
+
 dev-test-fast: ## Run fast tests locally for immediate feedback (unit tests only)
 	python -m pytest -m "not slow and not integration and not end_to_end" -n auto $(TEST_OPTS)
 

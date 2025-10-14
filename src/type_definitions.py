@@ -115,6 +115,8 @@ class MigrationConfig(TypedDict):
     no_confirm: bool
     disable_wpm_shim: NotRequired[bool]
     log_retention_count: NotRequired[int]
+    enable_rails_meta_writes: NotRequired[bool]
+    reset_wp_checkpoints: NotRequired[bool]
 
 
 class DatabaseConfig(TypedDict, total=False):
@@ -141,6 +143,7 @@ type BackupDir = Path
 type ComponentStatus = Literal["success", "failed", "interrupted"]
 type ComponentName = Literal[
     "users",
+    "groups",
     "custom_fields",
     "companies",
     "accounts",

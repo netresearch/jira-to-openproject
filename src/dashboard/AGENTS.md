@@ -1,4 +1,4 @@
-<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2025-09-30 -->
+<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2025-10-10 -->
 # AGENTS.md — src/dashboard
 
 ## Overview
@@ -14,7 +14,8 @@
 ## Build & tests (prefer file-scoped)
 - Typecheck: Deferred — dashboard modules are not mypy-clean; coordinate with platform team before enabling.
 - Lint/format: `python -m compileall src/dashboard`
-- Targeted tests: Container-only via `make dev-test TEST_OPTS="tests/test_dashboard_simple.py"`
+- Container smoke: `make container-test TEST_OPTS="-k test_dashboard_simple"`
+- Local run: `uv run uvicorn src.dashboard.app:app --reload --host 0.0.0.0 --port 8001`
 
 ## Code style & conventions
 - Keep endpoints async and reuse `ConnectionManager` helpers; prefer dependency injection for shared state.
@@ -48,3 +49,4 @@
 - Highlighted CDN usage from current template to ensure future work documents security posture.
 - Documented lack of mypy coverage because `src/dashboard/app.py` currently fails strict type checking.
 - Host sandbox lacks PyPI connectivity, so rely on container pytest runs and keep local checks to `compileall`/static analysis.
+- Added container smoke guidance (`make container-test …`) to align with the docker-first testing workflow.

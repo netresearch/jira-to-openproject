@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from src import config
 from src.utils.enhanced_user_association_migrator import (
     EnhancedUserAssociationMigrator,
     UserAssociationMapping,
@@ -19,6 +20,25 @@ from tests.utils.mock_factory import (
 
 class TestEnhancedUserAssociationMigrator:
     """Test suite for EnhancedUserAssociationMigrator."""
+
+    @pytest.fixture(autouse=True)
+    def _configure_mappings(self, monkeypatch):
+        """Provide in-memory mappings store for tests."""
+
+        class _MappingStore:
+            def __init__(self) -> None:
+                self._store: dict[str, dict[str, object]] = {}
+
+            def get_mapping(self, name: str) -> dict[str, object]:
+                return self._store.get(name, {})
+
+            def set_mapping(self, name: str, value: dict[str, object]) -> None:
+                self._store[name] = value
+
+        store = _MappingStore()
+        monkeypatch.setattr(config, "get_mappings", lambda: store)
+        monkeypatch.setattr(config, "mappings", store)
+        return store
 
     @pytest.fixture
     def temp_data_dir(self, tmp_path):

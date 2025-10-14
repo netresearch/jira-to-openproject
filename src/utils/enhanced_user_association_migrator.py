@@ -355,11 +355,7 @@ class EnhancedUserAssociationMigrator:
     def _get_op_users_index(
         self,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-        """Return indexes of OpenProject users by login, email, and Jira user key CF.
-
-        Returns:
-            Tuple of (by_login, by_email, by_jira_key)
-        """
+        """Return indexes of OpenProject users by login, email, and J2O provenance key."""
         if self._op_users_cache is None:
             try:
                 users = self.op_client.get_users() or []
@@ -375,7 +371,7 @@ class EnhancedUserAssociationMigrator:
 
         by_login: dict[str, dict[str, Any]] = {}
         by_email: dict[str, dict[str, Any]] = {}
-        by_jira_key: dict[str, dict[str, Any]] = {}
+        by_origin_key: dict[str, dict[str, Any]] = {}
 
         for user in self._op_users_cache:
             login = _norm(user.get("login") or "")
@@ -386,11 +382,11 @@ class EnhancedUserAssociationMigrator:
             if email_val:
                 by_email[email_val] = user
 
-            jira_key_cf = _norm(user.get("jira_user_key") or user.get("jira_key") or "")
-            if jira_key_cf:
-                by_jira_key[jira_key_cf] = user
+            provenance_key = _norm(user.get("j2o_user_key") or user.get("jira_user_key") or user.get("jira_key") or "")
+            if provenance_key:
+                by_origin_key[provenance_key] = user
 
-        return by_login, by_email, by_jira_key
+        return by_login, by_email, by_origin_key
 
     def _resolve_openproject_user_id(
         self,
@@ -398,12 +394,8 @@ class EnhancedUserAssociationMigrator:
         email: str | None,
         account_id: str | None,
     ) -> int | None:
-        """Resolve an OpenProject user ID using multiple heuristics.
-
-        Tries (in order): login==username, Jira user key CF==username, Jira user key CF==account_id,
-        mail==email, login==email local-part.
-        """
-        by_login, by_email, by_jira_key = self._get_op_users_index()
+        """Resolve an OpenProject user ID using multiple heuristics (login, J2O provenance, email)."""
+        by_login, by_email, by_origin_key = self._get_op_users_index()
 
         def _norm(s: str | None) -> str:
             if not s:
@@ -419,14 +411,14 @@ class EnhancedUserAssociationMigrator:
             if u and u.get("id"):
                 return int(u["id"])  # type: ignore[arg-type]
 
-            # 2) Jira user key CF equals username
-            u = by_jira_key.get(_norm(username))
+            # 2) J2O provenance key equals username
+            u = by_origin_key.get(_norm(username))
             if u and u.get("id"):
                 return int(u["id"])  # type: ignore[arg-type]
 
-        # 3) Jira user key CF equals account_id
+        # 3) J2O provenance key equals Jira account_id
         if account_id:
-            u = by_jira_key.get(_norm(account_id))
+            u = by_origin_key.get(_norm(account_id))
             if u and u.get("id"):
                 return int(u["id"])  # type: ignore[arg-type]
 
@@ -699,7 +691,7 @@ class EnhancedUserAssociationMigrator:
         self.logger.info("Creating enhanced user mappings from basic mapping")
 
         for jira_key, entry in self.user_mapping.items():
-            # user_mapping is keyed by Jira user key; values include jira_name/email
+            # user_mapping is keyed by Jira user key; entries now also carry J2O provenance data
             op_user_id = entry if isinstance(entry, int) else entry.get("openproject_id")
             jira_username = entry.get("jira_name") if isinstance(entry, dict) else None
             jira_user_info = self._get_jira_user_info(jira_username or jira_key)

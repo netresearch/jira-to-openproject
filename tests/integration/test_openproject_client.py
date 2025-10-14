@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 #!/usr/bin/env python3
 """Test module for OpenProjectClient.
 
@@ -12,7 +17,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.clients.docker_client import DockerClient
 from src.clients.openproject_client import FileTransferError, OpenProjectClient

@@ -7,13 +7,17 @@ A robust, modular migration toolset for transferring project management data fro
 **Migration Components:**
 - **Customer Migration:** Tempo Customers → Top-level OpenProject projects
 - **Account Migration:** Tempo Accounts → Custom field values on projects
-- **Project Migration:** Jira projects → Sub-projects under customer hierarchy with lead membership, adaptive module enablement, and Jira provenance (key/ID/category/type/URL/avatar)
+- **Project Migration:** Jira projects → Sub-projects under customer hierarchy with lead membership, adaptive module enablement, and Jira provenance (key/ID/category/type/URL/avatar/display name)
 - **Work Package Migration:** Issues → Work packages with full metadata
 - **User Migration:** Jira users → OpenProject users with role mapping, full J2O provenance (origin system/ID/key/URL), locale→language syncing, and avatar backfills. Legacy "Jira user key" / "Tempo Account" custom fields are retired automatically.
 - **Custom Field Migration:** Field definitions and values
 - **Status & Workflow Migration:** Status creation and workflow configuration guidance
 - **Attachment Migration:** Issue attachments → Work package files
 - **Time Log Migration:** Tempo worklogs → OpenProject time entries
+- **Workflow Automation:** Jira workflow transitions → OpenProject workflow entries per type/role
+- **Agile Boards & Sprints:** Jira boards → OpenProject saved queries with sprint (version) mapping
+- **Admin Schemes:** Jira role memberships → OpenProject project memberships
+- **Reporting Artefacts:** Jira saved filters & dashboards → OpenProject queries and wiki summaries
 
 **Key Capabilities:**
 - **Batch Processing:** Configurable batch sizes for large datasets
@@ -58,6 +62,12 @@ make up
 # Run tests (test profile)
 make test
 
+# Run the unit suite inside Docker (ensures native deps like libffi/aiohttp)
+make container-test
+
+# Run the integration suite against mock Jira/OpenProject services
+make container-test-integration
+
 # Code quality checks
 make lint
 make type-check
@@ -73,18 +83,28 @@ make start-rails ATTACH=true
 # Run specific migration components
 uv run python -m src.main migrate --components users,projects,workpackages --no-confirm
 
+# Run the predefined full profile (covers workflows, agile metadata, admin schemes, reporting)
+uv run python -m src.main migrate --profile full --no-confirm
+
 # Run with custom configuration
 uv run python -m src.main migrate --config custom_config.yaml --components all --no-confirm
 
 # Dry run mode
 uv run python -m src.main migrate --dry-run --components users --no-confirm
+
+# Reset work-package checkpoints before rerunning delta migrations
+uv run python -m src.main migrate --components work_packages --reset-wp-checkpoints
+
+# After each run a focused summary covering workflows, agile boards/sprints, admin schemes,
+# and reporting artefacts is written to `var/results/migration_summary_<timestamp>.json`.
 ```
 
 ### Rehearsal Workflow
 
 1. **Seed rehearsal data**: snapshot Jira/OpenProject using your existing backup process.
 2. **Configure credentials**: point `.env` at rehearsal endpoints/API tokens.
-3. **Run a rehearsal**: invoke the CLI with `--dry-run` or a limited component list to verify mappings.
+3. **Run a rehearsal**: invoke the CLI with `--dry-run` or a limited component list to verify mappings, or use
+   `python scripts/run_rehearsal.py --collect --stop` to orchestrate the container mocks automatically.
 4. **Review artefacts**: inspect `var/data`, `var/logs`, and the generated mapping JSON for discrepancies.
 5. **Reset state**: restore snapshots or wipe the rehearsal OpenProject instance before the next run.
 6. **Production cutover**: swap `.env` to production credentials and rerun the migration without `--dry-run`.
@@ -94,6 +114,7 @@ uv run python -m src.main migrate --dry-run --components users --no-confirm
 - Run `uv run --active --no-cache python scripts/data_qa.py --projects <KEY>` after rehearsals. Investigate any `⚠️` warnings about missing project modules or zero start-date coverage—rerun `migrate --components projects`/`work_packages` to refresh caches when needed.
 - Jira start-date precedence is `customfield_18690` → `customfield_12590` → `customfield_11490` → `customfield_15082`; when they are empty we fall back to the first Jira status transition whose category is *In Progress*. Confirm Jira histories include that transition or relax expectations when the project never moved into that category.
 - Confirm project modules (`work_package_tracking`, `wiki`, `time_tracking`, `costs`, `calendar`, `news`) stay enabled post-migration; the project component now enables time tracking/costs for Tempo-linked projects and calendar/news when categories or project types are present, then persists provenance (`Jira Project Lead`, `Jira Project Category`, `Jira Project Type`, `Jira Project URL`, `Jira Project Avatar URL`).
+- If you need to rebuild the work-package fast-forward database (e.g., after a rehearsal restore or when corruption is detected) run `uv run python -m src.main migrate --reset-wp-checkpoints --components work_packages`.
 
 ### Optional Tooling
 

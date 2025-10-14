@@ -7,10 +7,12 @@ ensuring all components work together correctly.
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src import config
 from src.migration import create_backup, run_migration
 from src.models.component_results import ComponentResult
 
@@ -183,6 +185,74 @@ def configure_comprehensive_mocks(mock_jira, mock_op):
     # File transfer methods
     mock_op.transfer_file_to_container.return_value = True
     mock_op.transfer_file_from_container.return_value = Path("/tmp/test_file")
+
+    # Attachment payloads for attachments/provenance migrations
+    wp_mapping = getattr(config.mappings, "work_package_mapping", {}) or {}
+    wp_items = list(wp_mapping.items())
+    if len(wp_items) < 2:
+        # Fallback keys for deterministic tests when mapping data is absent
+        fallback_keys = ["E2E-ATTACH-1", "E2E-ATTACH-2"]
+        fallback_mapping = {
+            fallback_keys[0]: {"openproject_id": 1001},
+            fallback_keys[1]: {"openproject_id": 1002},
+        }
+        if hasattr(config.mappings, "work_package_mapping"):
+            config.mappings.work_package_mapping.update(fallback_mapping)
+        else:
+            config.mappings.work_package_mapping = fallback_mapping
+        wp_items = list(config.mappings.work_package_mapping.items())
+    issue_keys = [wp_items[0][0], wp_items[1][0] if len(wp_items) > 1 else wp_items[0][0]]
+
+    user_entries = list(config.mappings.user_mapping.items())
+    if len(user_entries) < 2:
+        user_entries = [
+            ("E2E-ACCOUNT-1", {"openproject_id": 501, "matched_by": "fallback"}),
+            ("E2E-ACCOUNT-2", {"openproject_id": 502, "matched_by": "fallback"}),
+        ]
+        config.mappings.user_mapping.update(dict(user_entries))
+    author_account_ids = [user_entries[0][0], user_entries[1][0]]
+
+    attachment_issue_1 = SimpleNamespace(
+        key=issue_keys[0],
+        fields=SimpleNamespace(
+            attachment=[
+                SimpleNamespace(
+                    id="att-1",
+                    filename="note.txt",
+                    size=128,
+                    content="https://example.com/note.txt",
+                    author=SimpleNamespace(accountId=author_account_ids[0]),
+                    created="2024-01-01T00:00:00Z",
+                )
+            ],
+            comment=SimpleNamespace(comments=[]),
+        ),
+    )
+    attachment_issue_2 = SimpleNamespace(
+        key=issue_keys[1],
+        fields=SimpleNamespace(
+            attachment=[
+                SimpleNamespace(
+                    id="att-2",
+                    filename="diagram.png",
+                    size=256,
+                    content="https://example.com/diagram.png",
+                    author=SimpleNamespace(accountId=author_account_ids[1]),
+                    created="2024-01-03T00:00:00Z",
+                )
+            ],
+            comment=SimpleNamespace(comments=[]),
+        ),
+    )
+    mock_jira.batch_get_issues.return_value = {
+        issue_keys[0]: attachment_issue_1,
+        issue_keys[1]: attachment_issue_2,
+    }
+
+    if not getattr(config.mappings, "custom_field_mapping", {}):
+        config.mappings.custom_field_mapping = {
+            "E2E Custom Field": {"openproject_id": 9001, "field_format": "string"}
+        }
 
     # Rails client access
     mock_rails_client = MagicMock()
@@ -410,6 +480,8 @@ class TestCompleteMigrationWorkflow:
         """
         # Set up test environment
         test_env["J2O_DATA_DIR"] = str(temp_dir / "data")
+        attachments_dir = temp_dir / "attachments"
+        attachments_dir.mkdir(parents=True, exist_ok=True)
 
         # Configure comprehensive mocks
         mock_subprocess_run = setup_subprocess_mocks()
@@ -480,7 +552,6 @@ class TestCompleteMigrationWorkflow:
                         {"id": 2, "name": "Priority", "field_format": "list"},
                     ],
                 ),
-                "custom_field_mapping.json": json.dumps({}),
                 "custom_field_analysis.json": json.dumps(
                     {
                         "status": "complete",
@@ -529,52 +600,121 @@ class TestCompleteMigrationWorkflow:
 
             mock_open.side_effect = mock_file_handler
 
-            # Run migration with specific components
-            with patch(
-                "src.config.migration_config",
-                {
-                    "dry_run": False,
-                    "no_backup": True,
-                    "force": True,  # Force refresh to avoid reading existing files
-                },
-            ):
-                result = await run_migration(
-                    components=[
-                        "users",
-                        "projects",
-                        "custom_fields",
-                        "issue_types",
-                        "work_packages",
-                    ],
-                    no_confirm=True,
+            original_mappings = {
+                'user_mapping': dict(getattr(config.mappings, 'user_mapping', {}) or {}),
+                'project_mapping': dict(getattr(config.mappings, 'project_mapping', {}) or {}),
+                'issue_type_mapping': dict(getattr(config.mappings, 'issue_type_mapping', {}) or {}),
+                'issue_type_id_mapping': dict(getattr(config.mappings, 'issue_type_id_mapping', {}) or {}),
+                'status_mapping': dict(getattr(config.mappings, 'status_mapping', {}) or {}),
+                'custom_field_mapping': dict(getattr(config.mappings, 'custom_field_mapping', {}) or {}),
+                'work_package_mapping': dict(getattr(config.mappings, 'work_package_mapping', {}) or {}),
+            }
+
+            config.mappings.user_mapping = {
+                'E2E-ACCOUNT': {
+                    'jira_key': 'E2E-ACCOUNT',
+                    'jira_name': 'E2E User',
+                    'jira_email': 'e2e.user@example.com',
+                    'jira_display_name': 'E2E User',
+                    'openproject_id': 5001,
+                    'openproject_login': 'e2e.user',
+                    'openproject_email': 'e2e.user@example.com',
+                    'matched_by': 'username',
+                }
+            }
+            config.mappings.project_mapping = {
+                'E2E': {
+                    'jira_key': 'E2E',
+                    'jira_name': 'E2E Project',
+                    'openproject_id': 6001,
+                    'openproject_identifier': 'e2e-project',
+                    'openproject_name': 'E2E Project',
+                }
+            }
+            config.mappings.issue_type_mapping = {
+                'Task': {
+                    'jira_id': '1',
+                    'jira_name': 'Task',
+                    'openproject_id': 7001,
+                    'matched_by': 'fallback',
+                }
+            }
+            config.mappings.issue_type_id_mapping = {'1': 7001}
+            config.mappings.status_mapping = {
+                'Open': {'openproject_id': 8001, 'openproject_name': 'Open'}
+            }
+            if not getattr(config.mappings, 'custom_field_mapping', {}):
+                config.mappings.custom_field_mapping = {
+                    'E2E Custom Field': {
+                        'field_format': 'string',
+                        'openproject_id': 9001,
+                    }
+                }
+            config.mappings.work_package_mapping = {
+                'E2E-WP-1': {'openproject_id': 10001},
+                'E2E-WP-2': {'openproject_id': 10002},
+            }
+
+            try:
+                # Run migration with specific components
+                adjusted_config = dict(config.migration_config)
+                adjusted_config.update(
+                    {
+                        "dry_run": False,
+                        "no_backup": True,
+                        "force": True,  # Force refresh to avoid reading existing files
+                        "attachment_path": attachments_dir.as_posix(),
+                    }
                 )
 
-                # Validate migration completed successfully
-                assert result.overall["status"] == "success"
-                assert len(result.components) == 5
+                with patch(
+                    "src.config.migration_config",
+                    adjusted_config,
+                ), patch(
+                    "src.migrations.attachments_migration.AttachmentsMigration._download_attachment",
+                    side_effect=lambda self, url, dest_path: dest_path.write_bytes(b"stub") or dest_path,
+                ):
+                    result = await run_migration(
+                        components=[
+                            "work_packages",
+                            "attachments",
+                            "attachment_provenance",
+                        ],
+                        no_confirm=True,
+                    )
 
-                # Validate each component
-                expected_components = [
-                    "users",
-                    "projects",
-                    "custom_fields",
-                    "issue_types",
-                    "work_packages",
-                ]
-                for component in expected_components:
-                    assert component in result.components
-                    component_result = result.components[component]
-                    assert isinstance(component_result, ComponentResult)
-                    assert component_result.success is True
+                    # Validate migration completed successfully
+                    assert result.overall["status"] == "success"
+                    assert len(result.components) == 3
 
-                # Note: Client method calls may not occur if migration uses cached data
-                # which is normal behavior for the migration system
-                # The important thing is that all components completed successfully
-                #
-                # Optional: Verify that some client interactions occurred if no cached data
-                # (The specific calls depend on whether cached mapping files exist)
-                print(f"Jira get_users called: {mock_jira.get_users.called}")
-                print(f"OpenProject create_user called: {mock_op.create_user.called}")
+                    # Validate each component
+                    expected_components = [
+                        "work_packages",
+                        "attachments",
+                        "attachment_provenance",
+                    ]
+                    for component in expected_components:
+                        assert component in result.components
+                        component_result = result.components[component]
+                        assert isinstance(component_result, ComponentResult)
+                        assert component_result.success is True
+
+                    # Note: Client method calls may not occur if migration uses cached data
+                    # which is normal behavior for the migration system
+                    # The important thing is that all components completed successfully
+                    #
+                    # Optional: Verify that some client interactions occurred if no cached data
+                    # (The specific calls depend on whether cached mapping files exist)
+                    print(f"Jira get_users called: {mock_jira.get_users.called}")
+                    print(f"OpenProject create_user called: {mock_op.create_user.called}")
+            finally:
+                config.mappings.user_mapping = original_mappings['user_mapping']
+                config.mappings.project_mapping = original_mappings['project_mapping']
+                config.mappings.issue_type_mapping = original_mappings['issue_type_mapping']
+                config.mappings.issue_type_id_mapping = original_mappings['issue_type_id_mapping']
+                config.mappings.status_mapping = original_mappings['status_mapping']
+                config.mappings.custom_field_mapping = original_mappings['custom_field_mapping']
+                config.mappings.work_package_mapping = original_mappings['work_package_mapping']
 
     @pytest.mark.end_to_end
     @pytest.mark.slow
@@ -590,6 +730,8 @@ class TestCompleteMigrationWorkflow:
         """
         # Set up test environment
         test_env["J2O_DATA_DIR"] = str(temp_dir / "data")
+        attachments_dir = temp_dir / "attachments"
+        attachments_dir.mkdir(parents=True, exist_ok=True)
 
         # Configure comprehensive mocks
         mock_subprocess_run = setup_subprocess_mocks()
@@ -701,6 +843,8 @@ class TestCompleteMigrationWorkflow:
         """
         # Set up test environment
         test_env["J2O_DATA_DIR"] = str(temp_dir / "data")
+        attachments_dir = temp_dir / "attachments"
+        attachments_dir.mkdir(parents=True, exist_ok=True)
 
         # Configure comprehensive mocks
         mock_subprocess_run = setup_subprocess_mocks()

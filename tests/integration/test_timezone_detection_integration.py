@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
 #!/usr/bin/env python3
 """Integration tests for timezone detection fix in EnhancedTimestampMigrator."""
 
@@ -5,7 +10,6 @@ from datetime import datetime
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
-import pytest
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient

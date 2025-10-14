@@ -134,6 +134,11 @@ class Settings(BaseSettings):
             "worklogs",
             "attachments",
             "comments",
+            "workflows",
+            "agile_boards",
+            "sprint_epic",
+            "admin_schemes",
+            "reporting",
         ],
         description="Migration component order",
     )
@@ -255,6 +260,11 @@ class Settings(BaseSettings):
             "worklogs",
             "attachments",
             "comments",
+            "workflows",
+            "agile_boards",
+            "sprint_epic",
+            "admin_schemes",
+            "reporting",
         }
 
         for component in v:
