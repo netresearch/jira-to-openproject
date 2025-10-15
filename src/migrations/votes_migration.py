@@ -106,4 +106,40 @@ class VotesMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
+    def run(self) -> ComponentResult:
+        """Run votes migration using ETL pattern."""
+        logger.info("Starting votes migration...")
+        try:
+            extracted = self._extract()
+            if not extracted.success:
+                return ComponentResult(
+                    success=False,
+                    message="Votes extraction failed",
+                    errors=extracted.errors or ["votes extraction failed"],
+                )
+
+            mapped = self._map(extracted)
+            if not mapped.success:
+                return ComponentResult(
+                    success=False,
+                    message="Votes mapping failed",
+                    errors=mapped.errors or ["votes mapping failed"],
+                )
+
+            result = self._load(mapped)
+            logger.info(
+                "Votes migration completed: success=%s, updated=%s, failed=%s",
+                result.success,
+                result.updated,
+                result.failed,
+            )
+            return result
+        except Exception as e:
+            logger.exception("Votes migration failed")
+            return ComponentResult(
+                success=False,
+                message=f"Votes migration failed: {e}",
+                errors=[str(e)],
+            )
+
 

@@ -113,4 +113,40 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
+    def run(self) -> ComponentResult:
+        """Run resolution migration using ETL pattern."""
+        logger.info("Starting resolution migration...")
+        try:
+            extracted = self._extract()
+            if not extracted.success:
+                return ComponentResult(
+                    success=False,
+                    message="Resolution extraction failed",
+                    errors=extracted.errors or ["resolution extraction failed"],
+                )
+
+            mapped = self._map(extracted)
+            if not mapped.success:
+                return ComponentResult(
+                    success=False,
+                    message="Resolution mapping failed",
+                    errors=mapped.errors or ["resolution mapping failed"],
+                )
+
+            result = self._load(mapped)
+            logger.info(
+                "Resolution migration completed: success=%s, updated=%s, failed=%s",
+                result.success,
+                result.updated,
+                result.failed,
+            )
+            return result
+        except Exception as e:
+            logger.exception("Resolution migration failed")
+            return ComponentResult(
+                success=False,
+                message=f"Resolution migration failed: {e}",
+                errors=[str(e)],
+            )
+
 

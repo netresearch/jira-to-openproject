@@ -131,4 +131,40 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
+    def run(self) -> ComponentResult:
+        """Run remote links migration using ETL pattern."""
+        logger.info("Starting remote links migration...")
+        try:
+            extracted = self._extract()
+            if not extracted.success:
+                return ComponentResult(
+                    success=False,
+                    message="Remote links extraction failed",
+                    errors=extracted.errors or ["remote links extraction failed"],
+                )
+
+            mapped = self._map(extracted)
+            if not mapped.success:
+                return ComponentResult(
+                    success=False,
+                    message="Remote links mapping failed",
+                    errors=mapped.errors or ["remote links mapping failed"],
+                )
+
+            result = self._load(mapped)
+            logger.info(
+                "Remote links migration completed: success=%s, updated=%s, failed=%s",
+                result.success,
+                result.updated,
+                result.failed,
+            )
+            return result
+        except Exception as e:
+            logger.exception("Remote links migration failed")
+            return ComponentResult(
+                success=False,
+                message=f"Remote links migration failed: {e}",
+                errors=[str(e)],
+            )
+
 
