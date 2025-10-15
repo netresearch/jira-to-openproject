@@ -1,11 +1,20 @@
-<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2025-10-10 -->
+<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2025-10-15 -->
 # AGENTS.md (root)
 This file explains repo-wide conventions and where to find scoped rules.
 **Precedence:** the *closest* `AGENTS.md` to your changes wins. Root holds global defaults only.
 
+## Documentation Structure
+
+**IMPORTANT**: This file includes additional agent guidance files. All `AGENTS.*.md` files in the root directory are part of the agent instructions:
+
+- **AGENTS.tasks.md** - Task management with bd (beads) - **CRITICAL: Read this for all work tracking**
+- Additional AGENTS.*.md files may be added for specific domains (testing, security, etc.)
+
+AI agents MUST read and follow ALL AGENTS.*.md files in scope.
+
 ## Global rules
 - Keep diffs small, land tests with code, and ask before heavy deps, e2e suites, or repo-wide rewrites.
-- Use `bd` for work tracking and task management (see Development Workflow section below).
+- **Use `bd` for ALL work tracking and task management** - See AGENTS.tasks.md for complete details.
 - Merge guidance from tool-specific files (`.github/instructions/*.md`, `.cursor/rules/*.mdc`, `docs/SECURITY.md`) with the nearest scoped file.
 
 ## Index of scoped AGENTS.md
@@ -144,47 +153,16 @@ References used while composing this file: [AGENT.md RFC](https://ampcode.com/AG
 - **Resilience & logging**: Use `tenacity` for retries, `pybreaker` for circuit breaking, and `structlog` for structured logs.
 - **Security-first**: Validate all external inputs (e.g., Jira keys), escape dynamic data in generated Ruby scripts, and maintain security tests. See `docs/SECURITY.md`.
 
-## Development Workflow (bd)
+## Development Workflow
 
-- **Work tracking**: We use `bd` (not markdown) for all work tracking and task management.
-- **ALL tasks MUST be created in bd**: Never use TODO comments, markdown checklists, or planning documents for task tracking.
-- **Task creation is mandatory**: When you discover work, bugs, or improvements during development, immediately create a bd issue.
-- **Quick start**: Run `bd quickstart` for the interactive guide to learn the full workflow.
-- **Loop**: find ready work → update status → create discovered issues → link dependencies → complete work.
-- **Quality gates**: Before marking tasks done, run tests and lint/type checks (see Makefile targets and sections above).
-- **No TODO comments**: If you write TODO in code, you MUST immediately create a corresponding bd issue and reference it in the comment.
+**Task Management**: See **AGENTS.tasks.md** for complete bd workflow documentation.
 
-### bd Quick Reference
-
-```bash
-# Find ready work
-bd ready --json | jq '.[0]'
-
-# Create issues during work (MANDATORY for all discovered tasks)
-bd create "Discovered bug" -t bug -p 0 --json
-
-# Link discovered work back to parent
-bd dep add <new-id> <parent-id> --type discovered-from
-
-# Update status
-bd update <issue-id> --status in_progress --json
-
-# Complete work
-bd close <issue-id> --reason "Implemented" --json
-
-# View work history
-bd list --json | jq '.[] | select(.status == "closed")'
-```
-
-### Task Creation Rules
-
-**CRITICAL**: Every task, bug, improvement, or piece of work MUST be tracked in bd:
-
-1. **Discovery**: When you find work during development → create bd issue immediately
-2. **TODO comments**: Forbidden unless accompanied by bd issue reference: `# TODO(j2o-123): description`
-3. **Planning documents**: Use bd for tracking, not markdown files
-4. **Checklists**: Never use `- [ ]` checkboxes in docs for task tracking
-5. **Work results**: Store task outcomes in bd close reasons, not separate files
+**Quick Summary**:
+- ALL work tracked in `bd` (not markdown, not TODO comments)
+- Create bd issue for any discovered work immediately
+- Update bd during development (planning, progress, completion)
+- Close bd issues with detailed completion information
+- When asked "what's next?", check: `bd list --status open -p 1`
 
 ## Planning & Code Review
 
