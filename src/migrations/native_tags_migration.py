@@ -141,4 +141,40 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
+    def run(self) -> ComponentResult:
+        """Run native tags migration using ETL pattern."""
+        logger.info("Starting native tags migration...")
+        try:
+            extracted = self._extract()
+            if not extracted.success:
+                return ComponentResult(
+                    success=False,
+                    message="Native tags extraction failed",
+                    errors=extracted.errors or ["native tags extraction failed"],
+                )
+
+            mapped = self._map(extracted)
+            if not mapped.success:
+                return ComponentResult(
+                    success=False,
+                    message="Native tags mapping failed",
+                    errors=mapped.errors or ["native tags mapping failed"],
+                )
+
+            result = self._load(mapped)
+            logger.info(
+                "Native tags migration completed: success=%s, updated=%s, failed=%s",
+                result.success,
+                result.updated,
+                result.failed,
+            )
+            return result
+        except Exception as e:
+            logger.exception("Native tags migration failed")
+            return ComponentResult(
+                success=False,
+                message=f"Native tags migration failed: {e}",
+                errors=[str(e)],
+            )
+
 

@@ -93,4 +93,40 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
         failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
+    def run(self) -> ComponentResult:
+        """Run inline refs migration using ETL pattern."""
+        logger.info("Starting inline refs migration...")
+        try:
+            extracted = self._extract()
+            if not extracted.success:
+                return ComponentResult(
+                    success=False,
+                    message="Inline refs extraction failed",
+                    errors=extracted.errors or ["inline refs extraction failed"],
+                )
+
+            mapped = self._map(extracted)
+            if not mapped.success:
+                return ComponentResult(
+                    success=False,
+                    message="Inline refs mapping failed",
+                    errors=mapped.errors or ["inline refs mapping failed"],
+                )
+
+            result = self._load(mapped)
+            logger.info(
+                "Inline refs migration completed: success=%s, updated=%s, failed=%s",
+                result.success,
+                result.updated,
+                result.failed,
+            )
+            return result
+        except Exception as e:
+            logger.exception("Inline refs migration failed")
+            return ComponentResult(
+                success=False,
+                message=f"Inline refs migration failed: {e}",
+                errors=[str(e)],
+            )
+
 

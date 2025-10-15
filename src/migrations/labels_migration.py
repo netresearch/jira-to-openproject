@@ -116,4 +116,40 @@ class LabelsMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
+    def run(self) -> ComponentResult:
+        """Run labels migration using ETL pattern."""
+        logger.info("Starting labels migration...")
+        try:
+            extracted = self._extract()
+            if not extracted.success:
+                return ComponentResult(
+                    success=False,
+                    message="Labels extraction failed",
+                    errors=extracted.errors or ["labels extraction failed"],
+                )
+
+            mapped = self._map(extracted)
+            if not mapped.success:
+                return ComponentResult(
+                    success=False,
+                    message="Labels mapping failed",
+                    errors=mapped.errors or ["labels mapping failed"],
+                )
+
+            result = self._load(mapped)
+            logger.info(
+                "Labels migration completed: success=%s, updated=%s, failed=%s",
+                result.success,
+                result.updated,
+                result.failed,
+            )
+            return result
+        except Exception as e:
+            logger.exception("Labels migration failed")
+            return ComponentResult(
+                success=False,
+                message=f"Labels migration failed: {e}",
+                errors=[str(e)],
+            )
+
 

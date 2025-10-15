@@ -109,4 +109,40 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
+    def run(self) -> ComponentResult:
+        """Run category defaults migration using ETL pattern."""
+        logger.info("Starting category defaults migration...")
+        try:
+            extracted = self._extract()
+            if not extracted.success:
+                return ComponentResult(
+                    success=False,
+                    message="Category defaults extraction failed",
+                    errors=extracted.errors or ["category defaults extraction failed"],
+                )
+
+            mapped = self._map(extracted)
+            if not mapped.success:
+                return ComponentResult(
+                    success=False,
+                    message="Category defaults mapping failed",
+                    errors=mapped.errors or ["category defaults mapping failed"],
+                )
+
+            result = self._load(mapped)
+            logger.info(
+                "Category defaults migration completed: success=%s, updated=%s, failed=%s",
+                result.success,
+                result.updated,
+                result.failed,
+            )
+            return result
+        except Exception as e:
+            logger.exception("Category defaults migration failed")
+            return ComponentResult(
+                success=False,
+                message=f"Category defaults migration failed: {e}",
+                errors=[str(e)],
+            )
+
 
