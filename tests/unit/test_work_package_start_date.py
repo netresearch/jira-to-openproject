@@ -68,7 +68,7 @@ def test_resolve_start_date_from_raw_dict_issue() -> None:
             "customfield_18690": None,
             "customfield_12590": None,
             "customfield_11490": "2024-09-10T08:00:00+00:00",
-        }
+        },
     }
 
     assert migration._resolve_start_date(issue) == "2024-09-10"

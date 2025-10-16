@@ -1,4 +1,3 @@
-import io
 import os
 from pathlib import Path
 
@@ -16,7 +15,7 @@ class DummyAtt:
 
 
 class DummyFields:
-    def __init__(self, attachments: list[DummyAtt]):  # noqa: N803
+    def __init__(self, attachments: list[DummyAtt]):
         self.attachment = attachments
 
 
@@ -33,7 +32,7 @@ class DummyJira:
             "PRJ-2": DummyIssue("PRJ-2", [DummyAtt("3", "a.txt", "http://example/a")]),
         }
 
-    def batch_get_issues(self, keys):  # noqa: ANN001, ANN201
+    def batch_get_issues(self, keys):
         return {k: self.issues[k] for k in keys if k in self.issues}
 
 
@@ -42,17 +41,17 @@ class DummyOp:
         self.transfers: list[tuple[Path, str]] = []
         self.last_input: list[dict] | None = None
 
-    def transfer_file_to_container(self, local_path: Path, container_path: str):  # noqa: ANN201
+    def transfer_file_to_container(self, local_path: Path, container_path: str):
         self.transfers.append((local_path, container_path))
 
-    def execute_script_with_data(self, script_content: str, data: object):  # noqa: ANN201
+    def execute_script_with_data(self, script_content: str, data: object):
         self.last_input = list(data) if isinstance(data, list) else []
         return {"updated": len(self.last_input), "failed": 0}
 
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
@@ -60,16 +59,16 @@ def _mock_mappings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 "work_package": {
                     "PRJ-1": {"openproject_id": 2001},
                     "PRJ-2": {"openproject_id": 2002},
-                }
+                },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
     # Ensure attachment dir exists and stub download
-    def fake_download(self, url: str, dest_path: Path):  # noqa: ANN001
+    def fake_download(self, url: str, dest_path: Path):
         dest_path.write_bytes(os.urandom(32))
         return dest_path
 

@@ -1,8 +1,8 @@
 import pytest
 
 from src.migrations.affects_versions_migration import (
-    AffectsVersionsMigration,
     AFFECTS_VERSIONS_CF_NAME,
+    AffectsVersionsMigration,
 )
 
 
@@ -12,7 +12,7 @@ class DummyVer:
 
 
 class DummyFields:
-    def __init__(self, versions: list[DummyVer]):  # noqa: N803
+    def __init__(self, versions: list[DummyVer]):
         self.versions = versions
 
 
@@ -30,7 +30,7 @@ class DummyJira:
             "PRJ-3": DummyIssue("PRJ-3", []),
         }
 
-    def batch_get_issues(self, keys):  # noqa: ANN001, ANN201
+    def batch_get_issues(self, keys):
         return {k: self.issues[k] for k in keys if k in self.issues}
 
 
@@ -38,11 +38,11 @@ class DummyOp:
     def __init__(self) -> None:
         self.scripts: list[str] = []
 
-    def get_custom_field_by_name(self, name: str):  # noqa: ANN201
+    def get_custom_field_by_name(self, name: str):
         assert name == AFFECTS_VERSIONS_CF_NAME
         raise Exception("not found")
 
-    def execute_query(self, script: str):  # noqa: ANN201
+    def execute_query(self, script: str):
         self.scripts.append(script)
         # First call returns CF id; subsequent returns true for updates
         if "CustomField" in script and "cf.id" in script:
@@ -52,7 +52,7 @@ class DummyOp:
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
@@ -61,13 +61,13 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
                     "PRJ-1": {"openproject_id": 2001},
                     "PRJ-2": {"openproject_id": 2002},
                     "PRJ-3": {"openproject_id": 2003},
-                }
+                },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
 
 def test_affects_versions_migration_end_to_end():

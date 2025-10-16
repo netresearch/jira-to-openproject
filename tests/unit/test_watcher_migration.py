@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 
 from src.migrations.watcher_migration import WatcherMigration
@@ -36,7 +38,7 @@ def _map_store(monkeypatch: pytest.MonkeyPatch):
 
 def test_watcher_migration_adds_watchers(monkeypatch: pytest.MonkeyPatch, _map_store):
     op = DummyOpClient()
-    wm = WatcherMigration(jira_client=None, op_client=op)  # type: ignore[arg-type]
+    wm = WatcherMigration(jira_client=MagicMock(), op_client=op)
 
     # Simulate EJ batch_get_issues and JiraClient.get_issue_watchers
     from src.clients.enhanced_jira_client import EnhancedJiraClient
@@ -44,7 +46,7 @@ def test_watcher_migration_adds_watchers(monkeypatch: pytest.MonkeyPatch, _map_s
     monkeypatch.setattr(EnhancedJiraClient, "batch_get_issues", lambda self, keys: {"J1": object()})
 
     class DummyJira:
-        def get_issue_watchers(self, key: str):  # noqa: D401
+        def get_issue_watchers(self, key: str):
             return [{"name": "alice"}]
 
     wm.jira_client = DummyJira()  # type: ignore[assignment]

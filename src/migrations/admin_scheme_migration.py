@@ -9,7 +9,6 @@ from src import config
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
-
 ROLE_NAME_MAPPING = {
     "administrators": ["Project admin"],
     "project administrators": ["Project admin"],
@@ -39,9 +38,64 @@ class AdminSchemeMigration(BaseMigration):
     # BaseMigration overrides                                            #
     # ------------------------------------------------------------------ #
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "admin_schemes")
+
+        Returns:
+            List of project admin scheme entities (project roles + permission schemes)
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type != "admin_schemes":
+            msg = (
+                f"AdminSchemeMigration does not support entity type: {entity_type}. "
+                f"Supported types: ['admin_schemes']"
+            )
+            raise ValueError(msg)
+
+        # Aggregate data from multiple API calls per project
+        projects: list[dict[str, Any]] = []
+
+        for project_key, entry in self.project_mapping.items():
+            op_project_id = int(entry.get("openproject_id", 0) or 0) if isinstance(entry, dict) else 0
+            if op_project_id <= 0:
+                continue
+
+            try:
+                # Two API calls per project: roles and permission scheme
+                roles = self.jira_client.get_project_roles(project_key)
+                scheme = self.jira_client.get_project_permission_scheme(project_key)
+            except Exception as exc:
+                self.logger.exception(
+                    "Failed to fetch admin scheme for project %s: %s",
+                    project_key,
+                    exc,
+                )
+                continue
+
+            projects.append(
+                {
+                    "project_key": project_key,
+                    "openproject_id": op_project_id,
+                    "roles": roles,
+                    "permission_scheme": scheme,
+                },
+            )
+
+        return projects
+
     def _extract(self) -> ComponentResult:
         """Gather Jira project role assignments for mapped projects."""
-
         projects = []
         for project_key, entry in self.project_mapping.items():
             op_project_id = int(entry.get("openproject_id", 0) or 0) if isinstance(entry, dict) else 0
@@ -50,7 +104,7 @@ class AdminSchemeMigration(BaseMigration):
             try:
                 roles = self.jira_client.get_project_roles(project_key)
                 scheme = self.jira_client.get_project_permission_scheme(project_key)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.logger.exception(
                     "Failed to extract admin scheme for project %s: %s",
                     project_key,
@@ -75,7 +129,6 @@ class AdminSchemeMigration(BaseMigration):
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Convert Jira actors to OpenProject user/group assignments."""
-
         if not extracted.success or not isinstance(extracted.data, dict):
             return ComponentResult(
                 success=False,
@@ -213,7 +266,6 @@ class AdminSchemeMigration(BaseMigration):
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Create OpenProject memberships according to mapped roles."""
-
         if not mapped.success or not isinstance(mapped.data, dict):
             return ComponentResult(
                 success=False,
@@ -240,7 +292,7 @@ class AdminSchemeMigration(BaseMigration):
                             self.logger.error("Group role assignment errors: %s", details)
                         else:
                             self.logger.error("Group role assignment reported %s errors without details", group_errors)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 failed += len(group_assignments)
                 self.logger.exception("Failed to assign group roles: %s", exc)
 
@@ -257,7 +309,7 @@ class AdminSchemeMigration(BaseMigration):
                         assignment.get("user_id"),
                         result.get("error") or result,
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 failed += 1
                 self.logger.exception(
                     "Failed to assign user %s to project %s: %s",
@@ -280,7 +332,6 @@ class AdminSchemeMigration(BaseMigration):
 
     def run(self) -> ComponentResult:
         """Execute the admin scheme migration pipeline."""
-
         self.logger.info("Starting admin scheme migration")
 
         if not self.group_mapping:
@@ -317,7 +368,6 @@ class AdminSchemeMigration(BaseMigration):
 
     def _refresh_group_mapping(self) -> None:
         """Populate group mapping directly from OpenProject when absent."""
-
         try:
             groups = self.op_client.get_groups()
         except Exception as exc:  # noqa: BLE001

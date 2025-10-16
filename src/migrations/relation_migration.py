@@ -17,11 +17,11 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 @register_entity_types("relations", "issue_links")
@@ -45,6 +45,29 @@ class RelationMigration(BaseMigration):
             ("precedes", "outward"): ("precedes", False),
             ("precedes", "inward"): ("follows", True),
         }
+
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities for transformation.
+
+        This migration performs data transformation on issue relationships
+        rather than fetching directly from Jira. It operates on already-fetched
+        work package data and link type mappings.
+
+        Args:
+            entity_type: The type of entities requested (e.g., "relations", "issue_links")
+
+        Returns:
+            Empty list (this migration doesn't fetch from Jira directly)
+
+        Raises:
+            ValueError: Always, as this migration doesn't support idempotent workflow
+
+        """
+        msg = (
+            "RelationMigration is a transformation-only migration and does not "
+            "support idempotent workflow. It operates on data from other migrations."
+        )
+        raise ValueError(msg)
 
     def _resolve_wp_id(self, jira_key: str) -> int | None:
         """Resolve OpenProject WP ID from Jira key via mappings or local map."""
@@ -200,7 +223,7 @@ class RelationMigration(BaseMigration):
                 "created": created,
                 "skipped": skipped,
                 "errors": errors,
-            }
+            },
         )
         result.success = errors == 0
         result.message = (

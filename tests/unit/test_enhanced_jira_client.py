@@ -33,11 +33,28 @@ from src.clients.jira_client import JiraClient
 from src.utils.performance_optimizer import PerformanceOptimizer
 
 
+@pytest.fixture(autouse=True)
+def mock_jira_client(monkeypatch: pytest.MonkeyPatch):
+    """Auto-fixture to set up a mock JIRA client on all EnhancedJiraClient instances."""
+    original_init = EnhancedJiraClient.__init__
+    mock_jira_instance = Mock()
+    mock_jira_instance.search_issues = Mock(return_value=[])
+
+    def patched_init(self, *args, **kwargs):
+        # Call original but with mocked _connect and _patch_jira_client
+        with patch.object(JiraClient, "_connect"), patch.object(JiraClient, "_patch_jira_client"):
+            original_init(self, *args, **kwargs)
+        # Set up a mock jira instance
+        self.jira = mock_jira_instance
+
+    monkeypatch.setattr(EnhancedJiraClient, "__init__", patched_init)
+    return mock_jira_instance
+
+
 class TestEnhancedJiraClientInitialization:
     """Test EnhancedJiraClient initialization and configuration."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_enhanced_client_initialization(self, mock_jira) -> None:
+    def test_enhanced_client_initialization(self) -> None:
         """Test enhanced client initialization with performance optimizer."""
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -61,8 +78,7 @@ class TestEnhancedJiraClientInitialization:
         assert client.parallel_workers == 8
         assert client.performance_optimizer.rate_limiter.current_rate == 20.0
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_enhanced_client_default_values(self, mock_jira) -> None:
+    def test_enhanced_client_default_values(self) -> None:
         """Test enhanced client initialization with default values."""
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -81,8 +97,7 @@ class TestEnhancedJiraClientInitialization:
 class TestBatchGetIssues:
     """Test batch_get_issues functionality."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_batch_get_issues_empty_list(self, mock_jira) -> None:
+    def test_batch_get_issues_empty_list(self) -> None:
         """Test batch get issues with empty issue keys list."""
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -93,12 +108,10 @@ class TestBatchGetIssues:
         results = client.batch_get_issues([])
         assert results == {}
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
     @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
     def test_batch_get_issues_single_batch(
         self,
         mock_executor_class,
-        mock_jira,
     ) -> None:
         """Test batch get issues with single batch."""
         # Mock issue objects
@@ -133,12 +146,10 @@ class TestBatchGetIssues:
             assert results["TEST-1"] == mock_issue1
             assert results["TEST-2"] == mock_issue2
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
     @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
     def test_batch_get_issues_multiple_batches(
         self,
         mock_executor_class,
-        mock_jira,
     ) -> None:
         """Test batch get issues with multiple batches."""
         # Mock executor
@@ -175,12 +186,10 @@ class TestBatchGetIssues:
             assert "TEST-2" in results
             assert "TEST-3" in results
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
     @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
     def test_batch_get_issues_error_handling(
         self,
         mock_executor_class,
-        mock_jira,
     ) -> None:
         """Test batch get issues error handling."""
         # Mock executor
@@ -213,8 +222,7 @@ class TestBatchGetIssues:
 class TestFetchIssuesBatch:
     """Test _fetch_issues_batch internal method."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_fetch_issues_batch_empty(self, mock_jira) -> None:
+    def test_fetch_issues_batch_empty(self) -> None:
         """Test fetch issues batch with empty list."""
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -225,8 +233,7 @@ class TestFetchIssuesBatch:
         results = client._fetch_issues_batch([])
         assert results == {}
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_fetch_issues_batch_success(self, mock_jira) -> None:
+    def test_fetch_issues_batch_success(self, mock_jira_client) -> None:
         """Test successful batch fetch."""
         # Mock issues
         mock_issue1 = Mock(spec=Issue)
@@ -235,7 +242,7 @@ class TestFetchIssuesBatch:
         mock_issue2.key = "TEST-2"
 
         # Mock jira client
-        mock_jira.return_value.search_issues.return_value = [mock_issue1, mock_issue2]
+        mock_jira_client.search_issues.return_value = [mock_issue1, mock_issue2]
 
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -251,20 +258,19 @@ class TestFetchIssuesBatch:
 
         # Verify JQL query
         expected_jql = "key in (TEST-1,TEST-2)"
-        mock_jira.return_value.search_issues.assert_called_once_with(
+        mock_jira_client.search_issues.assert_called_once_with(
             expected_jql,
             maxResults=2,
             expand="changelog",
         )
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_fetch_issues_batch_partial_results(self, mock_jira) -> None:
+    def test_fetch_issues_batch_partial_results(self, mock_jira_client) -> None:
         """Test batch fetch with partial results."""
         # Mock only one issue returned
         mock_issue1 = Mock(spec=Issue)
         mock_issue1.key = "TEST-1"
 
-        mock_jira.return_value.search_issues.return_value = [mock_issue1]
+        mock_jira_client.search_issues.return_value = [mock_issue1]
 
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -278,10 +284,9 @@ class TestFetchIssuesBatch:
         assert results["TEST-1"] == mock_issue1
         assert results["TEST-2"] is None  # Not found
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_fetch_issues_batch_api_error(self, mock_jira) -> None:
+    def test_fetch_issues_batch_api_error(self, mock_jira_client) -> None:
         """Test batch fetch with API error."""
-        mock_jira.return_value.search_issues.side_effect = JIRAError("API Error")
+        mock_jira_client.search_issues.side_effect = JIRAError("API Error")
 
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -299,8 +304,7 @@ class TestFetchIssuesBatch:
 class TestBatchGetWorkLogs:
     """Test batch_get_work_logs functionality."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_batch_get_work_logs_empty(self, mock_jira) -> None:
+    def test_batch_get_work_logs_empty(self) -> None:
         """Test batch get work logs with empty list."""
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -311,9 +315,8 @@ class TestBatchGetWorkLogs:
         results = client.batch_get_work_logs([])
         assert results == {}
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
     @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
-    def test_batch_get_work_logs_success(self, mock_executor_class, mock_jira) -> None:
+    def test_batch_get_work_logs_success(self, mock_executor_class) -> None:
         """Test successful batch work logs retrieval."""
         # Mock executor
         mock_executor = Mock()
@@ -351,14 +354,13 @@ class TestBatchGetWorkLogs:
 class TestStreamSearchIssues:
     """Test stream_search_issues functionality."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_stream_search_issues_basic(self, mock_jira) -> None:
+    def test_stream_search_issues_basic(self, mock_jira_client) -> None:
         """Test basic streaming search functionality."""
         # Mock issues for pagination
         page1_issues = [Mock(key=f"TEST-{i}") for i in range(1, 4)]
         page2_issues = [Mock(key=f"TEST-{i}") for i in range(4, 6)]
 
-        mock_jira.return_value.search_issues.side_effect = [
+        mock_jira_client.search_issues.side_effect = [
             page1_issues,
             page2_issues,
             [],
@@ -375,11 +377,10 @@ class TestStreamSearchIssues:
         assert len(issues) == 5
         assert all(issue.key.startswith("TEST-") for issue in issues)
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_stream_search_issues_max_pages(self, mock_jira) -> None:
+    def test_stream_search_issues_max_pages(self, mock_jira_client) -> None:
         """Test streaming search with max pages limit."""
         # Mock infinite pages
-        mock_jira.return_value.search_issues.return_value = [Mock(key="TEST-1")]
+        mock_jira_client.search_issues.return_value = [Mock(key="TEST-1")]
 
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -392,14 +393,13 @@ class TestStreamSearchIssues:
         )
 
         assert len(issues) == 3
-        assert mock_jira.return_value.search_issues.call_count == 3
+        assert mock_jira_client.search_issues.call_count == 3
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_stream_search_issues_error_handling(self, mock_jira) -> None:
+    def test_stream_search_issues_error_handling(self, mock_jira_client) -> None:
         """Test streaming search error handling."""
         # First page succeeds, second fails
         page1_issues = [Mock(key="TEST-1")]
-        mock_jira.return_value.search_issues.side_effect = [
+        mock_jira_client.search_issues.side_effect = [
             page1_issues,
             JIRAError("API Error"),
         ]
@@ -420,8 +420,7 @@ class TestStreamSearchIssues:
 class TestCachedOperations:
     """Test cached operations integration."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_cached_project_get(self, mock_jira) -> None:
+    def test_cached_project_get(self) -> None:
         """Test cached project retrieval."""
         # Mock project data
         mock_project = {"key": "TEST", "name": "Test Project"}
@@ -451,8 +450,7 @@ class TestCachedOperations:
         # Should only make one API call due to caching
         assert mock_session.get.call_count == 1
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_cached_statuses_get(self, mock_jira) -> None:
+    def test_cached_statuses_get(self) -> None:
         """Test cached status retrieval."""
         mock_statuses = [
             {"id": "1", "name": "Open"},
@@ -485,9 +483,8 @@ class TestCachedOperations:
 class TestBulkOperations:
     """Test bulk operations functionality."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
     @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
-    def test_bulk_get_issue_metadata(self, mock_executor_class, mock_jira) -> None:
+    def test_bulk_get_issue_metadata(self, mock_executor_class) -> None:
         """Test bulk issue metadata retrieval."""
         # Mock executor
         mock_executor = Mock()
@@ -525,8 +522,7 @@ class TestBulkOperations:
 class TestPerformanceIntegration:
     """Test performance optimization integration."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_performance_optimizer_integration(self, mock_jira) -> None:
+    def test_performance_optimizer_integration(self) -> None:
         """Test performance optimizer integration in enhanced client."""
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -541,8 +537,7 @@ class TestPerformanceIntegration:
         assert client.performance_optimizer.cache.max_size == 100
         assert client.performance_optimizer.rate_limiter.current_rate == 5.0
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_rate_limiting_integration(self, mock_jira) -> None:
+    def test_rate_limiting_integration(self) -> None:
         """Test rate limiting integration in batch operations."""
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -567,8 +562,7 @@ class TestPerformanceIntegration:
 class TestBackwardsCompatibility:
     """Test backwards compatibility with base JiraClient."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_base_methods_available(self, mock_jira) -> None:
+    def test_base_methods_available(self) -> None:
         """Test that base JiraClient methods are still available."""
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -584,8 +578,7 @@ class TestBackwardsCompatibility:
         assert hasattr(client, "create_issue")
         assert hasattr(client, "search_issues")
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_enhanced_methods_added(self, mock_jira) -> None:
+    def test_enhanced_methods_added(self) -> None:
         """Test that enhanced methods are added."""
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -605,10 +598,9 @@ class TestBackwardsCompatibility:
 class TestErrorHandlingAndResilience:
     """Test error handling and resilience features."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_network_error_handling(self, mock_jira) -> None:
+    def test_network_error_handling(self, mock_jira_client) -> None:
         """Test handling of network errors."""
-        mock_jira.return_value.search_issues.side_effect = ConnectionError(
+        mock_jira_client.search_issues.side_effect = ConnectionError(
             "Network error",
         )
 
@@ -622,10 +614,9 @@ class TestErrorHandlingAndResilience:
         results = client._fetch_issues_batch(["TEST-1"])
         assert results["TEST-1"] is None
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_jira_api_error_handling(self, mock_jira) -> None:
+    def test_jira_api_error_handling(self, mock_jira_client) -> None:
         """Test handling of Jira API errors."""
-        mock_jira.return_value.search_issues.side_effect = JIRAError("Forbidden")
+        mock_jira_client.search_issues.side_effect = JIRAError("Forbidden")
 
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",
@@ -637,12 +628,10 @@ class TestErrorHandlingAndResilience:
         results = client._fetch_issues_batch(["TEST-1"])
         assert results["TEST-1"] is None
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
     @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
     def test_partial_batch_failure_handling(
         self,
         mock_executor_class,
-        mock_jira,
     ) -> None:
         """Test handling of partial batch failures."""
         # Mock executor
@@ -682,8 +671,7 @@ class TestErrorHandlingAndResilience:
 class TestMemoryEfficiency:
     """Test memory efficiency of streaming operations."""
 
-    @patch("src.clients.enhanced_jira_client.JIRA")
-    def test_streaming_memory_usage(self, mock_jira) -> None:
+    def test_streaming_memory_usage(self, mock_jira_client) -> None:
         """Test that streaming operations don't load all data into memory."""
 
         # Mock large result set
@@ -695,7 +683,7 @@ class TestMemoryEfficiency:
                 for i in range(startAt, min(startAt + maxResults, 1000))
             ]
 
-        mock_jira.return_value.search_issues.side_effect = mock_search_issues
+        mock_jira_client.search_issues.side_effect = mock_search_issues
 
         client = EnhancedJiraClient(
             server="https://test.atlassian.net",

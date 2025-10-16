@@ -3,6 +3,8 @@
 Handles the migration of custom fields from Jira to OpenProject.
 """
 
+from __future__ import annotations
+
 import json
 import pathlib
 import time

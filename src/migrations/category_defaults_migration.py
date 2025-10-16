@@ -16,21 +16,43 @@ from src.models import ComponentResult
 
 try:
     from src.config import logger as logger  # type: ignore
-    from src import config
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+
+from src import config
 
 
 @register_entity_types("category_defaults")
 class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
 
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities for transformation.
+
+        This migration performs data transformation on project components
+        rather than fetching directly from Jira. It operates on already-fetched
+        project data and component information.
+
+        Args:
+            entity_type: The type of entities requested
+
+        Returns:
+            Empty list (this migration doesn't fetch from Jira directly)
+
+        Raises:
+            ValueError: Always, as this migration doesn't support idempotent workflow
+
+        """
+        msg = (
+            "CategoryDefaultsMigration is a transformation-only migration and does not "
+            "support idempotent workflow. It operates on data from other migrations."
+        )
+        raise ValueError(msg)
+
+    def _extract(self) -> ComponentResult:
         """Extract per-project component->lead mapping from Jira."""
         # Expect jira_client.get_project_components(project_key) to yield components with 'name' and 'lead' (name/mail)
         proj_map = self.mappings.get_mapping("project") or {}
@@ -62,11 +84,11 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
             return None
         return None
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         """No transformation needed; pass through extracted data."""
         return ComponentResult(success=True, data=extracted.data)
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         components_by_project: dict[str, list[dict[str, Any]]] = data.get("components", {}) if isinstance(data, dict) else {}
 
@@ -103,7 +125,7 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
                         updated += 1
                     else:
                         failed += 1
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception("Failed to set category default for %s/%s", jira_key, comp)
                     failed += 1
 

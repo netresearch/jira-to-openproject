@@ -4,15 +4,16 @@ Client for executing commands on a Rails console running in a tmux session.
 Uses exception-based error handling for all operations.
 """
 
+import inspect
+import os
 import shutil
 import subprocess
 import time
+from datetime import UTC, datetime
 from typing import Any
-from datetime import datetime, timezone
-import inspect
-import os
 
 from src.display import configure_logging
+
 try:
     from src import config  # type: ignore
 except Exception:  # noqa: BLE001
@@ -414,13 +415,13 @@ class RailsConsoleClient:
                         path.replace("migrations/", "migration/")
                         .replace("clients/", "client/")
                         .replace("_migration.py", "")
-                        .replace(".py", "")
+                        .replace(".py", ""),
                     )
                 else:
                     parts.append("rails/console")
                 if func:
                     parts.append(f"func={func}")
-                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
                 parts.append(f"ts={ts}")
                 try:
                     parts.append(f"pid={os.getpid()}")

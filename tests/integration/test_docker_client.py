@@ -15,7 +15,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-
 from src.clients.docker_client import DockerClient
 
 

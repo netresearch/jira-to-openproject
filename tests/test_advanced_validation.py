@@ -1,24 +1,45 @@
 #!/usr/bin/env python3
-"""Tests for the Advanced Data Validation Framework."""
+"""Tests for the Advanced Data Validation Framework.
+
+NOTE: This entire test file is skipped because the Advanced Data Validation Framework
+was removed during enterprise bloat cleanup. Validation is now handled through simpler
+mechanisms within individual migration classes using their ETL methods and error handling.
+"""
 
 import json
 from datetime import datetime
 
 import pytest
 
-from src.utils.advanced_validation import (
-    InFlightValidator,
-    PostMigrationValidator,
-    PreMigrationValidator,
-    ValidationFramework,
-    ValidationLevel,
-    ValidationPhase,
-    ValidationResult,
-    ValidationSummary,
-    validate_in_flight,
-    validate_post_migration,
-    validate_pre_migration,
-)
+pytestmark = pytest.mark.skip(reason="ValidationFramework removed during enterprise bloat cleanup")
+
+try:
+    from src.utils.advanced_validation import (
+        InFlightValidator,
+        PostMigrationValidator,
+        PreMigrationValidator,
+        ValidationFramework,
+        ValidationLevel,
+        ValidationPhase,
+        ValidationResult,
+        ValidationSummary,
+        validate_in_flight,
+        validate_post_migration,
+        validate_pre_migration,
+    )
+except ImportError:
+    # Module was removed during enterprise bloat cleanup
+    InFlightValidator = None
+    PostMigrationValidator = None
+    PreMigrationValidator = None
+    ValidationFramework = None
+    ValidationLevel = None
+    ValidationPhase = None
+    ValidationResult = None
+    ValidationSummary = None
+    validate_in_flight = None
+    validate_post_migration = None
+    validate_pre_migration = None
 
 
 class TestValidationResult:

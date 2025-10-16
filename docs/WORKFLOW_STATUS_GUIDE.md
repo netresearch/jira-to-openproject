@@ -59,7 +59,7 @@ The migration tool uses this priority order for mapping Jira statuses to OpenPro
 | Done | Closed | Completed work |
 | Custom | Custom | Project-specific statuses |
 
-## Manual Validation
+## Manual Workflow Configuration
 
 After running the migration, review the generated transitions in OpenProject and adjust only if project-specific rules require it:
 

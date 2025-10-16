@@ -203,7 +203,7 @@ class EnhancedAuditTrailMigrator:
             if not hasattr(jira_issue, "fields"):
                 return comments
             fields = jira_issue.fields
-            if not hasattr(fields, "comment") or not getattr(fields, "comment"):
+            if not hasattr(fields, "comment") or not fields.comment:
                 return comments
             comment_container = fields.comment
             raw_comments = getattr(comment_container, "comments", []) or []
@@ -269,7 +269,7 @@ class EnhancedAuditTrailMigrator:
                         "version": 1,
                         "comment": converted_comment,
                         "changes": [],
-                    }
+                    },
                 )
             except Exception:
                 continue
@@ -490,6 +490,7 @@ class EnhancedAuditTrailMigrator:
 
         Returns:
             True when changelog data is queued successfully.
+
         """
         if not self.changelog_data:
             self.logger.info("No stored changelog data to process")
@@ -591,6 +592,7 @@ class EnhancedAuditTrailMigrator:
 
         Returns:
             Summary dict with execution status
+
         """
         if work_package_mapping is not None:
             queued_success = self.process_stored_changelog_data(work_package_mapping)
@@ -661,7 +663,7 @@ class EnhancedAuditTrailMigrator:
                     if not errors:
                         errors = [f"Unexpected audit execution response: {result}"]
                     self.logger.error("Audit event execution via client failed: %s", result)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 error_msg = f"Failed to execute audit Rails operations via client: {e}"
                 self.logger.exception(error_msg)
                 self.migration_results["errors"].append(error_msg)
@@ -686,7 +688,7 @@ class EnhancedAuditTrailMigrator:
                     error_msg = stderr or "Unknown Rails execution error"
                     self.logger.error(f"Rails audit operations failed: {error_msg}")
                     errors = [error_msg]
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 error_msg = f"Failed to execute audit Rails operations: {e}"
                 self.logger.exception(error_msg)
                 self.migration_results["errors"].append(error_msg)

@@ -19,7 +19,6 @@ import threading
 import time
 from unittest.mock import patch
 
-
 from src.clients.openproject_client import OpenProjectClient
 from src.utils.idempotency_manager import reset_idempotency_manager
 
@@ -32,14 +31,13 @@ class TestBatchIdempotencyIntegration:
         reset_idempotency_manager()
         # Mock the SSH connection and related dependencies
         with patch("src.clients.openproject_client.SSHConnection"):
-            with patch("src.clients.openproject_client.MetricsCollector"):
-                with patch("src.clients.openproject_client.PerformanceOptimizer"):
-                    with patch("src.clients.openproject_client.RateLimiter"):
-                        self.client = OpenProjectClient(
-                            host="test-host",
-                            user="test-user",
-                            project_name="test-project",
-                        )
+            with patch("src.clients.openproject_client.PerformanceOptimizer"):
+                with patch("src.clients.openproject_client.RateLimiter"):
+                    self.client = OpenProjectClient(
+                        host="test-host",
+                        user="test-user",
+                        project_name="test-project",
+                    )
 
     def teardown_method(self) -> None:
         """Clean up test fixtures."""

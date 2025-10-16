@@ -19,7 +19,6 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def migration(tmp_path):
     """Create a minimal WorkPackageMigration instance for helper testing."""
-
     instance = WorkPackageMigration.__new__(WorkPackageMigration)
     instance._checkpoint_migration_id = "test_wp_migration"
     instance._checkpoint_db_path = tmp_path / ".migration_checkpoints.db"

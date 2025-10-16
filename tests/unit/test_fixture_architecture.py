@@ -58,7 +58,6 @@ class TestFixtureArchitecture:
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
             patch.object(EnhancedUserAssociationMigrator, "_load_enhanced_mappings"),
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
-            patch("src.utils.enhanced_user_association_migrator.MetricsCollector"),
         ):
 
             # Clean config setup

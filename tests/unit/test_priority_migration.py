@@ -4,13 +4,13 @@ from src.migrations.priority_migration import PriorityMigration
 
 
 class DummyJira:
-    def get_priorities(self):  # noqa: ANN201
+    def get_priorities(self):
         return [
             {"name": "High"},
             {"name": "Normal"},
         ]
 
-    def batch_get_issues(self, keys):  # noqa: ANN201, ANN001
+    def batch_get_issues(self, keys):
         class F:
             def __init__(self, name: str) -> None:
                 class FF:
@@ -27,14 +27,14 @@ class DummyOp:
         self.created: list[str] = []
         self.updated: list[dict] = []
 
-    def get_issue_priorities(self):  # noqa: ANN201
+    def get_issue_priorities(self):
         return [{"id": 1, "name": "Normal"}]
 
-    def create_issue_priority(self, name: str, position=None, is_default=False):  # noqa: ANN001, ANN201
+    def create_issue_priority(self, name: str, position=None, is_default=False):
         self.created.append(name)
         return {"id": 2 if name == "High" else 3, "name": name}
 
-    def batch_update_work_packages(self, updates):  # noqa: ANN001, ANN201
+    def batch_update_work_packages(self, updates):
         self.updated.extend(updates)
         return {"updated": len(updates), "failed": 0, "results": []}
 
@@ -47,14 +47,18 @@ def _map_store(monkeypatch: pytest.MonkeyPatch):
                 "work_package": {"J1": {"openproject_id": 10}},
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._maps.get(name, {})
 
-        def set_mapping(self, name: str, mapping):  # noqa: ANN001, ANN201
+        def set_mapping(self, name: str, mapping):
             self._maps[name] = mapping
 
-    from src import mappings as _m  # type: ignore  # noqa: PLC0415
+    from src import config
+    from src import mappings as _m  # type: ignore
+
+    # Patch both the Mappings class and the config.mappings instance
     monkeypatch.setattr(_m, "Mappings", DummyMappings)
+    monkeypatch.setattr(config, "mappings", DummyMappings())
 
 
 def test_priority_migration_creates_and_updates(monkeypatch: pytest.MonkeyPatch):

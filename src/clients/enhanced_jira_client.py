@@ -1,12 +1,16 @@
 """Enhanced Jira client with advanced features for migration operations."""
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
-from jira import JIRA, Issue
+if TYPE_CHECKING:
+    from jira import Issue
+
 from src.clients.jira_client import JiraClient
 from src.display import configure_logging
 
@@ -30,28 +34,9 @@ class EnhancedJiraClient(JiraClient):
         self.server = kwargs.get("server", getattr(self, "jira_url", ""))
         self.username = kwargs.get("username", getattr(self, "jira_username", ""))
 
-    # ----- Connection override to use patch targets in this module -----
-    def _connect(self) -> None:
-        """Override connection to use local JIRA symbol for test patching.
-
-        Uses token auth first, then basic auth, mirroring base behavior but simplified.
-        """
-        try:
-            logger.info("[Enhanced] Connecting to Jira using token auth")
-            self.jira = JIRA(server=self.jira_url, token_auth=self.jira_token)
-            return  # noqa: TRY300
-        except Exception:  # noqa: BLE001
-            logger.warning("[Enhanced] Token auth failed, trying basic auth")
-        try:
-            self.jira = JIRA(
-                server=self.jira_url,
-                basic_auth=(self.jira_username, self.jira_token),
-                options={"verify": self.verify_ssl},
-            )
-            return  # noqa: TRY300
-        except Exception as e2:  # noqa: BLE001, pragma: no cover - exercised via base tests
-            msg = f"EnhancedJiraClient failed to connect: {e2!s}"
-            raise RuntimeError(msg) from None
+    # ----- Connection override - use base class with fallback -----
+    # EnhancedJiraClient delegates to base JiraClient._connect() which handles
+    # dynamic JIRA class import and authentication
 
     # ----- Batch operations -----
     def _fetch_issues_batch(self, issue_keys: list[str]) -> dict[str, Issue | None]:

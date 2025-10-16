@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 from unittest.mock import patch
 
 from src import config
@@ -28,7 +28,7 @@ class FixtureMappings:
                 "openproject_login": "mock.user",
                 "openproject_email": "mock.user@example.com",
                 "matched_by": "manual",
-            }
+            },
         }
         self.project_mapping = {
             "E2E": {
@@ -37,7 +37,7 @@ class FixtureMappings:
                 "openproject_id": 6001,
                 "openproject_identifier": "mock-project",
                 "openproject_name": "Mock Project",
-            }
+            },
         }
         self.issue_type_mapping = {
             "Task": {
@@ -45,17 +45,17 @@ class FixtureMappings:
                 "jira_name": "Task",
                 "openproject_id": 7001,
                 "matched_by": "manual",
-            }
+            },
         }
         self.issue_type_id_mapping = {"1": 7001}
         self.status_mapping = {
-            "Open": {"openproject_id": 8001, "openproject_name": "Open"}
+            "Open": {"openproject_id": 8001, "openproject_name": "Open"},
         }
         self.priority_mapping = {
-            "Normal": {"openproject_id": 9002}
+            "Normal": {"openproject_id": 9002},
         }
         self.custom_field_mapping = {
-            "E2E Custom Field": {"openproject_id": 9001, "field_format": "string"}
+            "E2E Custom Field": {"openproject_id": 9001, "field_format": "string"},
         }
         self.work_package_mapping = {
             "E2E-WP-1": {
@@ -63,7 +63,7 @@ class FixtureMappings:
                 "jira_key": "E2E-WP-1",
                 "project_key": "E2E",
                 "openproject_id": 10001,
-            }
+            },
         }
 
     def get_mapping(self, name: str):

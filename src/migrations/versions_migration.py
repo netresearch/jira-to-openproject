@@ -17,11 +17,11 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 @register_entity_types("versions")
@@ -37,7 +37,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         except Exception:
             return str(issue_key)
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         """Extract fixVersion names per Jira project from known work package issues."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         jira_keys = [str(k) for k in wp_map.keys()]
@@ -49,7 +49,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
             batch_get = getattr(self.jira_client, "batch_get_issues", None)
             if callable(batch_get):
                 issues = batch_get(jira_keys)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to batch-get Jira issues for versions extraction")
             issues = {}
 
@@ -75,7 +75,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         materialized = {k: sorted(list(v)) for k, v in by_project.items() if v}
         return ComponentResult(success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         by_project: dict[str, list[str]] = data.get("by_project", {}) if isinstance(data, dict) else {}
         if not by_project:
@@ -83,7 +83,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
 
         proj_map = self.mappings.get_mapping("project") or {}
         op_project_ids: dict[str, int] = {}
-        for jira_key in by_project.keys():
+        for jira_key in by_project:
             entry = proj_map.get(jira_key)
             pid = None
             if isinstance(entry, dict):
@@ -104,7 +104,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 res = self.op_client.execute_json_query(query)
                 if isinstance(res, list):
                     existing = [r for r in res if isinstance(r, dict)]
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Failed to list existing Versions")
                 existing = []
 
@@ -133,7 +133,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
             try:
                 res = self.op_client.bulk_create_records("Version", to_create)
                 created = int(res.get("created_count", 0)) if isinstance(res, dict) else len(to_create)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Failed to create Versions in bulk")
 
             # Refresh existing map after creation
@@ -150,18 +150,18 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                             by_pid_name_to_id.setdefault(str(pid), {})[name] = vid
                         except Exception:  # noqa: BLE001
                             continue
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Failed to refresh Version map after creation")
 
         # Persist
         try:
             self.mappings.set_mapping("version", by_pid_name_to_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to persist version mapping")
 
         return ComponentResult(success=True, created=created, data={"version_map": by_pid_name_to_id})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         version_map: dict[str, dict[str, int]] = (mapped.data or {}).get("version_map", {}) if mapped.data else {}
         if not version_map:
             return ComponentResult(success=True, updated=0)
@@ -176,7 +176,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
             batch_get = getattr(self.jira_client, "batch_get_issues", None)
             if callable(batch_get):
                 issues = batch_get(jira_keys)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to batch-get Jira issues for version assignment")
             issues = {}
 
@@ -233,7 +233,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         try:
             res = self.op_client.batch_update_work_packages(updates)
             updated = int(res.get("updated", 0)) if isinstance(res, dict) else len(updates)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to batch update version_id on work packages")
             failed += len(updates)
 

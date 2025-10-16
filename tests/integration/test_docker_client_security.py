@@ -14,7 +14,6 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-
 from src.clients.docker_client import DockerClient
 
 

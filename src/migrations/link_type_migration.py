@@ -82,6 +82,34 @@ class LinkTypeMigration(BaseMigration):
 
         self.console = console
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "link_types", "relation_types")
+
+        Returns:
+            List of entity dictionaries from Jira API
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type in ("link_types", "relation_types"):
+            return self.jira_client.get_issue_link_types()
+
+        # Raise error for unsupported types
+        msg = (
+            f"LinkTypeMigration does not support entity type: {entity_type}. "
+            f"Supported types: ['link_types', 'relation_types']"
+        )
+        raise ValueError(msg)
+
     def run(self) -> ComponentResult:
         """Run the link type migration process.
 

@@ -23,8 +23,7 @@ from pydantic import BaseModel, Field
 
 from src.display import configure_logging
 
-# Import our migration components
-from src.utils.error_recovery import ErrorRecoverySystem
+# No migration component imports needed for dashboard
 
 # Configure logger for dashboard
 logger = configure_logging("INFO", None)
@@ -54,7 +53,6 @@ migration_state = {
     "pause_time": None,
     "total_pause_time": 0,
     "current_component": None,
-    "error_recovery_system": None,
 }
 
 
@@ -254,14 +252,15 @@ async def update_migration_progress() -> None:
     """Update migration progress and broadcast to clients."""
     while True:
         try:
-            if (
-                migration_state["is_running"]
-                and migration_state["migration_id"]
-                and migration_state["error_recovery_system"]
-            ):
-                progress_data = await migration_state[
-                    "error_recovery_system"
-                ].get_progress()
+            if migration_state["is_running"] and migration_state["migration_id"]:
+                # Progress tracking would come from actual migration state
+                progress_data: dict[str, Any] = {
+                    "total_entities": 0,
+                    "processed_entities": 0,
+                    "failed_entities": 0,
+                    "error_count": 0,
+                    "success_rate": 0.0,
+                }
 
                 # Create progress object
                 progress = MigrationProgress(
@@ -405,9 +404,6 @@ async def start_migration_background(config: dict[str, Any]) -> None:
         migration_state["start_time"] = datetime.now(UTC)
         migration_state["current_component"] = config.get("component", "all")
 
-        # Initialize error recovery system
-        migration_state["error_recovery_system"] = ErrorRecoverySystem()
-
         # Broadcast migration start event
         event = MigrationEvent(
             level="info",
@@ -482,10 +478,15 @@ async def resume_migration_background() -> None:
 async def get_progress(migration_id: str | None = None) -> JSONResponse:
     """Get current migration progress."""
     try:
-        if migration_state["is_running"] and migration_state["error_recovery_system"]:
-            progress_data = await migration_state[
-                "error_recovery_system"
-            ].get_progress()
+        if migration_state["is_running"]:
+            # Progress tracking would come from actual migration state
+            progress_data: dict[str, Any] = {
+                "total_entities": 0,
+                "processed_entities": 0,
+                "failed_entities": 0,
+                "error_count": 0,
+                "success_rate": 0.0,
+            }
 
             progress = MigrationProgress(
                 migration_id=migration_state["migration_id"],
@@ -529,10 +530,11 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
         average_processing_time = 0.0
         error_rate = 0.0
 
-        if migration_state["is_running"] and migration_state["error_recovery_system"]:
-            progress_data = await migration_state[
-                "error_recovery_system"
-            ].get_progress()
+        if migration_state["is_running"]:
+            # Progress tracking would come from actual migration state
+            progress_data: dict[str, Any] = {
+                "processed_entities": 0,
+            }
 
             if migration_state["start_time"]:
                 elapsed_time = (

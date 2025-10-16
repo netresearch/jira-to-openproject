@@ -21,7 +21,7 @@ class DummyJira:
             "PRJ-2": DummyIssue("PRJ-2", []),
         }
 
-    def batch_get_issues(self, keys):  # noqa: ANN201, ANN001
+    def batch_get_issues(self, keys):
         return {k: self.issues.get(k) for k in keys}
 
 
@@ -29,23 +29,23 @@ class DummyOp:
     def __init__(self) -> None:
         self.payload = None
 
-    def execute_script_with_data(self, script_content: str, data: object):  # noqa: ANN201
+    def execute_script_with_data(self, script_content: str, data: object):
         self.payload = list(data) if isinstance(data, list) else []
         return {"updated": len(self.payload), "failed": 0}
 
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
             self._m = {"work_package": {"PRJ-1": {"openproject_id": 901}, "PRJ-2": {"openproject_id": 902}}}
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
 
 def test_native_tags_assigns_tags_to_work_packages():

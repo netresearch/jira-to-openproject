@@ -16,11 +16,11 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 @register_entity_types("customfields_generic")
@@ -69,7 +69,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
                             or v.get("displayName")
                             or v.get("id")
                             or v,
-                        )
+                        ),
                     )
                 else:
                     normalized.append(str(getattr(v, "name", v)))
@@ -79,7 +79,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
         # Fallback for objects with .name
         return str(getattr(value, "name", value))
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         """Extract unmapped customfield_* values per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
@@ -123,10 +123,10 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=True, data={"values_by_wp": values_by_wp})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         return extracted
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         values_by_wp: dict[int, list[tuple[str, str]]] = (mapped.data or {}).get("values_by_wp", {})  # type: ignore[assignment]
         if not values_by_wp:
             return ComponentResult(success=True, updated=0)
@@ -157,7 +157,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
                     ok = self.op_client.execute_query(set_script)
                     if ok:
                         updated += 1
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception("Failed to apply CF '%s' for WP %s", name, wp_id)
                     failed += 1
 

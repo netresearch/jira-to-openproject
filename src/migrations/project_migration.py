@@ -225,7 +225,6 @@ class ProjectMigration(BaseMigration):
 
     def _build_role_lookup(self) -> dict[str, int]:
         """Build a lookup of role names to IDs for project membership operations."""
-
         try:
             roles = self.op_client.get_roles()
         except Exception as exc:  # noqa: BLE001
@@ -1157,7 +1156,7 @@ class ProjectMigration(BaseMigration):
             "    begin\n"
             "      p.workspace_type = 'project'\n"
             "    rescue => e\n"
-            "      Rails.logger.warn(\"Failed to assign workspace_type: #{e.message}\")\n"
+            '      Rails.logger.warn("Failed to assign workspace_type: #{e.message}")\n'
             "    end\n"
             "  end\n"
             "  if defined?(Type) && p.respond_to?(:types=)\n"
@@ -1171,7 +1170,7 @@ class ProjectMigration(BaseMigration):
             "      end\n"
             "      p.types = default_types if default_types.any?\n"
             "    rescue => type_error\n"
-            "      Rails.logger.warn(\"Failed to assign work package types: #{type_error.message}\")\n"
+            '      Rails.logger.warn("Failed to assign work package types: #{type_error.message}")\n'
             "    end\n"
             "  end\n"
             "  p.save!;\n"

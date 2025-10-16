@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.resolution_migration import ResolutionMigration, RESOLUTION_CF_NAME
+from src.migrations.resolution_migration import RESOLUTION_CF_NAME, ResolutionMigration
 
 
 class DummyIssue:
@@ -13,7 +13,7 @@ class DummyIssue:
 
 
 class DummyJira:
-    def batch_get_issues(self, keys):  # noqa: ANN201, ANN001
+    def batch_get_issues(self, keys):
         return {"J1": DummyIssue("Fixed"), "J2": DummyIssue(None)}
 
 
@@ -21,11 +21,11 @@ class DummyOp:
     def __init__(self) -> None:
         self.queries: list[str] = []
 
-    def get_custom_field_by_name(self, name: str):  # noqa: ANN201
+    def get_custom_field_by_name(self, name: str):
         assert name == RESOLUTION_CF_NAME
         raise Exception("not found")
 
-    def execute_query(self, script: str):  # noqa: ANN201
+    def execute_query(self, script: str):
         self.queries.append(script)
         if "cf.id" in script:
             return 99
@@ -34,7 +34,7 @@ class DummyOp:
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
@@ -42,13 +42,13 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
                 "work_package": {
                     "J1": {"openproject_id": 1001},
                     "J2": {"openproject_id": 1002},
-                }
+                },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
 
 def test_resolution_migration_sets_cf_and_journal():

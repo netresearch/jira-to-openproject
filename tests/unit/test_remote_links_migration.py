@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.remote_links_migration import RemoteLinksMigration, SECTION_TITLE
+from src.migrations.remote_links_migration import SECTION_TITLE, RemoteLinksMigration
 
 
 class DummyFields:
@@ -22,7 +22,7 @@ class DummyJira:
             "PRJ-3": DummyIssue("PRJ-3", []),
         }
 
-    def batch_get_issues(self, keys):  # noqa: ANN201, ANN001
+    def batch_get_issues(self, keys):
         return {k: self.issues.get(k) for k in keys}
 
 
@@ -30,7 +30,7 @@ class DummyOp:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str, str]] = []
 
-    def upsert_work_package_description_section(self, work_package_id: int, section_marker: str, content: str):  # noqa: ANN201
+    def upsert_work_package_description_section(self, work_package_id: int, section_marker: str, content: str):
         assert section_marker == SECTION_TITLE
         self.calls.append((work_package_id, section_marker, content))
         return True
@@ -38,7 +38,7 @@ class DummyOp:
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
@@ -47,13 +47,13 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
                     "PRJ-1": {"openproject_id": 13001},
                     "PRJ-2": {"openproject_id": 13002},
                     "PRJ-3": {"openproject_id": 13003},
-                }
+                },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
 
 def test_remote_links_migration_renders_markdown_and_updates():

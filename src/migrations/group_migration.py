@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from pathlib import Path
 from typing import Any
 
 from src import config
@@ -30,6 +29,55 @@ class GroupMigration(BaseMigration):
             if isinstance(stored_mapping, dict) and stored_mapping
             else config.mappings.get_mapping("group") or {}
         )
+
+    # ------------------------------------------------------------------
+    # BaseMigration overrides
+    # ------------------------------------------------------------------
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "groups")
+
+        Returns:
+            List of group entities with membership data
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type != "groups":
+            msg = (
+                f"GroupMigration does not support entity type: {entity_type}. "
+                f"Supported types: ['groups']"
+            )
+            raise ValueError(msg)
+
+        # Fetch Jira groups (API call 1)
+        self.logger.info("Fetching Jira groups and memberships")
+        groups = self.jira_client.get_groups()
+
+        # Fetch members for each group (API call 2 per group)
+        group_members: list[dict[str, Any]] = []
+        for group in groups:
+            name = group.get("name")
+            if not name:
+                continue
+            members = self.jira_client.get_group_members(name)
+            group_payload = {
+                "name": name,
+                "groupId": group.get("groupId"),
+                "members": members,
+            }
+            group_members.append(group_payload)
+
+        self.logger.info("Discovered %s Jira groups", len(group_members))
+        return group_members
 
     # ------------------------------------------------------------------
     # Extraction helpers
@@ -80,7 +128,7 @@ class GroupMigration(BaseMigration):
                 total_count=summary.get("total_groups", 0),
                 success_count=summary.get("groups_synced", 0),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.logger.exception("Group migration failed")
             return ComponentResult(
                 component="groups",

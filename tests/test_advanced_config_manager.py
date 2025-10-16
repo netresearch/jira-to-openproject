@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Tests for the Advanced Configuration Management System."""
+"""Tests for the Advanced Configuration Management System.
+
+NOTE: This entire test file is skipped because the Advanced Configuration Management System
+was removed during enterprise bloat cleanup. Configuration is now handled through simpler
+mechanisms in src/config.py and environment variables.
+"""
 import json
 import tempfile
 from datetime import UTC, datetime
@@ -8,17 +13,31 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.utils.advanced_config_manager import (
-    ConfigBackup,
-    ConfigOverride,
-    ConfigTemplate,
-    ConfigurationManager,
-    ConfigValidationResult,
-    ConfigVersion,
-    EnvironmentType,
-    generate_config_from_template,
-    validate_configuration,
-)
+pytestmark = pytest.mark.skip(reason="AdvancedConfigManager removed during enterprise bloat cleanup")
+
+try:
+    from src.utils.advanced_config_manager import (
+        ConfigBackup,
+        ConfigOverride,
+        ConfigTemplate,
+        ConfigurationManager,
+        ConfigValidationResult,
+        ConfigVersion,
+        EnvironmentType,
+        generate_config_from_template,
+        validate_configuration,
+    )
+except ImportError:
+    # Module was removed during enterprise bloat cleanup
+    ConfigBackup = None
+    ConfigOverride = None
+    ConfigTemplate = None
+    ConfigurationManager = None
+    ConfigValidationResult = None
+    ConfigVersion = None
+    EnvironmentType = None
+    generate_config_from_template = None
+    validate_configuration = None
 
 
 class TestEnvironmentType:

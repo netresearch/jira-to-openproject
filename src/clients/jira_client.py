@@ -5,19 +5,23 @@ Enhanced with performance optimizations including batch operations,
 caching, and parallel processing.
 """
 
+from __future__ import annotations
+
 import time
 from collections.abc import Iterator
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from requests import Response, exceptions
 
-from jira import Issue, JIRA as AtlassianJIRA
-try:
+if TYPE_CHECKING:
     from jira.exceptions import JIRAError as AtlassianJIRAError
-except ImportError:  # pragma: no cover - newer jira packages relocate exceptions
-    from jira import JIRAError as AtlassianJIRAError  # type: ignore[attr-defined]
+
+    from jira import JIRA, Issue
+else:
+    # At runtime, avoid importing jira to prevent stub issues
+    AtlassianJIRAError = Exception  # type: ignore[misc,assignment]
 from src import config
 from src.display import configure_logging
 from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
@@ -181,7 +185,10 @@ class JiraClient:
         # Helper: import real jira module even if a local test stub shadows it
         def _import_real_jira_module():
             try:
-                import importlib, importlib.util, site, sys
+                import importlib
+                import importlib.util
+                import site
+                import sys
                 from pathlib import Path as _Path
 
                 # If a shadow stub is loaded from the project, purge it
@@ -287,7 +294,6 @@ class JiraClient:
 
     def get_projects(self) -> list[dict[str, Any]]:
         """Get all projects from Jira with enriched metadata."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -371,7 +377,7 @@ class JiraClient:
                 )
 
             return projects_details
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             error_msg = f"Failed to get projects: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
@@ -702,7 +708,6 @@ class JiraClient:
 
     def download_user_avatar(self, avatar_url: str) -> tuple[bytes, str] | None:
         """Download a Jira user avatar and return (bytes, content_type)."""
-
         if not avatar_url:
             return None
 
@@ -731,7 +736,6 @@ class JiraClient:
 
     def get_groups(self) -> list[dict[str, Any]]:
         """Retrieve all Jira groups visible to the migration user."""
-
         logger.info("Fetching Jira groups via groups picker endpoint")
 
         try:
@@ -770,7 +774,6 @@ class JiraClient:
 
     def get_group_members(self, group_name: str) -> list[dict[str, Any]]:
         """Retrieve members for a Jira group, handling pagination."""
-
         if not group_name:
             return []
 
@@ -835,7 +838,6 @@ class JiraClient:
 
     def get_project_roles(self, project_key: str) -> list[dict[str, Any]]:
         """Retrieve Jira project roles and their actors for a project."""
-
         if not project_key:
             return []
 
@@ -922,7 +924,6 @@ class JiraClient:
 
     def get_project_permission_scheme(self, project_key: str) -> dict[str, Any]:
         """Return the permission scheme applied to a Jira project."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -937,7 +938,7 @@ class JiraClient:
             response.raise_for_status()
             payload = response.json()
             return payload if isinstance(payload, dict) else {}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch permission scheme for {project_key}: {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
@@ -1180,7 +1181,7 @@ class JiraClient:
                     if isinstance(data, dict):
                         return data.get("value", data)  # type: ignore[return-value]
                 return None
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to fetch issue property: %s %s", issue_key, property_key)
             return None
 
@@ -2023,7 +2024,6 @@ class JiraClient:
 
     def get_workflow_schemes(self) -> list[dict[str, Any]]:
         """Return configured Jira workflow schemes with issue type mappings."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -2056,14 +2056,13 @@ class JiraClient:
                 )
                 return self._get_workflow_schemes_per_project()
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch workflow schemes: {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
 
     def _get_workflow_schemes_per_project(self) -> list[dict[str, Any]]:
         """Fallback that assembles workflow schemes via project endpoints."""
-
         project_keys: list[str] = []
         try:
             project_mapping = config.mappings.get_mapping("project") or {}
@@ -2123,7 +2122,6 @@ class JiraClient:
 
     def get_workflow_transitions(self, workflow_name: str) -> list[dict[str, Any]]:
         """Return transitions for a given Jira workflow name."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -2146,14 +2144,13 @@ class JiraClient:
                 len(transitions),
             )
             return transitions
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch transitions for workflow '{workflow_name}': {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
 
     def get_workflow_statuses(self, workflow_name: str) -> list[dict[str, Any]]:
         """Return statuses referenced by a workflow."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -2176,7 +2173,7 @@ class JiraClient:
                 type(workflow).__name__,
             )
             return []
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch workflow definition for '{workflow_name}': {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
@@ -2187,7 +2184,6 @@ class JiraClient:
 
     def get_boards(self) -> list[dict[str, Any]]:
         """Return Jira Software boards (Scrum/Kanban)."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -2219,14 +2215,13 @@ class JiraClient:
 
             logger.info("Retrieved %s Jira boards", len(boards))
             return boards
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch Jira boards: {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
 
     def get_board_configuration(self, board_id: int) -> dict[str, Any]:
         """Return configuration details for a Jira Software board."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -2241,14 +2236,13 @@ class JiraClient:
             if not isinstance(payload, dict):
                 raise ValueError("Unexpected board configuration payload")
             return payload
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch Jira board configuration ({board_id}): {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
 
     def get_board_sprints(self, board_id: int) -> list[dict[str, Any]]:
         """Return sprints associated with a Jira Software board."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -2305,7 +2299,7 @@ class JiraClient:
 
             logger.debug("Board %s has %s sprints", board_id, len(sprints))
             return sprints
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch sprints for board {board_id}: {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
@@ -2316,7 +2310,6 @@ class JiraClient:
 
     def get_filters(self) -> list[dict[str, Any]]:
         """Return Jira filters visible to the authenticated user."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -2403,14 +2396,13 @@ class JiraClient:
 
             logger.info("Retrieved %s Jira filters", len(filters))
             return filters
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch Jira filters: {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
 
     def get_dashboards(self) -> list[dict[str, Any]]:
         """Return Jira dashboards visible to the authenticated user."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -2426,14 +2418,13 @@ class JiraClient:
             dashboards = values if isinstance(values, list) else []
             logger.info("Retrieved %s Jira dashboards", len(dashboards))
             return dashboards
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch Jira dashboards: {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
 
     def get_dashboard_details(self, dashboard_id: int) -> dict[str, Any]:
         """Return details for a specific Jira dashboard."""
-
         if not self.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -2448,7 +2439,7 @@ class JiraClient:
             if not isinstance(payload, dict):
                 raise ValueError("Unexpected dashboard payload")
             return payload
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error_msg = f"Failed to fetch dashboard {dashboard_id}: {exc!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc

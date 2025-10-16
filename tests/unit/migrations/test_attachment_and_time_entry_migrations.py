@@ -1,15 +1,14 @@
 """Integration-like smoke tests for attachment and time-entry migrations."""
 
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from src.models import ComponentResult
-from src.migrations.attachments_migration import AttachmentsMigration
 from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.migrations.attachments_migration import AttachmentsMigration
 from src.migrations.time_entry_migration import TimeEntryMigration
+from src.models import ComponentResult
 
 
 class DummyMappings:
@@ -20,7 +19,7 @@ class DummyMappings:
         return self._mapping.get(name, {})
 
 
-@pytest.fixture()
+@pytest.fixture
 def dummy_mapping_data():
     return {"work_package": {"KEY-1": {"openproject_id": 42}}}
 
@@ -60,7 +59,7 @@ def test_attachments_migration_transfers_files(tmp_path, monkeypatch, dummy_mapp
                         {
                             "filename": "foo.txt",
                             "url": "https://example.com/foo.txt",
-                        }
+                        },
                     ],
                 },
             },
@@ -105,8 +104,8 @@ def test_attachment_provenance_updates_metadata(tmp_path, monkeypatch, dummy_map
                         "filename": "foo.txt",
                         "author": {"accountId": "acc-1"},
                         "created": "2024-01-01T00:00:00Z",
-                    }
-                ]
+                    },
+                ],
             },
         ),
     )

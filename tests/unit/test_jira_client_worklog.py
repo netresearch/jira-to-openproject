@@ -29,19 +29,29 @@ class TestJiraClientWorkLog:
 
         monkeypatch.setattr("src.clients.jira_client.config", mock_config)
 
-        # Mock the JIRA class to avoid actual API calls
+        # Mock the JIRA instance to avoid actual API calls
         mock_jira_instance = Mock()
+        mock_jira_instance.server_info.return_value = {
+            "baseUrl": "https://test.atlassian.net",
+            "version": "8.0.0",
+        }
 
-        with patch("src.clients.jira_client.JIRA") as mock_jira_class:
-            mock_jira_class.return_value = mock_jira_instance
-            mock_jira_instance.server_info.return_value = {
-                "baseUrl": "https://test.atlassian.net",
-                "version": "8.0.0",
-            }
+        # Create client and directly assign mocked jira instance
+        # (JIRA class removed from enterprise bloat - only type annotation remains)
+        client = JiraClient.__new__(JiraClient)
+        client.jira = mock_jira_instance
+        client.jira_url = "https://test.atlassian.net"
+        client.base_url = "https://test.atlassian.net"
 
-            client = JiraClient()
-            client.jira = mock_jira_instance
-            return client
+        # Set required attributes that __init__ would normally set
+        import time
+
+        from src.utils.rate_limiter import create_jira_rate_limiter
+        client.rate_limiter = create_jira_rate_limiter()
+        client.request_count = 0
+        client.period_start = time.time()
+
+        return client
 
     def test_get_work_logs_for_issue_success(self, mock_jira_client) -> None:
         """Test successful work log retrieval for an issue."""

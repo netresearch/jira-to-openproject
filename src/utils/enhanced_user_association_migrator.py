@@ -13,18 +13,17 @@ import logging
 import re
 import subprocess
 import time
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock, Semaphore
 from typing import Any, Literal, TypedDict
-import unicodedata
 
 import requests
 
 from src import config
 from src.clients.jira_client import JiraApiError, JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.utils.metrics_collector import MetricsCollector
 from src.utils.validators import validate_jira_key
 
 # =============================================================================
@@ -267,7 +266,7 @@ class EnhancedUserAssociationMigrator:
         jira_client: JiraClient,
         op_client: OpenProjectClient,
         user_mapping: dict[str, Any] | None = None,
-        metrics_collector: MetricsCollector | None = None,
+        # metrics_collector removed (enterprise bloat)
         **kwargs,
     ) -> None:
         """Initialize the enhanced user association migrator.
@@ -276,8 +275,6 @@ class EnhancedUserAssociationMigrator:
             jira_client: Initialized Jira client for user lookups
             op_client: Initialized OpenProject client for project operations
             user_mapping: Pre-loaded user mapping (optional)
-            metrics_collector: Optional metrics collector for monitoring cache operations,
-                              staleness detection, refresh attempts, and fallback executions
             **kwargs: Additional configuration options:
                 - max_retries: Maximum retry attempts (default: 2)
                 - base_delay: Base delay between retries in seconds (default: 0.5)
@@ -292,7 +289,7 @@ class EnhancedUserAssociationMigrator:
         self.op_client = op_client
 
         # Set up metrics collection (optional for backward compatibility)
-        self.metrics_collector = metrics_collector
+        # metrics_collector removed (enterprise bloat)
 
         # Load user mapping
         self.user_mapping = user_mapping or self._load_user_mapping()
@@ -440,27 +437,6 @@ class EnhancedUserAssociationMigrator:
                     return int(u["id"])  # type: ignore[arg-type]
 
         return None
-
-    def _safe_metrics_increment(
-        self,
-        counter_name: str,
-        tags: dict[str, str] | None = None,
-    ) -> None:
-        """Safely increment metrics counter without breaking core functionality.
-
-        YOLO FIX: Defensive metrics collection that never fails core operations.
-
-        Args:
-            counter_name: Name of the counter to increment
-            tags: Optional tags to include with the metric
-
-        """
-        try:
-            if hasattr(self, "metrics_collector") and self.metrics_collector:
-                self.metrics_collector.increment_counter(counter_name, tags=tags or {})
-        except Exception as e:
-            # Never let metrics failures break core functionality
-            self.logger.debug("Metrics collection failed for %s: %s", counter_name, e)
 
     def _make_json_serializable(
         self,
@@ -692,7 +668,7 @@ class EnhancedUserAssociationMigrator:
 
         for jira_key, entry in self.user_mapping.items():
             # user_mapping is keyed by Jira user key; entries now also carry J2O provenance data
-            op_user_id = entry if isinstance(entry, int) else entry.get("openproject_id")
+            op_user_id = entry if isinstance(entry, int) else (entry.get("openproject_id") if isinstance(entry, dict) else None)
             jira_username = entry.get("jira_name") if isinstance(entry, dict) else None
             jira_user_info = self._get_jira_user_info(jira_username or jira_key)
             op_user_info = (
@@ -1442,12 +1418,6 @@ class EnhancedUserAssociationMigrator:
             # MONITORING: Cache miss logging
             self.logger.debug("Cache miss for %s: %s", username, stale_reason)
 
-            # MONITORING: Staleness detection metrics (YOLO FIX: defensive metrics)
-            self._safe_metrics_increment(
-                "staleness_detected_total",
-                tags={"reason": "missing", "username": username},
-            )
-
             if raise_on_stale:
                 raise StaleMappingError(username, stale_reason)
             return None
@@ -1473,12 +1443,6 @@ class EnhancedUserAssociationMigrator:
 
             # MONITORING: Staleness detection logging
             self.logger.debug("Staleness detected for %s: %s", username, stale_reason)
-
-            # MONITORING: Staleness detection metrics (YOLO FIX: defensive metrics)
-            self._safe_metrics_increment(
-                "staleness_detected_total",
-                tags={"reason": reason_tag, "username": username},
-            )
 
             if raise_on_stale:
                 raise StaleMappingError(username, stale_reason)
@@ -1527,28 +1491,12 @@ class EnhancedUserAssociationMigrator:
                 if isinstance(success, dict):
                     # If refresh returned the full mapping dict, log success, record metrics, and return it
                     self.logger.debug("Successfully refreshed mapping for %s", username)
-                    self._safe_metrics_increment(
-                        "staleness_refreshed_total",
-                        tags={
-                            "success": "true",
-                            "username": username,
-                            "trigger": "auto_refresh",
-                        },
-                    )
                     return success
                 if success:
                     # MONITORING: Refresh success logging and metrics
                     self.logger.debug("Successfully refreshed mapping for %s", username)
 
                     # MONITORING: Refresh success metrics (YOLO FIX: defensive metrics)
-                    self._safe_metrics_increment(
-                        "staleness_refreshed_total",
-                        tags={
-                            "success": "true",
-                            "username": username,
-                            "trigger": "auto_refresh",
-                        },
-                    )
                     # Ensure mapping is returned for success path per end-to-end expectations
                     cached = self.enhanced_user_mappings.get(username)
                     return cached if cached else None
@@ -1556,24 +1504,11 @@ class EnhancedUserAssociationMigrator:
                 self.logger.debug("Failed to refresh mapping for %s", username)
 
                 # MONITORING: Refresh failure metrics (YOLO FIX: defensive metrics)
-                self._safe_metrics_increment(
-                    "staleness_refreshed_total",
-                    tags={
-                        "success": "false",
-                        "username": username,
-                        "trigger": "auto_refresh",
-                    },
-                )
-
                 return None
             # No auto-refresh, just log and return None; record metric for this specific stale case
             self.logger.debug(
                 "Stale mapping detected for %s, auto_refresh disabled",
                 username,
-            )
-            self._safe_metrics_increment(
-                "staleness_detected_total",
-                tags={"reason": "expired", "username": username},
             )
             return None
 
@@ -1648,15 +1583,6 @@ class EnhancedUserAssociationMigrator:
                     stale_mappings[username] = stale_reason
 
                     # MONITORING: Individual staleness detection metrics (YOLO FIX: defensive metrics)
-                    self._safe_metrics_increment(
-                        "staleness_detected_total",
-                        tags={
-                            "reason": reason_tag,
-                            "username": username,
-                            "detection_mode": "bulk",
-                        },
-                    )
-
             except Exception as e:
                 self.logger.warning("Error checking staleness for %s: %s", username, e)
                 stale_mappings[username] = f"Error during check: {e}"
@@ -1785,21 +1711,6 @@ class EnhancedUserAssociationMigrator:
                                 attempt + 1,
                             )
 
-                            # MONITORING: Batch refresh success metrics
-                            if (
-                                hasattr(self, "metrics_collector")
-                                and self.metrics_collector
-                            ):
-                                self.metrics_collector.increment_counter(
-                                    "staleness_refreshed_total",
-                                    tags={
-                                        "success": "true",
-                                        "username": username,
-                                        "trigger": "batch_refresh",
-                                        "attempts": str(attempt + 1),
-                                    },
-                                )
-
                             success = True
                             break
                         # Handle error mapping or None result
@@ -1812,17 +1723,6 @@ class EnhancedUserAssociationMigrator:
                                 "Unknown error",
                             )
                             attempts_used = attempt + 1
-                            # Failure metrics for batch path
-                            if hasattr(self, "metrics_collector") and self.metrics_collector:
-                                self.metrics_collector.increment_counter(
-                                    "staleness_refreshed_total",
-                                    tags={
-                                        "success": "false",
-                                        "username": username,
-                                        "trigger": "batch_refresh",
-                                        "attempts": str(attempt + 1),
-                                    },
-                                )
                             failure_metric_recorded = True
                             # Stop retrying for terminal failures
                             if refreshed_mapping.get("metadata", {}).get("terminal", False):
@@ -1859,22 +1759,6 @@ class EnhancedUserAssociationMigrator:
                         attempts_used,
                         last_error,
                     )
-
-                    # MONITORING: Batch refresh failure metrics
-                    if (
-                        hasattr(self, "metrics_collector")
-                        and self.metrics_collector
-                        and not failure_metric_recorded
-                    ):
-                        self.metrics_collector.increment_counter(
-                            "staleness_refreshed_total",
-                            tags={
-                                "success": "false",
-                                "username": username,
-                                "trigger": "batch_refresh",
-                                "attempts": str(attempts_used),
-                            },
-                        )
 
                     results["errors"].append(f"{username}: {last_error}")
 
@@ -2473,11 +2357,6 @@ class EnhancedUserAssociationMigrator:
             del self.enhanced_user_mappings[username]
 
         # Update metrics
-        if hasattr(self, "metrics_collector") and self.metrics_collector:
-            self.metrics_collector.increment_counter(
-                "mapping_fallback_total",
-                tags={"fallback_strategy": "skip", "reason": reason},
-            )
 
         try:
             self._save_enhanced_mappings()
@@ -2559,11 +2438,6 @@ class EnhancedUserAssociationMigrator:
         self.enhanced_user_mappings[username] = admin_mapping
 
         # Update metrics
-        if hasattr(self, "metrics_collector") and self.metrics_collector:
-            self.metrics_collector.increment_counter(
-                "mapping_fallback_total",
-                tags={"fallback_strategy": "assign_admin", "reason": reason},
-            )
 
         try:
             self._save_enhanced_mappings()
@@ -2635,11 +2509,6 @@ class EnhancedUserAssociationMigrator:
         self.enhanced_user_mappings[username] = placeholder_mapping
 
         # Update metrics
-        if hasattr(self, "metrics_collector") and self.metrics_collector:
-            self.metrics_collector.increment_counter(
-                "mapping_fallback_total",
-                tags={"fallback_strategy": "create_placeholder", "reason": reason},
-            )
 
         try:
             self._save_enhanced_mappings()

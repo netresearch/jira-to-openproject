@@ -9,8 +9,6 @@ A minimal Rails script is used to, per work package:
 
 from __future__ import annotations
 
-from typing import Any
-
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
@@ -19,21 +17,20 @@ from src.models import ComponentResult
 
 try:
     from src.config import logger as logger  # type: ignore
-    from src import config
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+
+from src import config
 
 
 @register_entity_types("inline_refs")
 class InlineRefsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
 
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
         wp_ids: list[int] = []
         for _k, entry in (wp_map or {}).items():
@@ -44,10 +41,10 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
                     continue
         return ComponentResult(success=True, data={"work_package_ids": wp_ids})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         return ComponentResult(success=True, data=extracted.data)
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         ids = data.get("work_package_ids", []) if isinstance(data, dict) else []
         if not ids:
@@ -63,10 +60,10 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "    names = wp.attachments.pluck(:filename)\n"
             "    if names.any?\n"
             "      union = Regexp.union(names.map { |n| Regexp.escape(n) })\n"
-            "      re = /\((?:[^()]*\\/)?(#{union})\)/\i\n"
+            "      re = /\\((?:[^()]*\\/)?(#{union})\\)/\\i\n"
             "      # Description\n"
             "      desc = (wp.description || '').to_s\n"
-            "      new_desc = desc.gsub(re) { \"(attachment:#{$1})\" }\n"
+            '      new_desc = desc.gsub(re) { "(attachment:#{$1})" }\n'
             "      if new_desc != desc\n"
             "        wp.description = new_desc\n"
             "        wp.save!\n"
@@ -75,7 +72,7 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "      # Comments\n"
             "      Journal.where(journable: wp).where.not(notes: [nil, '']).find_each do |j|\n"
             "        notes = j.notes.to_s\n"
-            "        new_notes = notes.gsub(re) { \"(attachment:#{$1})\" }\n"
+            '        new_notes = notes.gsub(re) { "(attachment:#{$1})" }\n'
             "        if new_notes != notes\n"
             "          j.update_columns(notes: new_notes)\n"
             "          updated += 1\n"

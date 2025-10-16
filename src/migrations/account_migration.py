@@ -67,6 +67,34 @@ class AccountMigration(BaseMigration):
             Mappings.ACCOUNT_MAPPING_FILE,
         )
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "accounts", "tempo_accounts")
+
+        Returns:
+            List of entity dictionaries from Jira API
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type in ("accounts", "tempo_accounts"):
+            return self.jira_client.get_tempo_accounts(expand=True)
+
+        # Raise error for unsupported types
+        msg = (
+            f"AccountMigration does not support entity type: {entity_type}. "
+            f"Supported types: ['accounts', 'tempo_accounts']"
+        )
+        raise ValueError(msg)
+
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
         self.tempo_accounts = self._load_from_json(Mappings.TEMPO_ACCOUNTS_FILE) or []

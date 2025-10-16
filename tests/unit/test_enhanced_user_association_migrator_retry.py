@@ -38,7 +38,6 @@ class TestEnhancedUserAssociationMigratorRetry:
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
             patch("builtins.open", mock_open(read_data="{}")),
             patch("pathlib.Path.exists", return_value=False),
-            patch("src.utils.enhanced_user_association_migrator.MetricsCollector"),
         ):
 
             mock_config.get_path.return_value = Path("/tmp/test")

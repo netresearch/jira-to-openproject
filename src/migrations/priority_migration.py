@@ -4,19 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from src import mappings
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
-import src.mappings as mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 @register_entity_types("priorities")
@@ -30,9 +30,36 @@ class PriorityMigration(BaseMigration):
         except Exception:  # noqa: BLE001
             self.mappings = mappings.Mappings(data_dir=config.get_path("data"))
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "priorities")
+
+        Returns:
+            List of entity dictionaries from Jira API
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type == "priorities":
+            return self.jira_client.get_priorities()
+
+        # Raise error for unsupported types
+        msg = (
+            f"PriorityMigration does not support entity type: {entity_type}. "
+            f"Supported types: ['priorities']"
+        )
+        raise ValueError(msg)
+
     def run(self) -> ComponentResult:
         """Execute the extract → map → load pipeline for priorities."""
-
         extracted = self._extract()
         if not extracted.success:
             return extracted
@@ -44,16 +71,16 @@ class PriorityMigration(BaseMigration):
         loaded = self._load(mapped)
         return loaded
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         """Extract Jira priorities (names and order)."""
         try:
             priorities = self.jira_client.get_priorities()  # expected: list of {name, id}
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to extract Jira priorities")
             priorities = []
         return ComponentResult(success=True, extracted=len(priorities), data={"priorities": priorities})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Map Jira priority names to OP IssuePriority records, create missing."""
         priorities = (extracted.data or {}).get("priorities", []) if extracted.data else []
         created = 0
@@ -75,7 +102,7 @@ class PriorityMigration(BaseMigration):
                     if op_id:
                         name_to_id[name] = op_id
                         created += 1
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception("Failed creating IssuePriority %s", name)
                     continue
             if op_id:
@@ -85,7 +112,7 @@ class PriorityMigration(BaseMigration):
         self.mappings.set_mapping("priority", mapping)
         return ComponentResult(success=True, created_types=created, data={"mapping": mapping})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Set priority on work packages using the mapping if missing or different."""
         mapping: dict[str, int] = (mapped.data or {}).get("mapping", {}) if mapped.data else {}
         if not mapping:
@@ -110,7 +137,7 @@ class PriorityMigration(BaseMigration):
             batch_get = getattr(self.jira_client, "batch_get_issues", None)
             if callable(batch_get):
                 iss_map = batch_get(jira_keys)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to batch-get Jira issues for priority application")
             iss_map = {}
 
@@ -146,7 +173,7 @@ class PriorityMigration(BaseMigration):
         try:
             res = self.op_client.batch_update_work_packages(updates)
             updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to batch update priorities on work packages")
             failed += len(updates)
 

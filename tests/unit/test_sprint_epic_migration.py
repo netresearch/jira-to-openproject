@@ -1,16 +1,16 @@
 import pytest
 
-from src.migrations.sprint_epic_migration import SprintEpicMigration, SPRINT_CF_NAME
+from src.migrations.sprint_epic_migration import SPRINT_CF_NAME, SprintEpicMigration
 
 
 class DummyFields:
-    def __init__(self, epic=None, sprint=None):  # noqa: ANN001
+    def __init__(self, epic=None, sprint=None):
         self.customfield_10008 = epic  # Epic Link common
         self.customfield_10020 = sprint  # Sprint common
 
 
 class DummyIssue:
-    def __init__(self, key: str, epic=None, sprint=None):  # noqa: ANN001
+    def __init__(self, key: str, epic=None, sprint=None):
         self.key = key
         self.fields = DummyFields(epic=epic, sprint=sprint)
 
@@ -23,7 +23,7 @@ class DummyJira:
             "PRJ-2": DummyIssue("PRJ-2", epic=None, sprint=None),
         }
 
-    def batch_get_issues(self, keys):  # noqa: ANN201, ANN001
+    def batch_get_issues(self, keys):
         return {k: self.issues.get(k) for k in keys}
 
 
@@ -32,24 +32,28 @@ class DummyOp:
         self.updates: list[dict] = []
         self.queries: list[str] = []
 
-    def batch_update_work_packages(self, updates):  # noqa: ANN201, ANN001
+    def batch_update_work_packages(self, updates):
         self.updates.extend(updates)
         return {"updated": len(updates), "failed": 0}
 
-    def get_custom_field_by_name(self, name: str):  # noqa: ANN201
+    def get_custom_field_by_name(self, name: str):
         assert name == SPRINT_CF_NAME
         raise Exception("not found")
 
-    def execute_query(self, script: str):  # noqa: ANN201
+    def execute_query(self, script: str):
         self.queries.append(script)
         if "cf.id" in script:
             return 901
         return True
 
+    def execute_query_to_json_file(self, script: str):
+        """Same behavior as execute_query but returns the result directly."""
+        return self.execute_query(script)
+
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
@@ -58,13 +62,13 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
                     "EPIC-1": {"openproject_id": 12000},
                     "PRJ-1": {"openproject_id": 12001},
                     "PRJ-2": {"openproject_id": 12002},
-                }
+                },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
 
 def test_sprint_epic_migration_sets_parent_and_sprint_cf():

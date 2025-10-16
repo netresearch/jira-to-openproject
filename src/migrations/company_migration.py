@@ -88,6 +88,34 @@ class CompanyMigration(BaseMigration):
         self.op_projects = self._load_from_json(Mappings.OP_PROJECTS_FILE) or []
         self.company_mapping = self._load_from_json(Mappings.COMPANY_MAPPING_FILE) or {}
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "companies", "tempo_companies")
+
+        Returns:
+            List of entity dictionaries from Jira API
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type in ("companies", "tempo_companies"):
+            return self.jira_client.get_tempo_customers()
+
+        # Raise error for unsupported types
+        msg = (
+            f"CompanyMigration does not support entity type: {entity_type}. "
+            f"Supported types: ['companies', 'tempo_companies']"
+        )
+        raise ValueError(msg)
+
     def _extract_tempo_companies(self) -> dict[str, Any]:
         """Extract companies from Tempo API.
 

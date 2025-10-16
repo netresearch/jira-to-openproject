@@ -16,11 +16,10 @@ from src.models import ComponentResult
 
 try:
     from src.config import logger as logger  # type: ignore
-    from src import config
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
 
+from src import config
 
 SECTION_TITLE = "Remote Links"
 
@@ -29,9 +28,8 @@ SECTION_TITLE = "Remote Links"
 class RemoteLinksMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
 
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
     @staticmethod
     def _extract_links_from_fields(fields: Any) -> list[tuple[str, str]]:
@@ -68,7 +66,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
             return links
         return links
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
         if not keys:
@@ -85,7 +83,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
                 continue
         return ComponentResult(success=True, data={"links": links_by_key})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         raw: dict[str, list[tuple[str, str]]]= data.get("links", {}) if isinstance(data, dict) else {}
         md_by_key: dict[str, str] = {}
@@ -97,13 +95,13 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
                 if sig in seen:
                     continue
                 seen.add(sig)
-                safe_title = (title or url).replace("[", "\[").replace("]", "\]")
+                safe_title = (title or url).replace("[", r"\[").replace("]", r"\]")
                 lines.append(f"- [{safe_title}]({url})")
             if lines:
                 md_by_key[key] = "\n".join(lines)
         return ComponentResult(success=True, data={"markdown": md_by_key})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         md_by_key: dict[str, str] = data.get("markdown", {}) if isinstance(data, dict) else {}
         wp_map = self.mappings.get_mapping("work_package") or {}
@@ -125,7 +123,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
                     updated += 1
                 else:
                     failed += 1
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Failed to upsert Remote Links for %s", jira_key)
                 failed += 1
 

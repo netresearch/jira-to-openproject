@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Any
 
 from src import config
@@ -22,9 +21,108 @@ class WorkflowMigration(BaseMigration):
     # BaseMigration overrides                                            #
     # ------------------------------------------------------------------ #
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "workflows")
+
+        Returns:
+            List containing aggregated workflow metadata (schemes, transitions, statuses, roles)
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type != "workflows":
+            msg = (
+                f"WorkflowMigration does not support entity type: {entity_type}. "
+                f"Supported types: ['workflows']"
+            )
+            raise ValueError(msg)
+
+        # Fetch issue types (API call 1)
+        try:
+            issue_types = self.jira_client.get_issue_types()
+        except Exception as exc:
+            self.logger.exception("Failed to extract issue types: %s", exc)
+            return []
+
+        # Fetch workflow schemes (API call 2)
+        try:
+            schemes = self.jira_client.get_workflow_schemes()
+        except Exception as exc:
+            self.logger.exception("Failed to extract workflow schemes: %s", exc)
+            return []
+
+        # Fetch OpenProject roles (API call 3)
+        try:
+            roles = self.op_client.get_roles()
+        except Exception as exc:
+            self.logger.exception("Failed to extract OpenProject roles: %s", exc)
+            roles = []
+
+        issue_type_by_id = {
+            str(item.get("id")): item.get("name")
+            for item in issue_types
+            if item.get("id") and item.get("name")
+        }
+
+        issue_type_to_workflow: dict[str, str] = {}
+        workflow_names: set[str] = set()
+        for scheme in schemes:
+            mappings = scheme.get("issueTypeMappings") or scheme.get("mappings") or {}
+            if isinstance(mappings, dict):
+                for issue_type_id, workflow_name in mappings.items():
+                    jira_name = issue_type_by_id.get(str(issue_type_id))
+                    if jira_name and isinstance(workflow_name, str) and workflow_name:
+                        issue_type_to_workflow[jira_name] = workflow_name
+                        workflow_names.add(workflow_name)
+            default_workflow = scheme.get("defaultWorkflow")
+            if (
+                isinstance(default_workflow, str)
+                and default_workflow
+                and not issue_type_to_workflow
+            ):
+                # Fallback: apply default workflow to every known issue type if no explicit mappings
+                for name in issue_type_by_id.values():
+                    if name not in issue_type_to_workflow:
+                        issue_type_to_workflow[name] = default_workflow
+                        workflow_names.add(default_workflow)
+
+        # Fetch transitions and statuses for each workflow (API calls 4 & 5 per workflow)
+        workflow_transitions: dict[str, list[dict[str, Any]]] = {}
+        workflow_statuses: dict[str, list[dict[str, Any]]] = {}
+        for workflow_name in workflow_names:
+            try:
+                transitions = self.jira_client.get_workflow_transitions(workflow_name)
+            except Exception:  # noqa: BLE001
+                transitions = []
+            workflow_transitions[workflow_name] = transitions
+
+            try:
+                statuses = self.jira_client.get_workflow_statuses(workflow_name)
+            except Exception:  # noqa: BLE001
+                statuses = []
+            workflow_statuses[workflow_name] = statuses if isinstance(statuses, list) else []
+
+        # Return aggregated data structure
+        return [
+            {
+                "issue_type_to_workflow": issue_type_to_workflow,
+                "workflow_transitions": workflow_transitions,
+                "workflow_statuses": workflow_statuses,
+                "roles": roles,
+            },
+        ]
+
     def _extract(self) -> ComponentResult:
         """Gather workflow schemes, transitions, and OpenProject roles."""
-
         try:
             issue_types = self.jira_client.get_issue_types()
             schemes = self.jira_client.get_workflow_schemes()
@@ -94,7 +192,6 @@ class WorkflowMigration(BaseMigration):
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Translate Jira workflows into OpenProject workflow transition payloads."""
-
         if not extracted.success or not isinstance(extracted.data, dict):
             return ComponentResult(
                 success=False,
@@ -240,7 +337,6 @@ class WorkflowMigration(BaseMigration):
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Create workflow entries in OpenProject."""
-
         if not mapped.success or not isinstance(mapped.data, dict):
             return ComponentResult(
                 success=False,
@@ -279,7 +375,6 @@ class WorkflowMigration(BaseMigration):
 
     def run(self) -> ComponentResult:
         """Execute the workflow migration pipeline (extract → map → load)."""
-
         self.logger.info("Starting workflow transition migration")
 
         extracted = self._extract()

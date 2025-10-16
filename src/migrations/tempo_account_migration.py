@@ -2,6 +2,8 @@
 Handles the migration of Tempo Timesheet accounts from Jira to OpenProject.
 """
 
+from __future__ import annotations
+
 import json
 import re
 from pathlib import Path
@@ -17,7 +19,6 @@ from src.clients.openproject_client import OpenProjectClient, OpenProjectError
 from src.config import get_path, jira_config, logger, migration_config
 
 config = SimpleNamespace(logger=logger)
-from unittest.mock import MagicMock  # added for test-time injection
 
 from src.display import ProgressTracker
 
@@ -44,31 +45,9 @@ class TempoAccountMigration:
 
         Allows dependency injection for tests to avoid real connections.
         """
-        # In test mode, avoid real Jira connects by using a lightweight stub unless provided
-        if jira_client is not None:
-            self.jira_client = jira_client
-        else:
-            try:
-                if migration_config.get("TEST_MODE", False) or migration_config.get("disable_external_connect", False):
-                    self.jira_client = MagicMock(spec=JiraClient)
-                else:
-                    self.jira_client = JiraClient()
-            except Exception:
-                # Fallback to mock if environment not set up
-                from unittest.mock import MagicMock as _MM  # local import to avoid global dependency
-                self.jira_client = _MM(spec=JiraClient)
-        # OpenProject client: prefer injected mock; otherwise avoid real SSH in tests
-        if op_client is not None:
-            self.op_client = op_client
-        else:
-            try:
-                if migration_config.get("TEST_MODE", False) or migration_config.get("disable_external_connect", False):
-                    self.op_client = MagicMock(spec=OpenProjectClient)
-                else:
-                    self.op_client = OpenProjectClient()
-            except Exception:
-                from unittest.mock import MagicMock as _MM
-                self.op_client = _MM(spec=OpenProjectClient)
+        # Initialize clients using dependency injection - fail fast if config missing
+        self.jira_client = jira_client or JiraClient()
+        self.op_client = op_client or OpenProjectClient()
         self.accounts: list[dict[str, Any]] = []
         self.account_mapping: dict[str, Any] = {}
         self.custom_field_id: int | None = None

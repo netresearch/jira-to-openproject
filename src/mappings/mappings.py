@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from src.config import logger, get_path
+from src.config import get_path, logger
 from src.utils import data_handler
 
 # We might need other clients or migration classes later
@@ -41,9 +41,9 @@ class Mappings:
     ) -> None:
         if data_dir is None:
             try:
-                data_dir = get_path('data')
+                data_dir = get_path("data")
             except Exception:
-                data_dir = Path('data')
+                data_dir = Path("data")
         self.data_dir: Path = data_dir
 
         # Load all mappings using class attributes for filenames

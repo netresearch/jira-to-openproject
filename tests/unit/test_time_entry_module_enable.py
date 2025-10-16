@@ -23,7 +23,7 @@ def test_time_entry_migrator_enables_time_tracking_once_per_project(monkeypatch,
     ]
 
     # Patch run_complete_migration to avoid heavy flows
-    def _noop_run(**kwargs):  # noqa: ANN001
+    def _noop_run(**kwargs):
         return {
             "successful_migrations": 0,
             "failed_migrations": 0,

@@ -13,13 +13,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 from src.utils.time_entry_migrator import TimeEntryMigrator
-from src import config
 
 try:
     from src.config import logger as logger  # type: ignore
@@ -131,7 +131,7 @@ class TimeEntryMigration(BaseMigration):
 
         # Determine larger batch size for time entries (env overrides default)
         try:
-            batch_size_env = int((__import__("os").environ.get("J2O_TIME_ENTRY_BATCH_SIZE") or "200"))
+            batch_size_env = int(__import__("os").environ.get("J2O_TIME_ENTRY_BATCH_SIZE") or "200")
         except Exception:
             batch_size_env = 200
 

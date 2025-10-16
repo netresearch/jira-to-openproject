@@ -1,5 +1,4 @@
-import os
-from datetime import datetime, UTC, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 from src.utils.time_entry_migrator import TimeEntryMigrator
@@ -27,7 +26,7 @@ def test_fast_forward_filters_old_logs(monkeypatch, tmp_path):
         "SRVA-1": [
             {"id": "1", "created": _iso(cutoff - timedelta(hours=1)), "updated": _iso(cutoff - timedelta(hours=1))},
             {"id": "2", "created": _iso(cutoff + timedelta(hours=1)), "updated": _iso(cutoff + timedelta(hours=2))},
-        ]
+        ],
     }
     jira = DummyJira(logs)
 
@@ -56,7 +55,7 @@ def test_fast_forward_created_field(monkeypatch, tmp_path):
         "SRVA-2": [
             {"id": "3", "created": _iso(cutoff - timedelta(days=1)), "updated": _iso(cutoff + timedelta(hours=1))},
             {"id": "4", "created": _iso(cutoff + timedelta(days=1)), "updated": _iso(cutoff - timedelta(hours=1))},
-        ]
+        ],
     }
     jira = DummyJira(logs)
 

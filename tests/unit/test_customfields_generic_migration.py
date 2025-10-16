@@ -1,4 +1,3 @@
-import types
 import pytest
 
 from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
@@ -20,7 +19,7 @@ class DummyIssue:
 
 
 class DummyJira:
-    def batch_get_issues(self, keys):  # noqa: ANN201, ANN001
+    def batch_get_issues(self, keys):
         return {k: DummyIssue(k) for k in keys}
 
 
@@ -28,10 +27,10 @@ class DummyOp:
     def __init__(self) -> None:
         self.queries: list[str] = []
 
-    def get_custom_field_by_name(self, name: str):  # noqa: ANN201
+    def get_custom_field_by_name(self, name: str):
         raise Exception("not found")
 
-    def execute_query(self, script: str):  # noqa: ANN201
+    def execute_query(self, script: str):
         self.queries.append(script)
         if "cf.id" in script:
             return 801
@@ -40,7 +39,7 @@ class DummyOp:
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
@@ -64,10 +63,10 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
                 },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
 
 def test_customfields_generic_migration_extracts_and_sets_cf():

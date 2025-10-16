@@ -16,9 +16,12 @@ class TestTempoAccountMigrationRefactored(unittest.TestCase):
     def setUp(self) -> None:
         """Set up test fixtures."""
         # Create migration instance with mocked clients
-        self.migration = TempoAccountMigration()
+        self.mock_jira_client = MagicMock()
         self.mock_op_client = MagicMock()
-        self.migration.op_client = self.mock_op_client
+        self.migration = TempoAccountMigration(
+            jira_client=self.mock_jira_client,
+            op_client=self.mock_op_client,
+        )
 
     def test_create_company_successful_creation(self) -> None:
         """Test successful company creation with valid tempo account data."""

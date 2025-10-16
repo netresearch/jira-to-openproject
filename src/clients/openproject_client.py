@@ -1,16 +1,16 @@
 """OpenProject client for interacting with OpenProject instances via SSH and Rails console."""
 
+import inspect
 import json
-import subprocess
 import os
 import random
 import re
 import secrets
+import subprocess
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime, timezone
-import inspect
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -19,7 +19,6 @@ from src import config
 from src.clients.docker_client import DockerClient
 from src.clients.exceptions import (
     ClientConnectionError,
-    ConnectionError,
     JsonParseError,
     QueryExecutionError,
     RecordNotFoundError,
@@ -35,7 +34,6 @@ from src.display import configure_logging
 from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
 from src.utils.file_manager import FileManager
 from src.utils.idempotency_decorators import batch_idempotent
-from src.utils.metrics_collector import MetricsCollector
 from src.utils.performance_optimizer import PerformanceOptimizer
 from src.utils.rate_limiter import create_openproject_rate_limiter
 
@@ -244,9 +242,6 @@ class OpenProjectClient:
         self.batch_size = batch_size
         self.parallel_workers = max_workers
 
-        # Initialize metrics collector for observability (Zen's recommendation)
-        self.metrics = MetricsCollector()
-
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
             self.ssh_host,
@@ -267,8 +262,8 @@ class OpenProjectClient:
 
         Raises:
             QueryExecutionError: when creation fails or no project can be ensured
-        """
 
+        """
         clean_identifier = re.sub(r"[^a-z0-9-]", "-", identifier.lower()).strip("-")
         clean_identifier = re.sub(r"-+", "-", clean_identifier) or "j2o-reporting"
         clean_name = name.strip() or "Jira Dashboards"
@@ -752,6 +747,7 @@ class OpenProjectClient:
 
         Raises:
             QueryExecutionError: If execution fails
+
         """
         try:
             # Always prefer file-based execution for reliability
@@ -834,7 +830,7 @@ class OpenProjectClient:
                 parts: list[str] = ["j2o:", component]
                 if func:
                     parts.append(f"func={func}")
-                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
                 parts.append(f"ts={ts}")
                 # include project filter if configured
                 proj = (config.jira_config or {}).get("project_filter")
@@ -1412,6 +1408,7 @@ class OpenProjectClient:
 
         Returns:
             Dict with at least {id, name, field_format}
+
         """
         ruby = f"""
           cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{name}')
@@ -1426,7 +1423,7 @@ class OpenProjectClient:
             if isinstance(result, dict) and result.get("id"):
                 return result
             raise QueryExecutionError("Failed ensuring WorkPackage custom field")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = f"Failed to ensure custom field '{name}': {e}"
             raise QueryExecutionError(msg) from e
 
@@ -1455,13 +1452,12 @@ class OpenProjectClient:
             if isinstance(result, dict) and result.get("id"):
                 return result
             raise QueryExecutionError(f"Failed ensuring {cf_type} '{name}'")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = f"Failed to ensure custom field '{name}' ({cf_type}): {e}"
             raise QueryExecutionError(msg) from e
 
     def remove_custom_field(self, name: str, *, cf_type: str | None = None) -> dict[str, int]:
         """Remove CustomField records matching the provided name/type."""
-
         name_literal = json.dumps(name)
         type_filter = ""
         if cf_type:
@@ -1477,7 +1473,7 @@ class OpenProjectClient:
             "    cf.destroy\n"
             "    removed += 1\n"
             "  rescue => e\n"
-            "    Rails.logger.warn(\"Failed to destroy custom field #{cf.id}: #{e.message}\")\n"
+            '    Rails.logger.warn("Failed to destroy custom field #{cf.id}: #{e.message}")\n'
             "  end\n"
             "end\n"
             "{ removed: removed }.to_json\n"
@@ -1488,7 +1484,7 @@ class OpenProjectClient:
             if isinstance(result, dict):
                 return {"removed": int(result.get("removed", 0) or 0)}
             raise QueryExecutionError("Unexpected response removing custom field")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = f"Failed to remove custom field '{name}'"
             raise QueryExecutionError(msg) from e
 
@@ -1508,7 +1504,7 @@ class OpenProjectClient:
         ):
             try:
                 ensured["work_package"].append(
-                    self.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField")
+                    self.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField"),
                 )
             except Exception as e:  # noqa: BLE001
                 self.logger.warning("Failed ensuring WP CF %s: %s", name, e)
@@ -1538,7 +1534,7 @@ class OpenProjectClient:
         ):
             try:
                 ensured["time_entry"].append(
-                    self.ensure_custom_field(name, field_format=fmt, cf_type="TimeEntryCustomField")
+                    self.ensure_custom_field(name, field_format=fmt, cf_type="TimeEntryCustomField"),
                 )
             except Exception as e:  # noqa: BLE001
                 self.logger.warning("Failed ensuring TE CF %s: %s", name, e)
@@ -1547,20 +1543,18 @@ class OpenProjectClient:
 
     def get_roles(self) -> list[dict[str, Any]]:
         """Return OpenProject roles (id, name, builtin flag)."""
-
         ruby = "Role.all.map { |r| r.as_json(only: [:id, :name, :builtin]) }"
         try:
             result = self.execute_json_query(ruby)
             if isinstance(result, list):
                 return result
             raise QueryExecutionError("Unexpected OpenProject role payload")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = f"Failed to fetch OpenProject roles: {e}"
             raise QueryExecutionError(msg) from e
 
     def get_groups(self) -> list[dict[str, Any]]:
         """Return existing OpenProject groups with member IDs."""
-
         ruby = (
             "Group.includes(:users).order(:name).map do |g| "
             "  { id: g.id, name: g.name, user_ids: g.users.pluck(:id) }"
@@ -1571,13 +1565,12 @@ class OpenProjectClient:
             if isinstance(result, list):
                 return result
             raise QueryExecutionError("Unexpected OpenProject group payload")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = f"Failed to fetch OpenProject groups: {e}"
             raise QueryExecutionError(msg) from e
 
     def sync_group_memberships(self, assignments: list[dict[str, Any]]) -> dict[str, int]:
         """Ensure each group has the provided membership list."""
-
         if not assignments:
             return {"updated": 0, "errors": 0}
 
@@ -1639,7 +1632,6 @@ class OpenProjectClient:
         assignments: list[dict[str, Any]],
     ) -> dict[str, int]:
         """Assign OpenProject groups to projects with given role IDs."""
-
         if not assignments:
             return {"updated": 0, "errors": 0}
 
@@ -1717,7 +1709,6 @@ class OpenProjectClient:
         role_ids: list[int],
     ) -> dict[str, Any]:
         """Ensure a user has the given roles on a project."""
-
         valid_role_ids = [int(r) for r in role_ids if isinstance(r, (int, str)) and int(r) > 0]
         if not valid_role_ids:
             return {"success": False, "error": "role_ids empty"}
@@ -1768,7 +1759,6 @@ end
         role_ids: list[int],
     ) -> dict[str, int]:
         """Ensure workflow transitions exist for the provided type/status/role combinations."""
-
         if not transitions or not role_ids:
             return {"created": 0, "existing": 0, "errors": 0}
 
@@ -1853,11 +1843,10 @@ end
         local_path: Path,
     ) -> dict[str, Any]:
         """Helper to read JSON results from container with cat fallback."""
-
         for attempt in range(10):
             try:
                 stdout, _stderr, rc = self.docker_client.execute_command(
-                    f"cat {container_path.as_posix()}"
+                    f"cat {container_path.as_posix()}",
                 )
             except Exception:  # noqa: BLE001
                 stdout, rc = "", 1
@@ -1895,7 +1884,6 @@ end
         sharing: str | None = None,
     ) -> dict[str, Any]:
         """Create or update a Version (Sprint/Release) for a project."""
-
         payload = {
             "project_id": int(project_id),
             "name": name,
@@ -1957,7 +1945,6 @@ JSON_DATA
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create or update an OpenProject query (saved filter)."""
-
         payload = {
             "name": name,
             "description": description,
@@ -2045,7 +2032,6 @@ JSON_DATA
         content: str,
     ) -> dict[str, Any]:
         """Create or update a Wiki page within a project."""
-
         payload = {
             "project_id": int(project_id),
             "title": title,
@@ -2131,6 +2117,7 @@ JSON_DATA
 
         Returns:
             True on success, False otherwise.
+
         """
         # Escape braces in f-string; Ruby string content uses literal markers.
         marker_start = "<!-- J2O_ORIGIN_START -->"
@@ -2162,6 +2149,7 @@ JSON_DATA
 
         Returns:
             True on success, False otherwise.
+
         """
         # Escape braces in f-string; Ruby string content uses literal markers.
         marker_start = "<!-- J2O_ORIGIN_START -->"
@@ -2337,6 +2325,7 @@ JSON_DATA
 
         Returns:
             Result dict with counts.
+
         """
         if not jira_keys:
             return {"updated": 0, "examined": 0}
@@ -2382,7 +2371,7 @@ JSON_DATA
             return result if isinstance(result, dict) else {"updated": 0, "examined": 0}
         except Exception as e:  # noqa: BLE001
             self.logger.warning(
-                "Failed to set J2O Last Update Date for project %s: %s", project_id, e
+                "Failed to set J2O Last Update Date for project %s: %s", project_id, e,
             )
             return {"updated": 0, "examined": 0, "error": str(e)}
 
@@ -2460,7 +2449,7 @@ JSON_DATA
         # Provenance hint for bulk create
         def _bulk_hint() -> str:
             try:
-                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
                 proj = (config.jira_config or {}).get("project_filter")
                 proj_part = f" project={proj}" if proj else ""
                 return f"j2o: migration/bulk_create model={model}{proj_part} ts={ts} pid={os.getpid()}"
@@ -2492,7 +2481,7 @@ JSON_DATA
             "data = JSON.parse(File.read(data_path))\n"
             "created = []\n"
             "errors = []\n"
-            "puts \"J2O bulk start: model=#{model_name} total=#{data.length} result=#{result_path}\" if verbose\n"
+            'puts "J2O bulk start: model=#{model_name} total=#{data.length} result=#{result_path}" if verbose\n'
             "begin; File.open(progress_file, 'a'){|f| f.write(\"START total=#{data.length}\\n\") }; rescue; end if progress_file\n"
             "data.each_with_index do |attrs, idx|\n"
             "  begin\n"
@@ -2595,7 +2584,7 @@ JSON_DATA
             "      if model_name == 'User' && pref_attrs.respond_to?(:each)\n"
             "        pref = rec.pref || rec.build_pref\n"
             "        pref_attrs.each do |k, v|\n"
-            "          setter = \"#{k}=\"\n"
+            '          setter = "#{k}="\n'
             "          pref.public_send(setter, v) if pref.respond_to?(setter)\n"
             "        end\n"
             "        begin; pref.save; rescue; end\n"
@@ -2604,7 +2593,7 @@ JSON_DATA
             "    end\n"
             "    if rec.save\n"
             "      created << {'index' => idx, 'id' => rec.id}\n"
-            "      puts \"J2O bulk item #{idx}: saved id=#{rec.id}\" if verbose\n"
+            '      puts "J2O bulk item #{idx}: saved id=#{rec.id}" if verbose\n'
             "    else\n"
             "      errors << {'index' => idx, 'errors' => rec.errors.full_messages}\n"
             "      puts \"J2O bulk item #{idx}: failed #{rec.errors.full_messages.join(', ')}\" if verbose\n"
@@ -2614,11 +2603,11 @@ JSON_DATA
             "      puts '.' if verbose\n"
             "    end\n"
             "    if verbose && progress_n > 0 && ((idx + 1) % (progress_n * 10) == 0)\n"
-            "      puts \"processed=#{idx + 1}/#{data.length}\"\n"
+            '      puts "processed=#{idx + 1}/#{data.length}"\n'
             "    end\n"
             "  rescue => e\n"
             "    errors << {'index' => idx, 'errors' => [e.message]}\n"
-            "    puts \"J2O bulk item #{idx}: exception #{e.class}: #{e.message}\" if verbose\n"
+            '    puts "J2O bulk item #{idx}: exception #{e.class}: #{e.message}" if verbose\n'
             "  end\n"
             "end\n"
             "result = {\n"
@@ -2634,7 +2623,7 @@ JSON_DATA
             "  begin; f.flush; f.fsync; rescue; end\n"
             "end\n"
             "begin; FileUtils.chmod(0644, result_path); rescue; end\n"
-            "puts \"J2O bulk done: created=#{created.length} errors=#{errors.length} total=#{data.length} -> #{result_path}\" if verbose\n"
+            'puts "J2O bulk done: created=#{created.length} errors=#{errors.length} total=#{data.length} -> #{result_path}" if verbose\n'
             "begin; File.open(progress_file, 'a'){|f| f.write(\"\\nDONE #{created.length}/#{data.length}\\n\") }; rescue; end if progress_file\n"
             "rescue => top_e\n"
             "  begin\n"
@@ -2644,7 +2633,7 @@ JSON_DATA
             "      begin; f.flush; f.fsync; rescue; end\n"
             "    end\n"
             "    begin; FileUtils.chmod(0644, result_path + '.error.json'); rescue; end\n"
-            "    puts \"J2O bulk error: #{top_e.class}: #{top_e.message} -> #{result_path}.error.json\" if verbose\n"
+            '    puts "J2O bulk error: #{top_e.class}: #{top_e.message} -> #{result_path}.error.json" if verbose\n'
             "  rescue; end\n"
             "end\n"
         )
@@ -2701,11 +2690,11 @@ JSON_DATA
                                 "J2O_BULK_PROGRESS_N": os.environ.get("J2O_BULK_PROGRESS_N", "50"),
                             },
                         )
-                    except subprocess.TimeoutExpired as te:  # noqa: PERF203
+                    except subprocess.TimeoutExpired as te:
                         # Best-effort remote cleanup of the timed-out runner
                         try:
                             self.docker_client.execute_command(
-                                f"pkill -f \"rails runner {runner_script_path}\" || true",
+                                f'pkill -f "rails runner {runner_script_path}" || true',
                                 timeout=10,
                             )
                         except Exception:  # noqa: BLE001
@@ -2733,11 +2722,11 @@ JSON_DATA
                             "J2O_BULK_PROGRESS_N": os.environ.get("J2O_BULK_PROGRESS_N", "50"),
                         },
                     )
-                except subprocess.TimeoutExpired as te:  # noqa: PERF203
+                except subprocess.TimeoutExpired as te:
                     # Best-effort remote cleanup of the timed-out runner
                     try:
                         self.docker_client.execute_command(
-                            f"pkill -f \"rails runner {runner_script_path}\" || true",
+                            f'pkill -f "rails runner {runner_script_path}" || true',
                             timeout=10,
                         )
                     except Exception:  # noqa: BLE001
@@ -2778,7 +2767,7 @@ JSON_DATA
         last_progress_len = -1
         last_progress_change_at = 0.0
         last_heartbeat_logged = -10.0
-        runner_script_known = 'runner_script_path' in locals()
+        runner_script_known = "runner_script_path" in locals()
         while waited < max_wait_seconds:
             # Avoid noisy SSH errors: first, check for existence using Docker API
             if self.docker_client.check_file_exists_in_container(container_result):
@@ -2824,7 +2813,7 @@ JSON_DATA
                                 prog_text = ""
                             prog_len = len(prog_text)
                             # Count dots as a rough processed counter
-                            processed_est = prog_text.count('.')
+                            processed_est = prog_text.count(".")
                             # Extract total from START line if present
                             total_est = None
                             try:
@@ -2848,13 +2837,13 @@ JSON_DATA
                                 try:
                                     if runner_script_known:
                                         self.docker_client.execute_command(
-                                            f"pkill -f \"rails runner {runner_script_path}\" || true",
+                                            f'pkill -f "rails runner {runner_script_path}" || true',
                                             timeout=10,
                                         )
                                 except Exception:
                                     pass
                                 raise QueryExecutionError(
-                                    f"bulk_create_records stalled for {stall_seconds}s without progress"
+                                    f"bulk_create_records stalled for {stall_seconds}s without progress",
                                 )
                             last_heartbeat_logged = waited
                         except Exception:
@@ -2930,7 +2919,7 @@ JSON_DATA
                 raise RecordNotFoundError(msg)
             return result
 
-    def _retry_with_exponential_backoff(  # noqa: PLR0913, C901
+    def _retry_with_exponential_backoff(  # noqa: PLR0913
         self,
         operation: Callable[[], object],
         operation_name: str,
@@ -2966,9 +2955,6 @@ JSON_DATA
         for attempt in range(max_retries + 1):
             try:
                 result = operation()
-                # Track successful batch operations (Zen's observability recommendation)
-                if hasattr(self, "metrics"):
-                    self.metrics.increment_counter("batch_success_total")
             except (ClientConnectionError, QueryExecutionError) as e:
                 last_exception = e
 
@@ -2992,15 +2978,8 @@ JSON_DATA
                 )
 
                 if not is_transient or attempt >= max_retries:
-                    # Track failed batch operations (Zen's observability recommendation)
-                    if hasattr(self, "metrics"):
-                        self.metrics.increment_counter("batch_failure_total")
                     # Don't retry for non-transient errors or if out of retries
                     raise
-
-                # Track retry attempts (Zen's observability recommendation)
-                if hasattr(self, "metrics"):
-                    self.metrics.increment_counter("batch_retry_total")
 
                 # Calculate delay with exponential backoff
                 delay = min(base_delay * (backoff_factor**attempt), max_delay)
@@ -3974,7 +3953,7 @@ JSON_DATA
             scope = "Project.where(parent_id: nil)" if top_level_only else "Project.all"
             write_query = (
                 "require 'json'\n"
-                + "projects = "
+                 "projects = "
                 + scope
                 + ".includes(:enabled_modules).map do |p|\n"
                 "  {\n"
@@ -4546,7 +4525,6 @@ JSON_DATA
 
     def ensure_local_avatars_enabled(self) -> bool:
         """Enable local avatar uploads if disabled."""
-
         ruby = (
             "settings = Setting.plugin_openproject_avatars || {}\n"
             "if ActiveModel::Type::Boolean.new.cast(settings['enable_local_avatars'])\n"
@@ -4569,7 +4547,6 @@ JSON_DATA
         content_type: str,
     ) -> dict[str, Any]:
         """Upload and assign a local avatar for a user."""
-
         safe_content_type = (content_type or "image/png").replace("'", "")
         safe_filename = filename.replace("'", "")
         head = (
@@ -4672,7 +4649,7 @@ result.to_json
             logger.warning("Failed to find relation: %s", e)
             return None
 
-    def create_relation(  # noqa: C901
+    def create_relation(
         self,
         from_work_package_id: int,
         to_work_package_id: int,
@@ -4714,7 +4691,7 @@ result.to_json
                 return result
             logger.warning("Unexpected relation creation result: %s", result)
             return None  # noqa: TRY300
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = f"Failed to create relation: {e}"
             raise QueryExecutionError(msg) from e
 
@@ -5080,6 +5057,7 @@ result.to_json
 
         Returns:
             True if the modules are enabled (already or after change), False on error
+
         """
         if not modules:
             return True

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 

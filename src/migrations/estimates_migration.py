@@ -21,11 +21,10 @@ from src.models import ComponentResult
 
 try:
     from src.config import logger as logger  # type: ignore
-    from src import config
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
 
+from src import config
 
 HOURS_PER_DAY = 8
 DAYS_PER_WEEK = 5
@@ -35,11 +34,10 @@ DAYS_PER_WEEK = 5
 class EstimatesMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
 
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         """Extract issues for which we have work package mappings."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         jira_keys = [str(k) for k in wp_map.keys()]
@@ -51,7 +49,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
             batch_get = getattr(self.jira_client, "batch_get_issues", None)
             if callable(batch_get):
                 issues = batch_get(jira_keys)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to batch-get Jira issues for estimates extraction")
             issues = {}
 
@@ -93,7 +91,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
         return total_hours if total_hours > 0 else None
 
     @staticmethod
-    def _seconds_to_hours(value: int | float | None) -> float | None:
+    def _seconds_to_hours(value: float | None) -> float | None:
         try:
             if value is None:
                 return None
@@ -101,7 +99,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
         except Exception:
             return None
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         issues: dict[str, Any] = (extracted.data or {}).get("issues", {}) if extracted.data else {}
         if not issues:
             return ComponentResult(success=True, data={"updates": []})
@@ -156,7 +154,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=True, data={"updates": updates}, mapped_fields_count=len(updates))
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         updates: list[dict[str, Any]] = (mapped.data or {}).get("updates", []) if mapped.data else []
         if not updates:
             return ComponentResult(success=True, updated=0)
@@ -166,7 +164,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
         try:
             res = self.op_client.batch_update_work_packages(updates)
             updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to batch update estimates on work packages")
             failed = len(updates)
 

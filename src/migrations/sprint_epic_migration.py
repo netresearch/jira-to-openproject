@@ -18,11 +18,11 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 SPRINT_CF_NAME = "Sprint"
@@ -123,7 +123,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
             return None
         return None
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         """Extract Sprint text and Epic parent links keyed by Jira key."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         if not wp_map:
@@ -181,7 +181,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=True, data={"sprint": sprint_by_key, "epic": epic_links})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         sprint_raw: dict[str, list[str]] = data.get("sprint", {}) if isinstance(data, dict) else {}
         epic_pairs: list[tuple[str, str]] = data.get("epic", []) if isinstance(data, dict) else []
@@ -214,7 +214,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=True, data={"sprint_text": sprint_text, "parent_links": parent_links})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         sprint_text: dict[str, str] = data.get("sprint_text", {}) if isinstance(data, dict) else {}
         parent_links: list[dict[str, int]] = data.get("parent_links", []) if isinstance(data, dict) else []
@@ -231,7 +231,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                 if isinstance(res, dict):
                     updated += int(res.get("updated", 0))
                     failed += int(res.get("failed", 0))
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to apply parent links in batch")
             failed += len(parent_links)
 
@@ -269,7 +269,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                 if isinstance(res, dict):
                     updated += int(res.get("updated", 0))
                     failed += int(res.get("failed", 0))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Failed to assign versions for sprint mapping")
                 failed += len(version_updates)
 
@@ -277,7 +277,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
         cf_id = 0
         try:
             cf_id = self._ensure_sprint_cf()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to ensure Sprint custom field")
         if not cf_id:
             self.logger.warning("Sprint custom field unavailable; skipping custom field hydration")
@@ -311,7 +311,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                     updated += 1
                 else:
                     failed += 1
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Failed to set Sprint CF for %s", jira_key)
                 failed += 1
 
@@ -331,7 +331,6 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
 
     def run(self) -> ComponentResult:
         """Execute the sprint/epic migration pipeline."""
-
         self.logger.info("Starting sprint and epic migration adjustments")
 
         extracted = self._extract()

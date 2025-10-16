@@ -1,10 +1,10 @@
 import pytest
 
-from src.migrations.votes_migration import VotesMigration, VOTES_CF_NAME
+from src.migrations.votes_migration import VOTES_CF_NAME, VotesMigration
 
 
 class DummyVotes:
-    def __init__(self, votes: int | None) -> None:  # noqa: A002
+    def __init__(self, votes: int | None) -> None:
         self.votes = votes
 
 
@@ -26,7 +26,7 @@ class DummyJira:
             "PRJ-2": DummyIssue("PRJ-2", None),
         }
 
-    def batch_get_issues(self, keys):  # noqa: ANN201, ANN001
+    def batch_get_issues(self, keys):
         return {k: self.issues.get(k) for k in keys}
 
 
@@ -34,11 +34,11 @@ class DummyOp:
     def __init__(self) -> None:
         self.queries: list[str] = []
 
-    def get_custom_field_by_name(self, name: str):  # noqa: ANN201
+    def get_custom_field_by_name(self, name: str):
         assert name == VOTES_CF_NAME
         raise Exception("not found")
 
-    def execute_query(self, script: str):  # noqa: ANN201
+    def execute_query(self, script: str):
         self.queries.append(script)
         if "cf.id" in script:
             return 702
@@ -47,7 +47,7 @@ class DummyOp:
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
@@ -55,13 +55,13 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
                 "work_package": {
                     "PRJ-1": {"openproject_id": 10001},
                     "PRJ-2": {"openproject_id": 10002},
-                }
+                },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
 
 def test_votes_migration_sets_cf():

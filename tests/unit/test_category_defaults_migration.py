@@ -10,10 +10,10 @@ class DummyJira:
             "PRJ": [
                 {"name": "Backend", "lead": {"name": "alice"}},
                 {"name": "API", "lead": {"name": "bob"}},
-            ]
+            ],
         }
 
-    def get_project_components(self, project_key: str):  # noqa: ANN201
+    def get_project_components(self, project_key: str):
         return self.components.get(project_key, [])
 
 
@@ -21,14 +21,14 @@ class DummyOp:
     def __init__(self) -> None:
         self.scripts: list[str] = []
 
-    def execute_query(self, script: str):  # noqa: ANN201
+    def execute_query(self, script: str):
         self.scripts.append(script)
         return True
 
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
@@ -40,10 +40,10 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
                 },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
 
 def test_category_defaults_sets_assignee_from_component_lead():

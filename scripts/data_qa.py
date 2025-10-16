@@ -25,8 +25,9 @@ import argparse
 import json
 import sqlite3
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from src import config as global_config
 
@@ -66,7 +67,6 @@ def iter_projects(requested: Iterable[str] | None, discovered: Iterable[str]) ->
 
 def summarize(data_dir: Path, projects: list[str] | None) -> None:
     """Print QA summary for the requested projects."""
-
     wp_mapping = load_json(data_dir / "work_package_mapping.json") or {}
     jira_projects = load_json(data_dir / "jira_projects.json") or []
     project_mapping = load_json(data_dir / "project_mapping.json") or {}
@@ -147,7 +147,7 @@ def summarize(data_dir: Path, projects: list[str] | None) -> None:
         except Exception:
             op_project_id = None
         modules_entry_found = bool(
-            op_project_id is not None and op_project_id in modules_by_project_id
+            op_project_id is not None and op_project_id in modules_by_project_id,
         )
         modules = modules_by_project_id.get(op_project_id, []) if modules_entry_found else []
         start_info = start_stats.get(upper, {"with_start": 0, "total": 0})

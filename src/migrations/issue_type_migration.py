@@ -81,6 +81,34 @@ class IssueTypeMigration(BaseMigration):
 
         self._load_data()
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "issue_types", "work_package_types")
+
+        Returns:
+            List of entity dictionaries from Jira API
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type in ("issue_types", "work_package_types"):
+            return self.jira_client.get_issue_types()
+
+        # Raise error for unsupported types
+        msg = (
+            f"IssueTypeMigration does not support entity type: {entity_type}. "
+            f"Supported types: ['issue_types', 'work_package_types']"
+        )
+        raise ValueError(msg)
+
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
         self.jira_issue_types = self._load_from_json(Path("jira_issue_types.json"), [])

@@ -2,17 +2,14 @@
 """Tests for YOLO fixes in Enhanced User Association Migrator.
 
 This module tests the YOLO improvements applied to the migrator including:
-- Defensive metrics collection (_safe_metrics_increment)
 - JSON serialization of complex objects (_make_json_serializable)
 - Security-focused error message sanitization
 - Enhanced exception handling patterns
+
+Note: Defensive metrics collection tests removed (MetricsCollector deleted as enterprise bloat)
 """
 
 import json
-import logging
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
@@ -25,122 +22,7 @@ from tests.utils.mock_factory import (
     create_mock_openproject_client,
 )
 
-
-class TestYoloMetricsHelpers:
-    """Test suite for defensive metrics collection (_safe_metrics_increment)."""
-
-    @pytest.fixture
-    def migrator_instance(self):
-        """Create migrator instance with mocked clients."""
-        mock_jira_client = create_mock_jira_client()
-        mock_op_client = create_mock_openproject_client()
-
-        migrator = EnhancedUserAssociationMigrator(
-            jira_client=mock_jira_client,
-            op_client=mock_op_client,
-        )
-
-        # Mock config to prevent AttributeError
-        migrator.config = Mock()
-        migrator.config.get_path.return_value = Path("/tmp/test")
-
-        return migrator
-
-    def test_safe_metrics_increment_with_none_collector(
-        self,
-        migrator_instance,
-        caplog,
-    ) -> None:
-        """Test _safe_metrics_increment when metrics_collector is None."""
-        migrator_instance.metrics_collector = None
-
-        # Should not raise exception
-        migrator_instance._safe_metrics_increment("test_counter", {"tag": "value"})
-
-        # Should not log any failure messages
-        assert "Metrics collection failed" not in caplog.text
-
-    def test_safe_metrics_increment_missing_collector_attribute(
-        self,
-        migrator_instance,
-        caplog,
-    ) -> None:
-        """Test _safe_metrics_increment when metrics_collector attribute is missing."""
-        # Remove the attribute entirely
-        if hasattr(migrator_instance, "metrics_collector"):
-            delattr(migrator_instance, "metrics_collector")
-
-        # Should not raise exception
-        migrator_instance._safe_metrics_increment("test_counter", {"tag": "value"})
-
-        # Should not log any failure messages
-        assert "Metrics collection failed" not in caplog.text
-
-    def test_safe_metrics_increment_failing_collector(
-        self,
-        migrator_instance,
-        caplog,
-    ) -> None:
-        """Test _safe_metrics_increment when metrics collector raises exception."""
-        mock_collector = Mock()
-        mock_collector.increment_counter.side_effect = Exception("Metrics service down")
-        migrator_instance.metrics_collector = mock_collector
-
-        # Set log level to DEBUG to capture the debug message
-        caplog.set_level(logging.DEBUG)
-
-        # Should not raise exception
-        migrator_instance._safe_metrics_increment("test_counter", {"tag": "value"})
-
-        # Should log debug message about failure
-        assert "Metrics collection failed for test_counter" in caplog.text
-        assert "Metrics service down" in caplog.text
-
-    def test_safe_metrics_increment_successful_call(self, migrator_instance) -> None:
-        """Test _safe_metrics_increment with successful metrics collection."""
-        mock_collector = Mock()
-        migrator_instance.metrics_collector = mock_collector
-
-        migrator_instance._safe_metrics_increment(
-            "staleness_detected_total",
-            {"reason": "expired", "username": "testuser"},
-        )
-
-        mock_collector.increment_counter.assert_called_once_with(
-            "staleness_detected_total",
-            tags={"reason": "expired", "username": "testuser"},
-        )
-
-    def test_safe_metrics_increment_with_none_tags(self, migrator_instance) -> None:
-        """Test _safe_metrics_increment with None tags (should default to empty dict)."""
-        mock_collector = Mock()
-        migrator_instance.metrics_collector = mock_collector
-
-        migrator_instance._safe_metrics_increment("test_counter", None)
-
-        mock_collector.increment_counter.assert_called_once_with(
-            "test_counter",
-            tags={},
-        )
-
-    def test_safe_metrics_increment_preserves_debug_level(
-        self,
-        migrator_instance,
-        caplog,
-    ) -> None:
-        """Test that metrics failures are logged at DEBUG level only."""
-        mock_collector = Mock()
-        mock_collector.increment_counter.side_effect = RuntimeError("Network error")
-        migrator_instance.metrics_collector = mock_collector
-
-        # Set log level to DEBUG to capture the message
-        caplog.set_level(logging.DEBUG)
-
-        migrator_instance._safe_metrics_increment("test_counter")
-
-        # Verify debug level logging
-        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
-        assert any("Metrics collection failed" in r.message for r in debug_records)
+# TestYoloMetricsHelpers class removed - _safe_metrics_increment deleted with MetricsCollector (enterprise bloat)
 
 
 class TestYoloJsonSerialization:
@@ -453,65 +335,8 @@ class TestYoloIntegrationScenarios:
             "/tmp/test2",
         ]
 
-    def test_staleness_detection_with_metrics_failure(
-        self,
-        migrator_instance,
-        caplog,
-    ) -> None:
-        """Test staleness detection continues working when metrics collection fails."""
-        # Setup failing metrics collector
-        mock_collector = Mock()
-        mock_collector.increment_counter.side_effect = ConnectionError(
-            "Metrics service unavailable",
-        )
-        migrator_instance.metrics_collector = mock_collector
-
-        # Set log level to DEBUG to capture the debug messages
-        caplog.set_level(logging.DEBUG)
-
-        # Test staleness detection via get_mapping_with_staleness_check (which triggers metrics)
-        result = migrator_instance.get_mapping_with_staleness_check("nonexistent_user")
-
-        # Should return None (user doesn't exist, stale)
-        assert result is None
-
-        # Metrics failure should be logged but not break functionality
-        assert "Metrics collection failed" in caplog.text
-        assert "staleness_detected_total" in caplog.text
-
-    def test_concurrent_metrics_collection_thread_safety(
-        self,
-        migrator_instance,
-    ) -> None:
-        """Test that multiple threads can safely call _safe_metrics_increment concurrently."""
-        # Setup mock collector that tracks calls
-        call_count = 0
-        call_lock = threading.Lock()
-
-        def increment_counter(counter_name, tags=None) -> None:
-            nonlocal call_count
-            with call_lock:
-                call_count += 1
-                time.sleep(0.001)  # Small delay to increase chance of race conditions
-
-        mock_collector = Mock()
-        mock_collector.increment_counter.side_effect = increment_counter
-        migrator_instance.metrics_collector = mock_collector
-
-        def worker() -> None:
-            migrator_instance._safe_metrics_increment(
-                "test_counter",
-                {"thread": threading.current_thread().name},
-            )
-
-        # Run 10 concurrent threads
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(worker) for _ in range(10)]
-            for future in futures:
-                future.result()  # Wait for completion
-
-        # All calls should have completed successfully
-        assert call_count == 10
+    # test_staleness_detection_with_metrics_failure removed - MetricsCollector deleted (enterprise bloat)
+    # test_concurrent_metrics_collection_thread_safety removed - _safe_metrics_increment deleted (enterprise bloat)
 
 
 class TestYoloExceptionHandling:

@@ -9,7 +9,7 @@ class DummyFV:
 
 
 class DummyFields:
-    def __init__(self, fixVersions: list[DummyFV]):  # noqa: N803
+    def __init__(self, fixVersions: list[DummyFV]):
         self.fixVersions = fixVersions
 
 
@@ -27,7 +27,7 @@ class DummyJira:
             "ABC-3": DummyIssue("ABC-3", ["alpha"]),
         }
 
-    def batch_get_issues(self, keys):  # noqa: ANN001, ANN201
+    def batch_get_issues(self, keys):
         return {k: self.issues[k] for k in keys if k in self.issues}
 
 
@@ -36,7 +36,7 @@ class DummyOp:
         self.queries: list[str] = []
         self.created_payloads: list[dict] = []
 
-    def execute_json_query(self, q: str):  # noqa: ANN201
+    def execute_json_query(self, q: str):
         self.queries.append(q)
         if "Version.where" in q:
             # Return synthesized existing versions from what we've created so far
@@ -46,19 +46,19 @@ class DummyOp:
             return out
         return []
 
-    def bulk_create_records(self, model: str, records: list[dict], **_):  # noqa: ANN001, ANN201
+    def bulk_create_records(self, model: str, records: list[dict], **_):
         assert model == "Version"
         self.created_payloads.extend(records)
         return {"created_count": len(records)}
 
-    def batch_update_work_packages(self, updates):  # noqa: ANN001, ANN201
+    def batch_update_work_packages(self, updates):
         # Pretend all succeeded
         return {"updated": len(updates)}
 
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.mappings as pkg
+    import src.config as cfg
 
     class DummyMappings:
         def __init__(self) -> None:
@@ -74,13 +74,13 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
                 },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
-        def set_mapping(self, name: str, mapping):  # noqa: ANN001, ANN201
+        def set_mapping(self, name: str, mapping):
             self._m[name] = mapping
 
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
 
 def test_versions_migration_end_to_end():

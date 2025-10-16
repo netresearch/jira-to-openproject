@@ -8,7 +8,6 @@ from src import config
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
-
 REPORTING_PROJECT_IDENTIFIER_DEFAULT = "j2o-reporting"
 REPORTING_PROJECT_NAME_DEFAULT = "Jira Dashboards"
 
@@ -21,9 +20,68 @@ class ReportingMigration(BaseMigration):
         super().__init__(jira_client=jira_client, op_client=op_client)
         self.project_mapping = config.mappings.get_mapping("project") or {}
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "reporting")
+
+        Returns:
+            List containing aggregated reporting entities (filters + dashboards)
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type != "reporting":
+            msg = (
+                f"ReportingMigration does not support entity type: {entity_type}. "
+                f"Supported types: ['reporting']"
+            )
+            raise ValueError(msg)
+
+        # Fetch filters (API call 1)
+        try:
+            filters = self.jira_client.get_filters()
+        except Exception as exc:
+            self.logger.exception("Failed to fetch Jira filters: %s", exc)
+            filters = []
+
+        # Fetch dashboards (API call 2)
+        try:
+            dashboards = self.jira_client.get_dashboards()
+        except Exception as exc:
+            self.logger.exception("Failed to fetch Jira dashboards: %s", exc)
+            dashboards = []
+
+        # Fetch detailed dashboard data (API call 3 per dashboard)
+        dashboard_details: list[dict[str, Any]] = []
+        for dashboard in dashboards:
+            dash_id = dashboard.get("id")
+            if dash_id is None:
+                continue
+            try:
+                detail = self.jira_client.get_dashboard_details(int(dash_id))
+            except Exception:  # noqa: BLE001
+                detail = dashboard
+            dashboard_details.append(detail)
+
+        # Return as list with single aggregated entity
+        return [
+            {
+                "filters": filters,
+                "dashboards": dashboard_details,
+                "total_count": len(filters) + len(dashboard_details),
+            },
+        ]
+
     def _extract(self) -> ComponentResult:
         """Fetch Jira filters and dashboards."""
-
         try:
             filters = self.jira_client.get_filters()
         except Exception as exc:  # noqa: BLE001
@@ -35,7 +93,7 @@ class ReportingMigration(BaseMigration):
 
         try:
             dashboards = self.jira_client.get_dashboards()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             dashboards = []
             self.logger.exception("Failed to fetch Jira dashboards: %s", exc)
 
@@ -61,7 +119,6 @@ class ReportingMigration(BaseMigration):
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Convert filters and dashboard metadata to OpenProject payloads."""
-
         if not extracted.success or not isinstance(extracted.data, dict):
             return ComponentResult(
                 success=False,
@@ -128,7 +185,7 @@ class ReportingMigration(BaseMigration):
                 reporting_name,
             )
             fallback_project_id = reporting_project_id
-        except Exception:  # noqa: BLE001
+        except Exception:
             self.logger.exception(
                 "Failed to ensure dedicated reporting project '%s'; dashboards without explicit share will be skipped",
                 reporting_identifier,
@@ -233,7 +290,6 @@ class ReportingMigration(BaseMigration):
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Create OpenProject queries and wiki pages."""
-
         if not mapped.success or not isinstance(mapped.data, dict):
             return ComponentResult(
                 success=False,
@@ -259,7 +315,7 @@ class ReportingMigration(BaseMigration):
                         payload.get("name"),
                         result.get("error") or result,
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 failed += 1
                 self.logger.exception(
                     "Failed to create query for filter '%s': %s",
@@ -279,7 +335,7 @@ class ReportingMigration(BaseMigration):
                         payload.get("title"),
                         result.get("error") or result,
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 failed += 1
                 self.logger.exception(
                     "Failed to create wiki page '%s': %s",
@@ -301,7 +357,6 @@ class ReportingMigration(BaseMigration):
 
     def run(self) -> ComponentResult:
         """Execute the reporting migration pipeline."""
-
         self.logger.info("Starting reporting artefact migration")
 
         extracted = self._extract()

@@ -21,11 +21,11 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 @register_entity_types("attachments")
@@ -41,6 +41,29 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         self.attachment_dir: Path = Path(ap or (Path(self.data_dir) / "attachments"))
         self.attachment_dir.mkdir(parents=True, exist_ok=True)
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities for transformation.
+
+        This migration performs data transformation on attachment files
+        rather than fetching directly from Jira. It operates on already-fetched
+        work package data and handles binary file transfers.
+
+        Args:
+            entity_type: The type of entities requested
+
+        Returns:
+            Empty list (this migration doesn't fetch from Jira directly)
+
+        Raises:
+            ValueError: Always, as this migration doesn't support idempotent workflow
+
+        """
+        msg = (
+            "AttachmentsMigration is a transformation-only migration and does not "
+            "support idempotent workflow. It operates on data from other migrations."
+        )
+        raise ValueError(msg)
+
     @staticmethod
     def _issue_project_key(issue_key: str) -> str:
         try:
@@ -48,7 +71,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         except Exception:
             return str(issue_key)
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         """Collect attachments from Jira issues mapped to work packages."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         jira_keys = [str(k) for k in wp_map.keys()]
@@ -60,7 +83,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             batch_get = getattr(self.jira_client, "batch_get_issues", None)
             if callable(batch_get):
                 issues = batch_get(jira_keys)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to batch-get Jira issues for attachments extraction")
             issues = {}
 
@@ -118,7 +141,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 h.update(chunk)
         return h.hexdigest()
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         att_by_key: dict[str, list[dict[str, Any]]] = data.get("attachments", {}) if isinstance(data, dict) else {}
         if not att_by_key:
@@ -162,14 +185,14 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                             "local_path": local_path.as_posix(),
                             "filename": filename,
                             "digest": digest,
-                        }
+                        },
                     )
                 except Exception:  # noqa: BLE001
                     continue
 
         return ComponentResult(success=True, data={"ops": ops})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         ops: list[dict[str, Any]] = (mapped.data or {}).get("ops", []) if mapped.data else []
         if not ops:
             return ComponentResult(success=True, updated=0)
@@ -182,13 +205,13 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 if not local_path.exists():
                     continue
                 wp_id = int(op["work_package_id"])  # type: ignore[arg-type]
-                filename = str(op["filename"])  # noqa: B905
-                digest = str(op["digest"])  # noqa: B905
+                filename = str(op["filename"])
+                digest = str(op["digest"])
                 # Place in /tmp with digest prefix to avoid collisions
                 container_path = f"/tmp/j2o_att_{digest[:12]}_{os.path.basename(filename)}"
                 try:
                     self.op_client.transfer_file_to_container(local_path, container_path)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception("File transfer failed for %s", local_path)
                     continue
                 container_ops.append(
@@ -196,7 +219,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         "work_package_id": wp_id,
                         "filename": filename,
                         "container_path": container_path,
-                    }
+                    },
                 )
             except Exception:  # noqa: BLE001
                 continue
@@ -249,7 +272,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             if isinstance(res, dict):
                 updated = int(res.get("updated", 0)) if res.get("updated") is not None else 0
                 failed = int(res.get("failed", 0)) if res.get("failed") is not None else 0
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Rails attach operation failed")
             failed = len(container_ops)
 

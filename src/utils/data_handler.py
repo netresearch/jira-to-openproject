@@ -152,8 +152,8 @@ def load[T](
             data = json.load(f)
 
         # Convert dict to model instance (Pydantic v2 only)
-        model_cls = cast(type[BaseModel], model_class)
-        result = cast(T, model_cls.model_validate(data))
+        model_cls = cast("type[BaseModel]", model_class)
+        result = cast("T", model_cls.model_validate(data))
 
         config.logger.info("Loaded data from %s", filepath)
         return result
@@ -380,8 +380,8 @@ def load_model[T](
             data = json.load(f)
 
         config.logger.info("Loaded data from %s", file_path)
-        model_cls = cast(type[BaseModel], model_class)
-        return cast(T, model_cls.model_validate(data))
+        model_cls = cast("type[BaseModel]", model_class)
+        return cast("T", model_cls.model_validate(data))
     except json.JSONDecodeError:
         config.logger.exception("Error parsing JSON from %s", file_path)
         return None

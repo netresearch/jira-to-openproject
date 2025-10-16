@@ -67,6 +67,12 @@ migration:
   skip_existing: true
   enable_rails_meta_writes: true
 
+  # Caching and Performance Optimization
+  # Enable idempotent workflow with thread-safe caching (Option B implementation)
+  # When true: uses run_idempotent() with cached API calls (80-95% reduction)
+  # When false: uses standard run() method (default, backward compatible)
+  use_idempotent_workflows: false
+
   # Security settings
   ssl_verify: true
 

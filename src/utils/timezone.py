@@ -1,6 +1,6 @@
-from datetime import timezone
+from datetime import UTC
 
 # Shared UTC timezone constant for consistent timestamp handling across the app
-UTC = timezone.utc
+UTC = UTC
 
 __all__ = ["UTC"]

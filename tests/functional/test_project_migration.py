@@ -818,14 +818,13 @@ def test_persist_project_metadata_sanitizes_values(project_migration) -> None:
             avatar_val = call.kwargs.get("value")
 
     assert category_val is not None
-    assert "R\'D" in category_val
+    assert "R'D" in category_val
     assert avatar_val is not None
     assert "avatar" in avatar_val
 
 @patch("src.migrations.project_migration.logger")
 def test_assign_project_lead_happy_path(mock_logger: MagicMock) -> None:
     """Assign project lead should grant role membership and persist provenance."""
-
     migration = ProjectMigration.__new__(ProjectMigration)
     migration.op_client = MagicMock()
     migration._extract_jira_lead = Mock(return_value=("sebastian", "Sebastian Mendel"))
@@ -851,7 +850,6 @@ def test_assign_project_lead_happy_path(mock_logger: MagicMock) -> None:
 @patch("src.migrations.project_migration.logger")
 def test_assign_project_lead_missing_user_mapping(mock_logger: MagicMock) -> None:
     """Skip assignment when the Jira lead cannot be mapped to OpenProject."""
-
     migration = ProjectMigration.__new__(ProjectMigration)
     migration.op_client = MagicMock()
     migration._extract_jira_lead = Mock(return_value=("ghost.user", "Ghost"))
@@ -873,7 +871,6 @@ def test_assign_project_lead_role_fallback_and_error_logging(
     mock_logger: MagicMock,
 ) -> None:
     """Fallback to member role and log errors while still persisting provenance."""
-
     migration = ProjectMigration.__new__(ProjectMigration)
     migration.op_client = MagicMock()
     migration._extract_jira_lead = Mock(return_value=("tappert", None))

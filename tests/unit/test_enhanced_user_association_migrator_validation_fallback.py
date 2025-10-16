@@ -72,7 +72,6 @@ def migrator_with_validation(mock_config, mock_clients):
 
     # Setup test state
     migrator.enhanced_user_mappings = {}
-    migrator.metrics_collector = Mock()
     migrator.fallback_strategy = "skip"
     migrator.admin_user_id = None
 
@@ -483,26 +482,9 @@ class TestExecuteSkipFallback:
                 {},
             )
 
-            migrator_with_validation.metrics_collector.increment_counter.assert_called_once_with(
-                "mapping_fallback_total",
-                tags={"fallback_strategy": "skip", "reason": "validation_failed"},
-            )
+            # MetricsCollector removed (enterprise bloat) - no metrics assertions
 
-    def test_skip_fallback_handles_missing_metrics_collector(
-        self,
-        migrator_with_validation,
-    ) -> None:
-        """Test skip fallback handles missing metrics collector gracefully."""
-        migrator_with_validation.metrics_collector = None
-
-        with patch.object(migrator_with_validation, "_save_enhanced_mappings"):
-            result = migrator_with_validation._execute_skip_fallback(
-                "test.user",
-                "validation_failed",
-                {},
-            )
-
-            assert result is None
+    # MetricsCollector removed (enterprise bloat) - test no longer needed
 
     def test_skip_fallback_handles_save_error(
         self,
@@ -633,13 +615,7 @@ class TestExecuteAssignAdminFallback:
                 {"active": False},
             )
 
-            migrator_with_validation.metrics_collector.increment_counter.assert_called_once_with(
-                "mapping_fallback_total",
-                tags={
-                    "fallback_strategy": "assign_admin",
-                    "reason": "validation_failed",
-                },
-            )
+            # MetricsCollector removed (enterprise bloat) - no metrics assertions
 
     def test_assign_admin_fallback_handles_save_error(
         self,
@@ -771,13 +747,7 @@ class TestExecuteCreatePlaceholderFallback:
                 {"active": False},
             )
 
-            migrator_with_validation.metrics_collector.increment_counter.assert_called_once_with(
-                "mapping_fallback_total",
-                tags={
-                    "fallback_strategy": "create_placeholder",
-                    "reason": "validation_failed",
-                },
-            )
+            # MetricsCollector removed (enterprise bloat) - no metrics assertions
 
     def test_create_placeholder_fallback_handles_save_error(
         self,

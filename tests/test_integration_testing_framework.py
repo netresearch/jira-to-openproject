@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Tests for the Integration Testing Framework."""
+"""Tests for the Integration Testing Framework.
+
+NOTE: This entire test file is skipped because the Integration Testing Framework
+was removed during enterprise bloat cleanup. Integration testing is now handled through
+simpler mechanisms and Docker-based E2E tests.
+"""
 
 import asyncio
 import json
@@ -11,22 +16,41 @@ from typing import Never
 
 import pytest
 
-from src.utils.integration_testing_framework import (
-    IntegrationTestingFramework,
-    PerformanceMonitor,
-    TestConfig,
-    TestData,
-    TestDataGenerator,
-    TestEnvironment,
-    TestEnvironmentManager,
-    TestReport,
-    TestReporter,
-    TestResult,
-    TestScope,
-    TestSuite,
-    create_basic_test_suite,
-    run_integration_tests,
-)
+pytestmark = pytest.mark.skip(reason="IntegrationTestingFramework removed during enterprise bloat cleanup")
+
+try:
+    from src.utils.integration_testing_framework import (
+        IntegrationTestingFramework,
+        PerformanceMonitor,
+        TestConfig,
+        TestData,
+        TestDataGenerator,
+        TestEnvironment,
+        TestEnvironmentManager,
+        TestReport,
+        TestReporter,
+        TestResult,
+        TestScope,
+        TestSuite,
+        create_basic_test_suite,
+        run_integration_tests,
+    )
+except ImportError:
+    # Module was removed during enterprise bloat cleanup
+    IntegrationTestingFramework = None
+    PerformanceMonitor = None
+    TestConfig = None
+    TestData = None
+    TestDataGenerator = None
+    TestEnvironment = None
+    TestEnvironmentManager = None
+    TestReport = None
+    TestReporter = None
+    TestResult = None
+    TestScope = None
+    TestSuite = None
+    create_basic_test_suite = None
+    run_integration_tests = None
 
 
 class TestTestConfig:

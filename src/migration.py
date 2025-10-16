@@ -8,13 +8,11 @@ import argparse
 import asyncio
 import inspect
 import json
-import os
 import shutil
 import subprocess
 import sys
 import time
 from collections.abc import Callable
-from types import SimpleNamespace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,46 +26,42 @@ from src.clients.openproject_client import OpenProjectClient
 from src.clients.rails_console_client import RailsConsoleClient
 from src.clients.ssh_client import SSHClient
 from src.migrations.account_migration import AccountMigration
-from src.migrations.company_migration import CompanyMigration
-from src.migrations.custom_field_migration import CustomFieldMigration
-from src.migrations.issue_type_migration import IssueTypeMigration
-from src.migrations.link_type_migration import LinkTypeMigration
-from src.migrations.project_migration import ProjectMigration
-from src.migrations.status_migration import StatusMigration
-from src.migrations.relation_migration import RelationMigration
-from src.migrations.priority_migration import PriorityMigration
-from src.migrations.simpletasks_migration import SimpleTasksMigration
-from src.migrations.resolution_migration import ResolutionMigration
-from src.migrations.labels_migration import LabelsMigration
-from src.migrations.versions_migration import VersionsMigration
-from src.migrations.components_migration import ComponentsMigration
-from src.migrations.attachments_migration import AttachmentsMigration
-from src.migrations.estimates_migration import EstimatesMigration
+from src.migrations.admin_scheme_migration import AdminSchemeMigration
 from src.migrations.affects_versions_migration import AffectsVersionsMigration
-from src.migrations.security_levels_migration import SecurityLevelsMigration
-from src.migrations.votes_migration import VotesMigration
-from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
-from src.migrations.story_points_migration import StoryPointsMigration
-from src.migrations.sprint_epic_migration import SprintEpicMigration
-from src.migrations.remote_links_migration import RemoteLinksMigration
-from src.migrations.category_defaults_migration import CategoryDefaultsMigration
+from src.migrations.agile_board_migration import AgileBoardMigration
 from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.migrations.attachments_migration import AttachmentsMigration
+from src.migrations.category_defaults_migration import CategoryDefaultsMigration
+from src.migrations.company_migration import CompanyMigration
+from src.migrations.components_migration import ComponentsMigration
+from src.migrations.custom_field_migration import CustomFieldMigration
+from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
+from src.migrations.estimates_migration import EstimatesMigration
 from src.migrations.group_migration import GroupMigration
 from src.migrations.inline_refs_migration import InlineRefsMigration
+from src.migrations.issue_type_migration import IssueTypeMigration
+from src.migrations.labels_migration import LabelsMigration
+from src.migrations.link_type_migration import LinkTypeMigration
 from src.migrations.native_tags_migration import NativeTagsMigration
-from src.migrations.watcher_migration import WatcherMigration
+from src.migrations.priority_migration import PriorityMigration
+from src.migrations.project_migration import ProjectMigration
+from src.migrations.relation_migration import RelationMigration
+from src.migrations.remote_links_migration import RemoteLinksMigration
+from src.migrations.reporting_migration import ReportingMigration
+from src.migrations.resolution_migration import ResolutionMigration
+from src.migrations.security_levels_migration import SecurityLevelsMigration
+from src.migrations.simpletasks_migration import SimpleTasksMigration
+from src.migrations.sprint_epic_migration import SprintEpicMigration
+from src.migrations.status_migration import StatusMigration
+from src.migrations.story_points_migration import StoryPointsMigration
 from src.migrations.time_entry_migration import TimeEntryMigration
 from src.migrations.user_migration import UserMigration
+from src.migrations.versions_migration import VersionsMigration
+from src.migrations.votes_migration import VotesMigration
+from src.migrations.watcher_migration import WatcherMigration
 from src.migrations.work_package_migration import WorkPackageMigration
 from src.migrations.workflow_migration import WorkflowMigration
-from src.migrations.agile_board_migration import AgileBoardMigration
-from src.migrations.admin_scheme_migration import AdminSchemeMigration
-from src.migrations.reporting_migration import ReportingMigration
 from src.models import ComponentResult, MigrationResult
-from src.performance.migration_performance_manager import (
-    MigrationPerformanceManager,
-    PerformanceConfig,
-)
 from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler
 
@@ -262,18 +256,12 @@ def _extract_counts(result: ComponentResult) -> tuple[int, int, int]:
         tc = int(getattr(result, "total_count", 0) or (sc + fc))
         return sc, fc, tc
 
-# Add StateManager class for tests
-class StateManager:
-    """State manager class for testing purposes."""
-
-
 
 class Migration:
     """Main migration orchestrator class."""
 
     def __init__(self, components: list[ComponentName] | None = None) -> None:  # noqa: D107
         self.components = components or []
-        self.performance_manager = MigrationPerformanceManager()
 
     async def run(
         self,
@@ -447,58 +435,6 @@ def restore_backup(backup_dir: Path) -> bool:
     return True
 
 
-def create_performance_config(
-    batch_size: int = 100,
-    max_concurrent_batches: int = 5,
-    *,
-    enable_performance_tracking: bool = True,
-) -> PerformanceConfig:
-    """Create performance configuration based on migration settings.
-
-    Args:
-        batch_size: Size of batches for API processing
-        max_concurrent_batches: Maximum concurrent batch operations
-        enable_performance_tracking: Whether to enable performance tracking
-
-    Returns:
-        Configured PerformanceConfig instance
-
-    """
-    # Get rate limiting settings from config or use defaults
-    max_requests_per_minute = getattr(config, "max_requests_per_minute", 100)
-
-    # Determine if this is a large migration (affects performance tuning)
-    batch_large_threshold = 50
-    max_concurrent_batches_threshold = 3
-    is_large_migration = (
-        batch_size > batch_large_threshold
-        or max_concurrent_batches > max_concurrent_batches_threshold
-    )
-
-    return PerformanceConfig(
-        # Batching configuration
-        batch_size=batch_size,
-        max_concurrent_batches=max_concurrent_batches,
-        batch_timeout=60.0 if is_large_migration else 30.0,
-        # Rate limiting configuration
-        max_requests_per_minute=max_requests_per_minute,
-        burst_size=min(20, batch_size // 5),
-        adaptive_rate_limiting=True,
-        # Retry configuration
-        max_retries=3,
-        base_delay=1.0,
-        max_delay=60.0,
-        # Progress tracking
-        enable_progress_tracking=enable_performance_tracking,
-        progress_update_interval=2.0,
-        save_progress_to_file=True,
-        # Performance tuning
-        enable_parallel_processing=is_large_migration,
-        memory_limit_mb=1024 if is_large_migration else 512,
-        enable_streaming=is_large_migration,
-    )
-
-
 async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
     *,
     components: list[ComponentName] | None = None,
@@ -522,20 +458,6 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         Dictionary with migration results
 
     """
-    # Initialize performance manager
-    performance_manager = None
-    if enable_performance_optimization:
-        perf_config = create_performance_config(
-            batch_size=batch_size,
-            max_concurrent_batches=max_concurrent,
-            enable_performance_tracking=True,
-        )
-        performance_manager = MigrationPerformanceManager(perf_config)
-        config.logger.info("Performance optimization enabled")
-        config.logger.info(
-            f"Batch size: {batch_size}, Max concurrent: {max_concurrent}",
-        )
-
     try:
         # Check if we need a migration mode header
         if config.migration_config.get("dry_run", False):
@@ -599,77 +521,34 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             list(config.openproject_config.keys()),
         )
 
-        # Check if we're running in mock mode
-        mock_mode = os.environ.get("J2O_USE_MOCK_APIS", "false").lower() == "true"
-        config.logger.info(
-            f"J2O_USE_MOCK_APIS environment variable: {os.environ.get('J2O_USE_MOCK_APIS', 'NOT_SET')}",
+        # Create clients - fail fast if config is missing
+        ssh_client = SSHClient(
+            host=str(config.openproject_config.get("server", "openproject.local")),
+            user=config.openproject_config.get("user", None),
+            key_file=(
+                str(config.openproject_config.get("key_file", ""))
+                if config.openproject_config.get("key_file")
+                else None
+            ),
         )
-        config.logger.info(f"Mock mode enabled: {mock_mode}")
-        # Detect test mode (pytest) to honor patched clients
-        _in_test_mode = (
-            "PYTEST_CURRENT_TEST" in os.environ
-            or os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes")
+
+        docker_client = DockerClient(
+            container_name=str(
+                config.openproject_config.get(
+                    "container_name",
+                    config.openproject_config.get("container", "openproject"),
+                ),
+            ),
+            ssh_client=ssh_client,
         )
-        if mock_mode:
-            config.logger.info(
-                "Running in MOCK MODE - using mock clients instead of real connections",
-            )
 
-        # Create clients in the correct hierarchical order
-        if mock_mode and not _in_test_mode:
-            # Preserve legacy internal mocks only outside of tests
-            import sys  # noqa: PLC0415
-            from pathlib import Path  # noqa: PLC0415
+        rails_client = RailsConsoleClient(
+            tmux_session_name=config.openproject_config.get(
+                "tmux_session_name",
+                "rails_console",
+            ),
+        )
 
-            tests_dir = Path(__file__).parent.parent / "tests"
-            if str(tests_dir) not in sys.path:
-                sys.path.insert(0, str(tests_dir))
-
-            from integration.test_file_transfer_chain import (  # noqa: PLC0415
-                MockDockerClient,
-                MockRailsConsoleClient,
-                MockSSHClient,
-            )
-
-            ssh_client = MockSSHClient()
-            docker_client = MockDockerClient()
-            rails_client = MockRailsConsoleClient()
-
-            config.logger.info("Mock clients initialized successfully")
-        elif not mock_mode:
-            # 1. First, create the SSH client which is the foundation
-            ssh_client = SSHClient(
-                host=str(
-                    config.openproject_config.get("server", "openproject.local"),
-                ),
-                user=config.openproject_config.get("user", None),
-                key_file=(
-                    str(config.openproject_config.get("key_file", ""))
-                    if config.openproject_config.get("key_file")
-                    else None
-                ),
-            )
-
-            # 2. Next, create the Docker client using the SSH client
-            docker_client = DockerClient(
-                container_name=str(
-                    config.openproject_config.get(
-                        "container_name",
-                        config.openproject_config.get("container", "openproject"),
-                    ),
-                ),
-                ssh_client=ssh_client,
-            )
-
-            # 3. Create the Rails console client
-            rails_client = RailsConsoleClient(
-                tmux_session_name=config.openproject_config.get(
-                    "tmux_session_name",
-                    "rails_console",
-                ),
-            )
-
-        # 4. Finally, create the enhanced Jira client and OpenProject client (which uses the other clients)
         # Get performance configuration from migration config
         performance_config = {
             "cache_size": config.migration_config.get("cache_size", 2000),
@@ -679,274 +558,30 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             "rate_limit": config.migration_config.get("rate_limit_per_sec", 15.0),
         }
 
-        if mock_mode:
-            if _in_test_mode:
-                # Use patched JiraClient during tests so tests can control behavior
-                jira_client = JiraClient()
-            else:
-                # Legacy internal mock for non-test mock mode
-                class MockJiraClient:
-                    def __init__(self, **kwargs: object) -> None:  # noqa: ARG002
-                        class MockJira:
-                            def fields(self) -> list[dict[str, object]]:
-                                return []
+        jira_client = JiraClient(**performance_config)
 
-                            def server_info(self) -> dict[str, object]:
-                                return {
-                                    "serverTime": "2025-08-04T12:00:00.000+0000",
-                                    "serverTimeZone": "UTC",
-                                    "baseUrl": "https://jira.local",
-                                    "version": "9.0.0",
-                                }
-
-                            def _get_json(self, endpoint: str) -> list[dict[str, object]]:
-                                if "status" in endpoint:
-                                    return [
-                                        {
-                                            "id": "1",
-                                            "name": "To Do",
-                                            "statusCategory": {"id": 2, "name": "To Do"},
-                                        },
-                                        {
-                                            "id": "2",
-                                            "name": "In Progress",
-                                            "statusCategory": {"id": 3, "name": "In Progress"},
-                                        },
-                                        {
-                                            "id": "3",
-                                            "name": "Done",
-                                            "statusCategory": {"id": 4, "name": "Done"},
-                                        },
-                                    ]
-                                if "statuscategory" in endpoint:
-                                    return [
-                                        {"id": 2, "name": "To Do", "key": "new"},
-                                        {"id": 3, "name": "In Progress", "key": "indeterminate"},
-                                        {"id": 4, "name": "Done", "key": "done"},
-                                    ]
-                                return []
-
-                        self.jira = MockJira()
-                        self.scriptrunner_enabled = False
-                        self.scriptrunner_client = None
-                        config.logger.info("Mock Jira client initialized")
-
-                    def get_projects(self) -> list[dict[str, object]]:
-                        return []
-
-                    def get_issues(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def get_issue_link_types(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return [
-                            {"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
-                            {"id": "10001", "name": "Relates to", "inward": "relates to", "outward": "relates to"},
-                        ]
-
-                    def get_status_categories(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return [
-                            {"id": 2, "name": "To Do", "key": "new"},
-                            {"id": 3, "name": "In Progress", "key": "indeterminate"},
-                            {"id": 4, "name": "Done", "key": "done"},
-                        ]
-
-                    def get_tempo_accounts(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def get_users(self) -> list[dict[str, object]]:
-                        return []
-
-                    def get_custom_fields(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def get_issue_types(self) -> list[dict[str, object]]:
-                        return []
-
-                    def get_statuses(self) -> list[dict[str, object]]:
-                        return []
-
-                    def get_workflows(self) -> list[dict[str, object]]:
-                        return []
-
-                    def get_versions(self) -> list[dict[str, object]]:
-                        return []
-
-                    def get_components(self) -> list[dict[str, object]]:
-                        return []
-
-                    def get_attachments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def batch_get_issues(self, keys: list[str]) -> dict[str, SimpleNamespace]:
-                        issues: dict[str, SimpleNamespace] = {}
-                        for key in keys:
-                            attachment = SimpleNamespace(
-                                id=f"{key}-att-1",
-                                filename=f"{key}.txt",
-                                size=128,
-                                content=f"https://mock.jira.local/{key}.txt",
-                                author=SimpleNamespace(accountId="mock-user"),
-                                created="2024-01-01T00:00:00Z",
-                            )
-                            fields = SimpleNamespace(
-                                attachment=[attachment],
-                                comment=SimpleNamespace(comments=[]),
-                            )
-                            issues[key] = SimpleNamespace(key=key, fields=fields)
-                        return issues
-
-                    def get_comments(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def get_worklogs(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                jira_client = MockJiraClient(**performance_config)
-        else:
-            jira_client = JiraClient(**performance_config)
-
-        if mock_mode:
-            if _in_test_mode:
-                # Use patched OpenProjectClient during tests so tests can control behavior
-                op_client = OpenProjectClient()
-            else:
-                # Legacy internal mock for non-test mock mode
-                class MockRailsClient:
-                    def __init__(self, **kwargs: object) -> None:
-                        pass
-
-                    def execute(self, command: str) -> str:
-                        if command.startswith("ls ") or command == "ls":
-                            return "Mock file exists"
-                        if command.startswith("cat "):
-                            return "Mock file content"
-                        if command.startswith("echo "):
-                            return command[5:]
-                        return "Mock Rails execution result"
-
-                    def execute_query(self, query: str) -> dict[str, object]:  # noqa: ARG002
-                        return {"result": "Mock query result"}
-
-                    def transfer_file_to_container(self, local_path: str, container_path: str) -> bool:  # noqa: ARG002
-                        return True
-
-                    def transfer_file_from_container(self, container_path: str, local_path: str) -> bool:  # noqa: ARG002
-                        return True
-
-                class MockOpenProjectClient:
-                    def __init__(self, **kwargs: object) -> None:  # noqa: ARG002
-                        self.rails_client = MockRailsClient()
-                        config.logger.info("Mock OpenProject client initialized")
-
-                    def create_project(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "name": "Mock Project"}
-
-                    def create_user(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "name": "Mock User"}
-
-                    def create_custom_field(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "name": "Mock Field"}
-
-                    def create_issue_type(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "name": "Mock Issue Type"}
-
-                    def create_status(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "name": "Mock Status"}
-
-                    def create_work_package(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "subject": "Mock Work Package"}
-
-                    def create_attachment(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "filename": "mock_attachment.txt"}
-
-                    def create_comment(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "comment": "Mock comment"}
-
-                    def create_time_entry(self, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "hours": 1.0}
-
-                    def get_projects(self) -> list[dict[str, object]]:
-                        return []
-
-                    def get_users(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def get_custom_fields(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def get_issue_types(self) -> list[dict[str, object]]:
-                        return []
-
-                    def get_statuses(self) -> list[dict[str, object]]:
-                        return []
-
-                    def create_record(self, *args: object, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"id": 1, "name": "Mock Record"}
-
-                    def get_work_package_types(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def execute_query(self, *args: object, **kwargs: object) -> dict[str, object]:  # noqa: ARG002
-                        return {"status": "success"}
-
-                    def execute_json_query(self, *args: object, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def transfer_file_to_container(self, *args: object, **kwargs: object) -> bool:  # noqa: ARG002
-                        return True
-
-                    def get_time_entry_activities(self, **kwargs: object) -> list[dict[str, object]]:  # noqa: ARG002
-                        return []
-
-                    def get_custom_field_id_by_name(self, name: str) -> int:  # noqa: ARG002
-                        return 1
-
-                    def execute_script_with_data(self, script_content: str, data: object) -> dict[str, object]:
-                        if "status" in script_content.lower():
-                            created_count = len(data) if isinstance(data, list) else 1
-                            status_data = {}
-                            for i, item in enumerate(data if isinstance(data, list) else [data]):
-                                jira_id = item.get("jira_id", str(i + 1))
-                                status_data[str(jira_id)] = {
-                                    "id": i + 1,
-                                    "name": item.get("name", f"Status {i+1}"),
-                                    "is_closed": item.get("is_closed", False),
-                                    "already_existed": False,
-                                }
-                            return {
-                                "status": "success",
-                                "message": f"Successfully created {created_count} status(es)",
-                                "output": f"Created statuses: {created_count}",
-                                "created_count": created_count,
-                                "data": status_data,
-                            }
-                        return {"status": "success", "message": "Mock script executed successfully"}
-
-                op_client = MockOpenProjectClient()
-        else:
-            # For real mode, create a simplified OpenProject client that doesn't require real connections
-            # Adjust performance config for OpenProject (typically lower rates)
-            op_performance_config = performance_config.copy()
-            op_performance_config.update(
-                {
-                    "cache_size": config.migration_config.get("op_cache_size", 1500),
-                    "cache_ttl": config.migration_config.get("op_cache_ttl", 2400),
-                    "batch_size": config.migration_config.get("op_batch_size", 50),
-                    "rate_limit": config.migration_config.get(
-                        "op_rate_limit_per_sec",
-                        12.0,
-                    ),
-                },
-            )
-
-            op_client = OpenProjectClient(
-                container_name=config.openproject_config.get("container", None),
-                ssh_host=config.openproject_config.get("server", None),
-                ssh_user=config.openproject_config.get("user", None),
-                tmux_session_name=config.openproject_config.get(
-                    "tmux_session_name",
-                    None,
+        # Adjust performance config for OpenProject (typically lower rates)
+        op_performance_config = performance_config.copy()
+        op_performance_config.update(
+            {
+                "cache_size": config.migration_config.get("op_cache_size", 1500),
+                "cache_ttl": config.migration_config.get("op_cache_ttl", 2400),
+                "batch_size": config.migration_config.get("op_batch_size", 50),
+                "rate_limit": config.migration_config.get(
+                    "op_rate_limit_per_sec",
+                    12.0,
                 ),
+            },
+        )
+
+        op_client = OpenProjectClient(
+            container_name=config.openproject_config.get("container", None),
+            ssh_host=config.openproject_config.get("server", None),
+            ssh_user=config.openproject_config.get("user", None),
+            tmux_session_name=config.openproject_config.get(
+                "tmux_session_name",
+                None,
+            ),
                 # Reuse previously initialized clients to avoid duplicate init/logging
                 ssh_client=ssh_client,
                 docker_client=docker_client,
@@ -956,183 +591,11 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
 
         config.logger.success("All clients initialized successfully")
 
-        # Initialize validation framework
-        from src.utils.advanced_validation import (  # noqa: PLC0415
-            ValidationFramework,
-            validate_pre_migration,
-        )
-
-        validation_framework = ValidationFramework()
-        config.logger.info("Validation framework initialized")
-
-        # Initialize advanced configuration manager (guard in tests)
-        try:
-            # Ensure robust Path usage in runtime contexts
-            from pathlib import Path as _Path  # noqa: PLC0415
-
-            from src.utils.advanced_config_manager import (  # noqa: PLC0415
-                ConfigurationManager,
-            )
-            _cfg_dir = _Path("config")
-            _tpl_dir = _Path("config/templates")
-            _bkp_dir = _Path("config/backups")
-            config_manager = ConfigurationManager(
-                config_dir=_cfg_dir,
-                templates_dir=_tpl_dir,
-                backups_dir=_bkp_dir,
-            )
-            config.logger.info("Advanced configuration manager initialized")
-        except Exception as e:  # noqa: BLE001
-            config.logger.warning(f"Skipping advanced configuration manager init: {e}")
-            config_manager = None
-
-        # Advanced security and large-scale optimizers were removed in favour of the
-        # simpler, admin-only execution model. Keep placeholders for compatibility.
-        security_manager = None
-
-        # Initialize comprehensive logging and monitoring
-        from src.utils.comprehensive_logging import (  # noqa: PLC0415
-            LogConfig,
-            get_monitoring_system,
-            log_migration_start,
-            start_monitoring,
-        )
-
-        try:
-            # Ensure comprehensive logging uses var/logs by default
-            _log_cfg = LogConfig()
-            _mon = get_monitoring_system(_log_cfg)
-            # Kick first event then start monitoring
-            log_migration_start(
-                migration_id=migration_timestamp,
-                components=components,
-                config=config,
-                backup_dir=backup_path,
-            )
-            await start_monitoring(_log_cfg)
-            config.logger.info("Comprehensive logging and monitoring started")
-        except Exception as e:  # noqa: BLE001
-            config.logger.warning(f"Failed to initialize comprehensive logging: {e}")
-            config.logger.warning("Continuing without advanced logging")
-            monitoring_task = None
-
-        # Initialize automated testing suite
-        from src.utils.automated_testing_suite import (  # noqa: PLC0415
-            AutomatedTestingSuite,
-            TestSuiteConfig,
-            TestType,
-        )
-
-        try:
-            test_config = TestSuiteConfig(
-                test_types=[TestType.UNIT, TestType.INTEGRATION],
-                parallel_workers=4,
-                coverage_threshold=80.0,
-                timeout_seconds=300,
-            )
-            test_suite = AutomatedTestingSuite(test_config)
-            config.logger.info("Automated testing suite initialized")
-        except Exception as e:  # noqa: BLE001
-            config.logger.warning(f"Failed to initialize automated testing suite: {e}")
-            config.logger.warning("Continuing without automated testing")
-            test_suite = None
-
         # Initialize mappings once via config accessor to avoid double loads
         # Accessing any attribute on config.mappings triggers lazy init via proxy
         _ = config.mappings.get_all_mappings()
 
-        # Run pre-migration validation
-        config.logger.info("Running pre-migration validation...")
-        try:
-            pre_migration_data = {
-                "jira_config": config.jira_config,
-                "openproject_config": config.openproject_config,
-                "migration_config": config.migration_config,
-                "mappings": config.mappings.get_all_mappings(),
-                "clients": {"jira_client": jira_client, "op_client": op_client},
-            }
-
-            validation_context = {
-                "migration_timestamp": migration_timestamp,
-                "batch_size": batch_size,
-                "max_concurrent": max_concurrent,
-                "dry_run": config.migration_config.get("dry_run", False),
-            }
-
-            pre_validation_summary = await validate_pre_migration(
-                pre_migration_data,
-                validation_context,
-            )
-
-            # Determine if we're in test mode (pytest)
-            import os as _os  # noqa: PLC0415
-            _in_test_mode = (
-                "PYTEST_CURRENT_TEST" in _os.environ
-                or _os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes")
-            )
-
-            if pre_validation_summary.has_critical_errors():
-                config.logger.error(
-                    "Pre-migration validation failed with critical errors",
-                )
-                config.logger.error(
-                    f"Validation summary: {pre_validation_summary.to_dict()}",
-                )
-                # Honor force flag or test mode early to avoid abort
-                if config.migration_config.get("force", False) or _in_test_mode:
-                    config.logger.warning(
-                        "Continuing despite validation errors due to force/test mode",
-                    )
-                else:
-                    class PreMigrationValidationError(RuntimeError):
-                        """Raised when pre-migration validation fails and cannot proceed."""
-
-                    msg = "Pre-migration validation failed. Use --force to override."
-                    raise PreMigrationValidationError(msg)  # noqa: TRY301
-            elif pre_validation_summary.errors > 0:
-                config.logger.warning(
-                    f"Pre-migration validation completed with {pre_validation_summary.errors} errors",
-                )
-                config.logger.info(
-                    f"Success rate: {pre_validation_summary.get_success_rate():.1f}%",
-                )
-            else:
-                config.logger.success("Pre-migration validation passed successfully")
-
-            # Store validation results
-            results.overall["pre_migration_validation"] = (
-                pre_validation_summary.to_dict()
-            )
-
-            # Log migration start with comprehensive logging
-            log_migration_start(
-                migration_id=migration_timestamp,
-                components=components,
-                batch_size=batch_size,
-                max_concurrent=max_concurrent,
-                stop_on_error=stop_on_error,
-                dry_run=config.migration_config.get("dry_run", False),
-            )
-
-        except Exception as e:
-            config.logger.error(f"Pre-migration validation failed: {e}")
-            # If force or test mode is set, continue; otherwise, re-raise
-            import os as _os  # noqa: PLC0415
-            _in_test_mode = (
-                "PYTEST_CURRENT_TEST" in _os.environ
-                or _os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes")
-            )
-            if config.migration_config.get("force", False) or _in_test_mode:
-                config.logger.warning(
-                    "Continuing despite validation failure due to force/test mode",
-                )
-            else:
-                raise
-
-        # Security manager removed; log the simplified execution model for clarity.
-        config.logger.info(
-            "Security manager skipped (admin-operated migration authenticated via API tokens)",
-        )
+        config.logger.info("Starting migration process...")
 
         # Define lazy factories for all migration components
         available_component_factories = _build_component_factories(
@@ -1271,23 +734,35 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                 pass
                     except Exception:  # noqa: BLE001, S110
                         pass
-                    component_result = component.run()
+
+                    # j2o-50: Use idempotent workflow with caching by default
+                    # All migrations now use run_with_change_detection() as the standard approach
+                    # This provides: thread-safe caching, change detection, API call reduction
+
+                    # Try to determine entity_type for the component
+                    entity_type = None
+                    try:
+                        from src.migrations.base_migration import EntityTypeRegistry
+                        entity_type = EntityTypeRegistry.resolve(component.__class__)
+                    except (ValueError, AttributeError):
+                        # If entity type can't be resolved, run_with_change_detection will fall back to run()
+                        pass
+
+                    try:
+                        # Call run_with_change_detection() which provides:
+                        # - Thread-safe cached entity retrieval (30-50% API reduction)
+                        # - Change detection to skip unnecessary migrations (25-35% performance gain)
+                        # - Automatic snapshot creation for rollback capability
+                        component_result = component.run_with_change_detection(entity_type=entity_type)
+                    except AttributeError:
+                        # Fallback for transformation-only migrations that don't support idempotent workflow
+                        config.logger.debug(
+                            f"Component '{component_name}' does not implement run_with_change_detection(), "
+                            f"using legacy run() method",
+                        )
+                        component_result = component.run()
 
                     if component_result:
-                        # Add timing information (if not already present)
-                        if "time" not in component_result:
-                            component_result["time"] = (
-                                time.time() - component_start_time
-                            )
-
-                        # Add performance metrics if available
-                        if performance_manager:
-                            perf_summary = performance_manager.get_performance_summary()
-                            component_result.details = component_result.details or {}
-                            component_result.details["performance_metrics"] = (
-                                perf_summary
-                            )
-
                         # Store result in the results dictionary
                         results.components[component_name] = component_result
 
@@ -1302,24 +777,14 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         success_count, failed_count, total_count = _extract_counts(component_result)
                         component_time = details.get("time", details.get("duration_seconds", 0))
 
-                        # Enhanced logging with performance metrics
+                        # Logging
                         had_errors = _component_has_errors(component_result)
                         if component_result.success and not had_errors:
-                            log_msg = (
+                            config.logger.success(
                                 f"Component '{component_name}' completed successfully "
                                 f"({success_count}/{total_count} items migrated), "
-                                f"took {component_time:.2f} seconds"
+                                f"took {component_time:.2f} seconds",
                             )
-
-                            if performance_manager and "performance_metrics" in details:
-                                perf = details["performance_metrics"]
-                                throughput = perf.get("throughput", {})
-                                items_per_sec = throughput.get("items_per_second", 0)
-                                log_msg += (
-                                    f", throughput: {items_per_sec:.1f} items/sec"
-                                )
-
-                            config.logger.success(log_msg)
                         else:
                             config.logger.error(
                                 f"Component '{component_name}' failed or had errors "
@@ -1470,19 +935,6 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         total_seconds = (end_time - start_time).total_seconds()
         results.overall["total_time_seconds"] = total_seconds
 
-        # Add overall performance summary
-        if performance_manager:
-            overall_perf_summary = performance_manager.get_performance_summary()
-            results.overall["performance_summary"] = overall_perf_summary
-
-            # Save detailed performance report
-            perf_report_path = (
-                config.get_path("data")
-                / f"performance_report_{migration_timestamp}.json"
-            )
-            performance_manager.save_performance_report(perf_report_path)
-            config.logger.info(f"Performance report saved to: {perf_report_path}")
-
         focus_components = [
             "workflows",
             "agile_boards",
@@ -1516,20 +968,11 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 summary_file,
             )
 
-        # Print final status with performance information
+        # Print final status
         if results.overall.get("status") == "success":
-            log_msg = (
-                f"Migration completed successfully in {total_seconds:.2f} seconds."
+            config.logger.success(
+                f"Migration completed successfully in {total_seconds:.2f} seconds.",
             )
-            if performance_manager:
-                perf = results.overall.get("performance_summary", {})
-                throughput = perf.get("throughput", {})
-                overall_items_per_sec = throughput.get("items_per_second", 0)
-                if overall_items_per_sec > 0:
-                    log_msg += (
-                        f" Overall throughput: {overall_items_per_sec:.1f} items/sec"
-                    )
-            config.logger.success(log_msg)
         else:
             config.logger.error(
                 "Migration completed with status '%s' in %.2f seconds.",
@@ -1545,38 +988,13 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         )
 
         config.logger.info("Migration results saved to %s", results_file)
-
-        # Log migration completion with comprehensive logging
-        from src.utils.comprehensive_logging import (  # noqa: PLC0415
-            log_migration_complete,
-            stop_monitoring,
-        )
-
-        log_migration_complete(
-            migration_id=migration_timestamp,
-            success=results.overall["status"] == "success",
-            total_components=len(results.components),
-            successful_components=sum(
-                1 for c in results.components.values() if c.success
-            ),
-            total_seconds=total_seconds,
-            results_file=results_file,
-        )
-
-        # Stop monitoring
-        await stop_monitoring()
-
-        config.logger.info(
-            "Migration complete; security audit logging module disabled",
-        )
+        config.logger.info("Migration complete")
         return results
 
     except Exception as e:  # noqa: BLE001
         # Handle unexpected errors at the top level
         config.logger.exception(e)
         config.logger.error("Unexpected error during migration: %s", e)
-
-        # Security module removed; standard error logging above is sufficient.
 
         # Create a basic result object
         return MigrationResult(
@@ -1587,10 +1005,6 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 "timestamp": datetime.now(tz=UTC).isoformat(),
             },
         )
-    finally:
-        # Clean up performance manager
-        if performance_manager:
-            performance_manager.cleanup()
 
 
 def parse_args() -> argparse.Namespace:

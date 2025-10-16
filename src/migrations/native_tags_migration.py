@@ -17,25 +17,18 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 @register_entity_types("native_tags")
 class NativeTagsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
-
-        # Use configured data directory for mapping IO consistency, but
-        # remain compatible with test doubles that expect zero-arg init.
-        try:
-            self.mappings = mappings.Mappings(config.get_path("data"))
-        except TypeError:
-            self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
     @staticmethod
     def _coerce_labels(fields: Any) -> list[str]:
@@ -59,9 +52,9 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         r = int(h[8:10], 16)
         g = int(h[12:14], 16)
         b = int(h[16:18], 16)
-        return f"#%02x%02x%02x" % (r, g, b)
+        return "#%02x%02x%02x" % (r, g, b)
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
         if not keys:
@@ -78,7 +71,7 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
                 continue
         return ComponentResult(success=True, data={"by_key": by_key})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         by_key: dict[str, list[str]] = data.get("by_key", {}) if isinstance(data, dict) else {}
         wp_map = self.mappings.get_mapping("work_package") or {}
@@ -92,7 +85,7 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
             updates.append({"work_package_id": wp_id, "tags": tag_defs})
         return ComponentResult(success=True, data={"updates": updates})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         updates = data.get("updates", []) if isinstance(data, dict) else []
         if not updates:

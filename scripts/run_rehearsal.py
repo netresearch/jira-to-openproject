@@ -33,8 +33,8 @@ import datetime as dt
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 ROOT = Path(__file__).resolve().parent.parent
 VAR_DIR = ROOT / "var"
@@ -46,7 +46,6 @@ DEFAULT_COMPONENTS = ["users", "groups", "projects", "work_packages"]
 
 def run(cmd: Iterable[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     """Run a shell command, streaming output to the console."""
-
     print(f"$ {' '.join(cmd)}")
     return subprocess.run(cmd, check=check, text=True)
 
@@ -139,7 +138,7 @@ def main() -> None:
             stop_mocks()
 
     if args.collect:
-        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
+        stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%d_%H%M%S")
         dest = VAR_DIR / "rehearsal" / stamp
         collect_artefacts(dest)
         print(f"Artefacts stored in {dest}")

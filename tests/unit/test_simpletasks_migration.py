@@ -7,7 +7,7 @@ class DummyJira:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload
 
-    def get_issue_property(self, key: str, prop: str):  # noqa: ANN001, ANN201
+    def get_issue_property(self, key: str, prop: str):
         return self._payload.get(key)
 
 
@@ -15,13 +15,14 @@ class DummyOp:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str]] = []
 
-    def set_checklist_section(self, wp_id: int, md: str, **_kwargs):  # noqa: ANN201
+    def set_checklist_section(self, wp_id: int, md: str, **_kwargs):
         self.calls.append((wp_id, md))
         return True
 
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
+    from src import config
     from src import mappings as pkg
 
     class DummyMappings:
@@ -30,13 +31,15 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
                 "work_package": {
                     "J1": {"openproject_id": 101},
                     "J2": {"openproject_id": 102},
-                }
+                },
             }
 
-        def get_mapping(self, name: str):  # noqa: ANN201
+        def get_mapping(self, name: str):
             return self._m.get(name, {})
 
+    # Patch both the Mappings class and the config.mappings instance
     monkeypatch.setattr(pkg, "Mappings", DummyMappings)
+    monkeypatch.setattr(config, "mappings", DummyMappings())
 
 
 def test_simpletasks_migration_renders_markdown_and_updates():
@@ -44,7 +47,7 @@ def test_simpletasks_migration_renders_markdown_and_updates():
         {
             "J1": {"tasks": [{"title": "A", "checked": True}, {"title": "B", "labels": ["x", "y"]}]},
             "J2": {"value": [{"text": "C", "dueDate": "2025-09-01"}]},
-        }
+        },
     )
     op = DummyOp()
 

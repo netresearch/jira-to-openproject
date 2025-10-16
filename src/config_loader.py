@@ -14,11 +14,11 @@ from dotenv import load_dotenv
 from src.type_definitions import (
     Config,
     ConfigValue,
-    LogLevel,
+    DatabaseConfig,
     JiraConfig,
+    LogLevel,
     MigrationConfig,
     OpenProjectConfig,
-    DatabaseConfig,
     SectionName,
 )
 
@@ -151,7 +151,7 @@ class ConfigLoader:
         """
         # Initialize database section if not present
         if "database" not in self.config:
-            self.config["database"] = cast(DatabaseConfig, {})
+            self.config["database"] = cast("DatabaseConfig", {})
 
         # Priority: explicit secret file env -> env var -> default Docker secret path
         postgres_password: str | None = None
@@ -200,7 +200,7 @@ class ConfigLoader:
             )
 
         # Store in config
-        db_cfg = cast(DatabaseConfig, self.config["database"])
+        db_cfg = cast("DatabaseConfig", self.config["database"])
         db_cfg["postgres_password"] = postgres_password
 
         # Also load other PostgreSQL environment variables with defaults
@@ -235,7 +235,7 @@ class ConfigLoader:
                         "CRITICAL",
                         "SUCCESS",
                     ]:
-                        self.config["migration"]["log_level"] = cast(LogLevel, log_level)
+                        self.config["migration"]["log_level"] = cast("LogLevel", log_level)
                     config_logger.debug("Applied log level: %s", log_level)
 
                 case ["J2O", "JIRA", *rest] if rest:

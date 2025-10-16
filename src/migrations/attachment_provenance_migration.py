@@ -16,11 +16,11 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 @register_entity_types("attachment_provenance")
@@ -49,7 +49,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             return None
         return None
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
         if not keys:
@@ -75,7 +75,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                 })
         return ComponentResult(success=True, data={"items": items})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         items = data.get("items", []) if isinstance(data, dict) else []
         wp_map = self.mappings.get_mapping("work_package") or {}
@@ -96,7 +96,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             })
         return ComponentResult(success=True, data={"updates": out})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         updates = data.get("updates", []) if isinstance(data, dict) else []
         if not updates:

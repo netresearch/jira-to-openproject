@@ -6,9 +6,9 @@ and export operations from a single command-line tool.
 """
 
 import argparse
-import sys
-import os
 import atexit
+import os
+import sys
 from pathlib import Path
 
 from src.config import logger, update_from_cli_args

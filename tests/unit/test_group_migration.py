@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,7 +28,6 @@ class DummyMappings:
 @pytest.fixture
 def dummy_mappings(monkeypatch):
     """Provide a dummy mappings store hooked into config."""
-
     store = DummyMappings()
     monkeypatch.setattr(config, "get_mappings", lambda: store)
     monkeypatch.setattr(config, "mappings", store)
@@ -39,7 +36,6 @@ def dummy_mappings(monkeypatch):
 
 def test_group_migration_creates_groups_and_syncs_members(tmp_path, dummy_mappings):
     """End-to-end happy path covering creation, membership sync, and role assignments."""
-
     # Seed required mappings for users and projects
     dummy_mappings.set_mapping(
         "project",

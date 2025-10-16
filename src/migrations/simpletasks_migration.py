@@ -11,16 +11,15 @@ from typing import Any
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
-from src.mappings import Mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 @register_entity_types("simpletasks")
@@ -28,15 +27,37 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
         # Import via module so tests can monkeypatch src.mappings.Mappings
-        import src.mappings as mappings  # noqa: PLC0415
 
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
         self.property_key = (
             config.migration_config.get("simpletasks_property_key")
             or "com.topshelf.simple-tasklists"
         )
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities for transformation.
+
+        This migration performs data transformation on issue properties
+        rather than fetching directly from Jira. It operates on already-fetched
+        work package data.
+
+        Args:
+            entity_type: The type of entities requested
+
+        Returns:
+            Empty list (this migration doesn't fetch from Jira directly)
+
+        Raises:
+            ValueError: Always, as this migration doesn't support idempotent workflow
+
+        """
+        msg = (
+            "SimpleTasksMigration is a transformation-only migration and does not "
+            "support idempotent workflow. It operates on data from other migrations."
+        )
+        raise ValueError(msg)
+
+    def _extract(self) -> ComponentResult:
         """Extract checklist data for all migrated issues using work_package mapping."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         extracted: dict[str, Any] = {}
@@ -48,7 +69,7 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
                     extracted[k] = prop
         return ComponentResult(success=True, data={"extracted": extracted})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Map extracted tasks to Markdown checklist per issue."""
         data = extracted.data or {}
         extracted_map: dict[str, Any] = data.get("extracted", {}) if isinstance(data, dict) else {}
@@ -87,7 +108,7 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
 
         return ComponentResult(success=True, data={"markdown": markdown_by_issue})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Upsert checklist section into WP descriptions."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         data = mapped.data or {}
@@ -106,7 +127,7 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
                         updated += 1
                     else:
                         failed += 1
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception("Failed to set checklist for %s", jira_key)
                     failed += 1
 

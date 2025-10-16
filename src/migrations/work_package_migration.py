@@ -127,7 +127,7 @@ class WorkPackageMigration(BaseMigration):
         try:
             data_dir_path = self.data_dir if isinstance(self.data_dir, Path) else Path(self.data_dir)
         except Exception:
-            data_dir_path = Path(".")
+            data_dir_path = Path()
         self._checkpoint_db_path = data_dir_path.parent / ".migration_checkpoints.db"
         self._project_latest_issue_ts: dict[str, datetime] = {}
         if config.migration_config.get("reset_wp_checkpoints"):
@@ -488,7 +488,6 @@ class WorkPackageMigration(BaseMigration):
 
     def _build_status_category_lookup(self) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
         """Load Jira statuses and map their categories by id/name."""
-
         statuses = self._load_from_json("jira_statuses.json", default=None)
         fetched = False
         if not statuses:
@@ -1373,7 +1372,6 @@ class WorkPackageMigration(BaseMigration):
 
     def _resolve_start_date(self, issue: Any) -> str | None:
         """Resolve start date from configured Jira custom fields."""
-
         candidates: list[str] = list(self.start_date_fields)
 
         # jira.Issue style access
@@ -1413,7 +1411,6 @@ class WorkPackageMigration(BaseMigration):
 
     def _resolve_start_date_from_history(self, issue: Any) -> str | None:
         """Infer start date from the first transition into an 'In Progress' category."""
-
         histories = self._extract_changelog_histories(issue)
         if not histories:
             return None
@@ -1462,15 +1459,13 @@ class WorkPackageMigration(BaseMigration):
     @staticmethod
     def _get_attr(obj: Any, key: str) -> Any:
         """Safely fetch attribute/key from Jira objects or dicts."""
-
         if isinstance(obj, dict):
             return obj.get(key)
         return getattr(obj, key, None)
 
     def _extract_changelog_histories(self, issue: Any) -> list[Any]:
         """Return changelog histories from either jira.Issue or dict payloads."""
-
-        if hasattr(issue, "changelog") and getattr(issue, "changelog"):
+        if hasattr(issue, "changelog") and issue.changelog:
             histories = getattr(issue.changelog, "histories", None)
             if histories:
                 return list(histories)
@@ -1491,7 +1486,6 @@ class WorkPackageMigration(BaseMigration):
     @staticmethod
     def _is_in_progress_category(category: dict[str, Any]) -> bool:
         """Return True when the status category represents 'In Progress'."""
-
         if not category:
             return False
 
@@ -1577,8 +1571,8 @@ class WorkPackageMigration(BaseMigration):
                 meta["status_name"] = _get(["status", "name"])
                 meta["priority_id"] = _get(["priority", "id"])
                 meta["priority_name"] = _get(["priority", "name"])
-                meta["reporter"] = _get(["reporter", "name"]) or _get(["reporter", "displayName"]) 
-                meta["assignee"] = _get(["assignee", "name"]) or _get(["assignee", "displayName"]) 
+                meta["reporter"] = _get(["reporter", "name"]) or _get(["reporter", "displayName"])
+                meta["assignee"] = _get(["assignee", "name"]) or _get(["assignee", "displayName"])
                 meta["created"] = _get(["created"]) or d.get("created")
                 meta["updated"] = _get(["updated"]) or d.get("updated")
                 meta["duedate"] = _get(["duedate"]) or d.get("duedate")
@@ -2024,8 +2018,8 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                     # Ensure project_id is present on every record in the batch
                     try:
                         for _rec in batch:
-                            if 'project_id' not in _rec or _rec.get('project_id') in (None, 0, ''):
-                                _rec['project_id'] = int(op_project_id)
+                            if "project_id" not in _rec or _rec.get("project_id") in (None, 0, ""):
+                                _rec["project_id"] = int(op_project_id)
                     except Exception:
                         pass
 
@@ -2153,8 +2147,8 @@ def _migrate_work_packages(self) -> dict[str, Any]:
                 # Ensure project_id is present on every record in the tail batch
                 try:
                     for _rec in batch:
-                        if 'project_id' not in _rec or _rec.get('project_id') in (None, 0, ''):
-                            _rec['project_id'] = int(op_project_id)
+                        if "project_id" not in _rec or _rec.get("project_id") in (None, 0, ""):
+                            _rec["project_id"] = int(op_project_id)
                 except Exception:
                     pass
 
@@ -3169,7 +3163,7 @@ def _apply_required_defaults(
                 try:
                     from datetime import date as _date  # local import to avoid top-level pollution
                     self.op_client.set_wp_last_update_date_by_keys(
-                        int(op_project_id), updated_keys, _date.today().isoformat()
+                        int(op_project_id), updated_keys, _date.today().isoformat(),
                     )
                 except Exception as _cf_err:
                     self.logger.debug(
@@ -3183,7 +3177,7 @@ def _apply_required_defaults(
                     # Build index for later result mapping while checking existing mapping
                     to_create: list[dict[str, Any]] = []
                     to_create_meta: list[dict[str, Any]] = []
-                    for meta, wp in zip(work_packages_meta, work_packages_data):
+                    for meta, wp in zip(work_packages_meta, work_packages_data, strict=False):
                         jira_id_meta = meta.get("jira_id")
                         existing = None
                         if jira_id_meta is not None:

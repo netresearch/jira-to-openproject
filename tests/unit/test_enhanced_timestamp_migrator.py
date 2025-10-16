@@ -329,7 +329,6 @@ class TestEnhancedTimestampMigrator:
 
     def test_extract_start_date_precedence(self, migrator_with_mocks) -> None:
         """Start date should honor configured precedence across custom fields."""
-
         first_value = "2024-07-01T08:00:00+02:00"
         second_value = "2024-07-02T09:00:00+02:00"
 
@@ -360,7 +359,6 @@ class TestEnhancedTimestampMigrator:
 
     def test_extract_start_date_fallback_field(self, migrator_with_mocks) -> None:
         """Fallback to the next configured custom field when earlier ones are empty."""
-
         fallback_value = "2024-08-15T10:30:00+02:00"
 
         fields = SimpleNamespace(
@@ -389,7 +387,6 @@ class TestEnhancedTimestampMigrator:
 
     def test_extract_start_date_missing_fields(self, migrator_with_mocks) -> None:
         """Return no start date when none of the configured fields have values."""
-
         fields = SimpleNamespace(
             customfield_18690=None,
             customfield_12590=None,

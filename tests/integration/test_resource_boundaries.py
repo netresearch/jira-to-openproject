@@ -17,7 +17,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
-
 from src.clients.exceptions import ConnectionError, RateLimitError
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient

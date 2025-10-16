@@ -8,8 +8,6 @@ Approach:
 
 from __future__ import annotations
 
-from typing import Any
-
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
@@ -17,11 +15,11 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
     from src import config
+    from src.config import logger as logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
+    from src import config  # type: ignore
 
 
 RESOLUTION_CF_NAME = "Resolution"
@@ -52,7 +50,7 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         """Extract Jira resolution per migrated issue (via work_package mapping)."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
@@ -69,11 +67,11 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
                 continue
         return ComponentResult(success=True, data={"resolution": reso_by_key})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         return ComponentResult(success=True, data=data)
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         cf_id = self._ensure_resolution_cf()
         if not cf_id:
             return ComponentResult(success=False, failed=1)
@@ -107,7 +105,7 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
                     % (wp_id, note_esc)
                 )
                 self.op_client.execute_query(journal_script)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Failed to apply resolution for %s", jira_key)
                 failed += 1
 

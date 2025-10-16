@@ -16,7 +16,6 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def logger_stub():
     """Return a minimal logger stub with the attributes used in tests."""
-
     return SimpleNamespace(
         info=lambda *args, **kwargs: None,
         warning=lambda *args, **kwargs: None,
@@ -30,7 +29,6 @@ def logger_stub():
 
 def test_get_user_origin_cf_ids_ensures_fields(logger_stub):
     """Verify legacy fields are removed and new origin CFs are created once."""
-
     instance = UserMigration.__new__(UserMigration)
     instance.logger = logger_stub
     instance.op_client = MagicMock()
@@ -77,7 +75,6 @@ def test_get_user_origin_cf_ids_ensures_fields(logger_stub):
 )
 def test_build_user_origin_metadata(logger_stub, account_id, expected_suffix, monkeypatch):
     """Ensure metadata assembly derives IDs, URLs, and avatar correctly."""
-
     instance = UserMigration.__new__(UserMigration)
     instance.logger = logger_stub
     instance.data_dir = Path(".")

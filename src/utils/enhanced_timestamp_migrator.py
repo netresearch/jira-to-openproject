@@ -623,7 +623,6 @@ class EnhancedTimestampMigrator:
         work_package_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Migrate start date (API-friendly)."""
-
         result = {"warnings": []}
 
         start_data = extracted.get("start_date")

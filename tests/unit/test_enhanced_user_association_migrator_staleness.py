@@ -59,7 +59,7 @@ class TestStalenessDetection:
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
             patch.object(EnhancedUserAssociationMigrator, "_load_enhanced_mappings"),
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
-            patch("src.utils.enhanced_user_association_migrator.MetricsCollector"),
+            # MetricsCollector removed (enterprise bloat)
         ):
 
             # Clean config setup
@@ -215,7 +215,7 @@ class TestDurationParsing:
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
             patch.object(EnhancedUserAssociationMigrator, "_load_enhanced_mappings"),
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
-            patch("src.utils.enhanced_user_association_migrator.MetricsCollector"),
+            # MetricsCollector removed (enterprise bloat)
         ):
 
             # Clean config setup with duration-specific settings
@@ -328,7 +328,7 @@ class TestConfigurationLoading:
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
             patch.object(EnhancedUserAssociationMigrator, "_load_enhanced_mappings"),
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
-            patch("src.utils.enhanced_user_association_migrator.MetricsCollector"),
+            # MetricsCollector removed (enterprise bloat)
         ):
 
             # Clean config setup
@@ -414,7 +414,7 @@ class TestRefreshUserMapping:
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
             patch.object(EnhancedUserAssociationMigrator, "_load_enhanced_mappings"),
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
-            patch("src.utils.enhanced_user_association_migrator.MetricsCollector"),
+            # MetricsCollector removed (enterprise bloat)
         ):
 
             # Clean config setup with refresh-specific settings
@@ -659,7 +659,7 @@ class TestBackwardsCompatibility:
             patch("builtins.open", mock_open(read_data=legacy_data)),
             patch("pathlib.Path.exists", return_value=True),
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
-            patch("src.utils.enhanced_user_association_migrator.MetricsCollector"),
+            # MetricsCollector removed (enterprise bloat)
         ):
 
             mock_config.get_path.return_value = Path("/tmp/test_legacy")
@@ -701,7 +701,7 @@ class TestBackwardsCompatibility:
             patch("builtins.open", mock_open(read_data=mixed_data)),
             patch("pathlib.Path.exists", return_value=True),
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
-            patch("src.utils.enhanced_user_association_migrator.MetricsCollector"),
+            # MetricsCollector removed (enterprise bloat)
         ):
 
             mock_config.get_path.return_value = Path("/tmp/test_mixed")
@@ -771,7 +771,7 @@ class TestSecurityFeatures:
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
             patch.object(EnhancedUserAssociationMigrator, "_load_enhanced_mappings"),
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
-            patch("src.utils.enhanced_user_association_migrator.MetricsCollector"),
+            # MetricsCollector removed (enterprise bloat)
         ):
 
             # Clean config setup with security-specific settings

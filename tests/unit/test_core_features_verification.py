@@ -16,14 +16,20 @@ rather than driving new implementation. Each test verifies a specific aspect
 of the feature is present and working.
 """
 
-import pytest
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
-from datetime import datetime, UTC
+from unittest.mock import Mock
+
+import pytest
 
 
+@pytest.mark.skip(reason="ValidationFramework removed during enterprise bloat cleanup")
 class TestJ2O6ValidationFramework:
-    """Verify j2o-6: Advanced Data Validation Framework is implemented and integrated."""
+    """Verify j2o-6: Advanced Data Validation Framework is implemented and integrated.
+
+    NOTE: These tests are skipped because the ValidationFramework was removed
+    during enterprise bloat cleanup. Validation is now handled through simpler
+    mechanisms in individual migration classes.
+    """
 
     def test_validation_framework_exists(self):
         """Verify ValidationFramework class exists and is importable."""
@@ -31,35 +37,35 @@ class TestJ2O6ValidationFramework:
 
         framework = ValidationFramework()
         assert framework is not None
-        assert hasattr(framework, 'validators')
-        assert hasattr(framework, 'summary')
+        assert hasattr(framework, "validators")
+        assert hasattr(framework, "summary")
 
     def test_validation_phases_defined(self):
         """Verify all required validation phases are defined."""
         from src.utils.advanced_validation import ValidationPhase
 
-        assert hasattr(ValidationPhase, 'PRE_MIGRATION')
-        assert hasattr(ValidationPhase, 'IN_FLIGHT')
-        assert hasattr(ValidationPhase, 'POST_MIGRATION')
-        assert hasattr(ValidationPhase, 'RECONCILIATION')
+        assert hasattr(ValidationPhase, "PRE_MIGRATION")
+        assert hasattr(ValidationPhase, "IN_FLIGHT")
+        assert hasattr(ValidationPhase, "POST_MIGRATION")
+        assert hasattr(ValidationPhase, "RECONCILIATION")
 
     def test_validation_levels_defined(self):
         """Verify all validation severity levels are defined."""
         from src.utils.advanced_validation import ValidationLevel
 
-        assert hasattr(ValidationLevel, 'INFO')
-        assert hasattr(ValidationLevel, 'WARNING')
-        assert hasattr(ValidationLevel, 'ERROR')
-        assert hasattr(ValidationLevel, 'CRITICAL')
+        assert hasattr(ValidationLevel, "INFO")
+        assert hasattr(ValidationLevel, "WARNING")
+        assert hasattr(ValidationLevel, "ERROR")
+        assert hasattr(ValidationLevel, "CRITICAL")
 
     def test_validators_registered(self):
         """Verify validators are registered for each phase."""
         from src.utils.advanced_validation import (
-            ValidationFramework,
-            ValidationPhase,
-            PreMigrationValidator,
             InFlightValidator,
             PostMigrationValidator,
+            PreMigrationValidator,
+            ValidationFramework,
+            ValidationPhase,
         )
 
         framework = ValidationFramework()
@@ -84,7 +90,7 @@ class TestJ2O6ValidationFramework:
         import src.migration as migration_module
 
         # Check that validation functions are imported
-        assert hasattr(migration_module, 'validate_pre_migration')
+        assert hasattr(migration_module, "validate_pre_migration")
 
         # Read migration.py source to verify integration
         migration_file = Path(__file__).parent.parent.parent / "src" / "migration.py"
@@ -107,7 +113,7 @@ class TestJ2O2MarkdownConversion:
 
         converter = MarkdownConverter()
         assert converter is not None
-        assert hasattr(converter, 'convert')
+        assert hasattr(converter, "convert")
 
     def test_markdown_converter_handles_jira_syntax(self):
         """Verify MarkdownConverter supports key Jira wiki syntax."""
@@ -131,7 +137,6 @@ class TestJ2O2MarkdownConversion:
     def test_markdown_converter_used_in_work_package_migration(self):
         """Verify MarkdownConverter is instantiated and used in WorkPackageMigration."""
         from src.migrations.work_package_migration import WorkPackageMigration
-        from unittest.mock import Mock
 
         # Create mocked clients
         jira_client = Mock()
@@ -142,11 +147,11 @@ class TestJ2O2MarkdownConversion:
         wp_migration = WorkPackageMigration(jira_client, op_client)
 
         # Verify markdown_converter attribute exists
-        assert hasattr(wp_migration, 'markdown_converter')
+        assert hasattr(wp_migration, "markdown_converter")
         assert wp_migration.markdown_converter is not None
 
         # Verify it has the convert method
-        assert hasattr(wp_migration.markdown_converter, 'convert')
+        assert hasattr(wp_migration.markdown_converter, "convert")
 
     def test_markdown_converter_integration_in_source(self):
         """Verify markdown_converter.convert() is called in work package creation."""
@@ -182,7 +187,6 @@ class TestJ2O3TimeEntryMigration:
     def test_time_entry_migration_has_run_method(self):
         """Verify TimeEntryMigration implements run() method."""
         from src.migrations.time_entry_migration import TimeEntryMigration
-        from unittest.mock import Mock
 
         jira_client = Mock()
         op_client = Mock()
@@ -191,7 +195,7 @@ class TestJ2O3TimeEntryMigration:
         time_entry_migration = TimeEntryMigration(jira_client, op_client)
 
         # Verify run method exists
-        assert hasattr(time_entry_migration, 'run')
+        assert hasattr(time_entry_migration, "run")
         assert callable(time_entry_migration.run)
 
     def test_time_entry_migrator_helper_exists(self):
@@ -218,7 +222,6 @@ class TestJ2O5PaginationProcessing:
     def test_work_package_migration_has_pagination(self):
         """Verify WorkPackageMigration implements pagination."""
         from src.migrations.work_package_migration import WorkPackageMigration
-        from unittest.mock import Mock
 
         jira_client = Mock()
         op_client = Mock()
@@ -227,7 +230,7 @@ class TestJ2O5PaginationProcessing:
         wp_migration = WorkPackageMigration(jira_client, op_client)
 
         # Verify iterator method exists
-        assert hasattr(wp_migration, 'iter_project_issues')
+        assert hasattr(wp_migration, "iter_project_issues")
         assert callable(wp_migration.iter_project_issues)
 
     def test_pagination_uses_start_at_max_results(self):
@@ -248,8 +251,8 @@ class TestJ2O5PaginationProcessing:
         wp_source = wp_migration_file.read_text()
 
         # Verify batch_size is read from config
-        assert 'batch_size' in wp_source
-        assert 'config.migration_config' in wp_source
+        assert "batch_size" in wp_source
+        assert "config.migration_config" in wp_source
 
     def test_iter_project_issues_is_generator(self):
         """Verify iter_project_issues returns an iterator for memory efficiency."""
@@ -297,7 +300,6 @@ class TestJ2O1MetadataPreservation:
     def test_enhanced_user_association_migrator_used(self):
         """Verify EnhancedUserAssociationMigrator is used for user mapping."""
         from src.migrations.work_package_migration import WorkPackageMigration
-        from unittest.mock import Mock
 
         jira_client = Mock()
         op_client = Mock()
@@ -306,13 +308,12 @@ class TestJ2O1MetadataPreservation:
         wp_migration = WorkPackageMigration(jira_client, op_client)
 
         # Verify enhanced user migrator is instantiated
-        assert hasattr(wp_migration, 'enhanced_user_migrator')
+        assert hasattr(wp_migration, "enhanced_user_migrator")
         assert wp_migration.enhanced_user_migrator is not None
 
     def test_enhanced_timestamp_migrator_used(self):
         """Verify EnhancedTimestampMigrator is used for timestamp preservation."""
         from src.migrations.work_package_migration import WorkPackageMigration
-        from unittest.mock import Mock
 
         jira_client = Mock()
         op_client = Mock()
@@ -321,13 +322,12 @@ class TestJ2O1MetadataPreservation:
         wp_migration = WorkPackageMigration(jira_client, op_client)
 
         # Verify enhanced timestamp migrator is instantiated
-        assert hasattr(wp_migration, 'enhanced_timestamp_migrator')
+        assert hasattr(wp_migration, "enhanced_timestamp_migrator")
         assert wp_migration.enhanced_timestamp_migrator is not None
 
     def test_enhanced_audit_trail_migrator_used(self):
         """Verify EnhancedAuditTrailMigrator is used for comments/history."""
         from src.migrations.work_package_migration import WorkPackageMigration
-        from unittest.mock import Mock
 
         jira_client = Mock()
         op_client = Mock()
@@ -336,7 +336,7 @@ class TestJ2O1MetadataPreservation:
         wp_migration = WorkPackageMigration(jira_client, op_client)
 
         # Verify enhanced audit trail migrator is instantiated
-        assert hasattr(wp_migration, 'enhanced_audit_trail_migrator')
+        assert hasattr(wp_migration, "enhanced_audit_trail_migrator")
         assert wp_migration.enhanced_audit_trail_migrator is not None
 
     def test_metadata_completeness(self):
@@ -383,8 +383,13 @@ class TestIntegrationVerification:
         assert '"work_packages"' in migration_source or "'work_packages'" in migration_source
         assert '"time_entries"' in migration_source or "'time_entries'" in migration_source
 
+    @pytest.mark.skip(reason="ValidationFramework removed during enterprise bloat cleanup")
     def test_validation_integrated_with_migration_flow(self):
-        """Verify validation is integrated into the migration workflow."""
+        """Verify validation is integrated into the migration workflow.
+
+        NOTE: Skipped because ValidationFramework was removed. Validation now happens
+        within individual migration classes through their ETL methods and error handling.
+        """
         migration_file = Path(__file__).parent.parent.parent / "src" / "migration.py"
         migration_source = migration_file.read_text()
 
@@ -402,15 +407,14 @@ class TestJ2O96MigrationCompleteness:
         This test ensures no migration is left incomplete with only the BaseMigration
         default run() method that raises NotImplementedError.
         """
-        import inspect
         from src.migration import DEFAULT_COMPONENT_SEQUENCE, _build_component_factories
-        from src.migrations.base_migration import BaseMigration
-        from unittest.mock import Mock
 
         # Create mock clients for instantiation
         mock_jira = Mock()
         mock_op = Mock()
         mock_op.rails_client = Mock()
+        # Configure op_client methods that migrations call during __init__
+        mock_op.get_roles.return_value = []
 
         # Get component factories
         factories = _build_component_factories(mock_jira, mock_op)
@@ -428,7 +432,7 @@ class TestJ2O96MigrationCompleteness:
             migration_instance = factory()
 
             # Verify run() method exists
-            assert hasattr(migration_instance, 'run'), \
+            assert hasattr(migration_instance, "run"), \
                 f"Component '{component_name}' has no run() method"
             assert callable(migration_instance.run), \
                 f"Component '{component_name}' run() is not callable"
@@ -439,7 +443,7 @@ class TestJ2O96MigrationCompleteness:
             run_class = run_method.__self__.__class__
 
             # Check if run() is defined in the migration class itself (not inherited)
-            if 'run' not in run_class.__dict__:
+            if "run" not in run_class.__dict__:
                 # run() is inherited from BaseMigration, not overridden
                 incomplete_migrations.append(component_name)
 
@@ -449,15 +453,16 @@ class TestJ2O96MigrationCompleteness:
 
     def test_migration_run_methods_return_component_result(self):
         """Verify all migration run() methods have proper return type annotations."""
-        from src.migration import DEFAULT_COMPONENT_SEQUENCE, _build_component_factories
-        from src.models import ComponentResult
-        from unittest.mock import Mock
         import inspect
+
+        from src.migration import DEFAULT_COMPONENT_SEQUENCE, _build_component_factories
 
         # Create mock clients
         mock_jira = Mock()
         mock_op = Mock()
         mock_op.rails_client = Mock()
+        # Configure op_client methods that migrations call during __init__
+        mock_op.get_roles.return_value = []
 
         # Get component factories
         factories = _build_component_factories(mock_jira, mock_op)
@@ -467,7 +472,7 @@ class TestJ2O96MigrationCompleteness:
             migration_instance = factory()
 
             # Get the run method's signature
-            run_method = getattr(migration_instance, 'run')
+            run_method = migration_instance.run
             signature = inspect.signature(run_method)
 
             # Verify return annotation
@@ -478,7 +483,7 @@ class TestJ2O96MigrationCompleteness:
             # Check if it's ComponentResult (handle both direct type and string annotation)
             if return_annotation != inspect.Signature.empty:
                 annotation_str = str(return_annotation)
-                assert 'ComponentResult' in annotation_str, \
+                assert "ComponentResult" in annotation_str, \
                     f"Component '{component_name}' run() should return ComponentResult, got {annotation_str}"
 
 

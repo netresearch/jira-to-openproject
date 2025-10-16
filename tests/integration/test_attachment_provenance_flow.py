@@ -1,27 +1,28 @@
-import pytest
+import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-import sys
-import types
+
+import pytest
 
 try:
     import pybreaker  # type: ignore  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests
     class _CircuitBreaker:  # pragma: no cover - minimal behavior
-        def __init__(self, *args, **kwargs) -> None:  # noqa: D401
+        def __init__(self, *args, **kwargs) -> None:
             return None
 
         def call(self, func, *args, **kwargs):
             return func(*args, **kwargs)
 
-        def close(self) -> None:  # noqa: D401
+        def close(self) -> None:
             return None
 
-        def open(self) -> None:  # noqa: D401
+        def open(self) -> None:
             return None
 
-        def half_open(self) -> None:  # noqa: D401
+        def half_open(self) -> None:
             return None
 
         def __call__(self, func):
@@ -31,24 +32,24 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
         CircuitBreakerError=Exception,
         CircuitBreaker=_CircuitBreaker,
     )
-    sys.modules['pybreaker'] = pybreaker_stub
+    sys.modules["pybreaker"] = pybreaker_stub
 
 try:
     from pydantic import BaseModel as _PydanticBaseModel  # type: ignore  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests
-    class _FieldInfo:  # noqa: D401 - minimal stub for tests
+    class _FieldInfo:
         def __init__(self, *, default=None, default_factory=None) -> None:
             self.default = default
             self.default_factory = default_factory
 
-    def Field(*, default=None, default_factory=None):  # type: ignore  # noqa: D401
+    def Field(*, default=None, default_factory=None):  # type: ignore
         return _FieldInfo(default=default, default_factory=default_factory)
 
-    class BaseModel:  # noqa: D401 - lightweight stand-in
+    class BaseModel:
         __annotations__: dict[str, object] = {}
 
         def __init__(self, **kwargs) -> None:
-            annotations = getattr(self.__class__, '__annotations__', {})
+            annotations = getattr(self.__class__, "__annotations__", {})
             for name in annotations:
                 attr = getattr(self.__class__, name, None)
                 if isinstance(attr, _FieldInfo):
@@ -65,10 +66,10 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
         def dict(self) -> dict[str, object]:  # type: ignore[override]
             return self.__dict__.copy()
 
-    sys.modules['pydantic'] = types.SimpleNamespace(BaseModel=BaseModel, Field=Field)
+    sys.modules["pydantic"] = types.SimpleNamespace(BaseModel=BaseModel, Field=Field)
 
 try:
-    import structlog  # type: ignore  # noqa: F401
+    import structlog  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests
     class _StubLogger:
         def __getattr__(self, _name):
@@ -77,28 +78,28 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
             return _noop
 
     class _StdlibNS(types.SimpleNamespace):
-        def PositionalArgumentsFormatter(self):  # noqa: D401
+        def PositionalArgumentsFormatter(self):
             return lambda *args, **kwargs: None
 
-        def LoggerFactory(self):  # noqa: D401
+        def LoggerFactory(self):
             return object
 
-        BoundLogger = type('BoundLogger', (), {})
+        BoundLogger = type("BoundLogger", (), {})
 
     class _ProcessorsNS(types.SimpleNamespace):
-        def TimeStamper(self, *args, **kwargs):  # noqa: D401
+        def TimeStamper(self, *args, **kwargs):
             return lambda *a, **kw: None
 
-        def StackInfoRenderer(self):  # noqa: D401
+        def StackInfoRenderer(self):
             return lambda *a, **kw: None
 
-        def format_exc_info(self, *args, **kwargs):  # noqa: D401
+        def format_exc_info(self, *args, **kwargs):
             return None
 
-        def UnicodeDecoder(self):  # noqa: D401
+        def UnicodeDecoder(self):
             return lambda *a, **kw: None
 
-        def JSONRenderer(self):  # noqa: D401
+        def JSONRenderer(self):
             return lambda *a, **kw: None
 
     stdlib_ns = _StdlibNS(
@@ -114,18 +115,18 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
         stdlib=stdlib_ns,
         processors=processors_ns,
     )
-    sys.modules['structlog'] = structlog
+    sys.modules["structlog"] = structlog
 
 try:
     import sqlalchemy  # type: ignore  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests
-    DeclarativeMeta = type('DeclarativeMeta', (type,), {})
+    DeclarativeMeta = type("DeclarativeMeta", (type,), {})
 
-    def _declarative_base():  # noqa: D401
+    def _declarative_base():
         metadata = types.SimpleNamespace(create_all=lambda *_args, **_kwargs: None)
-        return type('Base', (), {'metadata': metadata})
+        return type("Base", (), {"metadata": metadata})
 
-    def _sessionmaker(**_kwargs):  # noqa: D401
+    def _sessionmaker(**_kwargs):
         def _factory():
             return types.SimpleNamespace(commit=lambda: None, close=lambda: None)
 
@@ -141,15 +142,15 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
         ext=types.SimpleNamespace(declarative=types.SimpleNamespace(declarative_base=_declarative_base)),
         orm=types.SimpleNamespace(DeclarativeMeta=DeclarativeMeta, sessionmaker=_sessionmaker),
     )
-    sys.modules['sqlalchemy'] = sqlalchemy_stub
-    sys.modules['sqlalchemy.ext'] = sqlalchemy_stub.ext
-    sys.modules['sqlalchemy.ext.declarative'] = sqlalchemy_stub.ext.declarative
-    sys.modules['sqlalchemy.orm'] = sqlalchemy_stub.orm
+    sys.modules["sqlalchemy"] = sqlalchemy_stub
+    sys.modules["sqlalchemy.ext"] = sqlalchemy_stub.ext
+    sys.modules["sqlalchemy.ext.declarative"] = sqlalchemy_stub.ext.declarative
+    sys.modules["sqlalchemy.orm"] = sqlalchemy_stub.orm
 
 try:
     import tenacity  # type: ignore  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests
-    def _pass_through(*_args, **_kwargs):  # noqa: D401
+    def _pass_through(*_args, **_kwargs):
         def _decorator(func):
             return func
         return _decorator
@@ -162,10 +163,10 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
         after_log=_pass_through,
         before_sleep_log=_pass_through,
     )
-    sys.modules['tenacity'] = tenacity_stub
+    sys.modules["tenacity"] = tenacity_stub
 
-from src.migrations.attachments_migration import AttachmentsMigration
 from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.migrations.attachments_migration import AttachmentsMigration
 
 pytestmark = pytest.mark.integration
 
@@ -177,7 +178,7 @@ class DummyMappings:
             "user": {"alice": {"openproject_id": 7}},
         }
 
-    def get_mapping(self, name: str):  # noqa: ANN201
+    def get_mapping(self, name: str):
         return self._mapping.get(name, {})
 
 
@@ -203,7 +204,7 @@ def _make_issue() -> SimpleNamespace:
     return SimpleNamespace(key="KEY-1", fields=fields)
 
 
-@pytest.fixture()
+@pytest.fixture
 def patched_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     from src import config as global_config
 
@@ -229,7 +230,7 @@ def test_attachment_provenance_pipeline(monkeypatch: pytest.MonkeyPatch, patched
         {"updated": 1, "failed": 0},
     ]
 
-    def fake_download(self, url: str, dest_path: Path) -> Path:  # noqa: ANN001
+    def fake_download(self, url: str, dest_path: Path) -> Path:
         dest_path.write_bytes(b"stub")
         return dest_path
 

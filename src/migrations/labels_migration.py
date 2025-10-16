@@ -6,22 +6,18 @@ WorkPackage custom field named "Labels" storing a comma-separated list.
 
 from __future__ import annotations
 
-from typing import Any
-
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
-from src.mappings import Mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
     from src.config import logger as logger  # type: ignore
-    from src import config
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
 
+from src import config
 
 LABELS_CF_NAME = "Labels"
 
@@ -30,9 +26,8 @@ LABELS_CF_NAME = "Labels"
 class LabelsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
 
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
     def _ensure_labels_cf(self) -> int:
         """Ensure the Labels CF exists; return its ID."""
@@ -52,7 +47,7 @@ class LabelsMigration(BaseMigration):  # noqa: D101
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         """Extract Jira labels for all migrated issues."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
@@ -68,7 +63,7 @@ class LabelsMigration(BaseMigration):  # noqa: D101
                 continue
         return ComponentResult(success=True, data={"labels": labels_by_key})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         raw: dict[str, list[str]] = data.get("labels", {}) if isinstance(data, dict) else {}
 
@@ -80,7 +75,7 @@ class LabelsMigration(BaseMigration):  # noqa: D101
                 norm[key] = ", ".join(unique_sorted)
         return ComponentResult(success=True, data={"labels_markdown": norm})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         cf_id = self._ensure_labels_cf()
         if not cf_id:
             return ComponentResult(success=False, failed=1)
@@ -110,7 +105,7 @@ class LabelsMigration(BaseMigration):  # noqa: D101
                     updated += 1
                 else:
                     failed += 1
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Failed to set labels for %s", jira_key)
                 failed += 1
 

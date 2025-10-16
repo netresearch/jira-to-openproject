@@ -22,11 +22,10 @@ from src.models import ComponentResult
 
 try:
     from src.config import logger as logger  # type: ignore
-    from src import config
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
-    from src import config  # type: ignore  # noqa: PLC0415
 
+from src import config
 
 STORY_POINTS_CF_NAME = "Story Points"
 
@@ -35,9 +34,8 @@ STORY_POINTS_CF_NAME = "Story Points"
 class StoryPointsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        import src.mappings as mappings  # noqa: PLC0415
 
-        self.mappings = mappings.Mappings()
+        self.mappings = config.mappings
 
     def _ensure_story_points_cf(self) -> int:
         """Ensure the Story Points CF exists; return its ID."""
@@ -92,7 +90,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
             return None
         return None
 
-    def _extract(self) -> ComponentResult:  # noqa: D401
+    def _extract(self) -> ComponentResult:
         """Extract Jira story points per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
@@ -112,14 +110,14 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
                 continue
         return ComponentResult(success=True, data={"sp": sp_by_key})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         raw: dict[str, float] = data.get("sp", {}) if isinstance(data, dict) else {}
         # Normalize to strings suitable for CF
         norm: dict[str, str] = {k: ("%g" % v) for k, v in raw.items()}
         return ComponentResult(success=True, data={"sp_text": norm})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:  # noqa: D401
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         cf_id = self._ensure_story_points_cf()
         if not cf_id:
             return ComponentResult(success=False, failed=1)
@@ -150,7 +148,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
                     updated += 1
                 else:
                     failed += 1
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Failed to apply Story Points for %s", jira_key)
                 failed += 1
 

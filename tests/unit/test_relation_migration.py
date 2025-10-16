@@ -1,5 +1,5 @@
-import types
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,7 +11,7 @@ class DummyOpClient:
         self.created: list[tuple[int, int, str]] = []
         self.relations: set[tuple[int, int]] = set()
 
-    def find_relation(self, a: int, b: int):  # noqa: ANN201
+    def find_relation(self, a: int, b: int):
         return (a, b) in self.relations
 
     def create_relation(self, a: int, b: int, rel_type: str) -> bool:
@@ -44,18 +44,18 @@ def _map_store(monkeypatch: pytest.MonkeyPatch):
     import src.config as cfg
 
     monkeypatch.setattr(cfg, "mappings", dummy, raising=False)
-    yield dummy
+    return dummy
 
 
 def test_map_type_and_direction():
-    rm = RelationMigration(jira_client=None, op_client=None)  # type: ignore[arg-type]
+    rm = RelationMigration(jira_client=MagicMock(), op_client=MagicMock())
     assert rm._map_type_and_direction("duplicates", "inward") == ("duplicates", True)
     assert rm._map_type_and_direction("relates", "outward") == ("relates", False)
     assert rm._map_type_and_direction("foobar", "outward") is None
 
 
 def test_resolve_wp_id_various_shapes(_map_store):
-    rm = RelationMigration(jira_client=None, op_client=None)  # type: ignore[arg-type]
+    rm = RelationMigration(jira_client=MagicMock(), op_client=MagicMock())
     # direct int entry
     _map_store.set_mapping("work_package", {"A": 5})
     assert rm._resolve_wp_id("A") == 5
@@ -85,7 +85,7 @@ def test_run_skips_when_already_exists(monkeypatch: pytest.MonkeyPatch, _map_sto
     op = DummyOpClient()
     # Existing relation 10->20
     op.relations.add((10, 20))
-    rm = RelationMigration(jira_client=None, op_client=op)  # type: ignore[arg-type]
+    rm = RelationMigration(jira_client=MagicMock(), op_client=op)
     # Monkeypatch EnhancedJiraClient.batch_get_issues
     from src.clients.enhanced_jira_client import EnhancedJiraClient
 
@@ -100,7 +100,7 @@ def test_run_skips_when_already_exists(monkeypatch: pytest.MonkeyPatch, _map_sto
 
 def test_run_creates_with_swap(monkeypatch: pytest.MonkeyPatch, _map_store):
     op = DummyOpClient()
-    rm = RelationMigration(jira_client=None, op_client=op)  # type: ignore[arg-type]
+    rm = RelationMigration(jira_client=MagicMock(), op_client=op)
     from src.clients.enhanced_jira_client import EnhancedJiraClient
 
     # blocks + inward => swap to (20,10)

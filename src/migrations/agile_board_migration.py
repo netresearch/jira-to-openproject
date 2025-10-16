@@ -22,9 +22,113 @@ class AgileBoardMigration(BaseMigration):
     # BaseMigration overrides                                            #
     # ------------------------------------------------------------------ #
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "agile_boards", "sprints")
+
+        Returns:
+            List containing aggregated board and sprint data
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is one of the entity types we handle
+        if entity_type not in ("agile_boards", "sprints"):
+            msg = (
+                f"AgileBoardMigration does not support entity type: {entity_type}. "
+                f"Supported types: ['agile_boards', 'sprints']"
+            )
+            raise ValueError(msg)
+
+        # Fetch boards (API call 1)
+        try:
+            boards = self.jira_client.get_boards()
+        except Exception as exc:
+            self.logger.exception("Failed to fetch Jira boards: %s", exc)
+            return []
+
+        board_payloads: list[dict[str, Any]] = []
+        sprint_payloads: list[dict[str, Any]] = []
+
+        for board in boards:
+            board_id = board.get("id")
+            if board_id is None:
+                continue
+
+            # Fetch board configuration (API call 2 per board)
+            try:
+                configuration = self.jira_client.get_board_configuration(board_id)
+            except Exception:  # noqa: BLE001
+                configuration = {}
+
+            # Fetch board sprints (API call 3 per board)
+            try:
+                board_sprints = self.jira_client.get_board_sprints(board_id)
+            except Exception:  # noqa: BLE001
+                board_sprints = []
+
+            location = board.get("location") or {}
+            project_key = location.get("projectKey") or board.get("locationProjectKey")
+
+            columns = configuration.get("columnConfig", {}).get("columns", [])
+            statuses: list[str] = []
+            for column in columns:
+                column_statuses = column.get("statuses", [])
+                if isinstance(column_statuses, list):
+                    for status in column_statuses:
+                        if isinstance(status, dict):
+                            status_id = status.get("id") or status.get("name")
+                        else:
+                            status_id = status
+                        if status_id:
+                            statuses.append(str(status_id))
+
+            query = configuration.get("filter", {}) or {}
+            filter_jql = query.get("query") or query.get("queryString") or ""
+
+            board_payloads.append(
+                {
+                    "id": board_id,
+                    "name": board.get("name"),
+                    "type": board.get("type"),
+                    "project_key": project_key,
+                    "statuses": statuses,
+                    "filter_jql": filter_jql,
+                },
+            )
+
+            for sprint in board_sprints:
+                sprint_payloads.append(
+                    {
+                        "board_id": board_id,
+                        "project_key": project_key,
+                        "id": sprint.get("id"),
+                        "name": sprint.get("name"),
+                        "goal": sprint.get("goal"),
+                        "state": sprint.get("state"),
+                        "startDate": sprint.get("startDate"),
+                        "endDate": sprint.get("endDate"),
+                    },
+                )
+
+        # Return aggregated data structure
+        return [
+            {
+                "boards": board_payloads,
+                "sprints": sprint_payloads,
+                "total_count": len(board_payloads),
+            },
+        ]
+
     def _extract(self) -> ComponentResult:
         """Fetch boards, configurations, and sprints from Jira."""
-
         try:
             boards = self.jira_client.get_boards()
         except Exception as exc:  # noqa: BLE001
@@ -107,7 +211,6 @@ class AgileBoardMigration(BaseMigration):
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Convert board and sprint data into OpenProject payloads."""
-
         if not extracted.success or not isinstance(extracted.data, dict):
             return ComponentResult(
                 success=False,
@@ -219,7 +322,6 @@ class AgileBoardMigration(BaseMigration):
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Create queries and versions in OpenProject and persist sprint mapping."""
-
         if not mapped.success or not isinstance(mapped.data, dict):
             return ComponentResult(
                 success=False,
@@ -243,7 +345,7 @@ class AgileBoardMigration(BaseMigration):
                         created_queries += 1
                 else:
                     errors += 1
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors += 1
                 self.logger.exception("Failed to create query for board %s: %s", payload.get("name"), exc)
 
@@ -266,7 +368,7 @@ class AgileBoardMigration(BaseMigration):
                             sprint_mapping_updates[sprint_name] = entry
                 else:
                     errors += 1
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors += 1
                 self.logger.exception(
                     "Failed to create version for sprint %s: %s",
@@ -295,7 +397,6 @@ class AgileBoardMigration(BaseMigration):
 
     def run(self) -> ComponentResult:
         """Execute the agile board migration pipeline."""
-
         self.logger.info("Starting agile board and sprint migration")
 
         extracted = self._extract()

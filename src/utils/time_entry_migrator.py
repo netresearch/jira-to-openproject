@@ -10,10 +10,10 @@ This module provides complete time tracking data migration capabilities:
 """
 
 import json
-from datetime import UTC, datetime
-import time
-import threading
 import os
+import threading
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -649,14 +649,14 @@ class TimeEntryMigrator:
                             migration_summary["successful_migrations"] += 1
                             if new_id is not None:
                                 created_ids.append(new_id)
+                        # Distinguish skipped vs failed based on error type
+                        # Known validation reasons should be skipped, API errors should be failed
+                        elif err in ("missing_embedding", "invalid_hours_or_date"):
+                            migration_summary["skipped_entries"] += 1
+                            migration_summary["skipped_details"].append({"entry": None, "reason": err})
                         else:
-                            # Distinguish skipped vs failed when _create provided reason
-                            # For concurrency path, we treat invalid entries as skipped
-                            if err is None:
-                                migration_summary["failed_migrations"] += 1
-                            else:
-                                migration_summary["skipped_entries"] += 1
-                                migration_summary["skipped_details"].append({"entry": None, "reason": err})
+                            # API error (exception message) or no error (failed to get ID) = failed migration
+                            migration_summary["failed_migrations"] += 1
 
                         # Heartbeat progress
                         processed_total += 1
@@ -847,7 +847,7 @@ class TimeEntryMigrator:
             # Configure fast-forward once per run
             try:
                 self._ff_enabled = os.environ.get("J2O_TIME_ENTRY_FAST_FORWARD", "0").lower() in ("1", "true", "yes")
-                self._ff_field = os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower() in ("created", "updated") and os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower() or "updated"
+                self._ff_field = (os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower() in ("created", "updated") and os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower()) or "updated"
             except Exception:
                 self._ff_enabled = False
                 self._ff_field = "updated"

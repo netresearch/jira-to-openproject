@@ -9,6 +9,8 @@ Implementation is now complete, including:
 - Test validation in tests/test_status_migration.py
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any, TypeVar
@@ -75,6 +77,46 @@ class StatusMigration(BaseMigration):
 
         # Load existing data if available
         self._load_data()
+
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities from Jira for a specific type.
+
+        This method enables idempotent workflow caching by providing a standard
+        interface for entity retrieval. Called by run_with_change_detection() to fetch data
+        with automatic thread-safe caching.
+
+        Args:
+            entity_type: The type of entities to retrieve (e.g., "statuses", "status_types")
+
+        Returns:
+            List of entity dictionaries from Jira API
+
+        Raises:
+            ValueError: If entity_type is not supported by this migration
+
+        """
+        # Check if this is the entity type we handle
+        if entity_type in ("statuses", "status_types"):
+            # Use the same API call pattern as extract_jira_statuses()
+            if (
+                self.jira_client is None
+                or not hasattr(self.jira_client, "jira")
+                or self.jira_client.jira is None
+            ):
+                msg = "Jira client is not properly initialized"
+                logger.error(msg)
+                raise ValueError(msg)
+
+            # Use the REST API endpoint for status retrieval
+            response = self.jira_client.jira._get_json("status")
+            return response if response else []
+
+        # Raise error for unsupported types
+        msg = (
+            f"StatusMigration does not support entity type: {entity_type}. "
+            f"Supported types: ['statuses', 'status_types']"
+        )
+        raise ValueError(msg)
 
     def _load_data(self) -> None:
         """Load existing data from JSON files."""

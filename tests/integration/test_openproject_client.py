@@ -17,7 +17,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-
 from src.clients.docker_client import DockerClient
 from src.clients.openproject_client import FileTransferError, OpenProjectClient
 from src.clients.rails_console_client import CommandExecutionError, RailsConsoleClient

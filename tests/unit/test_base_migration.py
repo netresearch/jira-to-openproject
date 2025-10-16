@@ -13,6 +13,31 @@ from src.models import ComponentResult
 from src.utils.change_detector import ChangeDetector
 
 
+@pytest.fixture(autouse=True)
+def _mock_client_classes(monkeypatch: pytest.MonkeyPatch):
+    """Auto-fixture to prevent real client instantiation in all tests."""
+    # Create mock instances that will be returned
+    mock_jira = MagicMock(spec=JiraClient)
+    mock_op = MagicMock(spec=OpenProjectClient)
+    mock_change_detector = MagicMock(spec=ChangeDetector)
+
+    # Patch the classes in base_migration module to return our mocks
+    monkeypatch.setattr(
+        "src.migrations.base_migration.JiraClient",
+        lambda *args, **kwargs: mock_jira,
+    )
+    monkeypatch.setattr(
+        "src.migrations.base_migration.OpenProjectClient",
+        lambda *args, **kwargs: mock_op,
+    )
+    monkeypatch.setattr(
+        "src.migrations.base_migration.ChangeDetector",
+        lambda *args, **kwargs: mock_change_detector,
+    )
+
+    return {"jira": mock_jira, "op": mock_op, "change_detector": mock_change_detector}
+
+
 class TestBaseMigration:
     """Test cases for BaseMigration class."""
 

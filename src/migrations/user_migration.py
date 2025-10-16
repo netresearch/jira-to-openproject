@@ -4,12 +4,13 @@
 Handles the migration of users and their accounts from Jira to OpenProject.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
 import mimetypes
 import re
-import time
 import uuid
 from contextlib import suppress
 from pathlib import Path
@@ -366,7 +367,6 @@ class UserMigration(BaseMigration):
 
     def _get_user_origin_cf_ids(self) -> dict[str, int]:
         """Ensure and cache user-level origin custom field IDs."""
-
         if self._origin_cf_id_map is not None:
             return self._origin_cf_id_map
 
@@ -471,7 +471,7 @@ class UserMigration(BaseMigration):
 
         try:
             locales = self.op_client.execute_query_to_json_file(
-                "I18n.available_locales.map(&:to_s)"
+                "I18n.available_locales.map(&:to_s)",
             )
             if isinstance(locales, list):
                 normalized = {
@@ -1082,7 +1082,6 @@ class UserMigration(BaseMigration):
 
     def backfill_user_origin_metadata(self) -> dict[str, int]:
         """Update origin custom fields and timezone for existing OpenProject users."""
-
         if not self.op_users:
             self.extract_openproject_users()
         if not self.user_mapping:

@@ -287,7 +287,8 @@ def validate_config() -> bool:
         ("openproject", ["url"]),  # Allow either api_token or api_key for OpenProject
     ]:
         # Use a generic mapping type to avoid inconsistent TypedDict union issues
-        from typing import Mapping, Any as _Any  # local import to avoid top pollution
+        from collections.abc import Mapping  # local import to avoid top pollution
+        from typing import Any as _Any
 
         match section:
             case "jira":

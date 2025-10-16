@@ -2,18 +2,18 @@
 
 import os
 import shutil
+import sys
 import tempfile
+import types
 from collections.abc import Generator
 from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
-import sys
-import types
 
-if 'jira' not in sys.modules:
-    jira_module = types.ModuleType('jira')
+if "jira" not in sys.modules:
+    jira_module = types.ModuleType("jira")
 
     class _CTestJIRA:
         def __init__(self, *args, **kwargs):
@@ -24,15 +24,15 @@ if 'jira' not in sys.modules:
 
     jira_module.JIRA = _CTestJIRA
     jira_module.Issue = _CTestIssue
-    exceptions_module = types.ModuleType('jira.exceptions')
+    exceptions_module = types.ModuleType("jira.exceptions")
 
     class _CTestJIRAError(Exception):
         pass
 
     exceptions_module.JIRAError = _CTestJIRAError
     jira_module.exceptions = exceptions_module
-    sys.modules['jira'] = jira_module
-    sys.modules['jira.exceptions'] = exceptions_module
+    sys.modules["jira"] = jira_module
+    sys.modules["jira.exceptions"] = exceptions_module
 
 from _pytest.config import Config
 from dotenv import load_dotenv

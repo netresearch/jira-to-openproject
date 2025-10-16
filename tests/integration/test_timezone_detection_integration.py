@@ -10,7 +10,6 @@ from datetime import datetime
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
-
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator

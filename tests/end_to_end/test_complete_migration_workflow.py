@@ -223,7 +223,7 @@ def configure_comprehensive_mocks(mock_jira, mock_op):
                     content="https://example.com/note.txt",
                     author=SimpleNamespace(accountId=author_account_ids[0]),
                     created="2024-01-01T00:00:00Z",
-                )
+                ),
             ],
             comment=SimpleNamespace(comments=[]),
         ),
@@ -239,7 +239,7 @@ def configure_comprehensive_mocks(mock_jira, mock_op):
                     content="https://example.com/diagram.png",
                     author=SimpleNamespace(accountId=author_account_ids[1]),
                     created="2024-01-03T00:00:00Z",
-                )
+                ),
             ],
             comment=SimpleNamespace(comments=[]),
         ),
@@ -251,7 +251,7 @@ def configure_comprehensive_mocks(mock_jira, mock_op):
 
     if not getattr(config.mappings, "custom_field_mapping", {}):
         config.mappings.custom_field_mapping = {
-            "E2E Custom Field": {"openproject_id": 9001, "field_format": "string"}
+            "E2E Custom Field": {"openproject_id": 9001, "field_format": "string"},
         }
 
     # Rails client access
@@ -601,58 +601,58 @@ class TestCompleteMigrationWorkflow:
             mock_open.side_effect = mock_file_handler
 
             original_mappings = {
-                'user_mapping': dict(getattr(config.mappings, 'user_mapping', {}) or {}),
-                'project_mapping': dict(getattr(config.mappings, 'project_mapping', {}) or {}),
-                'issue_type_mapping': dict(getattr(config.mappings, 'issue_type_mapping', {}) or {}),
-                'issue_type_id_mapping': dict(getattr(config.mappings, 'issue_type_id_mapping', {}) or {}),
-                'status_mapping': dict(getattr(config.mappings, 'status_mapping', {}) or {}),
-                'custom_field_mapping': dict(getattr(config.mappings, 'custom_field_mapping', {}) or {}),
-                'work_package_mapping': dict(getattr(config.mappings, 'work_package_mapping', {}) or {}),
+                "user_mapping": dict(getattr(config.mappings, "user_mapping", {}) or {}),
+                "project_mapping": dict(getattr(config.mappings, "project_mapping", {}) or {}),
+                "issue_type_mapping": dict(getattr(config.mappings, "issue_type_mapping", {}) or {}),
+                "issue_type_id_mapping": dict(getattr(config.mappings, "issue_type_id_mapping", {}) or {}),
+                "status_mapping": dict(getattr(config.mappings, "status_mapping", {}) or {}),
+                "custom_field_mapping": dict(getattr(config.mappings, "custom_field_mapping", {}) or {}),
+                "work_package_mapping": dict(getattr(config.mappings, "work_package_mapping", {}) or {}),
             }
 
             config.mappings.user_mapping = {
-                'E2E-ACCOUNT': {
-                    'jira_key': 'E2E-ACCOUNT',
-                    'jira_name': 'E2E User',
-                    'jira_email': 'e2e.user@example.com',
-                    'jira_display_name': 'E2E User',
-                    'openproject_id': 5001,
-                    'openproject_login': 'e2e.user',
-                    'openproject_email': 'e2e.user@example.com',
-                    'matched_by': 'username',
-                }
+                "E2E-ACCOUNT": {
+                    "jira_key": "E2E-ACCOUNT",
+                    "jira_name": "E2E User",
+                    "jira_email": "e2e.user@example.com",
+                    "jira_display_name": "E2E User",
+                    "openproject_id": 5001,
+                    "openproject_login": "e2e.user",
+                    "openproject_email": "e2e.user@example.com",
+                    "matched_by": "username",
+                },
             }
             config.mappings.project_mapping = {
-                'E2E': {
-                    'jira_key': 'E2E',
-                    'jira_name': 'E2E Project',
-                    'openproject_id': 6001,
-                    'openproject_identifier': 'e2e-project',
-                    'openproject_name': 'E2E Project',
-                }
+                "E2E": {
+                    "jira_key": "E2E",
+                    "jira_name": "E2E Project",
+                    "openproject_id": 6001,
+                    "openproject_identifier": "e2e-project",
+                    "openproject_name": "E2E Project",
+                },
             }
             config.mappings.issue_type_mapping = {
-                'Task': {
-                    'jira_id': '1',
-                    'jira_name': 'Task',
-                    'openproject_id': 7001,
-                    'matched_by': 'fallback',
-                }
+                "Task": {
+                    "jira_id": "1",
+                    "jira_name": "Task",
+                    "openproject_id": 7001,
+                    "matched_by": "fallback",
+                },
             }
-            config.mappings.issue_type_id_mapping = {'1': 7001}
+            config.mappings.issue_type_id_mapping = {"1": 7001}
             config.mappings.status_mapping = {
-                'Open': {'openproject_id': 8001, 'openproject_name': 'Open'}
+                "Open": {"openproject_id": 8001, "openproject_name": "Open"},
             }
-            if not getattr(config.mappings, 'custom_field_mapping', {}):
+            if not getattr(config.mappings, "custom_field_mapping", {}):
                 config.mappings.custom_field_mapping = {
-                    'E2E Custom Field': {
-                        'field_format': 'string',
-                        'openproject_id': 9001,
-                    }
+                    "E2E Custom Field": {
+                        "field_format": "string",
+                        "openproject_id": 9001,
+                    },
                 }
             config.mappings.work_package_mapping = {
-                'E2E-WP-1': {'openproject_id': 10001},
-                'E2E-WP-2': {'openproject_id': 10002},
+                "E2E-WP-1": {"openproject_id": 10001},
+                "E2E-WP-2": {"openproject_id": 10002},
             }
 
             try:
@@ -664,7 +664,7 @@ class TestCompleteMigrationWorkflow:
                         "no_backup": True,
                         "force": True,  # Force refresh to avoid reading existing files
                         "attachment_path": attachments_dir.as_posix(),
-                    }
+                    },
                 )
 
                 with patch(
@@ -708,13 +708,13 @@ class TestCompleteMigrationWorkflow:
                     print(f"Jira get_users called: {mock_jira.get_users.called}")
                     print(f"OpenProject create_user called: {mock_op.create_user.called}")
             finally:
-                config.mappings.user_mapping = original_mappings['user_mapping']
-                config.mappings.project_mapping = original_mappings['project_mapping']
-                config.mappings.issue_type_mapping = original_mappings['issue_type_mapping']
-                config.mappings.issue_type_id_mapping = original_mappings['issue_type_id_mapping']
-                config.mappings.status_mapping = original_mappings['status_mapping']
-                config.mappings.custom_field_mapping = original_mappings['custom_field_mapping']
-                config.mappings.work_package_mapping = original_mappings['work_package_mapping']
+                config.mappings.user_mapping = original_mappings["user_mapping"]
+                config.mappings.project_mapping = original_mappings["project_mapping"]
+                config.mappings.issue_type_mapping = original_mappings["issue_type_mapping"]
+                config.mappings.issue_type_id_mapping = original_mappings["issue_type_id_mapping"]
+                config.mappings.status_mapping = original_mappings["status_mapping"]
+                config.mappings.custom_field_mapping = original_mappings["custom_field_mapping"]
+                config.mappings.work_package_mapping = original_mappings["work_package_mapping"]
 
     @pytest.mark.end_to_end
     @pytest.mark.slow

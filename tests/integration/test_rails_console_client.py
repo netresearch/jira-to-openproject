@@ -15,7 +15,6 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-
 from src.clients.rails_console_client import (
     CommandExecutionError,
     ConsoleNotReadyError,
