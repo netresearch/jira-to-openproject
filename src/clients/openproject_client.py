@@ -4500,8 +4500,7 @@ JSON_DATA
 
     def find_issue_priority_by_name(self, name: str) -> dict[str, Any] | None:
         script = (
-            "p = IssuePriority.find_by(name: %s); p && { id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }"
-            % json.dumps(name)
+            f"p = IssuePriority.find_by(name: {json.dumps(name)}); p && {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}"
         )
         try:
             result = self.execute_json_query(script)

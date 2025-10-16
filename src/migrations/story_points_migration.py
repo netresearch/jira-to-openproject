@@ -12,20 +12,22 @@ Detection strategy:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
 
 from src import config
+
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
 
 STORY_POINTS_CF_NAME = "Story Points"
 
@@ -49,9 +51,8 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
 
         # Create CF via execute_query (float field, global)
         script = (
-            "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '%s'); "
-            "if !cf; cf = CustomField.new(name: '%s', field_format: 'float', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
-            % (STORY_POINTS_CF_NAME, STORY_POINTS_CF_NAME)
+            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{STORY_POINTS_CF_NAME}'); "
+            f"if !cf; cf = CustomField.new(name: '{STORY_POINTS_CF_NAME}', field_format: 'float', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
         )
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
@@ -114,7 +115,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         data = extracted.data or {}
         raw: dict[str, float] = data.get("sp", {}) if isinstance(data, dict) else {}
         # Normalize to strings suitable for CF
-        norm: dict[str, str] = {k: ("%g" % v) for k, v in raw.items()}
+        norm: dict[str, str] = {k: (f"{v:g}") for k, v in raw.items()}
         return ComponentResult(success=True, data={"sp_text": norm})
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:

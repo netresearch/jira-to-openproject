@@ -9,17 +9,19 @@ Approach:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+
 try:
     from src import config
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
     from src import config  # type: ignore
@@ -45,9 +47,8 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
             logger.info("Sprint CF not found; will create")
 
         script = (
-            "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '%s'); "
-            "if !cf; cf = CustomField.new(name: '%s', field_format: 'text', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; { id: cf.id }.to_json"
-            % (SPRINT_CF_NAME, SPRINT_CF_NAME)
+            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{SPRINT_CF_NAME}'); "
+            f"if !cf; cf = CustomField.new(name: '{SPRINT_CF_NAME}', field_format: 'text', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; {{ id: cf.id }}.to_json"
         )
         result = self.op_client.execute_query_to_json_file(script)
         if isinstance(result, dict) and result.get("id"):

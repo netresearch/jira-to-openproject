@@ -8,15 +8,19 @@ Approach:
 
 from __future__ import annotations
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from typing import TYPE_CHECKING
+
 from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+
 try:
     from src import config
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
     from src import config  # type: ignore
@@ -43,9 +47,8 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
 
         # Create CF via execute_query (string field, global)
         script = (
-            "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '%s'); "
-            "if !cf; cf = CustomField.new(name: '%s', field_format: 'string', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
-            % (RESOLUTION_CF_NAME, RESOLUTION_CF_NAME)
+            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{RESOLUTION_CF_NAME}'); "
+            f"if !cf; cf = CustomField.new(name: '{RESOLUTION_CF_NAME}', field_format: 'string', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
         )
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)

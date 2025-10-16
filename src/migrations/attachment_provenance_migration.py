@@ -7,17 +7,19 @@ author and created_at.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+
 try:
     from src import config
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
     from src import config  # type: ignore

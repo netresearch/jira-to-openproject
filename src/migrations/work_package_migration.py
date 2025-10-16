@@ -29,7 +29,7 @@ from src.utils.enhanced_user_association_migrator import EnhancedUserAssociation
 from src.utils.markdown_converter import MarkdownConverter
 
 try:
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:
     logger = configure_logging("INFO", None)
 

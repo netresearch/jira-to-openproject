@@ -8,17 +8,19 @@ attribute, set a deterministic color from the tag name hash.
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+
 try:
     from src import config
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
     from src import config  # type: ignore
@@ -52,7 +54,7 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         r = int(h[8:10], 16)
         g = int(h[12:14], 16)
         b = int(h[16:18], 16)
-        return "#%02x%02x%02x" % (r, g, b)
+        return f"#{r:02x}{g:02x}{b:02x}"
 
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}

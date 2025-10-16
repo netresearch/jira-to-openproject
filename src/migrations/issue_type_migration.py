@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 # Prefer shared logger; fall back if unavailable
 try:
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:
     logger = configure_logging("INFO", None)
 

@@ -17,7 +17,7 @@ from src.models import ComponentResult, MigrationError
 from src.utils import data_handler
 
 try:
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:
     logger = configure_logging("INFO", None)
 

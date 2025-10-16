@@ -7,17 +7,19 @@ are created, then sets values on corresponding work packages.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+
 try:
     from src import config
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
     from src import config  # type: ignore
@@ -41,9 +43,8 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
 
         ff = field_format or "text"
         script = (
-            "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '%s'); "
-            "if !cf; cf = CustomField.new(name: '%s', field_format: '%s', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
-            % (name.replace("'", "\\'"), name.replace("'", "\\'"), ff)
+            "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{}'); "
+            "if !cf; cf = CustomField.new(name: '{}', field_format: '{}', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id".format(name.replace("'", "\\'"), name.replace("'", "\\'"), ff)
         )
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)

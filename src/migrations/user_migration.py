@@ -14,18 +14,20 @@ import re
 import uuid
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker, configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+
 try:
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:
     logger = configure_logging("INFO", None)
 
@@ -964,8 +966,8 @@ class UserMigration(BaseMigration):
                         if (not existing_op_user) and login_candidate:
                             try:
                                 ruby_expr = (
-                                    "user = User.find_by(login: %s); user && user.as_json.merge({ 'mail' => user.mail })"
-                                ) % json.dumps(login_candidate)
+                                    f"user = User.find_by(login: {json.dumps(login_candidate)}); user && user.as_json.merge({{ 'mail' => user.mail }})"
+                                )
                                 existing_op_user = self.op_client.execute_json_query(ruby_expr)
                             except Exception:
                                 existing_op_user = None

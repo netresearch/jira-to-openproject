@@ -13,20 +13,22 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker, configure_logging
-from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 from src.models.migration_error import MigrationError
 
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
+    from src.mappings.mappings import Mappings
+
 # Prefer shared logger; fall back to local configuration only if needed
 try:
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:
     logger = configure_logging("INFO", None)
 

@@ -9,17 +9,19 @@ import json
 import pathlib
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src import config
 from src.clients.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
-from src.clients.openproject_client import OpenProjectClient
 
 # Import RailsConsolePexpect to handle direct Rails console execution
-from src.clients.rails_console_client import RailsConsoleClient
 from src.display import ProgressTracker, console
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
+
+if TYPE_CHECKING:
+    from src.clients.openproject_client import OpenProjectClient
+    from src.clients.rails_console_client import RailsConsoleClient
 
 # Create rich console instance
 console = console

@@ -6,18 +6,22 @@ Jira `fields.votes.votes` count for mapped issues.
 
 from __future__ import annotations
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 try:
-    from src.config import logger as logger  # type: ignore
+    from src.config import logger  # type: ignore
 except Exception:  # noqa: BLE001
     logger = configure_logging("INFO", None)
 
+from typing import TYPE_CHECKING
+
 from src import config
+
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
 
 VOTES_CF_NAME = "Votes"
 
@@ -41,9 +45,8 @@ class VotesMigration(BaseMigration):  # noqa: D101
 
         # Create CF via execute_query (int field, global)
         script = (
-            "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '%s'); "
-            "if !cf; cf = CustomField.new(name: '%s', field_format: 'int', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
-            % (VOTES_CF_NAME, VOTES_CF_NAME)
+            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{VOTES_CF_NAME}'); "
+            f"if !cf; cf = CustomField.new(name: '{VOTES_CF_NAME}', field_format: 'int', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
         )
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
