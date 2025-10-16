@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.clients.jira_client import JiraClient
+    from src.clients.openproject_client import OpenProjectClient
 
 from src import config
 from src.migrations.base_migration import BaseMigration, register_entity_types
@@ -28,7 +32,7 @@ ROLE_NAME_MAPPING = {
 class AdminSchemeMigration(BaseMigration):
     """Synchronise Jira project role actors to OpenProject roles and memberships."""
 
-    def __init__(self, jira_client, op_client) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
         self.project_mapping = config.mappings.get_mapping("project") or {}
         self.user_mapping = config.mappings.get_mapping("user") or {}
