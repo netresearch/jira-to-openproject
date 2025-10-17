@@ -35,6 +35,30 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
         self.mappings = config.mappings
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities for transformation.
+
+        This migration performs data transformation on work package mappings
+        rather than fetching directly from Jira. It operates on already-migrated
+        work packages to extract and assign resolutions.
+
+        Args:
+            entity_type: The type of entities requested (e.g., "resolutions")
+
+        Returns:
+            Empty list (this migration doesn't fetch from Jira directly)
+
+        Raises:
+            ValueError: Always, as this migration doesn't support idempotent workflow
+
+        """
+        from typing import Any
+        msg = (
+            "ResolutionMigration is a transformation-only migration and does not "
+            "support idempotent workflow. It operates on work package mappings."
+        )
+        raise ValueError(msg)
+
     def _ensure_resolution_cf(self) -> int:
         """Ensure the Resolution CF exists; return its ID."""
         try:

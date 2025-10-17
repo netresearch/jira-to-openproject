@@ -33,6 +33,30 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
 
         self.mappings = config.mappings
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities for transformation.
+
+        This migration performs data transformation on work package mappings
+        rather than fetching directly from Jira. It operates on already-migrated
+        work packages to extract and assign security levels.
+
+        Args:
+            entity_type: The type of entities requested (e.g., "security_levels")
+
+        Returns:
+            Empty list (this migration doesn't fetch from Jira directly)
+
+        Raises:
+            ValueError: Always, as this migration doesn't support idempotent workflow
+
+        """
+        from typing import Any
+        msg = (
+            "SecurityLevelsMigration is a transformation-only migration and does not "
+            "support idempotent workflow. It operates on work package mappings."
+        )
+        raise ValueError(msg)
+
     def _ensure_security_cf(self) -> int:
         """Ensure the Security Level CF exists; return its ID."""
         try:

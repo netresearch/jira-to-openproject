@@ -32,6 +32,29 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
         self.mappings = config.mappings
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities for transformation.
+
+        This migration performs data transformation on work package mappings
+        rather than fetching directly from Jira. It operates on already-migrated
+        work packages to extract and assign fixVersions to Versions.
+
+        Args:
+            entity_type: The type of entities requested (e.g., "versions")
+
+        Returns:
+            Empty list (this migration doesn't fetch from Jira directly)
+
+        Raises:
+            ValueError: Always, as this migration doesn't support idempotent workflow
+
+        """
+        msg = (
+            "VersionsMigration is a transformation-only migration and does not "
+            "support idempotent workflow. It operates on work package mappings."
+        )
+        raise ValueError(msg)
+
     @staticmethod
     def _issue_project_key(issue_key: str) -> str:
         try:
