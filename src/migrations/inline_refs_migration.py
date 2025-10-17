@@ -37,7 +37,7 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
         wp_ids: list[int] = []
-        for _k, entry in (wp_map or {}).items():
+        for entry in (wp_map or {}).values():
             if isinstance(entry, dict) and entry.get("openproject_id"):
                 try:
                     wp_ids.append(int(entry["openproject_id"]))  # type: ignore[arg-type]

@@ -34,17 +34,13 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
 
     @staticmethod
     def _coerce_labels(fields: Any) -> list[str]:
-        out: list[str] = []
         if not fields:
-            return out
+            return []
         labels = getattr(fields, "labels", None)
         try:
-            for v in labels or []:
-                if isinstance(v, str) and v.strip():
-                    out.append(v.strip())
+            return [v.strip() for v in labels or [] if isinstance(v, str) and v.strip()]
         except Exception:  # noqa: BLE001
-            return out
-        return out
+            return []
 
     @staticmethod
     def _name_to_color_hex(name: str) -> str:
