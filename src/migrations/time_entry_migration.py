@@ -45,6 +45,30 @@ class TimeEntryMigration(BaseMigration):
             data_dir=self.data_dir,
         )
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Get current entities for transformation.
+
+        This migration performs data transformation on work package mappings
+        rather than fetching directly from Jira. It delegates time entry fetching
+        to TimeEntryMigrator which operates on already-migrated work packages.
+
+        Args:
+            entity_type: The type of entities requested (e.g., "time_entries", "work_logs")
+
+        Returns:
+            Empty list (this migration doesn't fetch from Jira directly)
+
+        Raises:
+            ValueError: Always, as this migration doesn't support idempotent workflow
+
+        """
+        msg = (
+            "TimeEntryMigration is a transformation-only migration and does not "
+            "support idempotent workflow. It operates on work package mappings "
+            "and delegates to TimeEntryMigrator."
+        )
+        raise ValueError(msg)
+
     def _load_migrated_work_packages(self) -> list[dict[str, Any]]:
         """Load migrated work packages to feed time entry migration.
 
