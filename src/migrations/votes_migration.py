@@ -33,6 +33,21 @@ class VotesMigration(BaseMigration):  # noqa: D101
 
         self.mappings = config.mappings
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
+        """Get current entities for change detection.
+
+        VotesMigration is a transformation-only component that operates on
+        already-migrated work packages. It doesn't fetch source data from Jira,
+        so this returns an empty list to indicate no changes to detect.
+
+        Args:
+            entity_type: Type of entities
+
+        Returns:
+            Empty list (transformation-only, no source entities)
+        """
+        return []
+
     def _ensure_votes_cf(self) -> int:
         """Ensure the Votes CF exists; return its ID."""
         try:

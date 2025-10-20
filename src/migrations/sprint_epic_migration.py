@@ -36,6 +36,21 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
         self.mappings = config.mappings
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
+        """Get current entities for change detection.
+
+        SprintEpicMigration is a transformation-only component that operates on
+        already-migrated work packages. It doesn't fetch source data from Jira,
+        so this returns an empty list to indicate no changes to detect.
+
+        Args:
+            entity_type: Type of entities (should be "sprint_epic")
+
+        Returns:
+            Empty list (transformation-only, no source entities)
+        """
+        return []
+
     # ---------- Sprint CF helpers ----------
     def _ensure_sprint_cf(self) -> int:
         try:

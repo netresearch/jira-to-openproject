@@ -1028,60 +1028,7 @@ class WorkPackageMigration(BaseMigration):
             msg = f"Jira issue extraction failed for project {project_key}: {e}"
             raise RuntimeError(msg) from e
 
-    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:  # type: ignore[override]
-        """Return current entities for change detection using generators.
 
-        Currently supports entity_type == "issues" by iterating all Jira projects
-        and yielding issues via `iter_project_issues`.
-
-        Args:
-            entity_type: The type of entities to retrieve (only "issues" supported)
-
-        Returns:
-            A list of minimal issue dictionaries for change detection.
-
-        """
-        if entity_type != "issues":
-            msg = (
-                f"Subclass {self.__class__.__name__} must implement _get_current_entities_for_type() "
-                f"to support change detection for entity type: {entity_type}"
-            )
-            raise NotImplementedError(msg)
-
-        def _issue_to_dict(issue: Any) -> dict[str, Any]:
-            raw = getattr(issue, "raw", {}) if hasattr(issue, "raw") else {}
-            fields = getattr(issue, "fields", None)
-            summary = None
-            try:
-                summary = fields.summary if fields is not None else raw.get("fields", {}).get("summary")
-            except Exception:
-                summary = None
-            return {
-                "key": getattr(issue, "key", raw.get("key")),
-                "id": getattr(issue, "id", raw.get("id")),
-                "summary": summary,
-            }
-
-        results: list[dict[str, Any]] = []
-        try:
-            projects = self.jira_client.get_projects() or []
-        except Exception:
-            projects = []
-
-        project_keys: list[str] = []
-        for p in projects:
-            if isinstance(p, dict) and "key" in p:
-                project_keys.append(str(p["key"]))
-            else:
-                key_val = getattr(p, "key", None)
-                if key_val:
-                    project_keys.append(str(key_val))
-
-        for project_key in project_keys:
-            for issue in self.iter_project_issues(project_key):
-                results.append(_issue_to_dict(issue))
-
-        return results
 
     def _prepare_work_package(
         self,

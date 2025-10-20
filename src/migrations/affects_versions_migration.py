@@ -33,6 +33,21 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
         self.mappings = config.mappings
 
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
+        """Get current entities for change detection.
+
+        AffectsVersionsMigration is a transformation-only component that operates on
+        already-migrated work packages. It doesn't fetch source data from Jira,
+        so this returns an empty list to indicate no changes to detect.
+
+        Args:
+            entity_type: Type of entities
+
+        Returns:
+            Empty list (transformation-only, no source entities)
+        """
+        return []
+
     def _ensure_cf(self) -> int:
         try:
             cf = self.op_client.get_custom_field_by_name(AFFECTS_VERSIONS_CF_NAME)
