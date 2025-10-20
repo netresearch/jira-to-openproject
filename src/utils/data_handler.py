@@ -35,7 +35,7 @@ def save_results(
     directory: Path | str | None = None,
     indent: int = 2,
     ensure_ascii: bool = False,
-) -> bool:
+) -> None:
     """Save data to a JSON file, automatically handling Pydantic models.
 
     Args:
@@ -45,14 +45,14 @@ def save_results(
         indent: JSON indentation level
         ensure_ascii: Whether to escape non-ASCII characters
 
-    Returns:
-        True if save was successful, False otherwise
+    Raises:
+        MigrationError: If saving fails
 
     """
     if directory is None:
         directory = config.get_path("results")
 
-    return save(data, filename, directory, indent, ensure_ascii)
+    save(data, filename, directory, indent, ensure_ascii)
 
 
 def save(
@@ -61,7 +61,7 @@ def save(
     directory: str | Path | None = None,
     indent: int = 2,
     ensure_ascii: bool = False,
-) -> bool:
+) -> None:
     """Save data to a JSON file, automatically handling Pydantic models.
 
     Args:
@@ -71,8 +71,8 @@ def save(
         indent: JSON indentation level
         ensure_ascii: Whether to escape non-ASCII characters
 
-    Returns:
-        True if save was successful, False otherwise
+    Raises:
+        MigrationError: If saving fails
 
     """
     if directory is None:
@@ -104,10 +104,9 @@ def save(
             )
 
         config.logger.info("Saved data to %s", filepath)
-        return True
-    except Exception:
-        config.logger.exception("Failed to save data to %s", filepath)
-        return False
+    except Exception as e:
+        msg = f"Failed to save data to {filepath}"
+        raise MigrationError(msg) from e
 
 
 def load[T](
@@ -277,7 +276,7 @@ def save_to_path(
     filepath: Path | str,
     indent: int = 2,
     ensure_ascii: bool = False,
-) -> bool:
+) -> None:
     """Save data to a JSON file at a specific path.
 
     Args:
@@ -286,8 +285,8 @@ def save_to_path(
         indent: JSON indentation level
         ensure_ascii: Whether to escape non-ASCII characters
 
-    Returns:
-        True if save was successful, False otherwise
+    Raises:
+        MigrationError: If saving fails
 
     """
     # Convert to Path object if it's a string
@@ -310,16 +309,11 @@ def save_to_path(
                 default=_json_default,
             )
 
-        # Verify file was created successfully
-        if filepath.exists():
-            config.logger.info("Saved data to %s", filepath)
-            return True
-        config.logger.error("Failed to save data to %s", filepath)
-        return False
+        config.logger.info("Saved data to %s", filepath)
 
     except Exception as e:
-        config.logger.exception("Failed to save data to %s: %s", filepath, e)
-        return False
+        msg = f"Failed to save data to {filepath}"
+        raise MigrationError(msg) from e
 
 
 def save_dict(
@@ -327,7 +321,7 @@ def save_dict(
     filepath: Path,
     indent: int = 2,
     ensure_ascii: bool = False,
-) -> bool:
+) -> None:
     """Save dictionary data to a JSON file.
 
     This is a convenience wrapper around save_to_path for dictionaries.
@@ -338,11 +332,11 @@ def save_dict(
         indent: JSON indentation level
         ensure_ascii: Whether to escape non-ASCII characters
 
-    Returns:
-        True if save was successful, False otherwise
+    Raises:
+        MigrationError: If saving fails
 
     """
-    return save_to_path(data, filepath, indent, ensure_ascii)
+    save_to_path(data, filepath, indent, ensure_ascii)
 
 
 def load_model[T](
