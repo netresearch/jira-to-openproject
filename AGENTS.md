@@ -183,6 +183,45 @@ References used while composing this file: [AGENT.md RFC](https://ampcode.com/AG
 
 ## Configuration & Environment Rules
 
+## Rails Console & OpenProject Integration Rules
+
+### REST API is NOT Suitable for Bulk Migration
+
+**CRITICAL RULE**: The OpenProject REST API is **NOT suitable** for the j2o bulk migration use case. We **MUST use Rails console via ActiveRecord** for all data import operations.
+
+**This is not negotiable** - it is an architectural requirement based on technical constraints:
+
+- **Performance**: File-based batch operations required to avoid timeouts and memory issues
+- **Transactions**: ActiveRecord transaction support not available via REST API
+- **Validation Control**: Ability to bypass validations for migration scenarios not available via REST API
+- **Bulk Operations**: REST API cannot handle thousands of records efficiently
+- **Capability**: Direct ActiveRecord access required for features not exposed through REST API
+
+**Stop recurring REST API discussions**: Any suggestion to use REST API for bulk operations should be immediately rejected with reference to this rule.
+
+**Evidence**: See [ADR 2025-10-20: Rails Console Requirement](docs/decisions/2025-10-20-rails-console-requirement.md) for comprehensive technical justification.
+
+### Tmux Session is REQUIRED for Rails Console
+
+**CRITICAL RULE**: A **persistent tmux session is REQUIRED** for Rails console operations. This is an architectural requirement, not optional.
+
+**Performance impact**: Persistent tmux session is 50-100x faster than one-off sessions or rails runner.
+
+**Pre-migration requirements** (operators MUST complete before migration):
+1. Install tmux on migration host (if not present)
+2. Install IRB configuration: `make install-irbrc`
+3. Start Rails console session: `make start-rails`
+4. Verify session exists: `tmux list-sessions | grep rails_console`
+
+**Failure to establish tmux session** will result in:
+```
+TmuxSessionError: tmux session 'rails_console' does not exist
+```
+
+**No alternatives**: One-off sessions or rails runner-only approaches result in 50-100x performance degradation and are **not architecturally supported**.
+
+**Evidence**: See [ADR 2025-10-20: Tmux Session Requirement](docs/decisions/2025-10-20-tmux-session-requirement.md) for detailed justification.
+
 ## Rails Console IRB Configuration
 
 To stabilize the tmux-backed Rails console session used by `RailsConsoleClient`, install an `.irbrc` into the OpenProject container. This disables multiline and relines interactive features which can break non-interactive execution flows:
