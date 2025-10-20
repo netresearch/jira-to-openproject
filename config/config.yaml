@@ -9,8 +9,7 @@ jira:
   api_token: ""  # Set via J2O_JIRA_API_TOKEN
   # Projects to migrate (leave empty to migrate all)
   projects:
-    - "PROJECT1"
-    - "PROJECT2"
+    - "SRVAC"
   # API request settings
   batch_size: 100
   # Fields to retrieve from Jira
