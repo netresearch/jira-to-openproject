@@ -656,9 +656,11 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                             "issue_type": bool(config.mappings.get_mapping("issue_type")),
                             "issue_type_id": bool(config.mappings.get_mapping("issue_type_id")),
                             "status": bool(config.mappings.get_mapping("status")),
-                            # Some configs may enable link/custom field enrichment
-                            "custom_field": bool(config.mappings.get_mapping("custom_field")),
                         }
+                        # Note: custom_field removed from required mappings per ADR 2025-10-20
+                        # (Idempotency Requirements). Work packages migration now handles
+                        # custom field mapping idempotently by querying OpenProject metadata
+                        # when cache is missing, rather than blocking execution.
                         missing = [k for k, ok in required.items() if not ok]
                         if missing:
                             config.logger.error(
