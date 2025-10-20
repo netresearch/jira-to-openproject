@@ -222,6 +222,86 @@ TmuxSessionError: tmux session 'rails_console' does not exist
 
 **Evidence**: See [ADR 2025-10-20: Tmux Session Requirement](docs/decisions/2025-10-20-tmux-session-requirement.md) for detailed justification.
 
+## Idempotency Requirements for All Migration Components
+
+**CRITICAL RULE**: Idempotency is **MANDATORY** for all migration components that create or modify OpenProject entities. This is an architectural requirement, not optional.
+
+**Authoritative Source**: Provenance metadata (custom fields + description markers) is the **single source of truth** for entity relationships. Mapping files (`var/data/*_mapping.json`) are **CACHE ONLY** and can be deleted and rebuilt at any time.
+
+**Architecture violation**: Any migration component that blocks execution due to missing mapping files is **violating this architectural principle** and must be fixed to query provenance metadata instead.
+
+### Provenance Metadata System
+
+All migrated OpenProject entities **MUST** include provenance custom fields:
+
+- `J2O Origin System` (e.g., "jira")
+- `J2O Origin ID` (e.g., "10523")
+- `J2O Origin Key` (e.g., "SRVAC-42")
+- `J2O Origin URL` (e.g., "https://jira.example.com/browse/SRVAC-42")
+
+**Backup provenance**: HTML comment markers in description fields (`<!-- J2O_ORIGIN_START -->...`) provide fallback when custom fields are unavailable.
+
+### Idempotent Migration Pattern
+
+```python
+def migrate_entity(jira_entity: dict) -> dict:
+    """Idempotent migration pattern using provenance metadata."""
+
+    # 1. Check if entity already exists via provenance metadata
+    existing = find_by_provenance(
+        origin_system="jira",
+        origin_id=jira_entity["id"],
+        origin_key=jira_entity["key"],
+    )
+
+    if existing:
+        logger.info(f"Entity {jira_entity['key']} already exists")
+        return existing
+
+    # 2. Create new entity with provenance metadata
+    op_entity["custom_fields"] = [
+        {"id": cf_id("J2O Origin System"), "value": "jira"},
+        {"id": cf_id("J2O Origin ID"), "value": str(jira_entity["id"])},
+        {"id": cf_id("J2O Origin Key"), "value": jira_entity["key"]},
+    ]
+
+    created = create_entity(op_entity)
+
+    # 3. Update mapping cache for performance (optional)
+    update_mapping_cache(jira_entity["key"], created["id"])
+
+    return created
+```
+
+### Mapping Files are Cache Only
+
+**Never** block migration on missing mapping files. Instead:
+
+1. Query OpenProject for entities with provenance metadata
+2. Build mapping dynamically from provenance custom fields
+3. Cache mapping to disk for performance (optional)
+
+**Good example**: `user_migration.py:206` - queries by J2O provenance custom fields
+**Bad example**: Blocking on missing `custom_field_mapping.json` file
+
+### Validation Criteria
+
+A migration component satisfies idempotency requirements if:
+
+1. ✅ Running migration twice creates no duplicates
+2. ✅ Deleting mapping cache and re-running succeeds
+3. ✅ Entity relationships preserved after mapping rebuild
+4. ✅ Provenance metadata present on all migrated entities
+5. ✅ Component documents transformation-only status (if applicable)
+
+### Transformation-Only Components
+
+Some components operate on already-migrated data and explicitly raise `ValueError` in `_get_current_entities_for_type()` to document this design choice. This is acceptable for components like:
+- `versions`, `components`, `labels` (operate on work package mapping)
+- `attachments` (operates on work package data)
+
+**Evidence**: See [ADR 2025-10-20: Idempotency Requirement](docs/decisions/2025-10-20-idempotency-requirement.md) for comprehensive technical details.
+
 ## Rails Console IRB Configuration
 
 To stabilize the tmux-backed Rails console session used by `RailsConsoleClient`, install an `.irbrc` into the OpenProject container. This disables multiline and relines interactive features which can break non-interactive execution flows:
