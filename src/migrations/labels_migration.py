@@ -34,27 +34,19 @@ class LabelsMigration(BaseMigration):  # noqa: D101
         self.mappings = config.mappings
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
-        """Get current entities for transformation.
+        """Get current entities for change detection.
 
-        This migration performs data transformation on work package mappings
-        rather than fetching directly from Jira. It operates on already-migrated
-        work packages to extract and assign labels.
+        LabelsMigration is a transformation-only component that operates on
+        already-migrated work packages. It doesn't fetch source data from Jira,
+        so this returns an empty list to indicate no changes to detect.
 
         Args:
-            entity_type: The type of entities requested (e.g., "labels")
+            entity_type: Type of entities
 
         Returns:
-            Empty list (this migration doesn't fetch from Jira directly)
-
-        Raises:
-            ValueError: Always, as this migration doesn't support idempotent workflow
-
+            Empty list (transformation-only, no source entities)
         """
-        msg = (
-            "LabelsMigration is a transformation-only migration and does not "
-            "support idempotent workflow. It operates on work package mappings."
-        )
-        raise ValueError(msg)
+        return []
 
     def _ensure_labels_cf(self) -> int:
         """Ensure the Labels CF exists; return its ID."""
