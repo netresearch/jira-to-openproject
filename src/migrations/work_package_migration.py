@@ -1872,20 +1872,26 @@ def _choose_default_type_id(op_client: Any) -> int:
 
 
 def _load_custom_field_mapping(self) -> dict[str, Any]:
-    """Load custom field mapping from disk (module-level helper).
+    """Load or rebuild custom field mapping from cache or OpenProject metadata.
 
-    Returns a mapping of Jira custom field IDs to OpenProject field metadata.
+    Following idempotency requirements (see ADR 2025-10-20), this module-level
+    helper delegates to the instance method which:
+    1. Tries to load cached mapping from disk (performance optimization)
+    2. If cache missing, queries OpenProject custom fields (authoritative source)
+    3. Builds mapping by matching Jira field names to OpenProject field names
+    4. Saves rebuilt mapping to cache for future use
+
+    Args:
+        self: WorkPackageMigration instance (passed explicitly to module-level function)
+
+    Returns:
+        Dictionary mapping Jira custom field IDs to OpenProject custom field info
+
+    Raises:
+        RuntimeError: If there's an error querying OpenProject or building mapping
     """
-    mapping_file = Path(self.data_dir) / "custom_field_mapping.json"
-    if not Path(mapping_file).exists():
-        msg = f"Custom field mapping file not found: {mapping_file}"
-        raise FileNotFoundError(msg)
-    try:
-        with Path(mapping_file).open() as f:
-            return json.load(f)
-    except Exception as e:
-        msg = f"Error loading custom field mapping from {mapping_file}: {e}"
-        raise RuntimeError(msg) from e
+    # Delegate to instance method which has full idempotent implementation
+    return self._load_custom_field_mapping()
 
 
 def _process_custom_field_value(
@@ -2364,32 +2370,112 @@ def _apply_required_defaults(
             wp["priority_id"] = default_priority_id
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
-        """Load custom field mapping from disk.
+        """Load or rebuild custom field mapping from cache or OpenProject metadata.
+
+        Following idempotency requirements (see ADR 2025-10-20), this method:
+        1. Tries to load cached mapping from disk (performance optimization)
+        2. If cache missing, queries OpenProject custom fields (authoritative source)
+        3. Builds mapping by matching Jira field names to OpenProject field names
+        4. Saves rebuilt mapping to cache for future use
 
         Returns:
-            Dictionary mapping Jira custom field IDs to OpenProject custom field IDs
+            Dictionary mapping Jira custom field IDs to OpenProject custom field info
 
         Raises:
-            FileNotFoundError: If mapping file doesn't exist
-            RuntimeError: If there's an error loading the mapping file
+            RuntimeError: If there's an error querying OpenProject or building mapping
 
         """
         mapping_file = Path(self.data_dir) / "custom_field_mapping.json"
 
-        if not Path(mapping_file).exists():
-            msg = f"Custom field mapping file not found: {mapping_file}"
-            raise FileNotFoundError(
-                msg,
-            )
+        # Try loading from cache first (performance optimization)
+        if mapping_file.exists():
+            try:
+                with mapping_file.open() as f:
+                    cached_mapping = json.load(f)
+                    if cached_mapping:  # Only use non-empty cache
+                        self.logger.info(
+                            "Loaded custom field mapping from cache: %d entries",
+                            len(cached_mapping),
+                        )
+                        return cached_mapping
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to load cached mapping from %s: %s. Will rebuild.",
+                    mapping_file,
+                    e,
+                )
+
+        # Cache miss or empty: rebuild from OpenProject (authoritative source)
+        self.logger.info(
+            "Rebuilding custom field mapping from OpenProject metadata"
+        )
 
         try:
-            with Path(mapping_file).open() as f:
-                return json.load(f)
+            # Query all custom fields from OpenProject
+            op_custom_fields = self.op_client.get_custom_fields(force_refresh=True)
+
+            # Build name-based lookup (same logic as custom_field_migration.py)
+            op_fields_by_name = {
+                field.get("name", "").lower(): field
+                for field in op_custom_fields
+                if field.get("name")
+            }
+
+            # Load Jira custom fields to build mapping
+            jira_fields_file = Path(self.data_dir) / "jira_custom_fields.json"
+            if not jira_fields_file.exists():
+                self.logger.warning(
+                    "Jira custom fields file not found: %s. "
+                    "Returning empty mapping.",
+                    jira_fields_file,
+                )
+                return {}
+
+            with jira_fields_file.open() as f:
+                jira_custom_fields = json.load(f)
+
+            # Build mapping by matching names
+            mapping = {}
+            for jira_field in jira_custom_fields:
+                jira_id = jira_field.get("id")
+                jira_name = jira_field.get("name", "")
+                jira_name_lower = jira_name.lower()
+
+                op_field = op_fields_by_name.get(jira_name_lower)
+
+                if op_field:
+                    mapping[jira_id] = {
+                        "jira_id": jira_id,
+                        "jira_name": jira_name,
+                        "openproject_id": op_field.get("id"),
+                        "openproject_name": op_field.get("name"),
+                        "openproject_type": op_field.get("field_format", "text"),
+                        "matched_by": "name",
+                    }
+
+            self.logger.info(
+                "Built custom field mapping from OpenProject: %d entries",
+                len(mapping),
+            )
+
+            # Save to cache for future use (performance optimization)
+            try:
+                mapping_file.parent.mkdir(parents=True, exist_ok=True)
+                with mapping_file.open("w") as f:
+                    json.dump(mapping, f, indent=2)
+                self.logger.info("Saved custom field mapping cache to %s", mapping_file)
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to save mapping cache to %s: %s. Continuing anyway.",
+                    mapping_file,
+                    e,
+                )
+
+            return mapping
+
         except Exception as e:
-            msg = f"Error loading custom field mapping from {mapping_file}: {e}"
-            raise RuntimeError(
-                msg,
-            ) from e
+            msg = f"Error rebuilding custom field mapping from OpenProject: {e}"
+            raise RuntimeError(msg) from e
 
     def _process_custom_field_value(
         value: Any,
