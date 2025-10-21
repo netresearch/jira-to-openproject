@@ -1455,6 +1455,15 @@ class OpenProjectClient:
             rescue
             end
             cf.save
+          else
+            # Update searchable if it doesn't match
+            begin
+              if cf.respond_to?(:searchable) && cf.searchable != {searchable_str}
+                cf.searchable = {searchable_str}
+                cf.save
+              end
+            rescue
+            end
           end
           if cf && cf.type == 'UserCustomField'
             begin
