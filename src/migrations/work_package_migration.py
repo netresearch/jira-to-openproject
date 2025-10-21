@@ -1877,12 +1877,12 @@ class WorkPackageMigration(BaseMigration):
             try:
                 with mapping_file.open() as f:
                     cached_mapping = json.load(f)
-                    if cached_mapping:  # Only use non-empty cache
-                        self.logger.info(
-                            "Loaded custom field mapping from cache: %d entries",
-                            len(cached_mapping),
-                        )
-                        return cached_mapping
+                    # Accept empty mapping as valid cache (no custom fields to map)
+                    self.logger.info(
+                        "Loaded custom field mapping from cache: %d entries",
+                        len(cached_mapping),
+                    )
+                    return cached_mapping
             except Exception as e:
                 self.logger.warning(
                     "Failed to load cached mapping from %s: %s. Will rebuild.",
