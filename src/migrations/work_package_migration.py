@@ -2035,6 +2035,9 @@ class WorkPackageMigration(BaseMigration):
             created_count = 0
             issues_seen = 0
             batch: list[dict[str, Any]] = []
+            # Early termination tracking
+            total_attempted = 0
+            batches_processed = 0
 
             try:
                 work_packages_meta: list[dict[str, Any]] = []
@@ -2092,6 +2095,9 @@ class WorkPackageMigration(BaseMigration):
                         except Exception as e:
                             self.logger.warning("Defaults application failed for %s: %s", project_key, e)
 
+                        # Save batch size for tracking before processing
+                        current_batch_size = len(batch)
+
                         try:
                             res = self.op_client.bulk_create_records(
                                 "WorkPackage",
@@ -2138,6 +2144,25 @@ class WorkPackageMigration(BaseMigration):
                                 if c is None:
                                     c = len(created_list) if isinstance(created_list, list) else 0
                                 created_count += int(c or 0)
+
+                                # Track batch for early termination detection
+                                total_attempted += current_batch_size
+                                batches_processed += 1
+
+                                # Early termination: if we've processed 3+ batches (300+ items) with 0% success rate, stop
+                                if batches_processed >= 3 and created_count == 0 and total_attempted >= 300:
+                                    self.logger.error(
+                                        "EARLY TERMINATION: Processed %d batches (%d work packages attempted) with 0%% success rate for %s. "
+                                        "All items are failing validation. Stopping to prevent wasted processing. "
+                                        "Please review bulk result files in %s for error details.",
+                                        batches_processed, total_attempted, project_key, self.data_dir
+                                    )
+                                    # Break out of the issue iteration loop
+                                    raise StopIteration("Early termination due to 100% failure rate")
+                        except StopIteration:
+                            # Early termination triggered - exit cleanly
+                            self.logger.warning("Migration stopped early for %s after %d failed attempts", project_key, total_attempted)
+                            break
                         except Exception as e:
                             self.logger.exception("Bulk create failed for %s: %s", project_key, e)
                             # Fallback: adaptively reduce batch size and retry in smaller chunks
@@ -2221,6 +2246,9 @@ class WorkPackageMigration(BaseMigration):
                     except Exception as e:
                         self.logger.warning("Defaults application failed for %s: %s", project_key, e)
 
+                    # Save batch size for tracking before processing
+                    current_batch_size = len(batch)
+
                     try:
                         res = self.op_client.bulk_create_records(
                             "WorkPackage",
@@ -2267,6 +2295,18 @@ class WorkPackageMigration(BaseMigration):
                             if c is None:
                                 c = len(created_list) if isinstance(created_list, list) else 0
                             created_count += int(c or 0)
+
+                            # Track tail batch for early termination detection
+                            total_attempted += current_batch_size
+                            batches_processed += 1
+
+                            # Log warning if we have systematic failure even on tail batch
+                            if created_count == 0 and total_attempted >= 100:
+                                self.logger.warning(
+                                    "Processed %d batches (%d work packages attempted) with 0%% success rate for %s. "
+                                    "All items are failing validation. Please review bulk result files in %s for error details.",
+                                    batches_processed, total_attempted, project_key, self.data_dir
+                                )
                     except Exception as e:
                         self.logger.exception("Bulk create failed (final) for %s: %s", project_key, e)
                         # Final fallback for tail batch
