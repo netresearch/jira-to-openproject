@@ -501,25 +501,45 @@ class BaseMigration:
         """
         try:
             # Get current entities from Jira for the specific entity type
+            self.logger.info(
+                f"Starting change detection for {entity_type} - fetching current entities from Jira"
+            )
             if cache_func:
                 current_entities = cache_func(entity_type)
             else:
                 current_entities = self._get_current_entities_for_type(entity_type)
 
+            self.logger.info(
+                f"Fetched {len(current_entities)} current entities for {entity_type}"
+            )
+
             # Detect changes
+            self.logger.info(f"Running change detection for {entity_type}")
             change_report = self.detect_changes(current_entities, entity_type)
+
+            # Log detailed change detection results
+            summary = change_report.get("summary", {})
+            self.logger.info(
+                f"Change detection results for {entity_type}: "
+                f"baseline={summary.get('baseline_entity_count', 0)}, "
+                f"current={summary.get('current_entity_count', 0)}, "
+                f"created={summary.get('entities_created', 0)}, "
+                f"updated={summary.get('entities_updated', 0)}, "
+                f"deleted={summary.get('entities_deleted', 0)}, "
+                f"total_changes={change_report.get('total_changes', 0)}"
+            )
 
             # If no changes detected, migration can be skipped
             should_skip = change_report["total_changes"] == 0
 
             if should_skip:
                 self.logger.info(
-                    "No changes detected for %s, skipping migration",
+                    "✓ No changes detected for %s, skipping migration (efficient!)",
                     entity_type,
                 )
             else:
                 self.logger.info(
-                    "Detected %d changes for %s: %s",
+                    "⚠ Detected %d changes for %s: %s - proceeding with migration",
                     change_report["total_changes"],
                     entity_type,
                     change_report["changes_by_type"],

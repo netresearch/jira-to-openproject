@@ -3597,13 +3597,51 @@ def _apply_required_defaults(
 
         """
         if entity_type in {"work_packages", "issues"}:
-            # Process issues from all configured projects using generator
+            # Process issues from configured projects using generator
             all_issues = []
-            projects = self.jira_client.get_projects()
 
-            for project in projects:
+            # Get ALL Jira projects first
+            all_projects = self.jira_client.get_projects()
+            logger.info(f"Retrieved {len(all_projects)} total Jira projects from API")
+
+            # Filter to only configured projects from config.jira.projects
+            try:
+                configured_projects = config.jira_config.get("projects") or []
+            except Exception:
+                configured_projects = []
+
+            if configured_projects:
+                # Filter projects to only those in configuration
+                projects_to_migrate = [
+                    p for p in all_projects
+                    if p.get("key") in configured_projects
+                ]
+                logger.info(
+                    f"Filtered to {len(projects_to_migrate)} configured projects: {configured_projects}"
+                )
+            else:
+                # No filter - migrate all projects
+                projects_to_migrate = all_projects
+                logger.warning(
+                    "No projects configured in config.jira.projects - will process ALL projects"
+                )
+
+            if not projects_to_migrate:
+                logger.warning(
+                    f"No projects to migrate after filtering. Configured: {configured_projects}, "
+                    f"Available: {[p.get('key') for p in all_projects[:10]]}"
+                )
+                return []
+
+            # Process each configured project
+            for project in projects_to_migrate:
                 project_key = project.get("key")
                 if project_key:
+                    logger.info(
+                        f"Starting issue fetch for project {project_key} (change detection)"
+                    )
+                    project_issue_count = 0
+
                     # Use the new generator method for memory-efficient processing
                     for issue in self.iter_project_issues(project_key):
                         # Convert Issue object to dict format expected by the rest of the code
@@ -3615,6 +3653,7 @@ def _apply_required_defaults(
                             "project_key": project_key,
                         }
                         all_issues.append(issue_dict)
+                        project_issue_count += 1
 
                         # Log progress periodically
                         if (
@@ -3624,8 +3663,12 @@ def _apply_required_defaults(
                         ):
                             logger.info(f"Processed {len(all_issues)} issues so far...")
 
+                    logger.info(
+                        f"Completed {project_key}: fetched {project_issue_count} issues for change detection"
+                    )
+
             logger.info(
-                f"Finished processing {len(all_issues)} total issues from all projects",
+                f"Finished processing {len(all_issues)} total issues from {len(projects_to_migrate)} configured projects for change detection",
             )
             return all_issues
         msg = (
