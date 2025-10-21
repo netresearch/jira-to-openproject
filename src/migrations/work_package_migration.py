@@ -2435,6 +2435,10 @@ def _apply_required_defaults(
     for wp in records:
         if not wp.get("type_id"):
             wp["type_id"] = default_type_id
+            # Also set _links.type for OpenProject API compatibility
+            if "_links" not in wp:
+                wp["_links"] = {}
+            wp["_links"]["type"] = {"href": f"/api/v3/types/{default_type_id}"}
         # Normalize status_id: set default if missing or invalid
         if not wp.get("status_id") and default_status_id:
             wp["status_id"] = default_status_id
