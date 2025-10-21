@@ -1231,8 +1231,7 @@ class WorkPackageMigration(BaseMigration):
         if custom_fields:
             # Load custom field mappings
             try:
-                from src.migrations import work_package_migration as _wpm
-                custom_field_mapping = _wpm._load_custom_field_mapping(self)
+                custom_field_mapping = self._load_custom_field_mapping()
                 custom_field_values = {}
 
                 for jira_field_id, field_value in custom_fields.items():
@@ -1241,13 +1240,8 @@ class WorkPackageMigration(BaseMigration):
                         op_field_id = op_field.get("openproject_id")
 
                         if op_field_id:
-                            # Process different field types differently
-                            field_type = op_field.get("field_type", "")
-                            processed_value = _wpm._process_custom_field_value(
-                                field_value,
-                                field_type,
-                                self,
-                            )
+                            # Use raw field value for now (TODO: implement proper processing)
+                            processed_value = field_value
                             if processed_value is not None:
                                 custom_field_values[op_field_id] = processed_value
 
