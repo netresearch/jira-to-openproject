@@ -2000,38 +2000,64 @@ def _migrate_work_packages(self) -> dict[str, Any]:
 
     results: dict[str, Any] = {"total_created": 0, "projects": [], "total_issues": 0}
 
-    # Discover Jira projects from mapping
-    jira_projects = list({
-        entry.get("jira_key")
-        for entry in (self.project_mapping or {}).values()
-        if entry.get("jira_key")
-    })
-
-    # Optional filter from config
+    # Start with configured projects from config.yaml
     try:
         configured_projects = config.jira_config.get("projects") or []
     except Exception:
         configured_projects = []
+
     if configured_projects:
-        jira_projects = [p for p in jira_projects if p in configured_projects]
+        # Use explicitly configured projects
+        jira_projects = configured_projects
+        self.logger.info(f"Using configured projects: {jira_projects}")
+    else:
+        # Fall back to projects in mapping if no config
+        jira_projects = list({
+            entry.get("jira_key")
+            for entry in (self.project_mapping or {}).values()
+            if entry.get("jira_key")
+        })
+        self.logger.info(f"No configured projects, using {len(jira_projects)} projects from mapping")
 
     if not jira_projects:
-        self.logger.warning("No Jira projects to migrate (mapping or filter empty)")
+        self.logger.warning("No Jira projects to migrate (no config and mapping empty)")
         return results
 
     batch_size = config.migration_config.get("batch_size", 100)
 
     for project_key in jira_projects:
-        # Resolve OpenProject project id
+        # Resolve OpenProject project id - check mapping first
         op_project_id = None
         for entry in self.project_mapping.values():
             if entry.get("jira_key") == project_key and entry.get("openproject_id"):
                 op_project_id = entry["openproject_id"]
+                self.logger.info(f"Found {project_key} in mapping: OP ID {op_project_id}")
                 break
+
+        # If not in mapping, look up in OpenProject by identifier (lowercase project key)
         if not op_project_id:
-            self.logger.warning("No OpenProject mapping for Jira project %s; skipping", project_key)
-            results["projects"].append({"project_key": project_key, "created": 0, "skipped": True})
-            continue
+            try:
+                identifier = project_key.lower()
+                ruby_query = f"Project.find_by(identifier: '{identifier}')&.id"
+                op_project_id = self.op_client.execute_large_query_to_json_file(ruby_query, timeout=30)
+                if op_project_id:
+                    self.logger.info(f"Found {project_key} in OpenProject: ID {op_project_id}")
+                    # Add to mapping for future use
+                    if self.project_mapping is None:
+                        self.project_mapping = {}
+                    self.project_mapping[project_key] = {
+                        "jira_key": project_key,
+                        "openproject_id": int(op_project_id),
+                        "openproject_identifier": identifier
+                    }
+                else:
+                    self.logger.warning(f"Project {project_key} not found in OpenProject (tried identifier '{identifier}'); skipping")
+                    results["projects"].append({"project_key": project_key, "created": 0, "skipped": True})
+                    continue
+            except Exception as e:
+                self.logger.error(f"Failed to lookup OpenProject project for {project_key}: {e}")
+                results["projects"].append({"project_key": project_key, "created": 0, "skipped": True, "error": str(e)})
+                continue
 
         created_count = 0
         issues_seen = 0
