@@ -887,6 +887,14 @@ class ProjectMigration(BaseMigration):
             has_tempo_account = bool(account_id)
             jira_project["has_tempo_account"] = has_tempo_account
 
+            # Determine project status based on Jira project category
+            # "Closed" category → "FINISHED" status, everything else → "ON_TRACK"
+            project_category_name = jira_project.get("project_category_name", "")
+            if str(project_category_name).lower() == "closed":
+                project_status = "FINISHED"
+            else:
+                project_status = "ON_TRACK"
+
             # Add to projects data
             project_data = {
                 "name": jira_name,
@@ -897,7 +905,7 @@ class ProjectMigration(BaseMigration):
                 "account_name": account_name,
                 "account_id": account_id,
                 "public": False,
-                "status": "ON_TRACK",
+                "status": project_status,
                 "lead": lead_login,
                 "lead_display": lead_display,
                 "project_type_key": jira_project.get("project_type_key"),
