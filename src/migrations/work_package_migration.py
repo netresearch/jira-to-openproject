@@ -3580,7 +3580,7 @@ def _apply_required_defaults(
 
         raise RuntimeError(error_details)
 
-    def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities of the specified type from Jira.
 
         This method now uses memory-efficient pagination instead of loading
