@@ -1427,14 +1427,31 @@ class OpenProjectClient:
             msg = f"Failed to ensure custom field '{name}': {e}"
             raise QueryExecutionError(msg) from e
 
-    def ensure_custom_field(self, name: str, *, field_format: str = "string", cf_type: str = "WorkPackageCustomField") -> dict[str, Any]:
-        """Ensure a CustomField exists for the given type, create if missing."""
+    def ensure_custom_field(self, name: str, *, field_format: str = "string", cf_type: str = "WorkPackageCustomField", searchable: bool = False) -> dict[str, Any]:
+        """Ensure a CustomField exists for the given type, create if missing.
+
+        Args:
+            name: Custom field name
+            field_format: Field format (string, text, int, date, etc.)
+            cf_type: Custom field type (WorkPackageCustomField, ProjectCustomField, UserCustomField)
+            searchable: Whether the field should be searchable in OpenProject search
+
+        Returns:
+            Dict with custom field attributes (id, name, field_format, type)
+        """
+        # Set searchable attribute in Ruby (true/false, not Python bool)
+        searchable_str = "true" if searchable else "false"
+
         ruby = f"""
           cf = CustomField.find_by(type: '{cf_type}', name: '{name}')
           if !cf
             cf = CustomField.new(name: '{name}', field_format: '{field_format}', is_required: false, type: '{cf_type}')
             begin
               cf.is_for_all = true
+            rescue
+            end
+            begin
+              cf.searchable = {searchable_str}
             rescue
             end
             cf.save

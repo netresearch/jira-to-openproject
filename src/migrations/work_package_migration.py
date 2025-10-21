@@ -1262,17 +1262,17 @@ class WorkPackageMigration(BaseMigration):
         try:
             if not hasattr(self, "_j2o_wp_cf_ids_full") or not isinstance(self._j2o_wp_cf_ids_full, dict):
                 cf_specs = (
-                    ("J2O Origin System", "string"),
-                    ("J2O Origin ID", "string"),
-                    ("J2O Origin Key", "string"),
-                    ("J2O Origin URL", "string"),
-                    ("J2O First Migration Date", "date"),
-                    ("J2O Last Update Date", "date"),
+                    ("J2O Origin System", "string", False),
+                    ("J2O Origin ID", "string", True),  # Searchable for finding by Jira ID
+                    ("J2O Origin Key", "string", True),  # Searchable for finding by Jira Key (e.g., NRS-2358)
+                    ("J2O Origin URL", "string", False),
+                    ("J2O First Migration Date", "date", False),
+                    ("J2O Last Update Date", "date", False),
                 )
                 cf_ids: dict[str, int] = {}
-                for name, fmt in cf_specs:
+                for name, fmt, searchable in cf_specs:
                     try:
-                        cf = self.op_client.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField")
+                        cf = self.op_client.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField", searchable=searchable)
                         if isinstance(cf, dict) and cf.get("id"):
                             cf_ids[name] = int(cf["id"])  # type: ignore[arg-type]
                     except Exception:
