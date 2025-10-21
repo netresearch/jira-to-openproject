@@ -1861,19 +1861,486 @@ class WorkPackageMigration(BaseMigration):
         raise ValueError(msg)
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
-        """Load or rebuild custom field mapping from cache or OpenProject metadata."""
-        # TODO: Full implementation to be restored
-        return {}
+        """Load or rebuild custom field mapping from cache or OpenProject metadata.
 
-    def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
-        """Get current entities of the specified type from OpenProject."""
-        # TODO: Full implementation to be restored
-        return []
+        Following idempotency requirements (see ADR 2025-10-20), this method:
+        1. Tries to load cached mapping from disk (performance optimization)
+        2. If cache missing, queries OpenProject custom fields (authoritative source)
+        3. Builds mapping by matching Jira field names to OpenProject field names
+        4. Saves rebuilt mapping to cache for future use
 
-    def _migrate_work_packages(self) -> dict[str, Any]:  # type: ignore[override]
-        """Migrate work packages from Jira to OpenProject."""
-        # TODO: Full implementation to be restored from git
-        return {"total_created": 0, "projects": [], "total_issues": 0}
+        Returns:
+            Dictionary mapping Jira custom field IDs to OpenProject custom field info
+
+        Raises:
+            RuntimeError: If there's an error querying OpenProject or building mapping
+
+        """
+        mapping_file = Path(self.data_dir) / "custom_field_mapping.json"
+
+        # Try loading from cache first (performance optimization)
+        if mapping_file.exists():
+            try:
+                with mapping_file.open() as f:
+                    cached_mapping = json.load(f)
+                    if cached_mapping:  # Only use non-empty cache
+                        self.logger.info(
+                            "Loaded custom field mapping from cache: %d entries",
+                            len(cached_mapping),
+                        )
+                        return cached_mapping
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to load cached mapping from %s: %s. Will rebuild.",
+                    mapping_file,
+                    e,
+                )
+
+        # Cache miss or empty: rebuild from OpenProject (authoritative source)
+        self.logger.info(
+            "Rebuilding custom field mapping from OpenProject metadata"
+        )
+
+        try:
+            # Query all custom fields from OpenProject
+            op_custom_fields = self.op_client.get_custom_fields(force_refresh=True)
+
+            # Build name-based lookup (same logic as custom_field_migration.py)
+            op_fields_by_name = {
+                field.get("name", "").lower(): field
+                for field in op_custom_fields
+                if field.get("name")
+            }
+
+            # Load Jira custom fields to build mapping
+            jira_fields_file = Path(self.data_dir) / "jira_custom_fields.json"
+            if not jira_fields_file.exists():
+                self.logger.warning(
+                    "Jira custom fields file not found: %s. "
+                    "Returning empty mapping.",
+                    jira_fields_file,
+                )
+                return {}
+
+            with jira_fields_file.open() as f:
+                jira_custom_fields = json.load(f)
+
+            # Build mapping by matching names
+            mapping = {}
+            for jira_field in jira_custom_fields:
+                jira_id = jira_field.get("id")
+                jira_name = jira_field.get("name", "")
+                jira_name_lower = jira_name.lower()
+
+                op_field = op_fields_by_name.get(jira_name_lower)
+
+                if op_field:
+                    mapping[jira_id] = {
+                        "jira_id": jira_id,
+                        "jira_name": jira_name,
+                        "openproject_id": op_field.get("id"),
+                        "openproject_name": op_field.get("name"),
+                        "openproject_type": op_field.get("field_format", "text"),
+                        "matched_by": "name",
+                    }
+
+            self.logger.info(
+                "Built custom field mapping from OpenProject: %d entries",
+                len(mapping),
+            )
+
+            # Save to cache for future use (performance optimization)
+            try:
+                mapping_file.parent.mkdir(parents=True, exist_ok=True)
+                with mapping_file.open("w") as f:
+                    json.dump(mapping, f, indent=2)
+                self.logger.info("Saved custom field mapping cache to %s", mapping_file)
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to save mapping cache to %s: %s. Continuing anyway.",
+                    mapping_file,
+                    e,
+                )
+
+            return mapping
+
+        except Exception as e:
+            msg = f"Error rebuilding custom field mapping from OpenProject: {e}"
+            raise RuntimeError(msg) from e
+
+    def _migrate_work_packages(self) -> dict[str, Any]:
+        """Simplified migration implementation to unblock execution.
+
+        Iterates configured Jira projects, prepares work package payloads,
+        applies required defaults, and bulk-creates WorkPackages via the
+        OpenProject client. Returns a summary dict with counts per project.
+        """
+        self.logger.info("Starting simplified work package migration (module-level)")
+
+        results: dict[str, Any] = {"total_created": 0, "projects": [], "total_issues": 0}
+
+        # Start with configured projects from config.yaml
+        try:
+            configured_projects = config.jira_config.get("projects") or []
+        except Exception:
+            configured_projects = []
+
+        if configured_projects:
+            # Use explicitly configured projects
+            jira_projects = configured_projects
+            self.logger.info(f"Using configured projects: {jira_projects}")
+        else:
+            # Fall back to projects in mapping if no config
+            jira_projects = list({
+                entry.get("jira_key")
+                for entry in (self.project_mapping or {}).values()
+                if entry.get("jira_key")
+            })
+            self.logger.info(f"No configured projects, using {len(jira_projects)} projects from mapping")
+
+        if not jira_projects:
+            self.logger.warning("No Jira projects to migrate (no config and mapping empty)")
+            return results
+
+        batch_size = config.migration_config.get("batch_size", 100)
+
+        for project_key in jira_projects:
+            # Resolve OpenProject project id - check mapping first
+            op_project_id = None
+            for entry in self.project_mapping.values():
+                if entry.get("jira_key") == project_key and entry.get("openproject_id"):
+                    op_project_id = entry["openproject_id"]
+                    self.logger.info(f"Found {project_key} in mapping: OP ID {op_project_id}")
+                    break
+
+            # If not in mapping, look up in OpenProject by identifier (lowercase project key)
+            if not op_project_id:
+                try:
+                    identifier = project_key.lower()
+                    ruby_query = f"Project.find_by(identifier: '{identifier}')&.id"
+                    op_project_id = self.op_client.execute_large_query_to_json_file(ruby_query, timeout=30)
+                    if op_project_id:
+                        self.logger.info(f"Found {project_key} in OpenProject: ID {op_project_id}")
+                        # Add to mapping for future use
+                        if self.project_mapping is None:
+                            self.project_mapping = {}
+                        self.project_mapping[project_key] = {
+                            "jira_key": project_key,
+                            "openproject_id": int(op_project_id),
+                            "openproject_identifier": identifier
+                        }
+                    else:
+                        self.logger.warning(f"Project {project_key} not found in OpenProject (tried identifier '{identifier}'); skipping")
+                        results["projects"].append({"project_key": project_key, "created": 0, "skipped": True})
+                        continue
+                except Exception as e:
+                    self.logger.error(f"Failed to lookup OpenProject project for {project_key}: {e}")
+                    results["projects"].append({"project_key": project_key, "created": 0, "skipped": True, "error": str(e)})
+                    continue
+
+            created_count = 0
+            issues_seen = 0
+            batch: list[dict[str, Any]] = []
+
+            try:
+                work_packages_meta: list[dict[str, Any]] = []
+                for issue in self.iter_project_issues(project_key):
+                    issues_seen += 1
+                    wp = self.prepare_work_package(issue, int(op_project_id))
+                    batch.append(wp)
+                    # Track minimal metadata for mapping
+                    try:
+                        jira_id = getattr(issue, "id", None)
+                    except Exception:
+                        jira_id = None
+                    try:
+                        jira_key = getattr(issue, "key", None)
+                    except Exception:
+                        jira_key = None
+                    # Enrich meta with non-AR fields for reporting/debug
+                    meta = {"jira_id": jira_id, "jira_key": jira_key, "project_key": project_key}
+                    try:
+                        extra = self._extract_issue_meta(issue)
+                        # Prefer our already extracted ids/keys
+                        extra.pop("jira_id", None)
+                        extra.pop("jira_key", None)
+                        meta.update(extra)
+                    except Exception:
+                        pass
+                    work_packages_meta.append(meta)
+                    if len(batch) >= batch_size:
+                        # Ensure project_id is present on every record in the batch
+                        try:
+                            for _rec in batch:
+                                if "project_id" not in _rec or _rec.get("project_id") in (None, 0, ""):
+                                    _rec["project_id"] = int(op_project_id)
+                        except Exception:
+                            pass
+
+                        # Determine a fallback admin user id once (best-effort)
+                        fallback_admin_user_id: int | str | None = None
+                        try:
+                            admin_id = self.op_client.execute_large_query_to_json_file(
+                                "User.where(admin: true).limit(1).pluck(:id).first",
+                                timeout=60,
+                            )
+                            if isinstance(admin_id, int):
+                                fallback_admin_user_id = admin_id
+                        except Exception:
+                            fallback_admin_user_id = None
+                        try:
+                            _apply_required_defaults(
+                                batch,
+                                project_id=int(op_project_id),
+                                op_client=self.op_client,
+                                fallback_admin_user_id=fallback_admin_user_id,
+                            )
+                        except Exception as e:
+                            self.logger.warning("Defaults application failed for %s: %s", project_key, e)
+
+                        try:
+                            res = self.op_client.bulk_create_records(
+                                "WorkPackage",
+                                batch,
+                                timeout=900,
+                                result_basename=f"work_packages_{project_key}",
+                            )
+                            if isinstance(res, dict):
+                                # Persist the bulk result for diagnostics (include paired meta)
+                                try:
+                                    debug_path = (
+                                        Path(self.data_dir)
+                                        / f"bulk_result_{project_key}_{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                                    )
+                                    with debug_path.open("w", encoding="utf-8") as f:
+                                        json.dump({"result": res, "meta": work_packages_meta}, f, indent=2)
+                                    self.logger.info("Saved bulk result to %s", debug_path)
+                                except Exception:
+                                    pass
+                                # Always process the created list to build mapping
+                                created_list = res.get("created", [])
+                                if isinstance(created_list, list) and created_list:
+                                    try:
+                                        _ = self.work_package_mapping  # ensure attribute exists
+                                    except Exception:
+                                        self.work_package_mapping = {}
+                                    for item in created_list:
+                                        try:
+                                            idx = item.get("index")
+                                            op_id = item.get("id")
+                                            if isinstance(idx, int) and 0 <= idx < len(work_packages_meta):
+                                                meta = work_packages_meta[idx]
+                                                jira_id = meta.get("jira_id")
+                                                if jira_id is not None:
+                                                    self.work_package_mapping[str(jira_id)] = {
+                                                        **meta,
+                                                        "openproject_id": op_id,
+                                                        "openproject_project_id": int(op_project_id),
+                                                    }
+                                        except Exception:
+                                            continue
+                                # Compute created count
+                                c = res.get("created_count") or res.get("total_created")
+                                if c is None:
+                                    c = len(created_list) if isinstance(created_list, list) else 0
+                                created_count += int(c or 0)
+                        except Exception as e:
+                            self.logger.exception("Bulk create failed for %s: %s", project_key, e)
+                            # Fallback: adaptively reduce batch size and retry in smaller chunks
+                            try:
+                                sizes = [max(1, len(batch) // 2), max(10, len(batch) // 4), 5, 1]
+                                for sz in sizes:
+                                    if sz >= len(batch) and sz != 1:
+                                        continue
+                                    self.logger.info("Retrying %s in %s sub-batches of size %s", project_key, (len(batch) + sz - 1) // sz, sz)
+                                    for start in range(0, len(batch), sz):
+                                        sub = batch[start : start + sz]
+                                        meta_slice = work_packages_meta[start : start + sz]
+                                        try:
+                                            sub_res = self.op_client.bulk_create_records(
+                                                "WorkPackage",
+                                                sub,
+                                                timeout=900,
+                                                result_basename=f"work_packages_{project_key}_sz{sz}",
+                                            )
+                                            if isinstance(sub_res, dict):
+                                                created_list = sub_res.get("created", [])
+                                                if isinstance(created_list, list) and created_list:
+                                                    try:
+                                                        _ = self.work_package_mapping
+                                                    except Exception:
+                                                        self.work_package_mapping = {}
+                                                    for item in created_list:
+                                                        try:
+                                                            idx = item.get("index")
+                                                            op_id = item.get("id")
+                                                            if isinstance(idx, int) and 0 <= idx < len(meta_slice):
+                                                                meta = meta_slice[idx]
+                                                                jira_id = meta.get("jira_id")
+                                                                if jira_id is not None:
+                                                                    self.work_package_mapping[str(jira_id)] = {
+                                                                        **meta,
+                                                                        "openproject_id": op_id,
+                                                                        "openproject_project_id": int(op_project_id),
+                                                                    }
+                                                        except Exception:
+                                                            continue
+                                                c = sub_res.get("created_count") or (len(created_list) if isinstance(created_list, list) else 0)
+                                                created_count += int(c or 0)
+                                        except Exception as sub_e:
+                                            self.logger.warning("Sub-batch failed (%s..%s) for %s: %s", start, start + sz, project_key, sub_e)
+                                self.logger.info("Fallback batching complete for %s; created so far: %s", project_key, created_count)
+                            except Exception as fb_e:
+                                self.logger.warning("Fallback batching aborted for %s: %s", project_key, fb_e)
+                        finally:
+                            batch = []
+                            work_packages_meta = []
+
+                # Flush tail batch
+                if batch:
+                    # Ensure project_id is present on every record in the tail batch
+                    try:
+                        for _rec in batch:
+                            if "project_id" not in _rec or _rec.get("project_id") in (None, 0, ""):
+                                _rec["project_id"] = int(op_project_id)
+                    except Exception:
+                        pass
+
+                    # Determine a fallback admin user id once (best-effort)
+                    fallback_admin_user_id: int | str | None = None
+                    try:
+                        admin_id = self.op_client.execute_large_query_to_json_file(
+                            "User.where(admin: true).limit(1).pluck(:id).first",
+                            timeout=60,
+                        )
+                        if isinstance(admin_id, int):
+                            fallback_admin_user_id = admin_id
+                    except Exception:
+                        fallback_admin_user_id = None
+                    try:
+                        _apply_required_defaults(
+                            batch,
+                            project_id=int(op_project_id),
+                            op_client=self.op_client,
+                            fallback_admin_user_id=fallback_admin_user_id,
+                        )
+                    except Exception as e:
+                        self.logger.warning("Defaults application failed for %s: %s", project_key, e)
+
+                    try:
+                        res = self.op_client.bulk_create_records(
+                            "WorkPackage",
+                            batch,
+                            timeout=900,
+                            result_basename=f"work_packages_{project_key}",
+                        )
+                        if isinstance(res, dict):
+                            # Persist the bulk result for diagnostics (include paired meta)
+                            try:
+                                debug_path = (
+                                    Path(self.data_dir)
+                                    / f"bulk_result_{project_key}_{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                                )
+                                with debug_path.open("w", encoding="utf-8") as f:
+                                    json.dump({"result": res, "meta": work_packages_meta}, f, indent=2)
+                                self.logger.info("Saved bulk result to %s", debug_path)
+                            except Exception:
+                                pass
+                            # Always process the created list to build mapping
+                            created_list = res.get("created", [])
+                            if isinstance(created_list, list) and created_list:
+                                try:
+                                    _ = self.work_package_mapping
+                                except Exception:
+                                    self.work_package_mapping = {}
+                                for item in created_list:
+                                    try:
+                                        idx = item.get("index")
+                                        op_id = item.get("id")
+                                        if isinstance(idx, int) and 0 <= idx < len(work_packages_meta):
+                                            meta = work_packages_meta[idx]
+                                            jira_id = meta.get("jira_id")
+                                            if jira_id is not None:
+                                                self.work_package_mapping[str(jira_id)] = {
+                                                    **meta,
+                                                    "openproject_id": op_id,
+                                                    "openproject_project_id": int(op_project_id),
+                                                }
+                                    except Exception:
+                                        continue
+                            # Compute created count
+                            c = res.get("created_count") or res.get("total_created")
+                            if c is None:
+                                c = len(created_list) if isinstance(created_list, list) else 0
+                            created_count += int(c or 0)
+                    except Exception as e:
+                        self.logger.exception("Bulk create failed (final) for %s: %s", project_key, e)
+                        # Final fallback for tail batch
+                        try:
+                            sizes = [max(1, len(batch) // 2), max(10, len(batch) // 4), 5, 1]
+                            for sz in sizes:
+                                if sz >= len(batch) and sz != 1:
+                                    continue
+                                self.logger.info("Retrying tail %s in %s sub-batches of size %s", project_key, (len(batch) + sz - 1) // sz, sz)
+                                for start in range(0, len(batch), sz):
+                                    sub = batch[start : start + sz]
+                                    meta_slice = work_packages_meta[start : start + sz]
+                                    try:
+                                        sub_res = self.op_client.bulk_create_records(
+                                            "WorkPackage",
+                                            sub,
+                                            timeout=900,
+                                            result_basename=f"work_packages_{project_key}_sz{sz}",
+                                        )
+                                        if isinstance(sub_res, dict):
+                                            created_list = sub_res.get("created", [])
+                                            if isinstance(created_list, list) and created_list:
+                                                try:
+                                                    _ = self.work_package_mapping
+                                                except Exception:
+                                                    self.work_package_mapping = {}
+                                                for item in created_list:
+                                                    try:
+                                                        idx = item.get("index")
+                                                        op_id = item.get("id")
+                                                        if isinstance(idx, int) and 0 <= idx < len(meta_slice):
+                                                            meta = meta_slice[idx]
+                                                            jira_id = meta.get("jira_id")
+                                                            if jira_id is not None:
+                                                                self.work_package_mapping[str(jira_id)] = {
+                                                                    **meta,
+                                                                    "openproject_id": op_id,
+                                                                    "openproject_project_id": int(op_project_id),
+                                                                }
+                                                    except Exception:
+                                                        continue
+                                            c = sub_res.get("created_count") or (len(created_list) if isinstance(created_list, list) else 0)
+                                            created_count += int(c or 0)
+                                    except Exception as sub_e:
+                                        self.logger.warning("Tail sub-batch failed (%s..%s) for %s: %s", start, start + sz, project_key, sub_e)
+                            self.logger.info("Tail fallback batching complete for %s; created so far: %s", project_key, created_count)
+                        except Exception as fb_e:
+                            self.logger.warning("Tail fallback batching aborted for %s: %s", project_key, fb_e)
+
+            except Exception as e:
+                self.logger.exception("Failed migrating project %s: %s", project_key, e)
+
+            results["projects"].append({"project_key": project_key, "created": created_count, "issues": issues_seen})
+            results["total_created"] += created_count
+            results["total_issues"] += issues_seen
+
+        # Save the work package mapping if available (used by time_entries)
+        try:
+            if getattr(self, "work_package_mapping", None):
+                data_handler.save(
+                    data=self.work_package_mapping,
+                    filename="work_package_mapping.json",
+                    directory=self.data_dir,
+                )
+        except Exception:
+            pass
+
+        return results
 
     def run(self) -> ComponentResult:  # type: ignore[override]
         start_time = datetime.now(tz=UTC)
@@ -1903,3 +2370,92 @@ class WorkPackageMigration(BaseMigration):
                 start_time=start_time.isoformat(),
                 duration_seconds=duration_seconds,
             )
+def _choose_default_type_id(op_client: Any) -> int:
+    """Pick a default Type ID, preferring the first by position, else 1.
+
+    This helper is isolated for testability.
+    """
+    try:
+        type_ids = op_client.execute_large_query_to_json_file(
+            "Type.order(:position).pluck(:id)",
+            timeout=30,
+        )
+        if isinstance(type_ids, list) and type_ids:
+            return int(type_ids[0])
+    except Exception:
+        pass
+    return 1
+def _apply_required_defaults(
+    records: list[dict[str, Any]],
+    *,
+    project_id: int | None,
+    op_client: Any,
+    fallback_admin_user_id: int | str | None,
+) -> None:
+    """Fill in missing required fields on WorkPackage records.
+
+    Sets type_id, status_id, priority_id, author_id if missing.
+    """
+    # Defaults via file-based queries
+    default_type_id = _choose_default_type_id(op_client)
+
+    default_status_id = 1
+    try:
+        status_ids = op_client.execute_large_query_to_json_file(
+            "Status.order(:position).pluck(:id)",
+            timeout=30,
+        )
+        if isinstance(status_ids, list) and status_ids:
+            default_status_id = int(status_ids[0])
+    except Exception:
+        pass
+
+    default_priority_id = None
+    try:
+        pr_ids = op_client.execute_large_query_to_json_file(
+            "IssuePriority.order(:position).pluck(:id)",
+            timeout=30,
+        )
+        if isinstance(pr_ids, list) and pr_ids:
+            default_priority_id = int(pr_ids[0])
+    except Exception:
+        default_priority_id = None
+
+    default_author_id = None
+    if fallback_admin_user_id:
+        try:
+            default_author_id = int(fallback_admin_user_id)
+        except Exception:
+            default_author_id = fallback_admin_user_id
+    if not default_author_id:
+        try:
+            admin_ids = op_client.execute_large_query_to_json_file(
+                "User.where(admin: true).limit(1).pluck(:id)",
+                timeout=30,
+            )
+            if isinstance(admin_ids, list) and admin_ids:
+                default_author_id = int(admin_ids[0])
+        except Exception:
+            default_author_id = None
+
+    for wp in records:
+        if not wp.get("type_id"):
+            wp["type_id"] = default_type_id
+        # Normalize status_id: set default if missing or invalid
+        if not wp.get("status_id") and default_status_id:
+            wp["status_id"] = default_status_id
+        else:
+            try:
+                sid = int(wp.get("status_id")) if wp.get("status_id") is not None else None
+                if sid is not None and isinstance(status_ids, list):
+                    valid_ids = {int(x) for x in status_ids if isinstance(x, (int, str)) and str(x).isdigit()}
+                    if valid_ids and sid not in valid_ids and default_status_id:
+                        wp["status_id"] = default_status_id
+            except Exception:
+                if default_status_id:
+                    wp["status_id"] = default_status_id
+        if not wp.get("author_id") and default_author_id:
+            wp["author_id"] = default_author_id
+        if not wp.get("priority_id") and default_priority_id:
+            wp["priority_id"] = default_priority_id
+
