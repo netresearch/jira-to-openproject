@@ -1,0 +1,219 @@
+# Journal creation logic for work package migration
+# This file is loaded by openproject_client.py bulk_create_records function
+#
+# Expected variables to be set before loading this file:
+# - rec: the WorkPackage record
+# - rails_ops: array of journal operations from Jira
+# - idx: bulk item index for logging
+# - verbose: boolean for logging control
+
+if rails_ops && rails_ops.respond_to?(:each)
+  puts "[RUBY] INSIDE JOURNAL BLOCK - Processing rails_ops..." if verbose
+  STDOUT.flush
+
+  begin
+    # Sort operations by created_at timestamp to ensure chronological order
+    # This is critical for validity_period ranges to not overlap
+    ops = rails_ops.sort_by do |op|
+      created_at_str = op['created_at'] || op[:created_at]
+      created_at_str ? Time.parse(created_at_str) : Time.now
+    end
+
+    puts "J2O bulk item #{idx}: Processing #{ops.length} journal operations (sorted by created_at)" if verbose
+
+    # BUG #32 FIX: Track last used timestamp to generate synthetic timestamps
+    # for operations with missing created_at (prevents EXCLUSION constraint violations)
+    last_used_timestamp = nil
+
+    ops.each_with_index do |op, op_idx|
+      begin
+        op_type = op['type'] || op[:type]
+        user_id = (op['user_id'] || op[:user_id]).to_i
+        created_at_str = op['created_at'] || op[:created_at]
+        notes = op['notes'] || op[:notes] || ''
+        field_changes = op['field_changes'] || op[:field_changes]
+
+        # BUG #32 FIX: Check if this is the first operation (creation journal)
+        # The first operation should UPDATE the auto-created journal v1
+        # All subsequent operations should CREATE new journals
+        if op_idx == 0
+          # FIRST OPERATION: Update existing auto-created journal v1
+          journal = Journal.where(
+            journable_id: rec.id,
+            journable_type: 'WorkPackage',
+            version: 1
+          ).first
+
+          if journal
+            puts "J2O bulk item #{idx}: Updating existing journal v1" if verbose
+
+            # Update journal metadata
+            journal.user_id = user_id
+            journal.notes = notes
+
+            # ALWAYS use current work package state from rec (never apply field_changes)
+            # The work package rec already has the correct final state after all updates
+            wp_journal_data = Journal::WorkPackageJournal.new(
+              type_id: rec.type_id,
+              project_id: rec.project_id,
+              subject: rec.subject,
+              description: rec.description,
+              due_date: rec.due_date,
+              category_id: rec.category_id,
+              status_id: rec.status_id,
+              assigned_to_id: rec.assigned_to_id,
+              priority_id: rec.priority_id,
+              version_id: rec.version_id,
+              author_id: rec.author_id,
+              done_ratio: rec.done_ratio,
+              estimated_hours: rec.estimated_hours,
+              start_date: rec.start_date,
+              parent_id: rec.parent_id,
+              schedule_manually: (rec.respond_to?(:schedule_manually) ? rec.schedule_manually : false),
+              ignore_non_working_days: (rec.respond_to?(:ignore_non_working_days) ? rec.ignore_non_working_days : false)
+            )
+
+            journal.data = wp_journal_data
+
+            # Set validity_period (BUG #32 FIX: ALWAYS set validity_period to avoid CHECK constraint)
+            if created_at_str && !created_at_str.empty?
+              period_start = Time.parse(created_at_str)
+              # Check if there's a next operation
+              next_op = ops[op_idx + 1]
+              if next_op
+                next_created_at = next_op['created_at'] || next_op[:created_at]
+                if next_created_at && !next_created_at.empty?
+                  period_end = Time.parse(next_created_at)
+                  # BUG #32 FIX: Detect timestamp collision to avoid empty ranges
+                  if period_start == period_end
+                    # Timestamp collision: use endless range to avoid CHECK constraint violation
+                    journal.validity_period = (period_start..)
+                  else
+                    # Normal case: bounded range with exclusive end
+                    journal.validity_period = (period_start...period_end)
+                  end
+                else
+                  journal.validity_period = (period_start..)  # Endless range if no timestamp
+                end
+              else
+                journal.validity_period = (period_start..)  # Endless range for last operation
+              end
+            else
+              # BUG #32 FIX: Fallback for missing created_at - use work package creation time
+              fallback_time = rec.created_at || Time.now
+              journal.validity_period = (fallback_time..)
+              puts "J2O bulk item #{idx}: WARNING - op #{op_idx+1} missing created_at, using fallback: #{fallback_time}" if verbose
+            end
+
+            # Save journal without validation
+            journal.save(validate: false)
+
+            # Update created_at and updated_at timestamps
+            if created_at_str
+              journal.update_column(:created_at, created_at_str)
+              journal.update_column(:updated_at, created_at_str)
+            end
+
+            puts "J2O bulk item #{idx}: Updated journal v#{journal.version} (op #{op_idx+1}/#{ops.length})" if verbose
+          else
+            puts "J2O bulk item #{idx}: WARNING - No journal v1 found to update!" if verbose
+          end
+
+        else
+          # SUBSEQUENT OPERATIONS: Create new journals v2, v3, etc.
+          # Get current max version to increment properly
+          max_version = Journal.where(journable_id: rec.id, journable_type: 'WorkPackage').maximum(:version) || 0
+
+          # Create journal
+          journal = Journal.new(
+            journable_id: rec.id,
+            journable_type: 'WorkPackage',
+            user_id: user_id,
+            notes: notes,
+            version: max_version + 1
+          )
+
+          # ALWAYS use current work package state from rec (never apply field_changes)
+          # The work package rec already has the correct final state after all updates
+          wp_journal_data = Journal::WorkPackageJournal.new(
+            type_id: rec.type_id,
+            project_id: rec.project_id,
+            subject: rec.subject,
+            description: rec.description,
+            due_date: rec.due_date,
+            category_id: rec.category_id,
+            status_id: rec.status_id,
+            assigned_to_id: rec.assigned_to_id,
+            priority_id: rec.priority_id,
+            version_id: rec.version_id,
+            author_id: rec.author_id,
+            done_ratio: rec.done_ratio,
+            estimated_hours: rec.estimated_hours,
+            start_date: rec.start_date,
+            parent_id: rec.parent_id,
+            schedule_manually: (rec.respond_to?(:schedule_manually) ? rec.schedule_manually : false),
+            ignore_non_working_days: (rec.respond_to?(:ignore_non_working_days) ? rec.ignore_non_working_days : false)
+          )
+
+          journal.data = wp_journal_data
+
+          # Set validity_period (BUG #32 FIX: ALWAYS set validity_period to avoid CHECK constraint)
+          if created_at_str && !created_at_str.empty?
+            period_start = Time.parse(created_at_str)
+            last_used_timestamp = period_start  # Track this timestamp
+            # Check if there's a next operation
+            next_op = ops[op_idx + 1]
+            if next_op
+              next_created_at = next_op['created_at'] || next_op[:created_at]
+              if next_created_at && !next_created_at.empty?
+                period_end = Time.parse(next_created_at)
+                # BUG #32 FIX: Detect timestamp collision to avoid empty ranges
+                if period_start == period_end
+                  # Timestamp collision: use endless range to avoid CHECK constraint violation
+                  journal.validity_period = (period_start..)
+                else
+                  # Normal case: bounded range with exclusive end
+                  journal.validity_period = (period_start...period_end)
+                end
+              else
+                journal.validity_period = (period_start..)  # Endless range if no timestamp
+              end
+            else
+              journal.validity_period = (period_start..)  # Endless range for last operation
+            end
+          else
+            # BUG #32 FIX: Generate synthetic timestamp with microsecond increments
+            # to prevent EXCLUSION constraint violations from duplicate endless ranges
+            if last_used_timestamp
+              # Add 1 microsecond to previous timestamp
+              synthetic_time = last_used_timestamp + Rational(1, 1_000_000)
+            else
+              # First operation with missing timestamp - use work package creation time
+              synthetic_time = rec.created_at || Time.now
+            end
+            last_used_timestamp = synthetic_time  # Track for next operation
+            journal.validity_period = (synthetic_time..)
+            puts "J2O bulk item #{idx}: WARNING - op #{op_idx+1} missing created_at, using synthetic: #{synthetic_time}" if verbose
+          end
+
+          # Save journal without validation
+          journal.save(validate: false)
+
+          # Update created_at timestamp if provided
+          if created_at_str
+            journal.update_column(:created_at, created_at_str)
+            journal.update_column(:updated_at, created_at_str)
+          end
+
+          puts "J2O bulk item #{idx}: Created journal v#{journal.version} (op #{op_idx+1}/#{ops.length})" if verbose
+        end
+
+      rescue => e
+        puts "J2O bulk item #{idx}: Journal op #{op_idx+1} failed: #{e.class}: #{e.message}" if verbose
+      end
+    end
+
+  rescue => e
+    puts "J2O bulk item #{idx}: Journal processing error: #{e.class}: #{e.message}" if verbose
+  end
+end

@@ -183,6 +183,104 @@ References used while composing this file: [AGENT.md RFC](https://ampcode.com/AG
 
 ## Configuration & Environment Rules
 
+## Journal Migration - Critical Knowledge
+
+**IMPORTANT**: Journal migration for work packages is complex with multiple discovered bugs. Before working on journal-related code, READ the authoritative documentation.
+
+**Authoritative Reference**: [ADR_003: Journal Migration Complete Journey](claudedocs/ADR_003_journal_migration_complete_journey.md)
+
+### Bug Chain Summary (Bugs #17-25)
+
+This represents days of debugging work. Each bug fix revealed the next issue:
+
+1. **Bug #17**: Missing `author_id` in WorkPackageJournal → PostgreSQL NOT NULL violation
+   - **Fix**: Added `author_id: rec.author_id` to journal data
+   - **Location**: `src/clients/openproject_client.py:2711-2737`
+
+2. **Bug #18**: No error logging from Ruby → Silent failures
+   - **Fix**: Enhanced error logging in Ruby scripts
+   - **Status**: ✅ FIXED
+
+3. **Bug #22**: Only creates operations when notes exist → 95% of history lost
+   - **Fix**: Always create operations for ALL changelogs (workflow transitions, field changes)
+   - **Location**: `src/migrations/work_package_migration.py:1758-1776`
+   - **Verification**: `grep -n "\[BUG23\]" src/migrations/work_package_migration.py`
+
+4. **Bug #23**: Console output suppressed → No visibility into Ruby execution
+   - **Fix**: Enable console output and log with `[RUBY]` prefix
+   - **Location**: `src/clients/openproject_client.py:2849-2862`
+   - **Verification**: `grep -n "\[RUBY\]" src/clients/openproject_client.py`
+
+5. **Bug #24**: Config setting ignored → Manual environment variable required
+   - **Fix**: Check both env var AND config file setting
+   - **Location**: `src/clients/openproject_client.py:2846-2850`
+   - **Side Effect**: Introduced Bug #25
+
+6. **Bug #25**: `self.config` doesn't exist on OpenProjectClient → CURRENT BLOCKER
+   - **Symptom**: Migration reports "success" but creates ZERO work packages
+   - **Error**: `'OpenProjectClient' object has no attribute 'config'`
+   - **Location**: `src/clients/openproject_client.py:2849`
+   - **Status**: ❌ **NOT YET FIXED - BLOCKS MIGRATION**
+
+### Critical Patterns to Follow
+
+**ALWAYS create operations for ALL changelogs** (Bug #22 lesson):
+```python
+# ✅ GOOD: Always create operation
+notes = "\n".join(changelog_notes) if changelog_notes else ""
+work_package["_rails_operations"].append({...})
+
+# ❌ BAD: Conditional creation loses history
+if changelog_notes:
+    work_package["_rails_operations"].append({...})
+```
+
+**ALWAYS log console output** (Bug #23 lesson):
+```python
+# ✅ GOOD: Log all output with prefix
+console_output = self.rails_client.execute(..., suppress_output=False)
+if console_output:
+    for line in console_output.splitlines():
+        if line.strip():
+            self.logger.info(f"[RUBY] {line}")
+```
+
+**ALWAYS verify attribute access patterns** (Bug #25 lesson):
+```python
+# ⚠️ CURRENT BUG: self.config doesn't exist
+allow_runner_fallback = (
+    ...
+    or self.config.migration_config.get("enable_runner_fallback", False)  # Bug #25
+)
+
+# TODO: Determine correct config access pattern for OpenProjectClient
+```
+
+### OpenProject Journal Architecture
+
+Two-table design with strict PostgreSQL constraints:
+
+1. **journals** table: Journal metadata (user_id, notes, version, validity_period)
+2. **work_package_journals** table: Work package state snapshot (author_id REQUIRED)
+
+**Critical Constraints**:
+- `work_package_journals.author_id`: NOT NULL (Bug #17)
+- `journals.version`: UNIQUE per (journable_id, journable_type)
+- `journals.validity_period`: TSTZRANGE with exclusion constraint preventing overlaps
+- `journals.data_type`: NOT NULL polymorphic association field
+
+### Test Strategy
+
+**Always test with NRS-182** (23 journals) to catch bugs early.
+
+Test issues: NRS-171, NRS-182, NRS-191, NRS-198, NRS-204, NRS-42, NRS-59, NRS-66, NRS-982, NRS-4003
+
+### Related Documentation
+
+- [ADR_003: Complete Journey](claudedocs/ADR_003_journal_migration_complete_journey.md) - **READ THIS FIRST**
+- [ADR_001: Initial Discovery](claudedocs/ADR_001_openproject_journal_creation.md) - Bugs #17, #18
+- [ADR_002: Three Fixes](claudedocs/ADR_002_journal_migration_three_bug_fixes.md) - Bugs #22, #23, #24
+
 ## Rails Console & OpenProject Integration Rules
 
 ### REST API is NOT Suitable for Bulk Migration

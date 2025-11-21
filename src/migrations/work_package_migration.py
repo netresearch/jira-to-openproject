@@ -1,5 +1,19 @@
 """Work package migration module for Jira to OpenProject migration.
 Handles the migration of issues from Jira to work packages in OpenProject.
+
+IMPORTANT: Journal Migration Reference
+======================================
+This module contains Bug #22 fix (lines 1758-1776): Always create operations for ALL changelogs.
+See claudedocs/ADR_003_journal_migration_complete_journey.md for complete context.
+
+Critical Pattern (Bug #22 lesson):
+    # ✅ ALWAYS create operations for ALL changelogs, even with empty notes
+    notes = "\\n".join(changelog_notes) if changelog_notes else ""
+    work_package["_rails_operations"].append({...})
+
+    # ❌ NEVER use conditional creation (loses 95% of history)
+    if changelog_notes:
+        work_package["_rails_operations"].append({...})
 """
 
 import json
@@ -518,17 +532,436 @@ class WorkPackageMigration(BaseMigration):
 
         return id_lookup, name_lookup
 
+    def _get_existing_work_packages(self, op_project_id: int) -> dict[str, dict[str, Any]]:
+        """Get existing work packages from OpenProject for incremental updates.
+
+        Returns a dict mapping Jira keys to OpenProject work package info.
+        """
+        try:
+            snapshot = self.op_client.get_project_wp_cf_snapshot(op_project_id)
+            existing_map = {}
+            for row in snapshot:
+                jira_key = row.get("jira_issue_key")
+                if jira_key:
+                    existing_map[str(jira_key).strip()] = {
+                        "id": row.get("id"),
+                        "jira_key": jira_key,
+                    }
+            return existing_map
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch existing work packages: {e}")
+            return {}
+
+    def _update_existing_work_package(
+        self,
+        jira_issue: Issue,
+        existing_wp: dict[str, Any],
+        op_project_id: int,
+    ) -> None:
+        """Update an existing work package with new comments from Jira.
+
+        Only adds comments that don't already exist in OpenProject.
+        """
+        from datetime import datetime, timedelta
+
+        try:
+            wp_id = existing_wp.get("id")
+            jira_key = getattr(jira_issue, "key", None)
+
+            if not wp_id:
+                return
+
+            # Extract BOTH comments AND changelog entries from Jira
+            comments = self.enhanced_audit_trail_migrator.extract_comments_from_issue(jira_issue)
+            changelog_entries = self.enhanced_audit_trail_migrator.extract_changelog_from_issue(jira_issue)
+
+            # Merge comments and changelog entries into unified journal entries
+            all_journal_entries = []
+
+            # Add comments as journal entries
+            for comment in comments:
+                all_journal_entries.append({
+                    "type": "comment",
+                    "timestamp": comment.get("created", ""),
+                    "data": comment
+                })
+
+            # Add changelog entries as journal entries
+            for entry in changelog_entries:
+                all_journal_entries.append({
+                    "type": "changelog",
+                    "timestamp": entry.get("created", ""),
+                    "data": entry
+                })
+
+            # If no journal entries, return
+            if not all_journal_entries:
+                return
+
+            # Sort ALL entries chronologically by timestamp
+            all_journal_entries.sort(key=lambda x: x.get("timestamp", ""))
+
+            # DEBUG: Log entries to understand why collision detection isn't executing
+            self.logger.info(f"[DEBUG] {jira_key}: all_journal_entries has {len(all_journal_entries)} entries")
+            if len(all_journal_entries) > 0:
+                for idx, entry in enumerate(all_journal_entries):
+                    self.logger.info(f"[DEBUG] {jira_key}: Entry[{idx}] type={entry.get('type')} timestamp={entry.get('timestamp')}")
+
+            # Fix Attempt #5: Detect and resolve timestamp collisions
+            # When comment and changelog entry have identical timestamps, add microsecond offsets
+            # to ensure unique timestamps and valid validity_period ranges
+            for i in range(1, len(all_journal_entries)):
+                current_timestamp = all_journal_entries[i].get("timestamp", "")
+                previous_timestamp = all_journal_entries[i-1].get("timestamp", "")
+                
+                # DEBUG: Log the comparison details
+                self.logger.info(f"[DEBUG] {jira_key}: Loop iteration i={i}")
+                self.logger.info(f"[DEBUG] {jira_key}: current_timestamp='{current_timestamp}' (type={type(current_timestamp).__name__}, truthy={bool(current_timestamp)})")
+                self.logger.info(f"[DEBUG] {jira_key}: previous_timestamp='{previous_timestamp}' (type={type(previous_timestamp).__name__}, truthy={bool(previous_timestamp)})")
+                self.logger.info(f"[DEBUG] {jira_key}: comparison result: {current_timestamp == previous_timestamp}")
+
+                # Check if timestamps collide
+                if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
+                    # Parse the timestamp
+                    try:
+                        if 'T' in current_timestamp:
+                            # ISO8601 format: 2011-08-23T13:41:21.000+0000
+                            # Parse timestamp
+                            dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                            # Add 1 SECOND to separate colliding entries (OpenProject uses second-precision timestamps)
+                            dt = dt + timedelta(seconds=1)
+                            # Convert back to ISO8601 format
+                            all_journal_entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                            self.logger.info(f"Resolved timestamp collision for {jira_key}: {previous_timestamp} → {all_journal_entries[i]['timestamp']}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to resolve timestamp collision for {jira_key}: {e}")
+
+            # Get existing Journal entries for this work package
+            existing_journals_query = f"""
+                Journal.where(journable_id: {wp_id}, journable_type: 'WorkPackage')
+                       .where.not(notes: [nil, ''])
+                       .pluck(:notes, :created_at)
+            """
+            existing_journals = self.op_client.execute_large_query_to_json_file(
+                existing_journals_query,
+                timeout=60,
+            )
+
+            existing_notes = set()
+            if isinstance(existing_journals, list):
+                for entry in existing_journals:
+                    if isinstance(entry, list) and len(entry) > 0:
+                        existing_notes.add(entry[0])
+
+            # Filter out journal entries that already exist (check comments only for duplicates)
+            new_journal_entries = []
+            for journal_entry in all_journal_entries:
+                entry_data = journal_entry["data"]
+
+                # For comments, check if already exists
+                if journal_entry["type"] == "comment":
+                    comment_body = entry_data.get("body", "")
+                    if not comment_body or comment_body in existing_notes:
+                        continue
+
+                # For changelog entries, always include (they don't have text to deduplicate)
+                new_journal_entries.append(journal_entry)
+
+            # Create journals with non-overlapping validity_period ranges
+            for i, journal_entry in enumerate(new_journal_entries):
+                entry_type = journal_entry["type"]
+                entry_data = journal_entry["data"]
+                entry_timestamp = journal_entry["timestamp"]
+
+                # Extract author information
+                author_info = entry_data.get("author") or {}
+                author_name = author_info.get("name")
+                user_dict = self.user_mapping.get(author_name) if author_name else None
+                entry_author_id = user_dict.get("openproject_id") if user_dict else None
+                if not entry_author_id:
+                    entry_author_id = 1  # Fallback to admin
+
+                # Build journal notes based on entry type
+                if entry_type == "comment":
+                    journal_notes = entry_data.get("body", "")
+                else:  # changelog
+                    # Format changelog items as notes
+                    journal_notes = "Jira changelog:\n"
+                    items = entry_data.get("items", [])
+                    for item in items:
+                        field = item.get("field", "")
+                        from_val = item.get("fromString") or item.get("from", "")
+                        to_val = item.get("toString") or item.get("to", "")
+                        journal_notes += f"- {field}: {from_val} → {to_val}\n"
+
+                comment_body = journal_notes
+                comment_author_id = entry_author_id
+                comment_created = entry_timestamp
+
+                # Determine if this is the last journal entry
+                is_last_comment = (i == len(new_journal_entries) - 1)
+
+                # Calculate validity_period
+                # - For all except last: closed range ending at next comment's timestamp
+                # - For last comment: open-ended range
+                if is_last_comment:
+                    # Last comment: OPEN-ENDED range (most recent journal version has no end)
+                    if comment_created and 'T' in comment_created:
+                        validity_start_iso = comment_created
+                    elif comment_created:
+                        try:
+                            # Try parsing with milliseconds first
+                            dt = datetime.strptime(comment_created, '%Y-%m-%d %H:%M:%S.%f')
+                            validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                        except ValueError:
+                            try:
+                                # Try parsing without milliseconds
+                                dt = datetime.strptime(comment_created, '%Y-%m-%d %H:%M:%S')
+                                validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                            except ValueError as e:
+                                self.logger.warning(f"Failed to parse timestamp '{comment_created}': {e}, using as-is")
+                                validity_start_iso = comment_created
+                    else:
+                        validity_start_iso = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+                    # Bug #15 fix Attempt #2: Open-ended range for most recent journal version
+                    # Mark this as open-ended by setting validity_end_iso to None
+                    validity_end_iso = None
+                    validity_period = f'["{validity_start_iso}",)'  # Open-ended range: no end time
+                else:
+                    # Not last: closed range ending at next journal entry's timestamp
+                    next_journal_entry = new_journal_entries[i + 1]
+                    next_created = next_journal_entry["timestamp"]
+
+                    # Convert both timestamps to ISO8601 - ALWAYS format to preserve milliseconds
+                    if comment_created:
+                        try:
+                            # First try parsing ISO8601 format with timezone (from collision detection)
+                            dt = datetime.strptime(comment_created, '%Y-%m-%dT%H:%M:%S.%f%z')
+                            validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                        except ValueError:
+                            try:
+                                # Try parsing with milliseconds (database format)
+                                dt = datetime.strptime(comment_created, '%Y-%m-%d %H:%M:%S.%f')
+                                validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                            except ValueError:
+                                try:
+                                    # Try parsing without milliseconds
+                                    dt = datetime.strptime(comment_created, '%Y-%m-%d %H:%M:%S')
+                                    validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                                except ValueError as e:
+                                    self.logger.warning(f"Failed to parse timestamp '{comment_created}': {e}, using as-is")
+                                    validity_start_iso = comment_created
+                    else:
+                        validity_start_iso = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+                    if next_created:
+                        try:
+                            # First try parsing ISO8601 format with timezone (from collision detection)
+                            dt = datetime.strptime(next_created, '%Y-%m-%dT%H:%M:%S.%f%z')
+                            validity_end_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                        except ValueError:
+                            try:
+                                # Try parsing with milliseconds (database format)
+                                dt = datetime.strptime(next_created, '%Y-%m-%d %H:%M:%S.%f')
+                                validity_end_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                            except ValueError:
+                                try:
+                                    # Try parsing without milliseconds
+                                    dt = datetime.strptime(next_created, '%Y-%m-%d %H:%M:%S')
+                                    validity_end_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                                except ValueError as e:
+                                    self.logger.warning(f"Failed to parse timestamp '{next_created}': {e}, using as-is")
+                                    validity_end_iso = next_created
+                    # else: Leave validity_end_iso as None for open-ended range (last comment)
+
+                    # Only set validity_period string if validity_end_iso is not None
+                    if validity_end_iso is not None:
+                        validity_period = f'["{validity_start_iso}", "{validity_end_iso}")'
+                    else:
+                        validity_period = None
+
+                # Bug #14/#15 fix - Build Ruby validity_period code as single-line expressions
+                if validity_end_iso is None:
+                    # Open-ended range for most recent journal version
+                    validity_period_ruby = f"journal.validity_period = Range.new(Time.parse('{validity_start_iso}'), nil)"
+                else:
+                    # Closed range for intermediate comments - use Range.new() for consistency
+                    validity_period_ruby = f"journal.validity_period = Range.new(Time.parse('{validity_start_iso}'), Time.parse('{validity_end_iso}'))"
+
+                # Bug #11 fix #7 - Populate WorkPackageJournal with work package snapshot
+                rails_code = f"""
+                    wp = WorkPackage.find({wp_id})
+                    max_version = Journal.where(journable_id: {wp_id}, journable_type: 'WorkPackage').maximum(:version) || 0
+
+                    # Bug #15 fix Attempt #4 - Update previous journal's validity_period end time using HALF-OPEN range
+                    # Find the most recent journal (before we add the new one)
+                    most_recent_journal = Journal.where(journable_id: {wp_id}, journable_type: 'WorkPackage')
+                                                 .order(version: :desc)
+                                                 .first
+
+                    # Update the most recent journal's validity_period to end at the new comment's start time
+                    # Bug #16 fix: Only update if new_comment_start_time >= current_start to avoid invalid ranges
+                    if most_recent_journal
+                        new_comment_start_time = Time.parse('{validity_start_iso}')
+                        # Get the current start time of the most recent journal
+                        current_start = most_recent_journal.validity_period.begin
+
+                        # Bug #16 fix: Check if comment timestamp is AFTER journal start
+                        # If comment timestamp is BEFORE journal start, skip update to avoid creating invalid range [T1, T0] where T1 > T0
+                        if new_comment_start_time >= current_start
+                            # Create new HALF-OPEN range [start, end) where end is EXCLUSIVE to prevent overlap
+                            # This ensures no conflict with the new journal starting at new_comment_start_time
+                            most_recent_journal.validity_period = Range.new(current_start, new_comment_start_time, true)
+                            most_recent_journal.save(validate: false)
+                        end
+                    end
+
+                    # Create Journal first
+                    journal = Journal.new(
+                        journable_id: {wp_id},
+                        journable_type: 'WorkPackage',
+                        user_id: {comment_author_id},
+                        version: max_version + 1,
+                        notes: {repr(comment_body)}
+                    )
+
+                    # Create WorkPackageJournal with snapshot of work package attributes (Bug #11 fix #7)
+                    data = Journal::WorkPackageJournal.new(
+                        type_id: wp.type_id,
+                        project_id: wp.project_id,
+                        subject: wp.subject,
+                        description: wp.description,
+                        due_date: wp.due_date,
+                        category_id: wp.category_id,
+                        status_id: wp.status_id,
+                        assigned_to_id: wp.assigned_to_id,
+                        priority_id: wp.priority_id,
+                        version_id: wp.version_id,
+                        author_id: wp.author_id,
+                        done_ratio: wp.done_ratio,
+                        estimated_hours: wp.estimated_hours,
+                        start_date: wp.start_date,
+                        parent_id: wp.parent_id,
+                        responsible_id: wp.responsible_id,
+                        budget_id: wp.budget_id,
+                        story_points: wp.story_points,
+                        remaining_hours: wp.remaining_hours,
+                        derived_estimated_hours: wp.derived_estimated_hours,
+                        schedule_manually: wp.schedule_manually,
+                        duration: wp.duration,
+                        ignore_non_working_days: wp.ignore_non_working_days,
+                        derived_remaining_hours: wp.derived_remaining_hours,
+                        derived_done_ratio: wp.derived_done_ratio,
+                        project_phase_definition_id: wp.project_phase_definition_id
+                    )
+                    journal.data = data
+                    # Bug #14/#15 fix - Set validity_period as Ruby Range object before save
+                    {validity_period_ruby}
+
+                    if journal.save(validate: false)
+                        journal.update_column(:created_at, '{comment_created}') if '{comment_created}' != ''
+                        puts journal.id
+                    else
+                        puts "ERROR: " + journal.errors.full_messages.join(", ")
+                    end
+                """
+
+                result = self.op_client.execute_large_query_to_json_file(rails_code, timeout=60)
+
+            if len(new_journal_entries) > 0:
+                self.logger.info(f"Added {len(new_journal_entries)} new journal entries to {jira_key} (WP#{wp_id})")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to update existing work package {existing_wp.get('jira_key')}: {e}")
+
+    def _iter_all_project_issues(
+        self,
+        project_key: str,
+    ) -> Iterator[Issue]:
+        """Fetch ALL Jira issues for a project without any filtering.
+
+        Used for incremental migrations to process all issues.
+        Includes renderedFields expansion for comment data extraction.
+        """
+        start_at = 0
+        batch_size = config.migration_config.get("batch_size", 100)
+        jql = f'project = "{project_key}" ORDER BY created ASC'
+        fields = None  # Get all fields
+        expand = "changelog,renderedFields"  # Include changelog and comments
+
+        # Check for issue limit or specific test issues (for testing purposes)
+        max_issues = None
+        test_issues = None
+
+        if os.getenv("J2O_TEST_ISSUES"):
+            # Specific issue keys to test (comma-separated)
+            test_issues = [k.strip() for k in os.getenv("J2O_TEST_ISSUES").split(",")]
+            self.logger.info(f"Testing specific issues: {test_issues}")
+            # Format issue keys for Jira JQL IN clause
+            issue_keys_str = ",".join(f'"{k}"' for k in test_issues)
+            jql = f'project = "{project_key}" AND key IN ({issue_keys_str}) ORDER BY created ASC'
+        elif os.getenv("J2O_MAX_ISSUES"):
+            # Limit issue count
+            try:
+                max_issues = int(os.getenv("J2O_MAX_ISSUES"))
+                self.logger.info(f"Limiting to {max_issues} issues (J2O_MAX_ISSUES set)")
+            except ValueError:
+                self.logger.warning("Invalid J2O_MAX_ISSUES value, ignoring")
+
+        self.logger.info(f"Fetching issues for project '{project_key}' with JQL: {jql}")
+
+        # Verify project exists first
+        try:
+            self.jira_client.jira.project(project_key)
+        except Exception as e:
+            from src.clients.jira_client import JiraResourceNotFoundError
+            msg = f"Project '{project_key}' not found: {e!s}"
+            raise JiraResourceNotFoundError(msg) from e
+
+        total_yielded = 0
+        while True:
+            issues_batch = self._fetch_issues_with_retry(
+                jql=jql,
+                start_at=start_at,
+                max_results=batch_size,
+                fields=fields,
+                expand=expand,
+                project_key=project_key,
+            )
+
+            if not issues_batch:
+                break
+
+            for issue in issues_batch:
+                yield issue
+                total_yielded += 1
+                # Check if we've reached the limit
+                if max_issues and total_yielded >= max_issues:
+                    self.logger.info(f"Reached issue limit ({max_issues}), stopping")
+                    return
+
+            self.logger.debug(f"Yielded {len(issues_batch)} issues (total: {total_yielded}) for {project_key}")
+
+            if len(issues_batch) < batch_size:
+                break
+
+            start_at += len(issues_batch)
+
+        self.logger.info(f"Finished yielding {total_yielded} issues for project '{project_key}'")
+
     def iter_project_issues(self, project_key: str) -> Iterator[Issue]:
         """Generate issues for a project with memory-efficient pagination.
 
         This generator yields individual issues instead of loading all issues
         into memory at once, solving the unbounded memory growth problem.
+        Includes renderedFields expansion for comment data extraction.
 
         Args:
             project_key: The key of the Jira project
 
         Yields:
-            Individual Jira Issue objects
+            Individual Jira Issue objects with comment data
 
         Raises:
             JiraApiError: If the API request fails after retries
@@ -541,13 +974,31 @@ class WorkPackageMigration(BaseMigration):
         # Reset per-project tracking for latest issue timestamps
         self._project_latest_issue_ts.pop(project_key, None)
 
-        # Build delta JQL if fast-forward is enabled
-        fast_forward_flag = str(os.environ.get("J2O_FAST_FORWARD", "1")).lower()
-        fast_forward = fast_forward_flag in {"1", "true", "yes", "on"}
-        backoff_seconds = int(os.environ.get("J2O_FF_BACKOFF_SECONDS", "7200"))  # default 2h
-        base_condition = f'project = "{project_key}"'
-        ordering = "ORDER BY created ASC"
-        jql = f"{base_condition} {ordering}"
+        # Check for test issue limiting
+        max_issues = None
+        if os.getenv("J2O_MAX_ISSUES"):
+            try:
+                max_issues = int(os.getenv("J2O_MAX_ISSUES"))
+                self.logger.info(f"Limiting to {max_issues} issues (J2O_MAX_ISSUES set)")
+            except ValueError:
+                self.logger.warning("Invalid J2O_MAX_ISSUES value, ignoring")
+
+        # Check for specific test issues first
+        if os.getenv("J2O_TEST_ISSUES"):
+            test_issues = [k.strip() for k in os.getenv("J2O_TEST_ISSUES").split(",")]
+            self.logger.info(f"Testing specific issues: {test_issues}")
+            issue_keys_str = ",".join(f'"{k}"' for k in test_issues)
+            jql = f'project = "{project_key}" AND key IN ({issue_keys_str}) ORDER BY created ASC'
+            fast_forward = False  # Disable fast-forward for testing
+            backoff_seconds = 0
+        else:
+            # Build delta JQL if fast-forward is enabled
+            fast_forward_flag = str(os.environ.get("J2O_FAST_FORWARD", "1")).lower()
+            fast_forward = fast_forward_flag in {"1", "true", "yes", "on"}
+            backoff_seconds = int(os.environ.get("J2O_FF_BACKOFF_SECONDS", "7200"))  # default 2h
+            base_condition = f'project = "{project_key}"'
+            ordering = "ORDER BY created ASC"
+            jql = f"{base_condition} {ordering}"
         existing_keys: set[str] = set()
 
         if fast_forward:
@@ -617,18 +1068,24 @@ class WorkPackageMigration(BaseMigration):
                     project_key,
                 )
         fields = None  # Get all fields
-        expand = "changelog"  # Include changelog for history
+        expand = "changelog,renderedFields"  # Include changelog and comments
 
         logger.notice("Starting paginated fetch for project '%s'...", project_key)
 
-        # Verify project exists first
-        try:
-            self.jira_client.jira.project(project_key)
-        except Exception as e:
-            from src.clients.jira_client import JiraResourceNotFoundError
+        # Verify project exists first (unless J2O_TEST_ISSUES is set)
+        if not os.getenv("J2O_TEST_ISSUES"):
+            try:
+                self.jira_client.jira.project(project_key)
+            except Exception as e:
+                from src.clients.jira_client import JiraResourceNotFoundError
 
-            msg = f"Project '{project_key}' not found: {e!s}"
-            raise JiraResourceNotFoundError(msg) from e
+                msg = f"Project '{project_key}' not found: {e!s}"
+                raise JiraResourceNotFoundError(msg) from e
+        else:
+            logger.info(
+                "J2O_TEST_ISSUES set - skipping project verification for '%s'",
+                project_key
+            )
 
         total_yielded = 0
         while True:
@@ -654,6 +1111,10 @@ class WorkPackageMigration(BaseMigration):
             for issue in issues_batch:
                 yield issue
                 total_yielded += 1
+                # Check if we've reached the limit
+                if max_issues and total_yielded >= max_issues:
+                    self.logger.info(f"Reached issue limit ({max_issues}), stopping")
+                    return
 
             logger.debug(
                 "Yielded %s issues from batch (total: %s) for %s",
@@ -812,13 +1273,14 @@ class WorkPackageMigration(BaseMigration):
         This method uses the new iter_project_issues generator to avoid loading
         all issues into memory at once, while preserving the existing interface
         for JSON file saving and project tracking.
+        Includes renderedFields expansion for comment data extraction.
 
         Args:
             project_key: The Jira project key to extract issues from
             project_tracker: Optional project tracker for logging
 
         Returns:
-            List of all issues from the project (as dictionaries)
+            List of all issues from the project with comment data (as dictionaries)
 
         """
         self.logger.info(f"Extracting issues from Jira project: {project_key}")
@@ -832,7 +1294,7 @@ class WorkPackageMigration(BaseMigration):
             batch_size = config.migration_config.get("batch_size", 100)
             jql = f'project = "{project_key}" ORDER BY created ASC'
             fields = None
-            expand = "changelog"
+            expand = "changelog,renderedFields"
 
             # Prefer generator when available (tests patch this)
             first_batch = None
@@ -1189,6 +1651,7 @@ class WorkPackageMigration(BaseMigration):
             jira_issue=jira_issue,
             work_package_data=work_package,
             use_rails_for_immutable=True,
+            author_id=author_id,
         )
 
         # Log any warnings from timestamp migration
@@ -1201,12 +1664,219 @@ class WorkPackageMigration(BaseMigration):
             for error in timestamp_result["errors"]:
                 self.logger.error("Timestamp migration error: %s", error)
 
-        # Add Jira issue key to description for reference
-        jira_reference = f"\n\n*Imported from Jira issue: {jira_key}*"
-        if description:
-            description += jira_reference
-        else:
-            description = jira_reference
+        # Store Rails operations for immutable timestamp setting (executed after save)
+        # Bug #23 debug: Track timestamp operations
+        ts_ops = timestamp_result.get("rails_operations", [])
+        self.logger.info(f"[BUG23] {jira_key}: timestamp_result has {len(ts_ops)} rails_operations")
+        if ts_ops:
+            work_package["_rails_operations"] = ts_ops
+            self.logger.info(f"[BUG23] {jira_key}: Set _rails_operations from timestamp_result")
+
+        # Extract and migrate comments AND changelog (Fix Attempt #5 for NEW work packages)
+        try:
+            # Extract BOTH comments AND changelog entries from Jira
+            comments = self.enhanced_audit_trail_migrator.extract_comments_from_issue(jira_issue)
+            changelog_entries = self.enhanced_audit_trail_migrator.extract_changelog_from_issue(jira_issue)
+
+            # Merge comments and changelog entries into unified journal entries
+            all_journal_entries = []
+
+            # Add comments as journal entries
+            for comment in comments:
+                all_journal_entries.append({
+                    "type": "comment",
+                    "timestamp": comment.get("created", ""),
+                    "data": comment
+                })
+
+            # Add changelog entries as journal entries
+            for entry in changelog_entries:
+                all_journal_entries.append({
+                    "type": "changelog",
+                    "timestamp": entry.get("created", ""),
+                    "data": entry
+                })
+
+            if all_journal_entries:
+                self.logger.debug(f"Found {len(comments)} comment(s) and {len(changelog_entries)} changelog entries for {jira_key}")
+
+                # Sort ALL entries chronologically by timestamp
+                all_journal_entries.sort(key=lambda x: x.get("timestamp", ""))
+
+                # DEBUG: Log entries to understand why collision detection isn't executing
+                self.logger.info(f"[DEBUG] {jira_key}: all_journal_entries has {len(all_journal_entries)} entries (CREATE path)")
+                if len(all_journal_entries) > 0:
+                    for idx, entry in enumerate(all_journal_entries):
+                        self.logger.info(f"[DEBUG] {jira_key}: Entry[{idx}] type={entry.get('type')} timestamp={entry.get('timestamp')}")
+
+                # Fix Attempt #6 (Bug #32): Detect and resolve timestamp collisions
+                # When multiple entries have identical timestamps, increment each duplicate sequentially
+                # to ensure unique timestamps and valid validity_period ranges
+                from datetime import datetime, timedelta
+
+                # Track all timestamps that have been used (original + modified)
+                used_timestamps = set()
+
+                for i in range(len(all_journal_entries)):
+                    current_timestamp = all_journal_entries[i].get("timestamp", "")
+
+                    if not current_timestamp:
+                        continue
+
+                    # Check if this timestamp has already been used
+                    if current_timestamp in used_timestamps:
+                        # This is a collision - need to find a unique timestamp
+                        try:
+                            if 'T' in current_timestamp:
+                                # ISO8601 format: 2011-08-23T13:41:21.000+0000
+                                original_dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+
+                                # Keep incrementing by 1 second until we find an unused timestamp
+                                offset_seconds = 1
+                                while True:
+                                    new_dt = original_dt + timedelta(seconds=offset_seconds)
+                                    new_timestamp = new_dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+
+                                    if new_timestamp not in used_timestamps:
+                                        # Found a unique timestamp
+                                        all_journal_entries[i]["timestamp"] = new_timestamp
+                                        used_timestamps.add(new_timestamp)
+                                        self.logger.info(f"Resolved timestamp collision for {jira_key}: {current_timestamp} → {new_timestamp} (+{offset_seconds}s)")
+                                        break
+
+                                    offset_seconds += 1
+                                    if offset_seconds > 100:
+                                        # Safety limit - should never reach this
+                                        self.logger.error(f"Failed to resolve timestamp collision for {jira_key} after 100 attempts")
+                                        used_timestamps.add(current_timestamp)
+                                        break
+                        except Exception as e:
+                            self.logger.warning(f"Failed to resolve timestamp collision for {jira_key}: {e}")
+                            used_timestamps.add(current_timestamp)
+                    else:
+                        # Timestamp is unique - add to used set
+                        used_timestamps.add(current_timestamp)
+
+                # Now create Rails operations for all journal entries with unique timestamps
+                # Bug #23 debug: Track operation array initialization
+                if "_rails_operations" not in work_package:
+                    self.logger.info(f"[BUG23] {jira_key}: Initializing _rails_operations (not in work_package)")
+                    work_package["_rails_operations"] = []
+                else:
+                    self.logger.info(f"[BUG23] {jira_key}: _rails_operations already exists, has {len(work_package['_rails_operations'])} items")
+
+                for entry in all_journal_entries:
+                    entry_type = entry.get("type")
+                    entry_data = entry.get("data", {})
+                    entry_timestamp = entry.get("timestamp", "")
+
+                    if entry_type == "comment":
+                        # Bug #32 fix: Ensure user exists before adding operation
+                        author_name = (entry_data.get("author") or {}).get("name")
+                        user_dict = self.user_mapping.get(author_name) if author_name else None
+                        comment_author_id = user_dict.get("openproject_id") if user_dict else None
+                        if not comment_author_id:
+                            # Bug #32 fix: Use proper fallback user (148941) instead of admin (1)
+                            comment_author_id = 148941
+                            self.logger.warning(f"[BUG32] {jira_key}: User '{author_name}' not found in mapping for comment, using fallback user {comment_author_id}")
+                        comment_body = entry_data.get("body", "")
+                        work_package["_rails_operations"].append({
+                            "type": "create_comment",
+                            "jira_key": jira_key,
+                            "user_id": comment_author_id,
+                            "notes": comment_body,
+                            "created_at": entry_timestamp,
+                        })
+                        self.logger.info(f"[BUG23] {jira_key}: Added comment operation, total operations: {len(work_package['_rails_operations'])}")
+                    elif entry_type == "changelog":
+                        # Bug #32 fix: Ensure user exists before adding operation
+                        author_name = (entry_data.get("author") or {}).get("name")
+                        user_dict = self.user_mapping.get(author_name) if author_name else None
+                        changelog_author_id = user_dict.get("openproject_id") if user_dict else None
+                        if not changelog_author_id:
+                            # Bug #32 fix: Use proper fallback user (148941) instead of admin (1)
+                            changelog_author_id = 148941
+                            self.logger.warning(f"[BUG32] {jira_key}: User '{author_name}' not found in mapping for changelog, using fallback user {changelog_author_id}")
+
+                        # Bug #28 fix: Process field changes as structured data
+                        changelog_items = entry_data.get("items", [])
+                        field_changes = {}
+
+                        for item in changelog_items:
+                            field_change = self._process_changelog_item(item)
+                            if field_change:
+                                field_changes.update(field_change)
+
+                        # Bug #22 fix: Always create journal for changelogs (preserves workflow transitions)
+                        # Bug #28 fix: Include field_changes for structured field tracking
+                        operation = {
+                            "type": "create_comment",
+                            "jira_key": jira_key,
+                            "user_id": changelog_author_id,
+                            "notes": "",  # Empty notes for field-change-only journals
+                            "created_at": entry_timestamp,
+                        }
+
+                        # Add field_changes if any were processed
+                        if field_changes:
+                            # BUG #32 DEBUG: Log field_changes keys to identify invalid fields
+                            self.logger.info(f"[BUG32] {jira_key}: field_changes keys: {list(field_changes.keys())}")
+                            operation["field_changes"] = field_changes
+
+                        work_package["_rails_operations"].append(operation)
+                        self.logger.info(f"[BUG23] {jira_key}: Added changelog operation with {len(field_changes)} field changes, total operations: {len(work_package['_rails_operations'])}")
+
+                # BUG #9 FIX (CRITICAL): Build progressive state snapshots for all operations
+                # Process operations in REVERSE order to reconstruct historical state from FINAL state
+                if "_rails_operations" in work_package and work_package["_rails_operations"]:
+                    try:
+                        # Initialize current_state with FINAL work package state
+                        current_state = {
+                            "type_id": work_package.get("type_id"),
+                            "project_id": work_package.get("project_id"),
+                            "subject": work_package.get("subject"),
+                            "description": work_package.get("description"),
+                            "due_date": work_package.get("due_date"),
+                            "category_id": work_package.get("category_id"),
+                            "status_id": work_package.get("status_id"),
+                            "assigned_to_id": work_package.get("assigned_to_id"),
+                            "priority_id": work_package.get("priority_id"),
+                            "version_id": work_package.get("version_id"),
+                            "author_id": work_package.get("author_id"),
+                            "done_ratio": work_package.get("done_ratio"),
+                            "estimated_hours": work_package.get("estimated_hours"),
+                            "start_date": work_package.get("start_date"),
+                            "parent_id": work_package.get("parent_id"),
+                        }
+
+                        # Process operations in REVERSE (most recent to oldest)
+                        # For each operation, store current state, then UNDO changes to get previous state
+                        for i in range(len(work_package["_rails_operations"]) - 1, -1, -1):
+                            op = work_package["_rails_operations"][i]
+
+                            # Store CURRENT state as snapshot (state AFTER this operation)
+                            op["state_snapshot"] = current_state.copy()
+
+                            # If this operation has field_changes, UNDO them to get state BEFORE this operation
+                            if "field_changes" in op and op["field_changes"]:
+                                for field_name, change_value in op["field_changes"].items():
+                                    # Extract OLD value from [old, new] array
+                                    if isinstance(change_value, list) and len(change_value) >= 2:
+                                        old_value = change_value[0]
+                                        # Apply OLD value to reconstruct previous state
+                                        if field_name in current_state:
+                                            current_state[field_name] = old_value
+
+                        self.logger.info(f"[BUG9] {jira_key}: Built state snapshots for {len(work_package['_rails_operations'])} operations")
+                    except Exception as snapshot_error:
+                        self.logger.warning(f"[BUG9] {jira_key}: Failed to build state snapshots: {snapshot_error}")
+                        # Continue without snapshots - Ruby template will fall back to current behavior
+
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to extract comments/changelog for {jira_key}: {e}. "
+                "Work package will be created without journal entries."
+            )
 
         # Update work package data with description (work_package_data was created earlier)
         work_package = work_package
@@ -1403,6 +2073,74 @@ class WorkPackageMigration(BaseMigration):
         if isinstance(obj, dict):
             return obj.get(key)
         return getattr(obj, key, None)
+
+    def _process_changelog_item(self, item: dict[str, Any]) -> dict[str, list[Any]] | None:
+        """Process a single changelog item into OpenProject field changes.
+
+        Bug #28 fix: Transform Jira changelog entries into structured field changes
+        for journal.data instead of text-only comments.
+
+        Args:
+            item: Jira changelog item with 'field', 'fromString', 'toString'
+
+        Returns:
+            Dictionary mapping OpenProject field names to [old_value, new_value] or None
+
+        """
+        field = item.get("field")
+        if not field:
+            return None
+
+        # Field mapping from Jira to OpenProject
+        # BUG #32 FIX (REGRESSION #3): Only map fields that exist in Journal::WorkPackageJournal
+        field_mappings = {
+            "summary": "subject",
+            "description": "description",
+            "status": "status_id",
+            "assignee": "assigned_to_id",
+            "priority": "priority_id",
+            "issuetype": "type_id",
+            # "resolution": "resolution",  # NOT a valid Journal::WorkPackageJournal attribute
+            # "labels": "tags",  # NOT a valid Journal::WorkPackageJournal attribute
+            # "fixVersion": "version",  # NOT a valid Journal::WorkPackageJournal attribute (should be version_id)
+            # "component": "category",  # NOT a valid Journal::WorkPackageJournal attribute (should be category_id)
+            "reporter": "author_id",
+        }
+
+        # BUG #32 FIX (REGRESSION #3): Skip unmapped fields to prevent invalid Journal::WorkPackageJournal attributes
+        if field not in field_mappings:
+            return None
+
+        op_field = field_mappings[field]
+
+        # Get values from changelog item
+        from_value = item.get("fromString") or item.get("from")
+        to_value = item.get("toString") or item.get("to")
+
+        # Special handling for user fields (assignee, reporter)
+        if field in ["assignee", "reporter"]:
+            # Map user names to IDs
+            from_id = None
+            to_id = None
+
+            if from_value and self.user_mapping:
+                user_dict = self.user_mapping.get(from_value)
+                from_id = user_dict.get("openproject_id") if user_dict else None
+
+            if to_value and self.user_mapping:
+                user_dict = self.user_mapping.get(to_value)
+                to_id = user_dict.get("openproject_id") if user_dict else None
+
+            return {op_field: [from_id, to_id]}
+
+        # Special handling for status, priority, issuetype (need ID mapping)
+        if field in ["status", "priority", "issuetype"]:
+            # For now, store as string values - Ruby code can map to IDs during insertion
+            # Future enhancement: Add ID mapping lookups here
+            return {op_field: [from_value, to_value]}
+
+        # Generic field change (subject, description, etc.)
+        return {op_field: [from_value, to_value]}
 
     def _extract_changelog_histories(self, issue: Any) -> list[Any]:
         """Return changelog histories from either jira.Issue or dict payloads."""
@@ -1777,38 +2515,56 @@ class WorkPackageMigration(BaseMigration):
             # Process issues from configured projects using generator
             all_issues = []
 
-            # Get ALL Jira projects first
-            all_projects = self.jira_client.get_projects()
-            logger.info(f"Retrieved {len(all_projects)} total Jira projects from API")
+            # Check if J2O_TEST_ISSUES is set - if so, bypass normal project fetching
+            test_issues_env = os.getenv("J2O_TEST_ISSUES")
+            if test_issues_env:
+                # Extract unique project keys from test issue keys (e.g., "NRS-182" → "NRS")
+                test_issue_keys = [k.strip() for k in test_issues_env.split(",")]
+                project_keys_from_issues = set()
+                for issue_key in test_issue_keys:
+                    if "-" in issue_key:
+                        project_key = issue_key.split("-")[0]
+                        project_keys_from_issues.add(project_key)
 
-            # Filter to only configured projects from config.jira.projects
-            try:
-                configured_projects = config.jira_config.get("projects") or []
-            except Exception:
-                configured_projects = []
-
-            if configured_projects:
-                # Filter projects to only those in configuration
-                projects_to_migrate = [
-                    p for p in all_projects
-                    if p.get("key") in configured_projects
-                ]
+                # Create minimal project structure for each extracted project key
+                projects_to_migrate = [{"key": pk, "name": pk} for pk in sorted(project_keys_from_issues)]
                 logger.info(
-                    f"Filtered to {len(projects_to_migrate)} configured projects: {configured_projects}"
+                    f"J2O_TEST_ISSUES set - bypassing Jira project fetch, "
+                    f"using extracted project keys: {sorted(project_keys_from_issues)}"
                 )
             else:
-                # No filter - migrate all projects
-                projects_to_migrate = all_projects
-                logger.warning(
-                    "No projects configured in config.jira.projects - will process ALL projects"
-                )
+                # Normal flow: Get ALL Jira projects first
+                all_projects = self.jira_client.get_projects()
+                logger.info(f"Retrieved {len(all_projects)} total Jira projects from API")
 
-            if not projects_to_migrate:
-                logger.warning(
-                    f"No projects to migrate after filtering. Configured: {configured_projects}, "
-                    f"Available: {[p.get('key') for p in all_projects[:10]]}"
-                )
-                return []
+                # Filter to only configured projects from config.jira.projects
+                try:
+                    configured_projects = config.jira_config.get("projects") or []
+                except Exception:
+                    configured_projects = []
+
+                if configured_projects:
+                    # Filter projects to only those in configuration
+                    projects_to_migrate = [
+                        p for p in all_projects
+                        if p.get("key") in configured_projects
+                    ]
+                    logger.info(
+                        f"Filtered to {len(projects_to_migrate)} configured projects: {configured_projects}"
+                    )
+                else:
+                    # No filter - migrate all projects
+                    projects_to_migrate = all_projects
+                    logger.warning(
+                        "No projects configured in config.jira.projects - will process ALL projects"
+                    )
+
+                if not projects_to_migrate:
+                    logger.warning(
+                        f"No projects to migrate after filtering. Configured: {configured_projects}, "
+                        f"Available: {[p.get('key') for p in all_projects[:10]]}"
+                    )
+                    return []
 
             # Process each configured project
             for project in projects_to_migrate:
@@ -2012,7 +2768,17 @@ class WorkPackageMigration(BaseMigration):
                 try:
                     identifier = project_key.lower()
                     ruby_query = f"Project.find_by(identifier: '{identifier}')&.id"
-                    op_project_id = self.op_client.execute_large_query_to_json_file(ruby_query, timeout=30)
+                    result = self.op_client.execute_large_query_to_json_file(ruby_query, timeout=180)
+                    # Handle case where result is a list (multiple projects with same identifier)
+                    if isinstance(result, list):
+                        op_project_id = result[0] if result else None
+                        if len(result) > 1:
+                            self.logger.warning(
+                                f"Multiple projects found for identifier '{identifier}': {result}. Using first: {op_project_id}"
+                            )
+                    else:
+                        op_project_id = result
+
                     if op_project_id:
                         self.logger.info(f"Found {project_key} in OpenProject: ID {op_project_id}")
                         # Add to mapping for future use
@@ -2039,10 +2805,24 @@ class WorkPackageMigration(BaseMigration):
             total_attempted = 0
             batches_processed = 0
 
+            # Fetch existing work packages for incremental update detection
+            existing_wp_map = self._get_existing_work_packages(int(op_project_id))
+            self.logger.info(f"Found {len(existing_wp_map)} existing work packages for project {project_key}")
+
             try:
                 work_packages_meta: list[dict[str, Any]] = []
-                for issue in self.iter_project_issues(project_key):
+                # Fetch ALL issues without fast-forward filtering
+                for issue in self._iter_all_project_issues(project_key):
                     issues_seen += 1
+
+                    # Check if work package already exists
+                    jira_key = getattr(issue, "key", None)
+                    if jira_key and jira_key in existing_wp_map:
+                        # Incremental update: Add only new comments
+                        self._update_existing_work_package(issue, existing_wp_map[jira_key], int(op_project_id))
+                        continue
+
+                    # Create new work package
                     wp = self.prepare_work_package(issue, int(op_project_id))
                     batch.append(wp)
                     # Track minimal metadata for mapping
@@ -2099,6 +2879,9 @@ class WorkPackageMigration(BaseMigration):
                         current_batch_size = len(batch)
 
                         try:
+                            # Remove _log_counters before sending to Rails (not a valid attribute)
+                            for wp in batch:
+                                wp.pop("_log_counters", None)
                             res = self.op_client.bulk_create_records(
                                 "WorkPackage",
                                 batch,
@@ -2176,6 +2959,9 @@ class WorkPackageMigration(BaseMigration):
                                         sub = batch[start : start + sz]
                                         meta_slice = work_packages_meta[start : start + sz]
                                         try:
+                                            # Remove _log_counters before sending to Rails
+                                            for wp in sub:
+                                                wp.pop("_log_counters", None)
                                             sub_res = self.op_client.bulk_create_records(
                                                 "WorkPackage",
                                                 sub,
@@ -2250,6 +3036,9 @@ class WorkPackageMigration(BaseMigration):
                     current_batch_size = len(batch)
 
                     try:
+                        # Remove _log_counters before sending to Rails
+                        for wp in batch:
+                            wp.pop("_log_counters", None)
                         res = self.op_client.bulk_create_records(
                             "WorkPackage",
                             batch,
@@ -2320,6 +3109,9 @@ class WorkPackageMigration(BaseMigration):
                                     sub = batch[start : start + sz]
                                     meta_slice = work_packages_meta[start : start + sz]
                                     try:
+                                        # Remove _log_counters before sending to Rails
+                                        for wp in sub:
+                                            wp.pop("_log_counters", None)
                                         sub_res = self.op_client.bulk_create_records(
                                             "WorkPackage",
                                             sub,
@@ -2412,7 +3204,7 @@ def _choose_default_type_id(op_client: Any) -> int:
     try:
         type_ids = op_client.execute_large_query_to_json_file(
             "Type.order(:position).pluck(:id)",
-            timeout=30,
+            timeout=180,
         )
         if isinstance(type_ids, list) and type_ids:
             return int(type_ids[0])
@@ -2437,7 +3229,7 @@ def _apply_required_defaults(
     try:
         status_ids = op_client.execute_large_query_to_json_file(
             "Status.order(:position).pluck(:id)",
-            timeout=30,
+            timeout=180,
         )
         if isinstance(status_ids, list) and status_ids:
             default_status_id = int(status_ids[0])
@@ -2448,7 +3240,7 @@ def _apply_required_defaults(
     try:
         pr_ids = op_client.execute_large_query_to_json_file(
             "IssuePriority.order(:position).pluck(:id)",
-            timeout=30,
+            timeout=180,
         )
         if isinstance(pr_ids, list) and pr_ids:
             default_priority_id = int(pr_ids[0])
@@ -2465,7 +3257,7 @@ def _apply_required_defaults(
         try:
             admin_ids = op_client.execute_large_query_to_json_file(
                 "User.where(admin: true).limit(1).pluck(:id)",
-                timeout=30,
+                timeout=180,
             )
             if isinstance(admin_ids, list) and admin_ids:
                 default_author_id = int(admin_ids[0])
@@ -2496,4 +3288,35 @@ def _apply_required_defaults(
             wp["author_id"] = default_author_id
         if not wp.get("priority_id") and default_priority_id:
             wp["priority_id"] = default_priority_id
+
+        # Bug #10 fix: Validate date constraints - due_date must be >= start_date
+        # PostgreSQL CHECK constraint: work_packages_due_larger_start_date
+        start_date = wp.get("start_date")
+        due_date = wp.get("due_date")
+        if start_date and due_date:
+            # Both dates exist, compare them
+            try:
+                # Handle both string and date object formats
+                from datetime import datetime, date
+
+                if isinstance(start_date, str):
+                    start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+                elif isinstance(start_date, date):
+                    start_dt = start_date
+                else:
+                    start_dt = None
+
+                if isinstance(due_date, str):
+                    due_dt = datetime.strptime(due_date, '%Y-%m-%d').date()
+                elif isinstance(due_date, date):
+                    due_dt = due_date
+                else:
+                    due_dt = None
+
+                # If due_date is before start_date, set due_date to None to avoid constraint violation
+                if start_dt and due_dt and due_dt < start_dt:
+                    wp["due_date"] = None
+            except Exception:
+                # If date parsing fails, set due_date to None to be safe
+                wp["due_date"] = None
 

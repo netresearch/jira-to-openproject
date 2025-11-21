@@ -922,11 +922,11 @@ class RailsConsoleClient:
         """
         target = self._get_target()
 
-        if not self._wait_for_console_ready(target, timeout=10):
+        if not self._wait_for_console_ready(target, timeout=10, reset_on_stall=False):
             logger.error("Console not ready, forcing full stabilization")
             self._stabilize_console()
 
-            if not self._wait_for_console_ready(target, timeout=5):
+            if not self._wait_for_console_ready(target, timeout=5, reset_on_stall=False):
                 msg = "Console could not be made ready"
                 raise ConsoleNotReadyError(msg)
 

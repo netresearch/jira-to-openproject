@@ -429,7 +429,12 @@ class JiraClient:
         # Surround project key with quotes to handle reserved words
         jql = f'project = "{project_key}" ORDER BY created ASC'
         fields = None  # Get all fields
-        expand = "changelog" if expand_changelog else None
+        # Include renderedFields to fetch comments, along with optional changelog
+        expand_parts = []
+        if expand_changelog:
+            expand_parts.append("changelog")
+        expand_parts.append("renderedFields")  # Includes comments
+        expand = ",".join(expand_parts)
 
         logger.notice("Fetching all issues for project '%s'...", project_key)
 

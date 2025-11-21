@@ -2450,6 +2450,24 @@ JSON_DATA
         container_json = Path("/tmp") / local_json.name  # noqa: S108
         self.transfer_file_to_container(local_json, container_json)
 
+        # BUG #32 FIX: Load journal creation .rb file content as template for WorkPackage migrations
+        # This avoids Ruby scoping issues with the `load` statement
+        journal_creation_ruby = ""
+        if model == "WorkPackage":
+            local_journal_rb = Path(__file__).parent.parent / "ruby" / "create_work_package_journals.rb"
+            if local_journal_rb.exists():
+                try:
+                    with local_journal_rb.open("r", encoding="utf-8") as f:
+                        # Read the .rb file content and prepare it for inline insertion
+                        rb_content = f.read()
+                        # Remove the header comments (first 9 lines) to avoid duplication
+                        lines = rb_content.split('\n')
+                        # Keep everything after line 9 (the actual Ruby code)
+                        journal_creation_ruby = '\n'.join(lines[9:])
+                except Exception as e:
+                    logger.warning(f"Failed to load journal creation template: {e}")
+                    journal_creation_ruby = ""
+
         # Result file path in container and local debug path
         # Always ensure uniqueness to avoid collisions across batches
         if result_basename:
@@ -2495,10 +2513,17 @@ JSON_DATA
             "ENV['J2O_BULK_PROGRESS_N'] ||= (ENV['J2O_BULK_PROGRESS_N'] || '50')\n"
         )
         ruby = (
+            "# BUG #32 FIX: Disable stdout buffering completely\n"
+            "$stdout.sync = true\n"
+            "$stderr.sync = true\n"
+            "puts '[RUBY] Script execution starting...'\n"
+            "STDOUT.flush\n"
             "begin; Rails.logger.level = Logger::WARN; rescue; end\n"
             "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end\n"
             "begin; GoodJob.logger = Logger.new(nil); rescue; end\n"
             "verbose = (ENV['J2O_BULK_RUBY_VERBOSE'] == '1')\n"
+            "puts \"[RUBY] Verbose mode: #{verbose}\"\n"
+            "STDOUT.flush\n"
             "progress_file = ENV['J2O_BULK_PROGRESS_FILE']\n"
             "begin; FileUtils.rm_f(progress_file); rescue; end if progress_file\n"
             "progress_n = (ENV['J2O_BULK_PROGRESS_N'] || '50').to_i\n"
@@ -2510,6 +2535,18 @@ JSON_DATA
             'puts "J2O bulk start: model=#{model_name} total=#{data.length} result=#{result_path}" if verbose\n'
             "begin; File.open(progress_file, 'a'){|f| f.write(\"START total=#{data.length}\\n\") }; rescue; end if progress_file\n"
             "data.each_with_index do |attrs, idx|\n"
+            "  # Debug: Inspect attrs hash for Bug #32\n"
+            "  if idx == 0 && model_name == 'WorkPackage'\n"
+            "    puts \"[BUG32-DEBUG] attrs.class = #{attrs.class}\"\n"
+            "    puts \"[BUG32-DEBUG] attrs.keys.count = #{attrs.keys.count}\"\n"
+            "    puts \"[BUG32-DEBUG] attrs.keys = #{attrs.keys.inspect}\"\n"
+            "    puts \"[BUG32-DEBUG] attrs['_rails_operations'] present? #{!attrs['_rails_operations'].nil?}\"\n"
+            "    puts \"[BUG32-DEBUG] attrs[:_rails_operations] present? #{!attrs[:_rails_operations].nil?}\"\n"
+            "    if attrs['_rails_operations']\n"
+            "      puts \"[BUG32-DEBUG] _rails_operations count = #{attrs['_rails_operations'].length}\"\n"
+            "    end\n"
+            "    STDOUT.flush\n"
+            "  end\n"
             "  begin\n"
             "    pref_attrs = nil\n"
             "    rec = model.new\n"
@@ -2545,10 +2582,12 @@ JSON_DATA
             "        pref_attrs = nil\n"
             "      end\n"
             "    end\n"
-            "    # Extract and remove custom_fields from attrs before assign_attributes\n"
+            "    # Extract and remove custom_fields and _rails_operations from attrs before assign_attributes\n"
             "    cf_data = nil\n"
+            "    rails_ops = nil\n"
             "    begin\n"
             "      cf_data = attrs.delete('custom_fields') if attrs.key?('custom_fields')\n"
+            "      rails_ops = attrs.delete('_rails_operations') if attrs.key?('_rails_operations')\n"
             "    rescue\n"
             "    end\n"
             "    begin\n"
@@ -2617,6 +2656,8 @@ JSON_DATA
             '          puts "J2O bulk item #{idx}: CF assignment error: #{e.class}: #{e.message}" if verbose\n'
             "        end\n"
             "      end\n"
+            f"      # BUG #32 FIX: Journal creation logic loaded from template\n"
+            + ('\n'.join(f"      {line}" for line in journal_creation_ruby.split('\n')) if journal_creation_ruby else "") + "\n"
             "      created << {'index' => idx, 'id' => rec.id}\n"
             '      puts "J2O bulk item #{idx}: saved id=#{rec.id}" if verbose\n'
             "    else\n"
@@ -2687,7 +2728,7 @@ JSON_DATA
             with local_tmp.open("w", encoding="utf-8") as f:
                 f.write(full_script)
             self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-            mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or "console").lower()
+            mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or "runner").lower()
             allow_runner_fallback = str(os.environ.get("J2O_ALLOW_RUNNER_FALLBACK", "0")).lower() in {"1", "true"}
             if mode == "console":
                 try:
@@ -2763,7 +2804,7 @@ JSON_DATA
                     q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
                     raise QueryExecutionError(q_msg)
                 if stdout:
-                    logger.info("runner stdout: %s", stdout[:500])
+                    logger.info("runner stdout: %s", stdout[:10000])
         else:
             # Execute via persistent Rails console with suppressed output (file-based result only)
             try:

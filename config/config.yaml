@@ -65,6 +65,7 @@ migration:
   # Behavior settings
   skip_existing: true
   enable_rails_meta_writes: true
+  enable_runner_fallback: true
 
   # Caching and Performance Optimization
   # Enable idempotent workflow with thread-safe caching (Option B implementation)

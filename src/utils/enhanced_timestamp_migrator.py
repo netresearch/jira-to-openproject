@@ -268,6 +268,7 @@ class EnhancedTimestampMigrator:
         jira_issue: dict[str, Any],
         work_package_data: dict[str, Any],
         use_rails_for_immutable: bool = True,
+        author_id: int | None = None,
     ) -> TimestampMigrationResult:
         """Migrate all timestamp data for a work package with enhanced handling.
 
@@ -309,6 +310,19 @@ class EnhancedTimestampMigrator:
             )
             if creation_result["rails_operation"]:
                 result["rails_operations"].append(creation_result["rails_operation"])
+                # Also generate Journal operations for activity log
+                created_timestamp = creation_result["rails_operation"].get("timestamp")
+                if created_timestamp and author_id:
+                    result["rails_operations"].append({
+                        "type": "set_journal_created_at",
+                        "jira_key": jira_key,
+                        "timestamp": created_timestamp,
+                    })
+                    result["rails_operations"].append({
+                        "type": "set_journal_user",
+                        "jira_key": jira_key,
+                        "user_id": author_id,
+                    })
             if creation_result["warnings"]:
                 result["warnings"].extend(creation_result["warnings"])
 
@@ -332,6 +346,23 @@ class EnhancedTimestampMigrator:
             start_result = self._migrate_start_date(extracted, work_package_data)
             if start_result["warnings"]:
                 result["warnings"].extend(start_result["warnings"])
+
+            # Validate date constraint: due_date must be >= start_date (Bug #10 fix)
+            # Only validate if BOTH dates are present and not None
+            if "due_date" in work_package_data and "start_date" in work_package_data:
+                due_date_str = work_package_data.get("due_date")
+                start_date_str = work_package_data.get("start_date")
+                # Check both are not None before comparing
+                if due_date_str is not None and start_date_str is not None:
+                    if due_date_str < start_date_str:  # String comparison works for ISO dates
+                        # Set due_date = start_date to satisfy PostgreSQL constraint
+                        jira_key = work_package_data.get("jira_key", "unknown")
+                        self.logger.warning(
+                            f"Date constraint violation in {jira_key}: "
+                            f"due_date ({due_date_str}) < start_date ({start_date_str}). "
+                            f"Setting due_date = start_date"
+                        )
+                        work_package_data["due_date"] = start_date_str
 
             # Migrate resolution/closed date
             resolution_result = self._migrate_resolution_date(
