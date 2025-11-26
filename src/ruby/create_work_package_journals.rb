@@ -16,15 +16,28 @@ if rails_ops && rails_ops.respond_to?(:each)
   STDOUT.flush
 
   begin
-    # Sort operations by created_at timestamp to ensure chronological order
+    # Sort operations by created_at/timestamp to ensure chronological order
     # This is critical for validity_period ranges to not overlap
     ops = rails_ops.sort_by do |op|
-      created_at_str = op['created_at'] || op[:created_at]
+      # BUG #9 FIX (MISSING JOURNALS): Check both 'created_at' and 'timestamp' fields
+      # set_* operations use 'timestamp' instead of 'created_at'
+      created_at_str = op['created_at'] || op[:created_at] || op['timestamp'] || op[:timestamp]
       # BUG #6 FIX (MEDIUM): Use UTC parsing for timezone consistency
       created_at_str ? Time.parse(created_at_str).utc : Time.now.utc
     end
 
     puts "J2O bulk item #{idx}: Processing #{ops.length} journal operations (sorted by created_at)" if verbose
+    # BUG #9 DEBUG: Detailed operation tracing to identify where operations 23-27 are lost
+    if verbose
+      puts "J2O bulk item #{idx}: DEBUG - Original rails_ops count: #{rails_ops.length}"
+      puts "J2O bulk item #{idx}: DEBUG - After sort ops count: #{ops.length}"
+      if ops.length > 0
+        first_op = ops.first
+        last_op = ops.last
+        puts "J2O bulk item #{idx}: DEBUG - First op: type=#{first_op['type'] || first_op[:type]}, timestamp=#{first_op['timestamp'] || first_op[:timestamp] || first_op['created_at'] || first_op[:created_at]}"
+        puts "J2O bulk item #{idx}: DEBUG - Last op: type=#{last_op['type'] || last_op[:type]}, timestamp=#{last_op['timestamp'] || last_op[:timestamp] || last_op['created_at'] || last_op[:created_at]}"
+      end
+    end
 
     # BUG #4 FIX (HIGH): Query max_version ONCE outside loop to avoid N+1 queries
     current_version = Journal.where(journable_id: rec.id, journable_type: 'WorkPackage').maximum(:version) || 0
@@ -88,10 +101,26 @@ if rails_ops && rails_ops.respond_to?(:each)
     apply_timestamp_and_validity = lambda do |journal, op_idx, created_at_str|
       # 1. Determine target start time
       target_time = nil
+      # BUG #9 FIX (CRITICAL REGRESSION): Check 'timestamp' field for set_* operations
+      # Operations like set_created_at, set_journal_created_at use 'timestamp' not 'created_at'
+      if !created_at_str || created_at_str.empty?
+        op = ops[op_idx]
+        created_at_str = op['timestamp'] || op[:timestamp]
+      end
+
       if created_at_str && !created_at_str.empty?
         # BUG #6 FIX: Use UTC parsing for timezone consistency
         target_time = Time.parse(created_at_str).utc
-        puts "J2O bulk item #{idx}: Op #{op_idx+1} using timestamp: #{target_time}" if verbose
+        
+        # BUG #9 FIX (CRITICAL): Ensure timestamp progression - if parsed timestamp is not after last used, bump it forward
+        # This handles cases where multiple operations have the same historical timestamp (e.g., ops 1 and 2 both at 2011-08-18 11:54:44)
+        if last_used_timestamp && target_time <= last_used_timestamp
+          original_time = target_time
+          target_time = last_used_timestamp + SYNTHETIC_TIMESTAMP_INCREMENT_US
+          puts "J2O bulk item #{idx}: Op #{op_idx+1} timestamp collision detected: #{original_time} <= #{last_used_timestamp}, adjusted to #{target_time}" if verbose
+        else
+          puts "J2O bulk item #{idx}: Op #{op_idx+1} using timestamp: #{target_time}" if verbose
+        end
       elsif last_used_timestamp
         # BUG #1 FIX: Synthetic timestamp with microsecond increment
         target_time = last_used_timestamp + SYNTHETIC_TIMESTAMP_INCREMENT_US
@@ -102,13 +131,12 @@ if rails_ops && rails_ops.respond_to?(:each)
         puts "J2O bulk item #{idx}: Op #{op_idx+1} using fallback timestamp: #{target_time}" if verbose
       end
 
-      # 2. Update tracker for next operation
-      last_used_timestamp = target_time
-
-      # 3. Determine validity_period range
+      # 2. Determine validity_period range BEFORE updating tracker
+      # This ensures last_used_timestamp points to END of current journal, not START
       next_op = ops[op_idx + 1]
       if next_op
-        next_created_at = next_op['created_at'] || next_op[:created_at]
+        # BUG #9 FIX (CRITICAL REGRESSION): Check 'timestamp' field for set_* operations
+        next_created_at = next_op['created_at'] || next_op[:created_at] || next_op['timestamp'] || next_op[:timestamp]
         if next_created_at && !next_created_at.empty?
           # Next op has timestamp - use it as end of range
           period_end = Time.parse(next_created_at).utc
@@ -127,18 +155,52 @@ if rails_ops && rails_ops.respond_to?(:each)
         journal.validity_period = (target_time..)
       end
 
+      # 3. Update tracker for next operation - use END of validity period so next journal starts after this one
+      # For bounded ranges, use the end. For endless ranges, next op will get its own timestamp or use fallback
+      if journal.validity_period.end
+        last_used_timestamp = journal.validity_period.end
+      else
+        # Endless range - next operation should use its own timestamp or fallback
+        last_used_timestamp = target_time
+      end
+
       # 4. Persist timestamps AND validity_period to journal
       # BUG #6 FIX (MEDIUM - SEC#2): update_columns needed for historical timestamps
       # Bypasses callbacks by design - required for migration to set past timestamps
       # BUG #32 FIX (REGRESSION): Must also persist validity_period, not just timestamps!
       puts "J2O bulk item #{idx}: DEBUG - Op #{op_idx+1} before update: persisted=#{journal.persisted?}, validity_period=#{journal.validity_period.inspect}" if verbose
       if journal.persisted?
-        result = journal.update_columns(
-          created_at: target_time,
-          updated_at: target_time,
-          validity_period: journal.validity_period
-        )
-        puts "J2O bulk item #{idx}: DEBUG - Op #{op_idx+1} update_columns result: #{result.inspect}" if verbose
+        # BUG #9 FIX (CRITICAL - VALIDITY PERIOD CONFLICT): Use raw SQL for v1 updates
+        # Rails update_columns triggers exclusion constraint violation when updating validity_period
+        # Raw SQL performs atomic UPDATE that PostgreSQL handles correctly
+        conn = ActiveRecord::Base.connection
+
+        # Format timestamps for PostgreSQL (Ruby 3.4 compatible)
+        # Ensure Time object before calling strftime to avoid Ruby 3.4 to_s(:db) errors
+        target_time_str = target_time.to_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+
+        # Build PostgreSQL tstzrange literal for validity_period
+        if journal.validity_period.end
+          # Bounded range: [start, end)
+          # Convert to Time object to ensure strftime compatibility
+          period_end_time = journal.validity_period.end.is_a?(Time) ? journal.validity_period.end : Time.parse(journal.validity_period.end.to_s)
+          period_end_str = period_end_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+          range_sql = "tstzrange('#{target_time_str}', '#{period_end_str}', '[)')"
+        else
+          # Endless range: [start, ∞)
+          range_sql = "tstzrange('#{target_time_str}', NULL, '[)')"
+        end
+
+        sql = <<~SQL
+          UPDATE journals
+          SET created_at = '#{target_time_str}',
+              updated_at = '#{target_time_str}',
+              validity_period = #{range_sql}
+          WHERE id = #{journal.id}
+        SQL
+
+        conn.execute(sql)
+        puts "J2O bulk item #{idx}: DEBUG - Op #{op_idx+1} raw SQL update complete" if verbose
       else
         puts "J2O bulk item #{idx}: WARNING - Op #{op_idx+1} journal not persisted, cannot update validity_period!" if verbose
       end
@@ -194,11 +256,61 @@ if rails_ops && rails_ops.respond_to?(:each)
     }
     puts "J2O bulk item #{idx}: DEBUG - Initial state: status_id=#{current_state[:status_id]}" if verbose
 
+    # BUG #14 FIX: Track actual journal-creating operations separately from metadata-only operations
+    # set_journal_user only updates v1's user_id, it should NOT create a new journal
+    journal_creating_op_idx = 0  # Counter for actual journal-creating operations
+
     ops.each_with_index do |op, op_idx|
       begin
         op_type = op['type'] || op[:type]
-        user_id = (op['user_id'] || op[:user_id]).to_i
-        created_at_str = op['created_at'] || op[:created_at]
+
+        # BUG #14 FIX (CRITICAL): Skip set_journal_user - it should NOT create new journals
+        # This operation is meant to set the user on v1, but with Bug #12 sorting it ends up
+        # at the END of operations (no timestamp → sorted last) and creates phantom journals.
+        # The first operation already sets v1's user_id correctly, so we skip this entirely.
+        if op_type == 'set_journal_user'
+          puts "J2O bulk item #{idx}: SKIP set_journal_user (Bug #14 fix - no phantom journal)" if verbose
+          next
+        end
+
+        # BUG #18 FIX: Skip timestamp-only operations that don't create meaningful journals
+        # These operations modify timestamps/metadata but don't have notes or field_changes.
+        # When processed as op_idx > 0, they create phantom "The changes were retracted" journals.
+        # Only the first operation (op_idx=0) should be processed from these types to set v1 metadata.
+        timestamp_only_ops = ['set_created_at', 'set_updated_at', 'set_closed_at', 'set_journal_created_at']
+        if timestamp_only_ops.include?(op_type) && op_idx != 0
+          puts "J2O bulk item #{idx}: SKIP #{op_type} at op_idx=#{op_idx} (Bug #18 fix - timestamp-only, no journal content)" if verbose
+          next
+        end
+
+        # BUG #15 + BUG #16 + BUG #18 FIX: Skip ALL operations with no meaningful content
+        # With Bug #16 Python fix, unmapped Jira fields are now captured in notes.
+        # With Bug #18, we generalize to skip ANY empty operation (not just create_comment).
+        # This prevents "The changes were retracted" phantom journals from any operation type.
+        # Exception: First operation (op_idx=0) must always be processed to create v1.
+        notes_preview = op['notes'] || op[:notes]
+        field_changes_preview = op['field_changes'] || op[:field_changes]
+
+        # BUG #18 DEBUG: Log what we're checking
+        puts "J2O bulk item #{idx}: DEBUG op_idx=#{op_idx} type=#{op_type} notes=#{notes_preview.inspect[0..40]} field_changes=#{field_changes_preview.inspect[0..40]}" if verbose
+
+        is_empty_operation = (notes_preview.nil? || notes_preview.to_s.strip.empty?) &&
+                             (field_changes_preview.nil? || field_changes_preview.empty?)
+        if is_empty_operation && op_idx != 0
+          puts "J2O bulk item #{idx}: SKIP empty #{op_type} at #{op['created_at'] || op['timestamp']} (Bug #18 fix - no content)" if verbose
+          next
+        end
+
+        # BUG #13 FIX: Fallback to work package author if user_id is 0 or nil
+        # user_id=0 causes HTTP 500 on activities page (route matching fails)
+        # BUG #17 FIX: Use work package author_id as fallback instead of DeletedUser (ID 2)
+        # This is more accurate for historical attribution - the WP author is known and exists
+        raw_user_id = (op['user_id'] || op[:user_id]).to_i
+        fallback_user_id = rec.author_id && rec.author_id > 0 ? rec.author_id : 2
+        user_id = raw_user_id > 0 ? raw_user_id : fallback_user_id
+        # BUG #9 FIX (CRITICAL - LINE 254): Check 'timestamp' field for set_* operations
+        # Operations like set_created_at, set_updated_at use 'timestamp' not 'created_at'
+        created_at_str = op['created_at'] || op[:created_at] || op['timestamp'] || op[:timestamp]
         notes = op['notes'] || op[:notes] || ''
         field_changes = op['field_changes'] || op[:field_changes]
 
@@ -333,6 +445,54 @@ if rails_ops && rails_ops.respond_to?(:each)
           )
 
           puts "J2O bulk item #{idx}: Created journal v#{journal.version} (op #{op_idx+1}/#{ops.length})" if verbose
+        end
+
+        # BUG #21 FIX: Create Journal::CustomizableJournal records for CF state tracking
+        # This allows OpenProject to show "J2O Jira Workflow changed from X to Y" in activity
+        # NOTE: When work package is created via API with CF values, OpenProject auto-creates
+        # CustomizableJournal entries for v1. We need to REPLACE those with our cf_state_snapshot values.
+        # CRITICAL: This runs for ALL operations (including v1) - moved OUTSIDE the if-else block!
+        if journal && op.is_a?(Hash) && (op.has_key?("cf_state_snapshot") || op.has_key?(:cf_state_snapshot))
+          cf_state_snapshot = op["cf_state_snapshot"] || op[:cf_state_snapshot]
+
+          # Get the J2O CF IDs that we're tracking (Workflow and Resolution)
+          # These are the only CFs we want to manage - delete existing and replace with our snapshot
+          j2o_cf_ids = []
+          workflow_cf = CustomField.find_by(name: "J2O Jira Workflow")
+          resolution_cf = CustomField.find_by(name: "J2O Jira Resolution")
+          j2o_cf_ids << workflow_cf.id if workflow_cf
+          j2o_cf_ids << resolution_cf.id if resolution_cf
+
+          if j2o_cf_ids.any?
+            # DEBUG: Show what exists before delete
+            existing_cf_entries = Journal::CustomizableJournal.where(
+              journal_id: journal.id,
+              custom_field_id: j2o_cf_ids
+            )
+            puts "J2O bulk item #{idx}: DEBUG - v#{journal.version} (journal_id=#{journal.id}) has #{existing_cf_entries.count} existing J2O CF entries: #{existing_cf_entries.map { |e| "CF#{e.custom_field_id}=#{e.value}" }.join(', ')}" if verbose
+
+            # DELETE existing CF journal entries for J2O CFs (auto-created by OpenProject during WP creation)
+            deleted_count = existing_cf_entries.delete_all
+            puts "J2O bulk item #{idx}: Deleted #{deleted_count} existing J2O CF journal entries for v#{journal.version}" if deleted_count > 0
+          end
+
+          # CREATE new CF journal entries from cf_state_snapshot
+          if cf_state_snapshot.is_a?(Hash) && cf_state_snapshot.any?
+            cf_state_snapshot.each do |cf_id, cf_value|
+              next if cf_id.nil? || cf_value.nil?
+              begin
+                # Create the customizable journal entry
+                Journal::CustomizableJournal.create!(
+                  journal_id: journal.id,
+                  custom_field_id: cf_id.to_i,
+                  value: cf_value.to_s
+                )
+                puts "J2O bulk item #{idx}: Created CF journal entry for v#{journal.version}: CF #{cf_id}=#{cf_value}" if verbose
+              rescue => cf_error
+                puts "J2O bulk item #{idx}: WARNING - Failed to create CF journal for v#{journal.version}: #{cf_error.message}" if verbose
+              end
+            end
+          end
         end
 
       rescue => e

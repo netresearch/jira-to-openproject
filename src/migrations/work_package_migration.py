@@ -148,6 +148,11 @@ class WorkPackageMigration(BaseMigration):
             self.logger.info("Resetting work package checkpoint store via CLI flag")
             self._reset_checkpoint_store()
 
+        # On-the-fly version creation cache: (project_id, version_name) -> openproject_version_id
+        self._version_cache: dict[tuple[int, str], int] = {}
+        # Current project context for changelog processing (set during issue processing)
+        self._current_project_id: int | None = None
+
         # Logging
         self.logger.debug(
             "WorkPackageMigration initialized with data dir: %s",
@@ -220,6 +225,130 @@ class WorkPackageMigration(BaseMigration):
             user_mapping=user_mapping,
             work_package_mapping=work_package_mapping,
         )
+
+    def _get_or_create_version(self, version_name: str, project_id: int) -> int | None:
+        """Get or create an OpenProject version on-the-fly.
+
+        This enables fixVersion mapping during work package migration without
+        requiring a separate versions migration step. Versions that don't exist
+        in Jira anymore can still be created in OpenProject.
+
+        Args:
+            version_name: Name of the version (from Jira fixVersion)
+            project_id: OpenProject project ID
+
+        Returns:
+            OpenProject version ID, or None if creation failed
+        """
+        if not version_name or not project_id:
+            return None
+
+        # Normalize version name
+        version_name = str(version_name).strip()
+        if not version_name:
+            return None
+
+        # Check cache first
+        cache_key = (project_id, version_name)
+        if cache_key in self._version_cache:
+            return self._version_cache[cache_key]
+
+        # Check if version exists in OpenProject
+        try:
+            query = f"""
+                v = Version.find_by(project_id: {project_id}, name: {repr(version_name)})
+                v ? {{ id: v.id, name: v.name }}.to_json : 'null'
+            """
+            result = self.op_client.execute_json_query(query)
+            # Parse JSON if result is a string
+            if isinstance(result, str):
+                try:
+                    import json
+                    result = json.loads(result)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if isinstance(result, dict) and result.get("id"):
+                version_id = int(result["id"])
+                self._version_cache[cache_key] = version_id
+                self.logger.debug(f"[VERSION] Found existing version '{version_name}' (ID: {version_id}) in project {project_id}")
+                return version_id
+        except Exception as e:
+            self.logger.debug(f"[VERSION] Error checking version existence: {e}")
+
+        # Create version on-the-fly
+        try:
+            create_query = f"""
+                v = Version.new(
+                    project_id: {project_id},
+                    name: {repr(version_name)},
+                    status: 'open'
+                )
+                if v.save
+                    {{ id: v.id, name: v.name, created: true }}.to_json
+                else
+                    {{ error: v.errors.full_messages.join(', ') }}.to_json
+                end
+            """
+            result = self.op_client.execute_json_query(create_query)
+            if isinstance(result, dict):
+                if result.get("id"):
+                    version_id = int(result["id"])
+                    self._version_cache[cache_key] = version_id
+                    self.logger.info(f"[VERSION] Created version '{version_name}' (ID: {version_id}) in project {project_id}")
+                    return version_id
+                elif result.get("error"):
+                    self.logger.warning(f"[VERSION] Failed to create version '{version_name}': {result['error']}")
+        except Exception as e:
+            self.logger.warning(f"[VERSION] Error creating version '{version_name}' in project {project_id}: {e}")
+
+        return None
+
+    def _extract_final_workflow(self, jira_issue: Any) -> str | None:
+        """Extract the final/current workflow scheme name from Jira changelog.
+
+        The Jira "Workflow" field in changelog represents workflow scheme changes
+        (not status changes). We extract the most recent "toString" value to get
+        the current workflow scheme name.
+
+        Args:
+            jira_issue: The Jira issue object
+
+        Returns:
+            Final workflow scheme name, or None if not found
+        """
+        try:
+            # Access changelog from issue
+            changelog = getattr(jira_issue, "changelog", None)
+            if not changelog:
+                return None
+
+            histories = getattr(changelog, "histories", None)
+            if not histories:
+                return None
+
+            # Find all Workflow field changes, sorted by date (most recent last)
+            workflow_changes = []
+            for history in histories:
+                items = getattr(history, "items", [])
+                for item in items:
+                    field = getattr(item, "field", None) or (item.get("field") if isinstance(item, dict) else None)
+                    if field == "Workflow":
+                        to_string = getattr(item, "toString", None) or (item.get("toString") if isinstance(item, dict) else None)
+                        if to_string:
+                            created = getattr(history, "created", "")
+                            workflow_changes.append((created, to_string))
+
+            if workflow_changes:
+                # Sort by timestamp and get the most recent
+                workflow_changes.sort(key=lambda x: x[0])
+                final_workflow = workflow_changes[-1][1]
+                self.logger.debug(f"[WORKFLOW] Extracted final workflow scheme: {final_workflow}")
+                return str(final_workflow)
+
+        except Exception as e:
+            self.logger.debug(f"[WORKFLOW] Error extracting workflow: {e}")
+
+        return None
 
     def _load_start_date_fields(self) -> list[str]:
         fields = list(self.START_DATE_FIELD_IDS_DEFAULT)
@@ -1507,6 +1636,33 @@ class WorkPackageMigration(BaseMigration):
             Dictionary with work package data
 
         """
+        # Set current project context for changelog processing (used by _process_changelog_item)
+        self._current_project_id = project_id
+
+        # BUG #21 FIX: Early load J2O CF IDs for Workflow/Resolution tracking in changelog processing
+        # This must happen BEFORE changelog processing so cf_field_changes can be populated
+        if not hasattr(self, "_j2o_wp_cf_ids_full") or not isinstance(self._j2o_wp_cf_ids_full, dict):
+            cf_specs = (
+                ("J2O Origin System", "string", False),
+                ("J2O Origin ID", "string", True),
+                ("J2O Origin Key", "string", True),
+                ("J2O Origin URL", "string", False),
+                ("J2O First Migration Date", "date", False),
+                ("J2O Last Update Date", "date", False),
+                ("J2O Jira Workflow", "string", True),
+                ("J2O Jira Resolution", "string", True),
+            )
+            cf_ids: dict[str, int] = {}
+            for name, fmt, searchable in cf_specs:
+                try:
+                    cf = self.op_client.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField", searchable=searchable)
+                    if isinstance(cf, dict) and cf.get("id"):
+                        cf_ids[name] = int(cf["id"])
+                except Exception:
+                    continue
+            self._j2o_wp_cf_ids_full = cf_ids
+            self.logger.info(f"[BUG21] Loaded J2O CF IDs: {cf_ids}")
+
         # Extract the necessary fields from the Jira Issue object
         issue_type_id = jira_issue.fields.issuetype.id
         issue_type_name = jira_issue.fields.issuetype.name
@@ -1735,7 +1891,7 @@ class WorkPackageMigration(BaseMigration):
                                 offset_seconds = 1
                                 while True:
                                     new_dt = original_dt + timedelta(seconds=offset_seconds)
-                                    new_timestamp = new_dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                                    new_timestamp = new_dt.astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
 
                                     if new_timestamp not in used_timestamps:
                                         # Found a unique timestamp
@@ -1771,14 +1927,27 @@ class WorkPackageMigration(BaseMigration):
                     entry_timestamp = entry.get("timestamp", "")
 
                     if entry_type == "comment":
-                        # Bug #32 fix: Ensure user exists before adding operation
-                        author_name = (entry_data.get("author") or {}).get("name")
-                        user_dict = self.user_mapping.get(author_name) if author_name else None
-                        comment_author_id = user_dict.get("openproject_id") if user_dict else None
+                        # Bug #32 fix: Enhanced user attribution - try multiple fields
+                        author_data = entry_data.get("author") or {}
+                        comment_author_id = None
+                        author_name = None
+                        
+                        # Try multiple fields: name, displayName, emailAddress
+                        for key in ['name', 'displayName', 'emailAddress']:
+                            if key in author_data and author_data[key]:
+                                user_dict = self.user_mapping.get(author_data[key])
+                                if user_dict:
+                                    comment_author_id = user_dict.get("openproject_id")
+                                    if comment_author_id:
+                                        author_name = author_data[key]
+                                        self.logger.debug(f"{jira_key}: Found user via {key}: {author_name} → {comment_author_id}")
+                                        break
+                        
                         if not comment_author_id:
-                            # Bug #32 fix: Use proper fallback user (148941) instead of admin (1)
+                            # Use fallback user (148941)
                             comment_author_id = 148941
-                            self.logger.warning(f"[BUG32] {jira_key}: User '{author_name}' not found in mapping for comment, using fallback user {comment_author_id}")
+                            attempted_fields = {k: author_data.get(k) for k in ['name', 'displayName', 'emailAddress'] if k in author_data}
+                            self.logger.warning(f"[BUG32] {jira_key}: User not found in mapping for comment (tried: {attempted_fields}), using fallback user {comment_author_id}")
                         comment_body = entry_data.get("body", "")
                         work_package["_rails_operations"].append({
                             "type": "create_comment",
@@ -1789,31 +1958,74 @@ class WorkPackageMigration(BaseMigration):
                         })
                         self.logger.info(f"[BUG23] {jira_key}: Added comment operation, total operations: {len(work_package['_rails_operations'])}")
                     elif entry_type == "changelog":
-                        # Bug #32 fix: Ensure user exists before adding operation
-                        author_name = (entry_data.get("author") or {}).get("name")
-                        user_dict = self.user_mapping.get(author_name) if author_name else None
-                        changelog_author_id = user_dict.get("openproject_id") if user_dict else None
+                        # Bug #32 fix: Enhanced user attribution - try multiple fields
+                        author_data = entry_data.get("author") or {}
+                        changelog_author_id = None
+                        author_name = None
+                        
+                        # Try multiple fields: name, displayName, emailAddress
+                        for key in ['name', 'displayName', 'emailAddress']:
+                            if key in author_data and author_data[key]:
+                                user_dict = self.user_mapping.get(author_data[key])
+                                if user_dict:
+                                    changelog_author_id = user_dict.get("openproject_id")
+                                    if changelog_author_id:
+                                        author_name = author_data[key]
+                                        self.logger.debug(f"{jira_key}: Found user via {key}: {author_name} → {changelog_author_id}")
+                                        break
+                        
                         if not changelog_author_id:
-                            # Bug #32 fix: Use proper fallback user (148941) instead of admin (1)
+                            # Use fallback user (148941)
                             changelog_author_id = 148941
-                            self.logger.warning(f"[BUG32] {jira_key}: User '{author_name}' not found in mapping for changelog, using fallback user {changelog_author_id}")
+                            attempted_fields = {k: author_data.get(k) for k in ['name', 'displayName', 'emailAddress'] if k in author_data}
+                            self.logger.warning(f"[BUG32] {jira_key}: User not found in mapping for changelog (tried: {attempted_fields}), using fallback user {changelog_author_id}")
 
                         # Bug #28 fix: Process field changes as structured data
+                        # Bug #16 fix: Also capture unmapped field changes as notes (prevent data loss)
+                        # Bug #21 fix: Track Workflow/Resolution as CF changes, not notes
                         changelog_items = entry_data.get("items", [])
                         field_changes = {}
+                        cf_field_changes = {}  # Bug #21: Track CF changes (Workflow/Resolution)
+                        unmapped_changes = []  # Bug #16: Track unmapped Jira fields
+
+                        # Get CF IDs for Workflow/Resolution tracking
+                        cf_map = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
+                        workflow_cf_id = cf_map.get("J2O Jira Workflow")
+                        resolution_cf_id = cf_map.get("J2O Jira Resolution")
 
                         for item in changelog_items:
                             field_change = self._process_changelog_item(item)
                             if field_change:
                                 field_changes.update(field_change)
+                            else:
+                                # Bug #16 fix: Capture unmapped field changes as text notes
+                                # Bug #21 fix: Workflow/Resolution tracked as CF changes, not notes
+                                field_name = item.get("field", "unknown")
+                                from_val = item.get("fromString") or item.get("from") or ""
+                                to_val = item.get("toString") or item.get("to") or ""
+
+                                # Bug #21: Track Workflow/Resolution as CF field changes
+                                if field_name == "Workflow" and workflow_cf_id:
+                                    cf_field_changes[workflow_cf_id] = [from_val or None, to_val or None]
+                                    self.logger.info(f"[BUG21] {jira_key}: Workflow CF change: '{from_val}' → '{to_val}'")
+                                elif field_name == "resolution" and resolution_cf_id:
+                                    cf_field_changes[resolution_cf_id] = [from_val or None, to_val or None]
+                                    self.logger.info(f"[BUG21] {jira_key}: Resolution CF change: '{from_val}' → '{to_val}'")
+                                elif from_val or to_val:
+                                    # Other unmapped fields still go to notes
+                                    unmapped_changes.append(f"Jira: {field_name} changed from '{from_val}' to '{to_val}'")
+
+                        # Bug #16 fix: Generate notes for unmapped field changes
+                        changelog_notes = "\n".join(unmapped_changes) if unmapped_changes else ""
 
                         # Bug #22 fix: Always create journal for changelogs (preserves workflow transitions)
                         # Bug #28 fix: Include field_changes for structured field tracking
+                        # Bug #16 fix: Include unmapped changes in notes to prevent data loss
                         operation = {
                             "type": "create_comment",
                             "jira_key": jira_key,
                             "user_id": changelog_author_id,
-                            "notes": "",  # Empty notes for field-change-only journals
+                            "notes": changelog_notes,  # Bug #16: Now contains unmapped field changes
                             "created_at": entry_timestamp,
                         }
 
@@ -1823,6 +2035,15 @@ class WorkPackageMigration(BaseMigration):
                             self.logger.info(f"[BUG32] {jira_key}: field_changes keys: {list(field_changes.keys())}")
                             operation["field_changes"] = field_changes
 
+                        # Bug #21: Add CF field changes (Workflow/Resolution)
+                        if cf_field_changes:
+                            operation["cf_field_changes"] = cf_field_changes
+                            self.logger.info(f"[BUG21] {jira_key}: Added {len(cf_field_changes)} CF field changes to operation")
+
+                        # Bug #16 debug: Log when unmapped changes are captured
+                        if unmapped_changes:
+                            self.logger.info(f"[BUG16] {jira_key}: Captured {len(unmapped_changes)} unmapped field changes as notes")
+
                         work_package["_rails_operations"].append(operation)
                         self.logger.info(f"[BUG23] {jira_key}: Added changelog operation with {len(field_changes)} field changes, total operations: {len(work_package['_rails_operations'])}")
 
@@ -1830,24 +2051,38 @@ class WorkPackageMigration(BaseMigration):
                 # Process operations in REVERSE order to reconstruct historical state from FINAL state
                 if "_rails_operations" in work_package and work_package["_rails_operations"]:
                     try:
-                        # Initialize current_state with FINAL work package state
+                        # BUG #12 FIX (CRITICAL): Sort operations by timestamp BEFORE assigning state_snapshots
+                        # Python assigns state_snapshots by array index, but Ruby re-sorts by timestamp.
+                        # Without this sort, timestamp operations (set_updated_at, set_journal_user) end up
+                        # at wrong positions after Ruby's sort, causing state_snapshot misalignment.
+                        # This ensures Python's assignment order matches Ruby's processing order.
+                        work_package["_rails_operations"].sort(
+                            key=lambda op: op.get("created_at") or op.get("timestamp") or "9999-12-31T23:59:59"
+                        )
+                        self.logger.info(f"[BUG12] {jira_key}: Sorted {len(work_package['_rails_operations'])} operations by timestamp before state_snapshot assignment")
+
+                        # BUG #10 FIX: Initialize current_state with ACTUAL FINAL values
+                        # These local variables contain the CURRENT/FINAL state from Jira
+                        # Using work_package.get() returned None because values weren't added yet
                         current_state = {
-                            "type_id": work_package.get("type_id"),
-                            "project_id": work_package.get("project_id"),
-                            "subject": work_package.get("subject"),
-                            "description": work_package.get("description"),
+                            "type_id": type_id,  # BUG #10: Use local var (already mapped from Jira issuetype)
+                            "project_id": project_id,  # BUG #10: Use local var
+                            "subject": subject,  # BUG #10: Use local var
+                            "description": description,  # BUG #10: Use local var
                             "due_date": work_package.get("due_date"),
                             "category_id": work_package.get("category_id"),
-                            "status_id": work_package.get("status_id"),
-                            "assigned_to_id": work_package.get("assigned_to_id"),
+                            "status_id": status_op_id,  # BUG #10: Use local var (already mapped from Jira status)
+                            "assigned_to_id": assigned_to_id,  # BUG #10: Use local var (from user association)
                             "priority_id": work_package.get("priority_id"),
                             "version_id": work_package.get("version_id"),
-                            "author_id": work_package.get("author_id"),
+                            "author_id": author_id,  # BUG #10: Use local var (from user association)
                             "done_ratio": work_package.get("done_ratio"),
                             "estimated_hours": work_package.get("estimated_hours"),
                             "start_date": work_package.get("start_date"),
                             "parent_id": work_package.get("parent_id"),
                         }
+                        # BUG #10 DEBUG: Log initial state values for validation
+                        self.logger.info(f"[BUG10] {jira_key}: Initial state - type_id={type_id}, status_id={status_op_id}, assigned_to_id={assigned_to_id}, author_id={author_id}")
 
                         # Process operations in REVERSE (most recent to oldest)
                         # For each operation, store current state, then UNDO changes to get previous state
@@ -1868,6 +2103,50 @@ class WorkPackageMigration(BaseMigration):
                                             current_state[field_name] = old_value
 
                         self.logger.info(f"[BUG9] {jira_key}: Built state snapshots for {len(work_package['_rails_operations'])} operations")
+                        # BUG #11 DEBUG: Log state_snapshot type_id and status_id for first, middle, and last operations
+                        ops = work_package["_rails_operations"]
+                        for debug_idx in [0, len(ops)//2, len(ops)-1]:
+                            if debug_idx < len(ops):
+                                ss = ops[debug_idx].get("state_snapshot", {})
+                                self.logger.info(f"[BUG11] {jira_key}: Op {debug_idx+1} state_snapshot: type_id={ss.get('type_id')}, status_id={ss.get('status_id')}")
+
+                        # BUG #21 FIX: Build CF state snapshots for Workflow/Resolution tracking
+                        # Different from state_snapshot: build FORWARD (oldest to newest), applying changes
+                        # This ensures v1 has initial values and vN has final values
+                        cf_map = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
+                        workflow_cf_id = cf_map.get("J2O Jira Workflow")
+                        resolution_cf_id = cf_map.get("J2O Jira Resolution")
+
+                        if workflow_cf_id or resolution_cf_id:
+                            # Start with empty CF state - no values before any changes
+                            current_cf_state: dict[int, str | None] = {}
+
+                            self.logger.info(f"[BUG21] {jira_key}: Starting CF state build (FORWARD order)")
+
+                            # Process operations in FORWARD order (oldest to newest)
+                            # For each operation, first apply any CF changes, then store the resulting state
+                            for i, op in enumerate(work_package["_rails_operations"]):
+                                op_type = op.get("type", "unknown")
+                                has_cf_changes = "cf_field_changes" in op and op["cf_field_changes"]
+
+                                # If this operation has cf_field_changes, APPLY the NEW value
+                                if has_cf_changes:
+                                    for cf_id, change_value in op["cf_field_changes"].items():
+                                        # Extract NEW value from [old, new] array
+                                        if isinstance(change_value, list) and len(change_value) >= 2:
+                                            new_value = change_value[1]
+                                            # Apply NEW value to get state AFTER this operation
+                                            current_cf_state[cf_id] = new_value
+                                            self.logger.info(f"[BUG21] {jira_key}: Op {i+1} ({op_type}): Applied CF {cf_id}={new_value}")
+
+                                # Store CF state as snapshot (CF values AFTER this operation)
+                                op["cf_state_snapshot"] = current_cf_state.copy()
+
+                                # Debug: Log snapshot for first few and last operations
+                                if i < 3 or i >= len(work_package["_rails_operations"]) - 2:
+                                    self.logger.info(f"[BUG21] {jira_key}: Op {i+1} ({op_type}): cf_state_snapshot={current_cf_state}")
+
+                            self.logger.info(f"[BUG21] {jira_key}: Built CF state snapshots for {len(work_package['_rails_operations'])} operations")
                     except Exception as snapshot_error:
                         self.logger.warning(f"[BUG9] {jira_key}: Failed to build state snapshots: {snapshot_error}")
                         # Continue without snapshots - Ruby template will fall back to current behavior
@@ -1938,6 +2217,8 @@ class WorkPackageMigration(BaseMigration):
                     ("J2O Origin URL", "string", False),
                     ("J2O First Migration Date", "date", False),
                     ("J2O Last Update Date", "date", False),
+                    ("J2O Jira Workflow", "string", True),  # Searchable: Current/final Jira workflow scheme
+                    ("J2O Jira Resolution", "string", True),  # Searchable: Final Jira resolution (Done, Fixed, etc.)
                 )
                 cf_ids: dict[str, int] = {}
                 for name, fmt, searchable in cf_specs:
@@ -1970,6 +2251,21 @@ class WorkPackageMigration(BaseMigration):
                 cf_vals.append({"id": cf_map["J2O First Migration Date"], "value": today_str})
             if cf_map.get("J2O Last Update Date"):
                 cf_vals.append({"id": cf_map["J2O Last Update Date"], "value": today_str})
+            # Extract final workflow scheme from changelog (last "Workflow" field change)
+            if cf_map.get("J2O Jira Workflow"):
+                final_workflow = self._extract_final_workflow(jira_issue)
+                if final_workflow:
+                    cf_vals.append({"id": cf_map["J2O Jira Workflow"], "value": final_workflow})
+            # Extract resolution from Jira issue (direct field, not changelog)
+            if cf_map.get("J2O Jira Resolution"):
+                try:
+                    resolution = getattr(jira_issue.fields, "resolution", None)
+                    if resolution:
+                        resolution_name = getattr(resolution, "name", None) or str(resolution)
+                        if resolution_name:
+                            cf_vals.append({"id": cf_map["J2O Jira Resolution"], "value": resolution_name})
+                except Exception:
+                    pass
             if cf_vals:
                 existing = work_package.get("custom_fields")
                 if isinstance(existing, list):
@@ -2093,6 +2389,8 @@ class WorkPackageMigration(BaseMigration):
 
         # Field mapping from Jira to OpenProject
         # BUG #32 FIX (REGRESSION #3): Only map fields that exist in Journal::WorkPackageJournal
+        # BUG #17 FIX: Added timeestimate and timeoriginalestimate mappings
+        # fixVersion: Enabled with on-the-fly version creation
         field_mappings = {
             "summary": "subject",
             "description": "description",
@@ -2102,9 +2400,12 @@ class WorkPackageMigration(BaseMigration):
             "issuetype": "type_id",
             # "resolution": "resolution",  # NOT a valid Journal::WorkPackageJournal attribute
             # "labels": "tags",  # NOT a valid Journal::WorkPackageJournal attribute
-            # "fixVersion": "version",  # NOT a valid Journal::WorkPackageJournal attribute (should be version_id)
-            # "component": "category",  # NOT a valid Journal::WorkPackageJournal attribute (should be category_id)
+            "Fix Version": "version_id",  # On-the-fly version creation enabled
+            # "component": "category_id",  # Requires category_mapping - falls through to Bug #16 notes for now
             "reporter": "author_id",
+            # BUG #17 FIX: Time estimate fields (Jira stores in seconds, OpenProject in hours)
+            "timeestimate": "remaining_hours",
+            "timeoriginalestimate": "estimated_hours",
         }
 
         # BUG #32 FIX (REGRESSION #3): Skip unmapped fields to prevent invalid Journal::WorkPackageJournal attributes
@@ -2119,27 +2420,148 @@ class WorkPackageMigration(BaseMigration):
 
         # Special handling for user fields (assignee, reporter)
         if field in ["assignee", "reporter"]:
-            # Map user names to IDs
+            # BUG #20 FIX: Use 'from'/'to' (username) not 'fromString'/'toString' (display name)
+            # Jira changelog provides:
+            #   - from/to: username (e.g., "enrico.tischendorf")
+            #   - fromString/toString: display name (e.g., "Enrico Tischendorf")
+            # Our user_mapping is keyed by username, so we must use from/to
+            from_username = item.get("from")
+            to_username = item.get("to")
+
+            # Map usernames to OpenProject IDs
             from_id = None
             to_id = None
 
-            if from_value and self.user_mapping:
-                user_dict = self.user_mapping.get(from_value)
+            if from_username and self.user_mapping:
+                user_dict = self.user_mapping.get(from_username)
                 from_id = user_dict.get("openproject_id") if user_dict else None
+                if not user_dict:
+                    self.logger.debug(f"[BUG20] User not found in mapping: {from_username}")
 
-            if to_value and self.user_mapping:
-                user_dict = self.user_mapping.get(to_value)
+            if to_username and self.user_mapping:
+                user_dict = self.user_mapping.get(to_username)
                 to_id = user_dict.get("openproject_id") if user_dict else None
+                if not user_dict:
+                    self.logger.debug(f"[BUG20] User not found in mapping: {to_username}")
+
+            # BUG #19 FIX: Skip no-change mappings (from == to, including both None)
+            # This prevents "retracted" phantom journals from operations with no actual change
+            if from_id == to_id:
+                return None
 
             return {op_field: [from_id, to_id]}
 
-        # Special handling for status, priority, issuetype (need ID mapping)
-        if field in ["status", "priority", "issuetype"]:
-            # For now, store as string values - Ruby code can map to IDs during insertion
-            # Future enhancement: Add ID mapping lookups here
+        # BUG #11 FIX: Map Jira IDs to OpenProject IDs for status, issuetype
+        # The progressive state building needs OpenProject integer IDs, not Jira string values
+        if field == "issuetype":
+            # Get Jira type IDs (not string names)
+            from_jira_id = item.get("from")  # e.g., "3" for Task
+            to_jira_id = item.get("to")  # e.g., "10404" for Access
+
+            # Map to OpenProject type IDs
+            from_op_id = None
+            to_op_id = None
+
+            if from_jira_id and self.issue_type_id_mapping:
+                from_op_id = self.issue_type_id_mapping.get(str(from_jira_id))
+            if to_jira_id and self.issue_type_id_mapping:
+                to_op_id = self.issue_type_id_mapping.get(str(to_jira_id))
+
+            # BUG #11 DEBUG: Log type mapping results
+            self.logger.info(f"[BUG11-TYPE] issuetype change: from_jira={from_jira_id} -> from_op={from_op_id}, to_jira={to_jira_id} -> to_op={to_op_id}")
+
+            # BUG #19 FIX: Skip no-change mappings
+            if from_op_id == to_op_id:
+                return None
+
+            return {op_field: [from_op_id, to_op_id]}
+
+        if field == "status":
+            # Get Jira status IDs (not string names)
+            from_jira_id = item.get("from")  # e.g., "1" for Open
+            to_jira_id = item.get("to")  # e.g., "6" for Closed
+
+            # Map to OpenProject status IDs
+            from_op_id = None
+            to_op_id = None
+
+            if from_jira_id and self.status_mapping:
+                mapping = self.status_mapping.get(str(from_jira_id))
+                from_op_id = mapping.get("openproject_id") if mapping else None
+            if to_jira_id and self.status_mapping:
+                mapping = self.status_mapping.get(str(to_jira_id))
+                to_op_id = mapping.get("openproject_id") if mapping else None
+
+            # BUG #11 DEBUG: Log status mapping results
+            self.logger.info(f"[BUG11-STATUS] status change: from_jira={from_jira_id} -> from_op={from_op_id}, to_jira={to_jira_id} -> to_op={to_op_id}")
+
+            # BUG #19 FIX: Skip no-change mappings
+            if from_op_id == to_op_id:
+                return None
+
+            return {op_field: [from_op_id, to_op_id]}
+
+        # Handle Fix Version -> version_id with on-the-fly version creation
+        if field == "Fix Version":
+            # Version names are in fromString/toString (like user display names)
+            from_version_name = item.get("fromString")
+            to_version_name = item.get("toString")
+
+            # Map to OpenProject version IDs (create if needed)
+            from_version_id = None
+            to_version_id = None
+
+            if self._current_project_id:
+                if from_version_name:
+                    from_version_id = self._get_or_create_version(from_version_name, self._current_project_id)
+                if to_version_name:
+                    to_version_id = self._get_or_create_version(to_version_name, self._current_project_id)
+
+            self.logger.info(f"[FIXVERSION] project_id={self._current_project_id}, from='{from_version_name}' -> {from_version_id}, to='{to_version_name}' -> {to_version_id}")
+
+            # Skip no-change mappings
+            if from_version_id == to_version_id:
+                return None
+
+            return {op_field: [from_version_id, to_version_id]}
+
+        # For priority, keep string values for now (mapping not critical for journals)
+        if field == "priority":
+            # BUG #19 FIX: Skip no-change mappings
+            if from_value == to_value:
+                return None
             return {op_field: [from_value, to_value]}
 
+        # BUG #17 FIX: Handle time estimate fields - convert Jira seconds to OpenProject hours
+        if field in ["timeestimate", "timeoriginalestimate"]:
+            from_seconds = item.get("from")
+            to_seconds = item.get("to")
+
+            def seconds_to_hours(seconds_str: str | None) -> float | None:
+                """Convert Jira time (seconds) to OpenProject hours."""
+                if not seconds_str:
+                    return None
+                try:
+                    seconds = int(seconds_str)
+                    return round(seconds / 3600, 2)  # Convert to hours with 2 decimal places
+                except (ValueError, TypeError):
+                    return None
+
+            from_hours = seconds_to_hours(from_seconds)
+            to_hours = seconds_to_hours(to_seconds)
+
+            self.logger.info(f"[BUG17-TIME] {field} change: from={from_seconds}s ({from_hours}h) -> to={to_seconds}s ({to_hours}h)")
+
+            # BUG #19 FIX: Skip no-change mappings
+            if from_hours == to_hours:
+                return None
+
+            return {op_field: [from_hours, to_hours]}
+
         # Generic field change (subject, description, etc.)
+        # BUG #19 FIX: Skip no-change mappings
+        if from_value == to_value:
+            return None
         return {op_field: [from_value, to_value]}
 
     def _extract_changelog_histories(self, issue: Any) -> list[Any]:
