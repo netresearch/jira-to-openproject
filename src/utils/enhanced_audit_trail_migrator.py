@@ -174,9 +174,11 @@ class EnhancedAuditTrailMigrator:
                         "field": item.field,
                         "fieldtype": getattr(item, "fieldtype", None),
                         "fieldId": getattr(item, "fieldId", None),
-                        "from": getattr(item, "fromString", None),
+                        # BUG #11 FIX: Use "from"/"to" for IDs, not fromString/toString
+                        # Jira API provides: from=ID (e.g., "1"), fromString=name (e.g., "Open")
+                        "from": getattr(item, "from", None),
                         "fromString": getattr(item, "fromString", None),
-                        "to": getattr(item, "toString", None),
+                        "to": getattr(item, "to", None),
                         "toString": getattr(item, "toString", None),
                     }
                     entry["items"].append(change_item)
