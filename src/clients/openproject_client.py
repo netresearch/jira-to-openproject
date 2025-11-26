@@ -1455,6 +1455,14 @@ class OpenProjectClient:
             rescue
             end
             cf.save
+            # For WorkPackageCustomField, explicitly enable for all types
+            if cf.type == 'WorkPackageCustomField' && cf.type_ids.empty?
+              begin
+                cf.type_ids = Type.all.pluck(:id)
+                cf.save
+              rescue
+              end
+            end
           else
             # Update searchable if it doesn't match
             begin
@@ -1463,6 +1471,14 @@ class OpenProjectClient:
                 cf.save
               end
             rescue
+            end
+            # Ensure WP CFs are enabled for all types
+            if cf.type == 'WorkPackageCustomField' && cf.type_ids.empty?
+              begin
+                cf.type_ids = Type.all.pluck(:id)
+                cf.save
+              rescue
+              end
             end
           end
           if cf && cf.type == 'UserCustomField'
