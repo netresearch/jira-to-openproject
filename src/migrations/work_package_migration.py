@@ -2011,6 +2011,36 @@ class WorkPackageMigration(BaseMigration):
                                 elif field_name == "resolution" and resolution_cf_id:
                                     cf_field_changes[resolution_cf_id] = [from_val or None, to_val or None]
                                     self.logger.info(f"[BUG21] {jira_key}: Resolution CF change: '{from_val}' → '{to_val}'")
+                                elif field_name == "Key" and from_val:
+                                    # Project move: Key field shows issue key change (e.g., NRTECH-468 → NRS-182)
+                                    # Generate compact comment with link to previous project if mapped
+                                    from_project_key = from_val.rsplit("-", 1)[0] if "-" in from_val else None
+                                    proj_map = getattr(self, "project_mapping", {}) or {}
+                                    if from_project_key and from_project_key in proj_map:
+                                        op_identifier = proj_map[from_project_key].get("openproject_identifier", "").lower()
+                                        if op_identifier:
+                                            unmapped_changes.append(f"Moved from [{from_val}](/projects/{op_identifier}/work_packages)")
+                                        else:
+                                            unmapped_changes.append(f"Moved from {from_val}")
+                                    else:
+                                        unmapped_changes.append(f"Moved from {from_val}")
+                                elif field_name == "project" and from_val:
+                                    # Project move: project field shows project name change
+                                    # Generate compact comment with link to previous project if mapped
+                                    proj_map = getattr(self, "project_mapping", {}) or {}
+                                    from_project_mapping = None
+                                    for key, info in proj_map.items():
+                                        if info.get("jira_name") == from_val or key == from_val:
+                                            from_project_mapping = info
+                                            break
+                                    if from_project_mapping:
+                                        op_identifier = from_project_mapping.get("openproject_identifier", "").lower()
+                                        if op_identifier:
+                                            unmapped_changes.append(f"Moved from project [{from_val}](/projects/{op_identifier})")
+                                        else:
+                                            unmapped_changes.append(f"Moved from project '{from_val}'")
+                                    else:
+                                        unmapped_changes.append(f"Moved from project '{from_val}'")
                                 elif from_val or to_val:
                                     # Other unmapped fields still go to notes
                                     unmapped_changes.append(f"Jira: {field_name} changed from '{from_val}' to '{to_val}'")
