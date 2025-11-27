@@ -223,4 +223,7 @@ auth_keys
 
 # Task files
 # tasks.json
-# tasks/ 
+# tasks/
+
+# Serena MCP memories (session-specific)
+.serena/ 
