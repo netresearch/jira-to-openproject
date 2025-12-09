@@ -25,6 +25,7 @@
 - Implement migrations via `BaseMigration` with extract → map → load methods, optimistic execution, and structured logging via `structlog`.
 - Wrap external I/O with `tenacity` retries and `pybreaker` circuit breakers; raise exceptions with rich context instead of returning error codes.
 - Generate Rails console scripts via `OpenProjectClient` helpers; sanitize payloads first and keep Ruby minimal per `docs/SECURITY.md`.
+- **Compute Location Principle**: Python does computation, Ruby does minimum INSERT only. Pre-compute version numbers, validity_period ranges, field mappings, and state snapshots in Python; Ruby only reads WP initial state and executes bulk INSERT. This leverages Python's superior parallelism (ThreadPoolExecutor) and reduces SSH/tmux overhead.
 - When composing Rails console Ruby from Python, split the script into a parameterized head (f-string interpolation) and a literal body block so escaping stays predictable.
 - User provenance flow now removes the obsolete "Jira user key" and "Tempo Account" custom fields so J2O_* attributes remain the canonical origin source.
 - On user updates, also map Jira locale → OpenProject `UserPreference.language` and backfill avatars through `Avatars::UpdateService` (skip silently when Jira exposes no avatar URLs).
