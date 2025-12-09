@@ -72,6 +72,7 @@ class EnhancedAuditTrailMigrator:
         self.changelog_data: dict[str, list[Any]] = {}
         self.audit_events: list[AuditEventData] = []
         self.user_mapping: dict[str, int] = {}
+        self.project_mapping: dict[str, dict[str, Any]] = {}
 
         # Migration results
         self.migration_results = {
@@ -93,6 +94,8 @@ class EnhancedAuditTrailMigrator:
 
         # Load user mapping if available
         self._load_user_mapping()
+        # Load project mapping for project move links
+        self._load_project_mapping()
         # Initialize converter for mention conversion using current mapping
         self.converter = MarkdownConverter(user_mapping=self.user_mapping)
 
@@ -101,16 +104,16 @@ class EnhancedAuditTrailMigrator:
         try:
             from src.utils import data_handler
 
-            user_mapping_file = Path("data") / "user_mapping.json"
-            if user_mapping_file.exists():
-                self.user_mapping = data_handler.load(
-                    filename="user_mapping.json",
-                    directory=Path("data"),
-                )
+            # Use data_handler.load_dict without directory - it will use config.get_path("data")
+            self.user_mapping = data_handler.load_dict(
+                filename=Path("user_mapping.json"),
+                default={},
+            )
+            if self.user_mapping:
                 self.logger.info(f"Loaded {len(self.user_mapping)} user mappings")
             else:
                 self.logger.warning(
-                    "User mapping file not found - will use fallback user attribution",
+                    "User mapping file not found or empty - will use fallback user attribution",
                 )
 
         except Exception as e:
@@ -121,6 +124,24 @@ class EnhancedAuditTrailMigrator:
                 self.converter.user_mapping = self.user_mapping or {}
         except Exception:
             pass
+
+    def _load_project_mapping(self) -> None:
+        """Load project mapping for generating project move links."""
+        try:
+            from src.utils import data_handler
+
+            project_mapping_file = Path("data") / "project_mapping.json"
+            if project_mapping_file.exists():
+                self.project_mapping = data_handler.load(
+                    filename="project_mapping.json",
+                    directory=Path("data"),
+                )
+                self.logger.info(f"Loaded {len(self.project_mapping)} project mappings")
+            else:
+                self.logger.debug("Project mapping file not found")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to load project mapping: {e}")
 
     def extract_changelog_from_issue(self, jira_issue: Any) -> list[dict[str, Any]]:
         """Extract changelog data from a Jira issue.
@@ -416,7 +437,57 @@ class EnhancedAuditTrailMigrator:
         from_value = change_item.get("fromString") or change_item.get("from") or "empty"
         to_value = change_item.get("toString") or change_item.get("to") or "empty"
 
+        # Special handling for project moves (Key and project field changes)
+        if field == "Key":
+            return self._generate_key_change_comment(from_value, to_value)
+        if field == "project":
+            return self._generate_project_move_comment(from_value, to_value)
+
         return f"Changed {field} from '{from_value}' to '{to_value}'"
+
+    def _generate_key_change_comment(self, from_key: str, to_key: str) -> str:
+        """Generate a compact comment for Jira key changes (project moves).
+
+        Format: Moved from OLDKEY (with link to project if migrated)
+        """
+        if not from_key or from_key == "empty":
+            return f"Jira key set to {to_key}"
+
+        # Extract project key from Jira issue key (e.g., "NRTECH" from "NRTECH-468")
+        from_project_key = from_key.rsplit("-", 1)[0] if "-" in from_key else None
+
+        if from_project_key and from_project_key in self.project_mapping:
+            project_info = self.project_mapping[from_project_key]
+            op_identifier = project_info.get("openproject_identifier", "").lower()
+            if op_identifier:
+                # Use markdown link to the project (relative URL works in OpenProject)
+                return f"Moved from [{from_key}](/projects/{op_identifier}/work_packages)"
+        # Fallback: just show the old key without link
+        return f"Moved from {from_key}"
+
+    def _generate_project_move_comment(self, from_project: str, to_project: str) -> str:
+        """Generate a compact comment for project field changes.
+
+        Format: Project changed: OldProject -> NewProject (with link if migrated)
+        """
+        if not from_project or from_project == "empty":
+            return f"Assigned to project '{to_project}'"
+
+        # Try to find the old project in mapping (match by name)
+        from_project_mapping = None
+        for key, info in self.project_mapping.items():
+            jira_name = info.get("jira_name", "")
+            if jira_name == from_project or key == from_project:
+                from_project_mapping = info
+                break
+
+        if from_project_mapping:
+            op_identifier = from_project_mapping.get("openproject_identifier", "").lower()
+            if op_identifier:
+                return f"Moved from project [{from_project}](/projects/{op_identifier})"
+
+        # Fallback: just show project names
+        return f"Moved from project '{from_project}'"
 
     def migrate_audit_trail_for_issue(
         self,
