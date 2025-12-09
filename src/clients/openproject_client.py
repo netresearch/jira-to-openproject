@@ -2330,21 +2330,27 @@ JSON_DATA
         Each item: { id, updated_at, jira_issue_key, jira_migration_date }
         """
         ruby = f"""
-          cf_key = CustomField.find_by(type: 'WorkPackageCustomField', name: 'Jira Issue Key')
-          cf_mig = CustomField.find_by(type: 'WorkPackageCustomField', name: 'Jira Migration Date')
-          wps = WorkPackage.where(project_id: {project_id}).select(:id, :updated_at)
-          wps.map do |wp|
-            key = nil
-            mig = nil
-            begin
-              key = (cf_key ? wp.custom_value_for(cf_key)&.value : nil)
-            rescue
-            end
-            begin
-              mig = (cf_mig ? wp.custom_value_for(cf_mig)&.value : nil)
-            rescue
-            end
-            {{ id: wp.id, updated_at: (wp.updated_at&.utc&.iso8601), jira_issue_key: key, jira_migration_date: mig }}
+          cf_key = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Origin Key')
+          cf_mig = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Last Update Date')
+
+          # Pre-load custom values for all WPs in this project for efficiency
+          wp_ids = WorkPackage.where(project_id: {project_id}).pluck(:id)
+
+          key_values = {{}}
+          mig_values = {{}}
+
+          if cf_key
+            CustomValue.where(custom_field_id: cf_key.id, customized_type: 'WorkPackage', customized_id: wp_ids)
+              .each {{ |cv| key_values[cv.customized_id] = cv.value }}
+          end
+
+          if cf_mig
+            CustomValue.where(custom_field_id: cf_mig.id, customized_type: 'WorkPackage', customized_id: wp_ids)
+              .each {{ |cv| mig_values[cv.customized_id] = cv.value }}
+          end
+
+          WorkPackage.where(project_id: {project_id}).select(:id, :updated_at).map do |wp|
+            {{ id: wp.id, updated_at: (wp.updated_at&.utc&.iso8601), jira_issue_key: key_values[wp.id], jira_migration_date: mig_values[wp.id] }}
           end
         """
         data = self.execute_large_query_to_json_file(ruby, timeout=120)
