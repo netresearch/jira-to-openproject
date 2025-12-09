@@ -18,7 +18,6 @@ Critical Pattern (Bug #22 lesson):
 
 import json
 import os
-import shutil
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -35,8 +34,7 @@ from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import ProgressTracker, configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
-from src.migrations.wp_defaults import apply_required_defaults
-from src.models import ComponentResult, MigrationError
+from src.models import ComponentResult
 from src.utils import data_handler
 from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
 from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
@@ -1030,12 +1028,25 @@ class WorkPackageMigration(BaseMigration):
         jira_issue: Issue,
         existing_wp: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Build rails_ops for a single Jira issue's journals.
+        """Build rails_ops for a single Jira issue's journals with full pre-computation.
 
-        This is extracted from _update_existing_work_package to enable batching.
+        Pre-computes in Python (fast, parallel):
+        - Version numbers (v2, v3, v4...)
+        - validity_period ranges as ISO strings
+        - field_changes mapped to OpenProject field names/IDs
+        - user_id from mapping
+        - notes from comments/changelog
+        - cf_state_snapshot for J2O Workflow/Resolution
+
+        Ruby only does (requires DB access):
+        - Read WP initial state
+        - Apply field_changes to build state_snapshot
+        - Bulk INSERT
+
         Returns list of operations ready for Ruby bulk processing.
         """
-        rails_ops = []
+        rails_ops: list[dict[str, Any]] = []
+        jira_key = getattr(jira_issue, "key", "unknown")
 
         try:
             # Extract comments and changelog
@@ -1043,7 +1054,7 @@ class WorkPackageMigration(BaseMigration):
             changelog_entries = self.enhanced_audit_trail_migrator.extract_changelog_from_issue(jira_issue)
 
             # Merge into unified entries
-            all_entries = []
+            all_entries: list[dict[str, Any]] = []
             for comment in comments:
                 all_entries.append({
                     "type": "comment",
@@ -1063,51 +1074,184 @@ class WorkPackageMigration(BaseMigration):
             # Sort chronologically
             all_entries.sort(key=lambda x: x.get("timestamp", ""))
 
-            # Resolve timestamp collisions (add 1 second offset)
-            for i in range(1, len(all_entries)):
-                curr_ts = all_entries[i].get("timestamp", "")
-                prev_ts = all_entries[i-1].get("timestamp", "")
-                if curr_ts and prev_ts and curr_ts == prev_ts:
-                    try:
-                        if 'T' in curr_ts:
-                            dt = datetime.fromisoformat(curr_ts.replace('Z', '+00:00'))
+            # Resolve timestamp collisions (add 1 second offset) and track all timestamps
+            resolved_timestamps: list[str] = []
+            for i, entry in enumerate(all_entries):
+                curr_ts = entry.get("timestamp", "")
+                if i > 0 and curr_ts:
+                    prev_ts = resolved_timestamps[i - 1] if resolved_timestamps else ""
+                    if prev_ts and curr_ts <= prev_ts:
+                        # Collision: add 1 second to previous
+                        try:
+                            if "T" in prev_ts:
+                                dt = datetime.fromisoformat(prev_ts.replace("Z", "+00:00").replace("+0000", "+00:00"))
+                            else:
+                                dt = datetime.fromisoformat(prev_ts)
                             dt = dt + timedelta(seconds=1)
-                            all_entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
-                    except Exception:
-                        pass
+                            curr_ts = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
+                            entry["timestamp"] = curr_ts
+                        except Exception:
+                            pass
+                resolved_timestamps.append(curr_ts)
 
-            # Build rails_ops from entries
+            # Pre-compute validity_period ranges
+            # Each entry's validity starts at its timestamp and ends at next entry's timestamp
+            validity_periods: list[tuple[str, str | None]] = []
+            for i, entry in enumerate(all_entries):
+                start_ts = entry.get("timestamp", "")
+                if i < len(all_entries) - 1:
+                    # Not last: ends at next entry's start
+                    end_ts = all_entries[i + 1].get("timestamp", "")
+                else:
+                    # Last entry: open-ended (None)
+                    end_ts = None
+                validity_periods.append((start_ts, end_ts))
+
+            # Field mapping from Jira to OpenProject
+            jira_to_op_field = {
+                "summary": "subject",
+                "description": "description",
+                "status": "status_id",
+                "assignee": "assigned_to_id",
+                "priority": "priority_id",
+                "issuetype": "type_id",
+                "reporter": "author_id",
+                "Fix Version": "version_id",
+                "fixVersion": "version_id",
+                "Component": "category_id",
+                "component": "category_id",
+                "duedate": "due_date",
+                "Story Points": "story_points",
+            }
+
+            # Track J2O Workflow/Resolution for cf_state_snapshot
+            cf_workflow_value: str | None = None
+            cf_resolution_value: str | None = None
+
+            # Build rails_ops with full pre-computation
             for i, entry in enumerate(all_entries):
                 entry_type = entry["type"]
                 entry_data = entry["data"]
-                entry_ts = entry["timestamp"]
+                entry_ts = entry.get("timestamp", "")
+                validity_start, validity_end = validity_periods[i]
 
-                # Get author
+                # Get author and map to OP user_id
                 author_info = entry_data.get("author") or {}
                 author_name = author_info.get("name")
                 user_dict = self.user_mapping.get(author_name) if author_name else None
                 user_id = user_dict.get("openproject_id") if user_dict else 1
 
-                # Build notes
-                if entry_type == "comment":
-                    notes = entry_data.get("body", "")
-                else:
-                    notes = "Jira changelog:\n"
-                    items = entry_data.get("items", [])
-                    for item in items:
-                        field = item.get("field", "")
-                        from_val = item.get("fromString") or item.get("from", "")
-                        to_val = item.get("toString") or item.get("to", "")
-                        notes += f"- {field}: {from_val} → {to_val}\n"
+                # Build field_changes for changelog entries (mapped to OP field names)
+                field_changes: dict[str, Any] = {}
+                notes = ""
 
-                rails_ops.append({
+                if entry_type == "comment":
+                    # Comments have no field changes, just notes
+                    raw_body = entry_data.get("body", "")
+                    # Convert Jira markup to markdown if converter available
+                    if hasattr(self, "markdown_converter") and self.markdown_converter:
+                        try:
+                            notes = self.markdown_converter.convert(raw_body)
+                        except Exception:
+                            notes = raw_body
+                    else:
+                        notes = raw_body
+                else:
+                    # Changelog: extract field changes and build notes
+                    items = entry_data.get("items", [])
+                    notes_lines = []
+
+                    for item in items:
+                        jira_field = item.get("field", "")
+                        field_id = item.get("fieldId", "")
+                        from_val = item.get("from")
+                        from_str = item.get("fromString", "")
+                        to_val = item.get("to")
+                        to_str = item.get("toString", "")
+
+                        # Map to OP field name
+                        op_field = jira_to_op_field.get(jira_field.lower(), jira_to_op_field.get(jira_field))
+
+                        if op_field:
+                            # Use ID values for _id fields, string values otherwise
+                            if op_field.endswith("_id"):
+                                # Map IDs through our mappings
+                                if op_field == "status_id" and to_val:
+                                    mapped_to = self.status_mapping.get(to_val, {}).get("openproject_id") if self.status_mapping else None
+                                    mapped_from = self.status_mapping.get(from_val, {}).get("openproject_id") if self.status_mapping and from_val else None
+                                    if mapped_to:
+                                        field_changes[op_field] = [mapped_from, mapped_to]
+                                elif op_field == "type_id" and to_val:
+                                    mapped_to = self.issue_type_mapping.get(to_val, {}).get("openproject_id") if self.issue_type_mapping else None
+                                    mapped_from = self.issue_type_mapping.get(from_val, {}).get("openproject_id") if self.issue_type_mapping and from_val else None
+                                    if mapped_to:
+                                        field_changes[op_field] = [mapped_from, mapped_to]
+                                elif op_field == "assigned_to_id":
+                                    # Map user names to IDs
+                                    mapped_to = self.user_mapping.get(to_str, {}).get("openproject_id") if self.user_mapping and to_str else None
+                                    mapped_from = self.user_mapping.get(from_str, {}).get("openproject_id") if self.user_mapping and from_str else None
+                                    field_changes[op_field] = [mapped_from, mapped_to]
+                                elif op_field == "author_id":
+                                    mapped_to = self.user_mapping.get(to_str, {}).get("openproject_id") if self.user_mapping and to_str else None
+                                    mapped_from = self.user_mapping.get(from_str, {}).get("openproject_id") if self.user_mapping and from_str else None
+                                    field_changes[op_field] = [mapped_from, mapped_to]
+                                elif op_field == "priority_id" and to_str:
+                                    # Priority uses string names that Ruby will resolve
+                                    field_changes[op_field] = [from_str, to_str]
+                                else:
+                                    # Generic ID field
+                                    field_changes[op_field] = [from_val, to_val]
+                            else:
+                                # Non-ID fields use string values
+                                field_changes[op_field] = [from_str, to_str]
+
+                        # Track J2O Workflow/Resolution for cf_state_snapshot
+                        if jira_field.lower() == "workflow" or field_id == "customfield_10500":
+                            cf_workflow_value = to_str or to_val
+                        elif jira_field.lower() == "resolution":
+                            cf_resolution_value = to_str or to_val
+
+                        # Build human-readable notes for unmapped fields
+                        notes_lines.append(f"Jira: {jira_field} changed from '{from_str}' to '{to_str}'")
+
+                    notes = "\n".join(notes_lines) if notes_lines else ""
+
+                # Build cf_state_snapshot for J2O custom fields
+                cf_state_snapshot: dict[str, str] | None = None
+                if cf_workflow_value or cf_resolution_value:
+                    cf_state_snapshot = {}
+                    # We need the CF IDs - these are loaded elsewhere, use placeholders
+                    # Ruby will look these up by name if needed
+                    if cf_workflow_value:
+                        cf_state_snapshot["workflow"] = cf_workflow_value
+                    if cf_resolution_value:
+                        cf_state_snapshot["resolution"] = cf_resolution_value
+
+                # Build the operation with all pre-computed data
+                op: dict[str, Any] = {
                     "type": "journal",
                     "created_at": entry_ts,
                     "user_id": user_id,
                     "notes": notes,
-                })
+                    "version": i + 2,  # v2, v3, v4... (v1 is creation journal)
+                    "validity_period_start": validity_start,
+                    "validity_period_end": validity_end,  # None for last entry (open-ended)
+                }
+
+                # Only include field_changes if non-empty
+                if field_changes:
+                    op["field_changes"] = field_changes
+
+                # Only include cf_state_snapshot if we have values
+                if cf_state_snapshot:
+                    op["cf_state_snapshot"] = cf_state_snapshot
+
+                rails_ops.append(op)
+
         except Exception as e:
-            self.logger.warning(f"Failed to build rails_ops for {getattr(jira_issue, 'key', 'unknown')}: {e}")
+            self.logger.warning(f"Failed to build rails_ops for {jira_key}: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
 
         return rails_ops
 
@@ -2133,7 +2277,7 @@ class WorkPackageMigration(BaseMigration):
                         author_data = entry_data.get("author") or {}
                         comment_author_id = None
                         author_name = None
-                        
+
                         # Try multiple fields: name, displayName, emailAddress
                         for key in ['name', 'displayName', 'emailAddress']:
                             if key in author_data and author_data[key]:
@@ -2144,7 +2288,7 @@ class WorkPackageMigration(BaseMigration):
                                         author_name = author_data[key]
                                         self.logger.debug(f"{jira_key}: Found user via {key}: {author_name} → {comment_author_id}")
                                         break
-                        
+
                         if not comment_author_id:
                             # Use fallback user (148941)
                             comment_author_id = 148941
@@ -2164,7 +2308,7 @@ class WorkPackageMigration(BaseMigration):
                         author_data = entry_data.get("author") or {}
                         changelog_author_id = None
                         author_name = None
-                        
+
                         # Try multiple fields: name, displayName, emailAddress
                         for key in ['name', 'displayName', 'emailAddress']:
                             if key in author_data and author_data[key]:
@@ -2175,7 +2319,7 @@ class WorkPackageMigration(BaseMigration):
                                         author_name = author_data[key]
                                         self.logger.debug(f"{jira_key}: Found user via {key}: {author_name} → {changelog_author_id}")
                                         break
-                        
+
                         if not changelog_author_id:
                             # Use fallback user (148941)
                             changelog_author_id = 148941

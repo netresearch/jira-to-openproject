@@ -542,10 +542,78 @@ class OpenProjectClient:
             # Transfer the input JSON to container
             self.transfer_file_to_container(local_data_path, container_data_path)
 
-            # Execute the script inside Rails console. Suppress wrapper result.inspect noise.
+            # Execute the script inside Rails console.
+            # IMPORTANT: We use a unique execution ID to distinguish this run's output
+            # from any previous runs still visible in the tmux buffer.
+            import shutil
+            import subprocess
+
+            exec_id = os.urandom(8).hex()
+            unique_start_marker = f"JSON_OUTPUT_START_{exec_id}"
+            unique_end_marker = f"JSON_OUTPUT_END_{exec_id}"
+
             load_cmd = f'load "{container_script_path.as_posix()}"'
             try:
-                output = self.rails_client.execute(load_cmd, timeout=timeout, suppress_output=True)
+                target = self.rails_client._get_target()
+                tmux = shutil.which("tmux") or "tmux"
+
+                # First, send a Ruby command to define the unique markers for this execution
+                # The script will use these instead of hardcoded markers
+                marker_setup = (
+                    f"$j2o_start_marker = '{unique_start_marker}'; "
+                    f"$j2o_end_marker = '{unique_end_marker}'"
+                )
+                subprocess.run(
+                    [tmux, "send-keys", "-t", target, marker_setup, "Enter"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                time.sleep(0.1)
+
+                # Send the load command
+                escaped_cmd = self.rails_client._escape_command(load_cmd)
+                subprocess.run(
+                    [tmux, "send-keys", "-t", target, escaped_cmd, "Enter"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+                # Poll for our unique JSON_OUTPUT_END marker with timeout
+                effective_timeout = timeout or self.rails_client.command_timeout
+                start_time = time.time()
+                output = ""
+                found_markers = False
+
+                while time.time() - start_time < effective_timeout:
+                    cap = subprocess.run(
+                        [tmux, "capture-pane", "-p", "-S", "-2000", "-t", target],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    output = cap.stdout
+
+                    # Check for our unique end marker AT START OF LINE (preceded by newline)
+                    # This avoids matching the command echo like => "JSON_OUTPUT_END_xxx"
+                    if f"\n{unique_start_marker}" in output and unique_end_marker in output:
+                        # Verify both markers appear in the right order (script output, not echo)
+                        start_pos = output.rfind(f"\n{unique_start_marker}")
+                        if start_pos != -1:
+                            end_pos = output.find(unique_end_marker, start_pos)
+                            if end_pos != -1 and end_pos > start_pos:
+                                found_markers = True
+                                break
+
+                    time.sleep(0.2)  # Poll every 200ms
+
+                if not found_markers:
+                    logger.warning(
+                        "JSON_OUTPUT_END_%s marker not found within %d seconds",
+                        exec_id,
+                        effective_timeout,
+                    )
             except Exception as e:
                 # Fallback: if Rails console crashed or is unstable (e.g., Reline/IRB errors),
                 # execute via non-interactive runner to avoid TTY/Reline issues.
@@ -579,20 +647,41 @@ class OpenProjectClient:
                 else:
                     raise
 
-            # Extract JSON payload between JSON_OUTPUT_START / JSON_OUTPUT_END
-            start_marker = "JSON_OUTPUT_START"
-            end_marker = "JSON_OUTPUT_END"
-            start_idx = output.find(start_marker)
-            end_idx = output.find(end_marker)
+            # Extract JSON payload between unique markers (JSON_OUTPUT_START_{exec_id} / JSON_OUTPUT_END_{exec_id})
+            # Look for start marker preceded by newline (actual script output, not command echo)
+            newline_start = f"\n{unique_start_marker}"
+            start_idx = output.rfind(newline_start)
+            if start_idx != -1:
+                start_idx += 1  # Skip the newline, point to marker start
+                end_idx = output.find(unique_end_marker, start_idx + len(unique_start_marker))
+            else:
+                end_idx = -1
+
+            # DEBUG: Log marker positions
+            logger.debug(
+                "Marker extraction: start_idx=%s, end_idx=%s, marker=%s, output_len=%d",
+                start_idx, end_idx, exec_id, len(output)
+            )
+            if start_idx != -1 and end_idx != -1:
+                json_preview = output[start_idx:end_idx + len(unique_end_marker)][:200]
+                logger.debug("JSON region preview: %r", json_preview)
+
             if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                json_str = output[start_idx + len(start_marker) : end_idx].strip()
+                json_str = output[start_idx + len(unique_start_marker) : end_idx].strip()
                 # Fallback parsing with sanitization to guard against stray control chars from IRB/tmux
                 def _try_parse(s: str) -> Any:  # noqa: ANN401
                     return json.loads(s)
 
                 def _sanitize_control_chars(s: str) -> str:
-                    # Remove ASCII control chars except standard whitespace
-                    return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
+                    # Remove ANSI escape sequences (colors, cursor movement, etc.)
+                    s = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", s)
+                    # Also remove OSC sequences (e.g., \x1b]...BEL or ST)
+                    s = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?", "", s)
+                    # Remove other escape sequences
+                    s = re.sub(r"\x1b[^[]]", "", s)
+                    # Remove ASCII control chars except tab (CR/LF are NOT preserved - they corrupt JSON)
+                    s = re.sub(r"[\x00-\x08\x0A-\x0D\x0E-\x1F\x7f]", "", s)
+                    return s
 
                 def _extract_first_json_block(s: str) -> str | None:  # noqa: C901
                     # Attempt to isolate the first balanced JSON object/array
@@ -623,17 +712,32 @@ class OpenProjectClient:
                             break
                     return None
 
+                # Always sanitize first - tmux output often has ANSI codes and line wraps
+                json_str = _sanitize_control_chars(json_str)
                 try:
                     parsed = _try_parse(json_str)
                 except Exception:  # noqa: BLE001
                     try:
-                        parsed = _try_parse(_sanitize_control_chars(json_str))
+                        parsed = _try_parse(json_str)  # Already sanitized
                     except Exception:  # noqa: BLE001
                         candidate = _extract_first_json_block(json_str)
                         if candidate is None:
                             candidate = _extract_first_json_block(_sanitize_control_chars(json_str)) or json_str
                         try:
                             parsed = _try_parse(candidate)
+                        except json.JSONDecodeError as e:
+                            # Debug: log the problematic area
+                            pos = e.pos if hasattr(e, 'pos') else 0
+                            start_ctx = max(0, pos - 20)
+                            end_ctx = min(len(candidate), pos + 20)
+                            ctx = candidate[start_ctx:end_ctx]
+                            char_at_pos = repr(candidate[pos:pos+5]) if pos < len(candidate) else "EOF"
+                            logger.warning(
+                                "JSON parse error at pos %d: char=%s, context=%r",
+                                pos, char_at_pos, ctx
+                            )
+                            q_msg = f"Failed to parse JSON output: {e}"
+                            raise QueryExecutionError(q_msg) from e
                         except Exception as e:
                             q_msg = f"Failed to parse JSON output: {e}"
                             raise QueryExecutionError(q_msg) from e

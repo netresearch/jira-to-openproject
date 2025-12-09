@@ -1,26 +1,30 @@
 # Multi-WP batch journal creation for optimized migration
 # This script processes multiple work packages' journals in ONE Rails call
 #
+# OPTIMIZED VERSION: Uses pre-computed values from Python
+# Python pre-computes: version, validity_period_start/end, field_changes mapping
+# Ruby only: reads WP initial state, applies field_changes, bulk INSERT
+#
 # Expected variables:
-# - input_data: Array of {wp_id:, jira_key:, rails_ops:} hashes (loaded by execute_script_with_data)
-# - verbose: boolean for logging control (optional)
+# - input_data: Array of {wp_id:, jira_key:, rails_ops:} hashes
+# - rails_ops contain: version, validity_period_start, validity_period_end, field_changes, user_id, notes
 #
 # Output: JSON with results per WP
 # {"results": [{"wp_id": X, "jira_key": "Y", "created": N, "error": null}, ...]}
 
 require 'json'
 
-SYNTHETIC_TIMESTAMP_INCREMENT = 1  # 1 second increment
-
 results = []
 
 if input_data && input_data.respond_to?(:each)
   conn = ActiveRecord::Base.connection
 
-  # Cache lookups that are shared across all WPs
+  # Cache lookups shared across all WPs (one-time cost)
   workflow_cf = CustomField.find_by(name: "J2O Jira Workflow")
   resolution_cf = CustomField.find_by(name: "J2O Jira Resolution")
   j2o_cf_ids = [workflow_cf&.id, resolution_cf&.id].compact
+  workflow_cf_id = workflow_cf&.id
+  resolution_cf_id = resolution_cf&.id
 
   priority_cache = {}
   IssuePriority.all.each { |p| priority_cache[p.name.downcase] = p.id }
@@ -31,6 +35,53 @@ if input_data && input_data.respond_to?(:each)
     :done_ratio, :estimated_hours, :start_date, :parent_id,
     :schedule_manually, :ignore_non_working_days
   ].freeze
+
+  # Lambda: Apply field_changes to state hash
+  apply_field_changes_to_state = lambda do |current_state, field_changes, priority_cache, rec|
+    return current_state unless field_changes && field_changes.is_a?(Hash)
+    field_changes.each do |k, v|
+      field_sym = k.to_sym
+      next unless valid_journal_attributes.include?(field_sym)
+      new_value = v.is_a?(Array) ? v[1] : v
+      next if new_value.nil?
+      next if new_value.is_a?(String) && new_value.empty?
+      next if new_value.is_a?(Array)
+
+      # Special handling for priority_id - resolve string name to ID
+      if field_sym == :priority_id && new_value.is_a?(String) && !(new_value =~ /^\d+$/)
+        resolved = priority_cache[new_value.downcase]
+        new_value = resolved if resolved
+      end
+
+      next unless new_value.is_a?(Integer) || new_value.is_a?(String) ||
+                  new_value.is_a?(TrueClass) || new_value.is_a?(FalseClass) ||
+                  new_value.is_a?(Float) || new_value.is_a?(Date) ||
+                  new_value.is_a?(Time) || new_value.is_a?(Numeric)
+      current_state[field_sym] = new_value.is_a?(String) && new_value =~ /^\d+$/ ? new_value.to_i : new_value
+    end
+    current_state
+  end
+
+  # Lambda: Ensure required fields have valid defaults from WP
+  ensure_required_fields = lambda do |state, rec|
+    state = state.transform_keys(&:to_sym) if state.is_a?(Hash) && state.keys.first.is_a?(String)
+    state[:priority_id] ||= rec.priority_id
+    state[:type_id] ||= rec.type_id
+    state[:status_id] ||= rec.status_id
+    state[:project_id] ||= rec.project_id
+    state[:author_id] ||= rec.author_id
+    state[:schedule_manually] = rec.schedule_manually if state[:schedule_manually].nil?
+    state[:ignore_non_working_days] = rec.ignore_non_working_days if state[:ignore_non_working_days].nil?
+    state
+  end
+
+  # Lambda: Sanitize ID fields
+  sanitize_id_field = lambda do |value, cache, fallback|
+    return fallback if value.nil?
+    return value if value.is_a?(Integer)
+    return value.to_i if value.to_s =~ /^\d+$/
+    cache[value.to_s.downcase] || fallback
+  end
 
   input_data.each_with_index do |wp_data, batch_idx|
     wp_id = wp_data['wp_id'] || wp_data[:wp_id]
@@ -67,88 +118,13 @@ if input_data && input_data.respond_to?(:each)
         end
       end
 
-      # Sort operations chronologically
-      ops = rails_ops.sort_by do |op|
-        created_at_str = op['created_at'] || op[:created_at] || op['timestamp'] || op[:timestamp]
-        created_at_str ? Time.parse(created_at_str).utc : Time.now.utc
-      end
+      # Operations are already sorted by Python, use as-is
+      ops = rails_ops
 
-      current_version = Journal.where(journable_id: rec.id, journable_type: 'WorkPackage').maximum(:version) || 0
-      last_used_timestamp = nil
+      # Get base version for this WP
+      base_version = Journal.where(journable_id: rec.id, journable_type: 'WorkPackage').maximum(:version) || 0
 
-      # Lambda helpers
-      apply_field_changes_to_state = lambda do |current_state, field_changes|
-        return current_state unless field_changes && field_changes.is_a?(Hash)
-        field_changes.each do |k, v|
-          field_sym = k.to_sym
-          next unless valid_journal_attributes.include?(field_sym)
-          new_value = v.is_a?(Array) ? v[1] : v
-          next if new_value.nil? || (new_value.is_a?(String) && new_value.empty?) || new_value.is_a?(Array)
-          next unless new_value.is_a?(Integer) || new_value.is_a?(String) ||
-                      new_value.is_a?(TrueClass) || new_value.is_a?(FalseClass) ||
-                      new_value.is_a?(Float) || new_value.is_a?(Date) ||
-                      new_value.is_a?(Time) || new_value.is_a?(Numeric)
-          current_state[field_sym] = new_value
-        end
-        current_state
-      end
-
-      compute_timestamp_and_validity = lambda do |op_idx, created_at_str|
-        if !created_at_str || created_at_str.empty?
-          op = ops[op_idx]
-          created_at_str = op['timestamp'] || op[:timestamp]
-        end
-
-        if created_at_str && !created_at_str.empty?
-          target_time = Time.parse(created_at_str).utc
-          if last_used_timestamp && target_time <= last_used_timestamp
-            target_time = last_used_timestamp + SYNTHETIC_TIMESTAMP_INCREMENT
-          end
-        elsif last_used_timestamp
-          target_time = last_used_timestamp + SYNTHETIC_TIMESTAMP_INCREMENT
-        else
-          target_time = (rec.created_at || Time.now).utc
-        end
-
-        next_op = ops[op_idx + 1]
-        if next_op
-          next_created_at = next_op['created_at'] || next_op[:created_at] || next_op['timestamp'] || next_op[:timestamp]
-          if next_created_at && !next_created_at.empty?
-            period_end = Time.parse(next_created_at).utc
-            period_end = target_time + SYNTHETIC_TIMESTAMP_INCREMENT if period_end <= target_time
-            validity_period = (target_time...period_end)
-          else
-            period_end = target_time + SYNTHETIC_TIMESTAMP_INCREMENT
-            validity_period = (target_time...period_end)
-          end
-        else
-          validity_period = (target_time..)
-        end
-
-        last_used_timestamp = validity_period.end || target_time
-        [target_time, validity_period]
-      end
-
-      ensure_required_fields = lambda do |state|
-        state = state.transform_keys(&:to_sym) if state.is_a?(Hash) && state.keys.first.is_a?(String)
-        state[:priority_id] ||= rec.priority_id
-        state[:type_id] ||= rec.type_id
-        state[:status_id] ||= rec.status_id
-        state[:project_id] ||= rec.project_id
-        state[:author_id] ||= rec.author_id
-        state[:schedule_manually] = rec.schedule_manually if state[:schedule_manually].nil?
-        state[:ignore_non_working_days] = rec.ignore_non_working_days if state[:ignore_non_working_days].nil?
-        state
-      end
-
-      sanitize_id_field = lambda do |value, cache, fallback|
-        return fallback if value.nil?
-        return value if value.is_a?(Integer)
-        return value.to_i if value.to_s =~ /^\d+$/
-        cache[value.to_s.downcase] || fallback
-      end
-
-      # Initialize state
+      # Initialize state from WP record (Ruby has DB access)
       current_state = {
         type_id: rec.type_id, project_id: rec.project_id, subject: rec.subject,
         description: rec.description, due_date: rec.due_date, category_id: rec.category_id,
@@ -158,7 +134,7 @@ if input_data && input_data.respond_to?(:each)
         schedule_manually: rec.schedule_manually, ignore_non_working_days: rec.ignore_non_working_days
       }
 
-      # Collect journal data
+      # Collect journal data using pre-computed values from Python
       bulk_journals = []
       v1_journal = nil
       v1_cf_snapshot = nil
@@ -167,34 +143,62 @@ if input_data && input_data.respond_to?(:each)
         op_type = op['type'] || op[:type]
         next if op_type == 'set_journal_user'
 
-        timestamp_only_ops = ['set_created_at', 'set_updated_at', 'set_closed_at', 'set_journal_created_at']
-        next if timestamp_only_ops.include?(op_type) && op_idx != 0
-
         notes = op['notes'] || op[:notes] || ''
         field_changes = op['field_changes'] || op[:field_changes]
 
+        # Skip empty operations (except first which updates v1)
         is_empty = (notes.nil? || notes.to_s.strip.empty?) && (field_changes.nil? || field_changes.empty?)
         next if is_empty && op_idx != 0
 
+        # Use pre-computed user_id from Python
         raw_user_id = (op['user_id'] || op[:user_id]).to_i
         fallback_user_id = rec.author_id && rec.author_id > 0 ? rec.author_id : 2
         user_id = raw_user_id > 0 ? raw_user_id : fallback_user_id
 
-        created_at_str = op['created_at'] || op[:created_at] || op['timestamp'] || op[:timestamp]
-        target_time, validity_period = compute_timestamp_and_validity.call(op_idx, created_at_str)
+        # Use pre-computed timestamps from Python
+        validity_start_str = op['validity_period_start'] || op[:validity_period_start] || op['created_at'] || op[:created_at]
+        validity_end_str = op['validity_period_end'] || op[:validity_period_end]
 
-        if op.is_a?(Hash) && (op.has_key?("state_snapshot") || op.has_key?(:state_snapshot))
-          state_snapshot = op["state_snapshot"] || op[:state_snapshot]
-          sanitized_state = ensure_required_fields.call(state_snapshot)
+        # Parse timestamps
+        target_time = validity_start_str && !validity_start_str.to_s.empty? ? Time.parse(validity_start_str.to_s).utc : (rec.created_at || Time.now).utc
+
+        # Build validity_period from pre-computed values
+        if validity_end_str && !validity_end_str.to_s.empty?
+          period_end = Time.parse(validity_end_str.to_s).utc
+          validity_period = (target_time...period_end)
         else
-          current_state = apply_field_changes_to_state.call(current_state, field_changes)
+          # Open-ended (last entry)
+          validity_period = (target_time..)
+        end
+
+        # Apply field_changes to build progressive state snapshot
+        if op.is_a?(Hash) && (op.key?("state_snapshot") || op.key?(:state_snapshot))
+          state_snapshot = op["state_snapshot"] || op[:state_snapshot]
+          sanitized_state = ensure_required_fields.call(state_snapshot, rec)
+        else
+          current_state = apply_field_changes_to_state.call(current_state, field_changes, priority_cache, rec)
           sanitized_state = current_state.dup
         end
 
+        # Get cf_state_snapshot (pre-computed by Python with field names, resolve to IDs here)
         cf_snapshot = op["cf_state_snapshot"] || op[:cf_state_snapshot]
+        resolved_cf_snapshot = nil
+        if cf_snapshot.is_a?(Hash)
+          resolved_cf_snapshot = {}
+          if cf_snapshot['workflow'] && workflow_cf_id
+            resolved_cf_snapshot[workflow_cf_id] = cf_snapshot['workflow']
+          end
+          if cf_snapshot['resolution'] && resolution_cf_id
+            resolved_cf_snapshot[resolution_cf_id] = cf_snapshot['resolution']
+          end
+        end
+
+        # Use pre-computed version from Python, or calculate if not provided
+        pre_computed_version = op['version'] || op[:version]
 
         if op_idx == 0
-          v1_cf_snapshot = cf_snapshot
+          # First operation updates v1 journal
+          v1_cf_snapshot = resolved_cf_snapshot
           v1_journal = Journal.where(journable_id: rec.id, journable_type: 'WorkPackage', version: 1).first
           if v1_journal
             v1_journal.user_id = user_id
@@ -202,7 +206,8 @@ if input_data && input_data.respond_to?(:each)
             v1_journal.data = Journal::WorkPackageJournal.new(sanitized_state)
             v1_journal.save(validate: false)
 
-            target_time_str = target_time.to_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+            # Update timestamps via raw SQL
+            target_time_str = target_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
             if validity_period.end
               period_end_time = validity_period.end.is_a?(Time) ? validity_period.end : Time.parse(validity_period.end.to_s)
               period_end_str = period_end_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
@@ -213,16 +218,17 @@ if input_data && input_data.respond_to?(:each)
             conn.execute("UPDATE journals SET created_at = '#{target_time_str}', updated_at = '#{target_time_str}', validity_period = #{range_sql} WHERE id = #{v1_journal.id}")
           end
         else
-          current_version += 1
+          # v2+ journals: use pre-computed version or increment
+          version = pre_computed_version || (base_version + bulk_journals.size + 1)
           bulk_journals << {
-            version: current_version, user_id: user_id, notes: notes,
+            version: version, user_id: user_id, notes: notes,
             created_at: target_time, validity_period: validity_period,
-            state: sanitized_state, cf_snapshot: cf_snapshot
+            state: sanitized_state, cf_snapshot: resolved_cf_snapshot
           }
         end
       end
 
-      # Deduplicate
+      # Deduplicate by validity_period (in case Python sent duplicates)
       if bulk_journals.any?
         seen = {}
         deduped = []
@@ -236,14 +242,14 @@ if input_data && input_data.respond_to?(:each)
           deduped << j
         end
 
+        # Re-number versions if deduplication removed entries
         if deduped.size < bulk_journals.size
-          base_version = Journal.where(journable_id: rec.id, journable_type: 'WorkPackage').maximum(:version) || 0
           deduped.each_with_index { |j, i| j[:version] = base_version + 1 + i }
         end
         bulk_journals = deduped
       end
 
-      # Bulk INSERT
+      # Bulk INSERT work_package_journals first (to get data_id)
       if bulk_journals.any?
         wp_journal_values = bulk_journals.map do |j|
           s = j[:state]
@@ -271,11 +277,12 @@ if input_data && input_data.respond_to?(:each)
         wp_journal_ids = []
         wp_result.each { |row| wp_journal_ids << row['id'] }
 
+        # Bulk INSERT journals with data_type and data_id
         journal_values = bulk_journals.each_with_index.map do |j, idx|
           wp_journal_id = wp_journal_ids[idx]
           next nil unless wp_journal_id
 
-          ts_str = j[:created_at].to_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+          ts_str = j[:created_at].strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
           notes_escaped = conn.quote(j[:notes].to_s)
 
           if j[:validity_period].end
@@ -302,7 +309,7 @@ if input_data && input_data.respond_to?(:each)
           version_to_id = {}
           journal_result.each { |row| version_to_id[row['version']] = row['id'] }
 
-          # CustomizableJournals for v2+
+          # Bulk INSERT customizable_journals for v2+ (J2O custom fields)
           if j2o_cf_ids.any?
             cf_journal_values = []
             bulk_journals.each do |j|
@@ -320,7 +327,7 @@ if input_data && input_data.respond_to?(:each)
         end
       end
 
-      # CustomizableJournals for v1
+      # Insert customizable_journals for v1
       if v1_journal && j2o_cf_ids.any?
         Journal::CustomizableJournal.where(journal_id: v1_journal.id, custom_field_id: j2o_cf_ids).delete_all
         if v1_cf_snapshot.is_a?(Hash) && v1_cf_snapshot.any?
@@ -342,5 +349,7 @@ if input_data && input_data.respond_to?(:each)
   end
 end
 
-# Output JSON result with markers expected by execute_script_with_data
-puts "JSON_OUTPUT_START" + results.to_json + "JSON_OUTPUT_END"
+# Output JSON result with dynamic markers (set by Python via $j2o_start_marker / $j2o_end_marker)
+start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : "JSON_OUTPUT_START"
+end_marker = defined?($j2o_end_marker) && $j2o_end_marker ? $j2o_end_marker : "JSON_OUTPUT_END"
+puts start_marker + results.to_json + end_marker
