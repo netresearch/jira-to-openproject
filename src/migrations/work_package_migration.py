@@ -238,6 +238,7 @@ class WorkPackageMigration(BaseMigration):
 
         Returns:
             OpenProject version ID, or None if creation failed
+
         """
         if not version_name or not project_id:
             return None
@@ -255,7 +256,7 @@ class WorkPackageMigration(BaseMigration):
         # Check if version exists in OpenProject
         try:
             query = f"""
-                v = Version.find_by(project_id: {project_id}, name: {repr(version_name)})
+                v = Version.find_by(project_id: {project_id}, name: {version_name!r})
                 v ? {{ id: v.id, name: v.name }}.to_json : 'null'
             """
             result = self.op_client.execute_json_query(query)
@@ -279,7 +280,7 @@ class WorkPackageMigration(BaseMigration):
             create_query = f"""
                 v = Version.new(
                     project_id: {project_id},
-                    name: {repr(version_name)},
+                    name: {version_name!r},
                     status: 'open'
                 )
                 if v.save
@@ -295,7 +296,7 @@ class WorkPackageMigration(BaseMigration):
                     self._version_cache[cache_key] = version_id
                     self.logger.info(f"[VERSION] Created version '{version_name}' (ID: {version_id}) in project {project_id}")
                     return version_id
-                elif result.get("error"):
+                if result.get("error"):
                     self.logger.warning(f"[VERSION] Failed to create version '{version_name}': {result['error']}")
         except Exception as e:
             self.logger.warning(f"[VERSION] Error creating version '{version_name}' in project {project_id}: {e}")
@@ -314,6 +315,7 @@ class WorkPackageMigration(BaseMigration):
 
         Returns:
             Final workflow scheme name, or None if not found
+
         """
         try:
             # Access changelog from issue
@@ -515,7 +517,7 @@ class WorkPackageMigration(BaseMigration):
             key
             for key in sorted({k.strip() for k in existing_keys if k and k.strip()})
             if key
-        ][:900]  # Avoid overly long JQL payloads
+        ][:200]  # Keep under 8KB URL limit (200 keys × ~10 chars = ~2KB)
         if not limited:
             return None
         return f"key NOT IN ({','.join(limited)})"
@@ -737,7 +739,7 @@ class WorkPackageMigration(BaseMigration):
                 all_journal_entries.append({
                     "type": "comment",
                     "timestamp": comment.get("created", ""),
-                    "data": comment
+                    "data": comment,
                 })
 
             # Add changelog entries as journal entries
@@ -745,7 +747,7 @@ class WorkPackageMigration(BaseMigration):
                 all_journal_entries.append({
                     "type": "changelog",
                     "timestamp": entry.get("created", ""),
-                    "data": entry
+                    "data": entry,
                 })
 
             # If no journal entries, return
@@ -772,14 +774,14 @@ class WorkPackageMigration(BaseMigration):
                 if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
                     # Parse the timestamp
                     try:
-                        if 'T' in current_timestamp:
+                        if "T" in current_timestamp:
                             # ISO8601 format: 2011-08-23T13:41:21.000+0000
                             # Parse timestamp
-                            dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                            dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
                             # Add 1 SECOND to separate colliding entries (OpenProject uses second-precision timestamps)
                             dt = dt + timedelta(seconds=1)
                             # Convert back to ISO8601 format
-                            all_journal_entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                            all_journal_entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
                             self.logger.info(f"Resolved timestamp collision for {jira_key}: {previous_timestamp} → {all_journal_entries[i]['timestamp']}")
                     except Exception as e:
                         self.logger.warning(f"Failed to resolve timestamp collision for {jira_key}: {e}")
@@ -854,23 +856,23 @@ class WorkPackageMigration(BaseMigration):
                 # - For last comment: open-ended range
                 if is_last_comment:
                     # Last comment: OPEN-ENDED range (most recent journal version has no end)
-                    if comment_created and 'T' in comment_created:
+                    if comment_created and "T" in comment_created:
                         validity_start_iso = comment_created
                     elif comment_created:
                         try:
                             # Try parsing with milliseconds first
-                            dt = datetime.strptime(comment_created, '%Y-%m-%d %H:%M:%S.%f')
-                            validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                            dt = datetime.strptime(comment_created, "%Y-%m-%d %H:%M:%S.%f")
+                            validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                         except ValueError:
                             try:
                                 # Try parsing without milliseconds
-                                dt = datetime.strptime(comment_created, '%Y-%m-%d %H:%M:%S')
-                                validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                                dt = datetime.strptime(comment_created, "%Y-%m-%d %H:%M:%S")
+                                validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                             except ValueError as e:
                                 self.logger.warning(f"Failed to parse timestamp '{comment_created}': {e}, using as-is")
                                 validity_start_iso = comment_created
                     else:
-                        validity_start_iso = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+                        validity_start_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                     # Bug #15 fix Attempt #2: Open-ended range for most recent journal version
                     # Mark this as open-ended by setting validity_end_iso to None
@@ -885,39 +887,39 @@ class WorkPackageMigration(BaseMigration):
                     if comment_created:
                         try:
                             # First try parsing ISO8601 format with timezone (from collision detection)
-                            dt = datetime.strptime(comment_created, '%Y-%m-%dT%H:%M:%S.%f%z')
-                            validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                            dt = datetime.strptime(comment_created, "%Y-%m-%dT%H:%M:%S.%f%z")
+                            validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                         except ValueError:
                             try:
                                 # Try parsing with milliseconds (database format)
-                                dt = datetime.strptime(comment_created, '%Y-%m-%d %H:%M:%S.%f')
-                                validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                                dt = datetime.strptime(comment_created, "%Y-%m-%d %H:%M:%S.%f")
+                                validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                             except ValueError:
                                 try:
                                     # Try parsing without milliseconds
-                                    dt = datetime.strptime(comment_created, '%Y-%m-%d %H:%M:%S')
-                                    validity_start_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                                    dt = datetime.strptime(comment_created, "%Y-%m-%d %H:%M:%S")
+                                    validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                                 except ValueError as e:
                                     self.logger.warning(f"Failed to parse timestamp '{comment_created}': {e}, using as-is")
                                     validity_start_iso = comment_created
                     else:
-                        validity_start_iso = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+                        validity_start_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                     if next_created:
                         try:
                             # First try parsing ISO8601 format with timezone (from collision detection)
-                            dt = datetime.strptime(next_created, '%Y-%m-%dT%H:%M:%S.%f%z')
-                            validity_end_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                            dt = datetime.strptime(next_created, "%Y-%m-%dT%H:%M:%S.%f%z")
+                            validity_end_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                         except ValueError:
                             try:
                                 # Try parsing with milliseconds (database format)
-                                dt = datetime.strptime(next_created, '%Y-%m-%d %H:%M:%S.%f')
-                                validity_end_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                                dt = datetime.strptime(next_created, "%Y-%m-%d %H:%M:%S.%f")
+                                validity_end_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                             except ValueError:
                                 try:
                                     # Try parsing without milliseconds
-                                    dt = datetime.strptime(next_created, '%Y-%m-%d %H:%M:%S')
-                                    validity_end_iso = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                                    dt = datetime.strptime(next_created, "%Y-%m-%d %H:%M:%S")
+                                    validity_end_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                                 except ValueError as e:
                                     self.logger.warning(f"Failed to parse timestamp '{next_created}': {e}, using as-is")
                                     validity_end_iso = next_created
@@ -971,7 +973,7 @@ class WorkPackageMigration(BaseMigration):
                         journable_type: 'WorkPackage',
                         user_id: {comment_author_id},
                         version: max_version + 1,
-                        notes: {repr(comment_body)}
+                        notes: {comment_body!r}
                     )
 
                     # Create WorkPackageJournal with snapshot of work package attributes (Bug #11 fix #7)
@@ -1059,13 +1061,13 @@ class WorkPackageMigration(BaseMigration):
                 all_entries.append({
                     "type": "comment",
                     "timestamp": comment.get("created", ""),
-                    "data": comment
+                    "data": comment,
                 })
             for entry in changelog_entries:
                 all_entries.append({
                     "type": "changelog",
                     "timestamp": entry.get("created", ""),
-                    "data": entry
+                    "data": entry,
                 })
 
             if not all_entries:
@@ -1286,7 +1288,7 @@ class WorkPackageMigration(BaseMigration):
             return {
                 "wp_id": wp_id,
                 "jira_key": jira_key,
-                "rails_ops": rails_ops
+                "rails_ops": rails_ops,
             }
 
         with ThreadPoolExecutor(max_workers=10) as executor:
@@ -1332,7 +1334,7 @@ class WorkPackageMigration(BaseMigration):
                         else:
                             created = r.get("created", 0)
                             if created > 0:
-                                self.logger.info(f"Added {created} journals to {r.get('jira_key')} (WP#{r.get('wp_id')})")
+                                self.logger.debug(f"Added {created} journals to {r.get('jira_key')} (WP#{r.get('wp_id')})")
                             success_count += 1
                 else:
                     self.logger.warning(f"Unexpected data format in batch result: {type(results)}")
@@ -1514,18 +1516,7 @@ class WorkPackageMigration(BaseMigration):
                 effective_cutoff = target_ts - timedelta(seconds=backoff_seconds)
                 cutoff_str = effective_cutoff.strftime("%Y-%m-%d %H:%M")
                 ordering = "ORDER BY updated ASC"
-                if exclusion_clause:
-                    jql = (
-                        f'{base_condition} AND '
-                        f'(updated >= "{cutoff_str}" OR {exclusion_clause}) {ordering}'
-                    )
-                    if len(existing_keys) > 900:
-                        self.logger.debug(
-                            "Truncated existing key exclusion list for %s to first 900 entries",
-                            project_key,
-                        )
-                else:
-                    jql = f'{base_condition} AND updated >= "{cutoff_str}" {ordering}'
+                jql = f'{base_condition} AND updated >= "{cutoff_str}" {ordering}'
                 self.logger.info(
                     "Fast-forward enabled for %s using checkpoint %s (effective cutoff %s, backoff %ss)",
                     project_key,
@@ -1559,7 +1550,7 @@ class WorkPackageMigration(BaseMigration):
         else:
             logger.info(
                 "J2O_TEST_ISSUES set - skipping project verification for '%s'",
-                project_key
+                project_key,
             )
 
         total_yielded = 0
@@ -1591,8 +1582,8 @@ class WorkPackageMigration(BaseMigration):
                     self.logger.info(f"Reached issue limit ({max_issues}), stopping")
                     return
 
-            logger.debug(
-                "Yielded %s issues from batch (total: %s) for %s",
+            logger.info(
+                "Fetched batch: %s issues (total: %s) for project '%s'",
                 len(issues_batch),
                 total_yielded,
                 project_key,
@@ -2188,7 +2179,7 @@ class WorkPackageMigration(BaseMigration):
                 all_journal_entries.append({
                     "type": "comment",
                     "timestamp": comment.get("created", ""),
-                    "data": comment
+                    "data": comment,
                 })
 
             # Add changelog entries as journal entries
@@ -2196,7 +2187,7 @@ class WorkPackageMigration(BaseMigration):
                 all_journal_entries.append({
                     "type": "changelog",
                     "timestamp": entry.get("created", ""),
-                    "data": entry
+                    "data": entry,
                 })
 
             if all_journal_entries:
@@ -2229,15 +2220,15 @@ class WorkPackageMigration(BaseMigration):
                     if current_timestamp in used_timestamps:
                         # This is a collision - need to find a unique timestamp
                         try:
-                            if 'T' in current_timestamp:
+                            if "T" in current_timestamp:
                                 # ISO8601 format: 2011-08-23T13:41:21.000+0000
-                                original_dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                                original_dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
 
                                 # Keep incrementing by 1 second until we find an unused timestamp
                                 offset_seconds = 1
                                 while True:
                                     new_dt = original_dt + timedelta(seconds=offset_seconds)
-                                    new_timestamp = new_dt.astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                                    new_timestamp = new_dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
                                     if new_timestamp not in used_timestamps:
                                         # Found a unique timestamp
@@ -2279,8 +2270,8 @@ class WorkPackageMigration(BaseMigration):
                         author_name = None
 
                         # Try multiple fields: name, displayName, emailAddress
-                        for key in ['name', 'displayName', 'emailAddress']:
-                            if key in author_data and author_data[key]:
+                        for key in ["name", "displayName", "emailAddress"]:
+                            if author_data.get(key):
                                 user_dict = self.user_mapping.get(author_data[key])
                                 if user_dict:
                                     comment_author_id = user_dict.get("openproject_id")
@@ -2292,7 +2283,7 @@ class WorkPackageMigration(BaseMigration):
                         if not comment_author_id:
                             # Use fallback user (148941)
                             comment_author_id = 148941
-                            attempted_fields = {k: author_data.get(k) for k in ['name', 'displayName', 'emailAddress'] if k in author_data}
+                            attempted_fields = {k: author_data.get(k) for k in ["name", "displayName", "emailAddress"] if k in author_data}
                             self.logger.warning(f"[BUG32] {jira_key}: User not found in mapping for comment (tried: {attempted_fields}), using fallback user {comment_author_id}")
                         comment_body = entry_data.get("body", "")
                         work_package["_rails_operations"].append({
@@ -2310,8 +2301,8 @@ class WorkPackageMigration(BaseMigration):
                         author_name = None
 
                         # Try multiple fields: name, displayName, emailAddress
-                        for key in ['name', 'displayName', 'emailAddress']:
-                            if key in author_data and author_data[key]:
+                        for key in ["name", "displayName", "emailAddress"]:
+                            if author_data.get(key):
                                 user_dict = self.user_mapping.get(author_data[key])
                                 if user_dict:
                                     changelog_author_id = user_dict.get("openproject_id")
@@ -2323,7 +2314,7 @@ class WorkPackageMigration(BaseMigration):
                         if not changelog_author_id:
                             # Use fallback user (148941)
                             changelog_author_id = 148941
-                            attempted_fields = {k: author_data.get(k) for k in ['name', 'displayName', 'emailAddress'] if k in author_data}
+                            attempted_fields = {k: author_data.get(k) for k in ["name", "displayName", "emailAddress"] if k in author_data}
                             self.logger.warning(f"[BUG32] {jira_key}: User not found in mapping for changelog (tried: {attempted_fields}), using fallback user {changelog_author_id}")
 
                         # Bug #28 fix: Process field changes as structured data
@@ -2425,7 +2416,7 @@ class WorkPackageMigration(BaseMigration):
 
                 # BUG #9 FIX (CRITICAL): Build progressive state snapshots for all operations
                 # Process operations in REVERSE order to reconstruct historical state from FINAL state
-                if "_rails_operations" in work_package and work_package["_rails_operations"]:
+                if work_package.get("_rails_operations"):
                     try:
                         # BUG #12 FIX (CRITICAL): Sort operations by timestamp BEFORE assigning state_snapshots
                         # Python assigns state_snapshots by array index, but Ruby re-sorts by timestamp.
@@ -2433,7 +2424,7 @@ class WorkPackageMigration(BaseMigration):
                         # at wrong positions after Ruby's sort, causing state_snapshot misalignment.
                         # This ensures Python's assignment order matches Ruby's processing order.
                         work_package["_rails_operations"].sort(
-                            key=lambda op: op.get("created_at") or op.get("timestamp") or "9999-12-31T23:59:59"
+                            key=lambda op: op.get("created_at") or op.get("timestamp") or "9999-12-31T23:59:59",
                         )
                         self.logger.info(f"[BUG12] {jira_key}: Sorted {len(work_package['_rails_operations'])} operations by timestamp before state_snapshot assignment")
 
@@ -2469,7 +2460,7 @@ class WorkPackageMigration(BaseMigration):
                             op["state_snapshot"] = current_state.copy()
 
                             # If this operation has field_changes, UNDO them to get state BEFORE this operation
-                            if "field_changes" in op and op["field_changes"]:
+                            if op.get("field_changes"):
                                 for field_name, change_value in op["field_changes"].items():
                                     # Extract OLD value from [old, new] array
                                     if isinstance(change_value, list) and len(change_value) >= 2:
@@ -2530,7 +2521,7 @@ class WorkPackageMigration(BaseMigration):
         except Exception as e:
             self.logger.warning(
                 f"Failed to extract comments/changelog for {jira_key}: {e}. "
-                "Work package will be created without journal entries."
+                "Work package will be created without journal entries.",
             )
 
         # Update work package data with description (work_package_data was created earlier)
@@ -3328,7 +3319,7 @@ class WorkPackageMigration(BaseMigration):
                 projects_to_migrate = [{"key": pk, "name": pk} for pk in sorted(project_keys_from_issues)]
                 logger.info(
                     f"J2O_TEST_ISSUES set - bypassing Jira project fetch, "
-                    f"using extracted project keys: {sorted(project_keys_from_issues)}"
+                    f"using extracted project keys: {sorted(project_keys_from_issues)}",
                 )
             else:
                 # Normal flow: Get ALL Jira projects first
@@ -3348,19 +3339,19 @@ class WorkPackageMigration(BaseMigration):
                         if p.get("key") in configured_projects
                     ]
                     logger.info(
-                        f"Filtered to {len(projects_to_migrate)} configured projects: {configured_projects}"
+                        f"Filtered to {len(projects_to_migrate)} configured projects: {configured_projects}",
                     )
                 else:
                     # No filter - migrate all projects
                     projects_to_migrate = all_projects
                     logger.warning(
-                        "No projects configured in config.jira.projects - will process ALL projects"
+                        "No projects configured in config.jira.projects - will process ALL projects",
                     )
 
                 if not projects_to_migrate:
                     logger.warning(
                         f"No projects to migrate after filtering. Configured: {configured_projects}, "
-                        f"Available: {[p.get('key') for p in all_projects[:10]]}"
+                        f"Available: {[p.get('key') for p in all_projects[:10]]}",
                     )
                     return []
 
@@ -3369,7 +3360,7 @@ class WorkPackageMigration(BaseMigration):
                 project_key = project.get("key")
                 if project_key:
                     logger.info(
-                        f"Starting issue fetch for project {project_key} (change detection)"
+                        f"Starting issue fetch for project {project_key} (change detection)",
                     )
                     project_issue_count = 0
 
@@ -3395,7 +3386,7 @@ class WorkPackageMigration(BaseMigration):
                             logger.info(f"Processed {len(all_issues)} issues so far...")
 
                     logger.info(
-                        f"Completed {project_key}: fetched {project_issue_count} issues for change detection"
+                        f"Completed {project_key}: fetched {project_issue_count} issues for change detection",
                     )
 
             logger.info(
@@ -3446,7 +3437,7 @@ class WorkPackageMigration(BaseMigration):
 
         # Cache miss or empty: rebuild from OpenProject (authoritative source)
         self.logger.info(
-            "Rebuilding custom field mapping from OpenProject metadata"
+            "Rebuilding custom field mapping from OpenProject metadata",
         )
 
         try:
@@ -3572,7 +3563,7 @@ class WorkPackageMigration(BaseMigration):
                         op_project_id = result[0] if result else None
                         if len(result) > 1:
                             self.logger.warning(
-                                f"Multiple projects found for identifier '{identifier}': {result}. Using first: {op_project_id}"
+                                f"Multiple projects found for identifier '{identifier}': {result}. Using first: {op_project_id}",
                             )
                     else:
                         op_project_id = result
@@ -3585,7 +3576,7 @@ class WorkPackageMigration(BaseMigration):
                         self.project_mapping[project_key] = {
                             "jira_key": project_key,
                             "openproject_id": int(op_project_id),
-                            "openproject_identifier": identifier
+                            "openproject_identifier": identifier,
                         }
                     else:
                         self.logger.warning(f"Project {project_key} not found in OpenProject (tried identifier '{identifier}'); skipping")
@@ -3739,7 +3730,7 @@ class WorkPackageMigration(BaseMigration):
                                         "EARLY TERMINATION: Processed %d batches (%d work packages attempted) with 0%% success rate for %s. "
                                         "All items are failing validation. Stopping to prevent wasted processing. "
                                         "Please review bulk result files in %s for error details.",
-                                        batches_processed, total_attempted, project_key, self.data_dir
+                                        batches_processed, total_attempted, project_key, self.data_dir,
                                     )
                                     # Break out of the issue iteration loop
                                     raise StopIteration("Early termination due to 100% failure rate")
@@ -3895,7 +3886,7 @@ class WorkPackageMigration(BaseMigration):
                                 self.logger.warning(
                                     "Processed %d batches (%d work packages attempted) with 0%% success rate for %s. "
                                     "All items are failing validation. Please review bulk result files in %s for error details.",
-                                    batches_processed, total_attempted, project_key, self.data_dir
+                                    batches_processed, total_attempted, project_key, self.data_dir,
                                 )
                     except Exception as e:
                         self.logger.exception("Bulk create failed (final) for %s: %s", project_key, e)
@@ -3958,7 +3949,7 @@ class WorkPackageMigration(BaseMigration):
                     num_batches = (total_wps + WP_BATCH_SIZE - 1) // WP_BATCH_SIZE
                     self.logger.info(
                         f"Processing {total_wps} existing WP updates in {num_batches} batches "
-                        f"(batch size: {WP_BATCH_SIZE})"
+                        f"(batch size: {WP_BATCH_SIZE})",
                     )
                     total_success = 0
                     total_errors = 0
@@ -3969,7 +3960,7 @@ class WorkPackageMigration(BaseMigration):
                         batch = existing_wp_updates[start_idx:end_idx]
 
                         self.logger.info(
-                            f"Batch {batch_idx + 1}/{num_batches}: WPs {start_idx + 1}-{end_idx}"
+                            f"Batch {batch_idx + 1}/{num_batches}: WPs {start_idx + 1}-{end_idx}",
                         )
 
                         try:
@@ -3984,11 +3975,11 @@ class WorkPackageMigration(BaseMigration):
                         processed = end_idx
                         self.logger.info(
                             f"Batch progress: {processed}/{total_wps} WPs "
-                            f"(success: {total_success}, errors: {total_errors})"
+                            f"(success: {total_success}, errors: {total_errors})",
                         )
 
                     self.logger.info(
-                        f"WP update complete: {total_success} success, {total_errors} errors"
+                        f"WP update complete: {total_success} success, {total_errors} errors",
                     )
 
             except Exception as e:
@@ -4140,17 +4131,17 @@ def _apply_required_defaults(
             # Both dates exist, compare them
             try:
                 # Handle both string and date object formats
-                from datetime import datetime, date
+                from datetime import date, datetime
 
                 if isinstance(start_date, str):
-                    start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+                    start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
                 elif isinstance(start_date, date):
                     start_dt = start_date
                 else:
                     start_dt = None
 
                 if isinstance(due_date, str):
-                    due_dt = datetime.strptime(due_date, '%Y-%m-%d').date()
+                    due_dt = datetime.strptime(due_date, "%Y-%m-%d").date()
                 elif isinstance(due_date, date):
                     due_dt = due_date
                 else:

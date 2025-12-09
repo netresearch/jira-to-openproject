@@ -181,8 +181,14 @@ class ChangeDetector:
             "snapshots": snapshots,
         }
 
+        def json_serializer(obj: Any) -> str:
+            """Handle non-serializable objects like Jira PropertyHolder."""
+            if hasattr(obj, "__dict__"):
+                return str(obj)
+            return repr(obj)
+
         with snapshot_path.open("w") as f:
-            json.dump(snapshot_data, f, indent=2)
+            json.dump(snapshot_data, f, indent=2, default=json_serializer)
 
         # Update current snapshot pointer
         current_snapshot_path = self.snapshot_dir / "current" / f"{entity_type}.json"
