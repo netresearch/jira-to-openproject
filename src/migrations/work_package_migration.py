@@ -22,6 +22,7 @@ import shutil
 import sqlite3
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -700,6 +701,32 @@ class WorkPackageMigration(BaseMigration):
             if not wp_id:
                 return
 
+            # Bug #9 fix: Delete existing v2+ journals before adding new ones (idempotent migration)
+            # This matches the deletion logic in create_work_package_journals.rb
+            delete_journals_code = f"""
+                v2_plus_journals = Journal.where(journable_id: {wp_id}, journable_type: 'WorkPackage').where('version > 1')
+                v2_plus_count = v2_plus_journals.count
+                if v2_plus_count > 0
+                    v2_plus_ids = v2_plus_journals.pluck(:id)
+                    data_ids = v2_plus_journals.pluck(:data_id).compact
+
+                    # Delete associated customizable_journals first
+                    Journal::CustomizableJournal.where(journal_id: v2_plus_ids).delete_all if v2_plus_ids.any?
+
+                    # Delete the journals themselves
+                    v2_plus_journals.delete_all
+
+                    # Delete orphaned work_package_journals
+                    Journal::WorkPackageJournal.where(id: data_ids).delete_all if data_ids.any?
+
+                    puts "CLEANUP: WP#" + {wp_id}.to_s + " deleted " + v2_plus_count.to_s + " existing v2+ journals for re-migration"
+                end
+                puts "OK"
+            """
+            cleanup_result = self.op_client.execute_large_query_to_json_file(delete_journals_code, timeout=60)
+            if cleanup_result and "CLEANUP" in str(cleanup_result):
+                self.logger.info(f"Cleaned up v2+ journals for WP#{wp_id} ({jira_key})")
+
             # Extract BOTH comments AND changelog entries from Jira
             comments = self.enhanced_audit_trail_migrator.extract_comments_from_issue(jira_issue)
             changelog_entries = self.enhanced_audit_trail_migrator.extract_changelog_from_issue(jira_issue)
@@ -742,12 +769,6 @@ class WorkPackageMigration(BaseMigration):
             for i in range(1, len(all_journal_entries)):
                 current_timestamp = all_journal_entries[i].get("timestamp", "")
                 previous_timestamp = all_journal_entries[i-1].get("timestamp", "")
-                
-                # DEBUG: Log the comparison details
-                self.logger.info(f"[DEBUG] {jira_key}: Loop iteration i={i}")
-                self.logger.info(f"[DEBUG] {jira_key}: current_timestamp='{current_timestamp}' (type={type(current_timestamp).__name__}, truthy={bool(current_timestamp)})")
-                self.logger.info(f"[DEBUG] {jira_key}: previous_timestamp='{previous_timestamp}' (type={type(previous_timestamp).__name__}, truthy={bool(previous_timestamp)})")
-                self.logger.info(f"[DEBUG] {jira_key}: comparison result: {current_timestamp == previous_timestamp}")
 
                 # Check if timestamps collide
                 if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
@@ -1003,6 +1024,187 @@ class WorkPackageMigration(BaseMigration):
 
         except Exception as e:
             self.logger.warning(f"Failed to update existing work package {existing_wp.get('jira_key')}: {e}")
+
+    def _build_rails_ops_for_issue(
+        self,
+        jira_issue: Issue,
+        existing_wp: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Build rails_ops for a single Jira issue's journals.
+
+        This is extracted from _update_existing_work_package to enable batching.
+        Returns list of operations ready for Ruby bulk processing.
+        """
+        rails_ops = []
+
+        try:
+            # Extract comments and changelog
+            comments = self.enhanced_audit_trail_migrator.extract_comments_from_issue(jira_issue)
+            changelog_entries = self.enhanced_audit_trail_migrator.extract_changelog_from_issue(jira_issue)
+
+            # Merge into unified entries
+            all_entries = []
+            for comment in comments:
+                all_entries.append({
+                    "type": "comment",
+                    "timestamp": comment.get("created", ""),
+                    "data": comment
+                })
+            for entry in changelog_entries:
+                all_entries.append({
+                    "type": "changelog",
+                    "timestamp": entry.get("created", ""),
+                    "data": entry
+                })
+
+            if not all_entries:
+                return rails_ops
+
+            # Sort chronologically
+            all_entries.sort(key=lambda x: x.get("timestamp", ""))
+
+            # Resolve timestamp collisions (add 1 second offset)
+            for i in range(1, len(all_entries)):
+                curr_ts = all_entries[i].get("timestamp", "")
+                prev_ts = all_entries[i-1].get("timestamp", "")
+                if curr_ts and prev_ts and curr_ts == prev_ts:
+                    try:
+                        if 'T' in curr_ts:
+                            dt = datetime.fromisoformat(curr_ts.replace('Z', '+00:00'))
+                            dt = dt + timedelta(seconds=1)
+                            all_entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                    except Exception:
+                        pass
+
+            # Build rails_ops from entries
+            for i, entry in enumerate(all_entries):
+                entry_type = entry["type"]
+                entry_data = entry["data"]
+                entry_ts = entry["timestamp"]
+
+                # Get author
+                author_info = entry_data.get("author") or {}
+                author_name = author_info.get("name")
+                user_dict = self.user_mapping.get(author_name) if author_name else None
+                user_id = user_dict.get("openproject_id") if user_dict else 1
+
+                # Build notes
+                if entry_type == "comment":
+                    notes = entry_data.get("body", "")
+                else:
+                    notes = "Jira changelog:\n"
+                    items = entry_data.get("items", [])
+                    for item in items:
+                        field = item.get("field", "")
+                        from_val = item.get("fromString") or item.get("from", "")
+                        to_val = item.get("toString") or item.get("to", "")
+                        notes += f"- {field}: {from_val} → {to_val}\n"
+
+                rails_ops.append({
+                    "type": "journal",
+                    "created_at": entry_ts,
+                    "user_id": user_id,
+                    "notes": notes,
+                })
+        except Exception as e:
+            self.logger.warning(f"Failed to build rails_ops for {getattr(jira_issue, 'key', 'unknown')}: {e}")
+
+        return rails_ops
+
+    def _update_existing_work_packages_batch(
+        self,
+        batch: list[tuple[Issue, dict[str, Any], int]],
+    ) -> tuple[int, int]:
+        """Process a batch of existing work packages with parallel Jira fetch.
+
+        This method:
+        1. Fetches Jira changelogs in parallel (safe - Jira API is thread-safe)
+        2. Builds rails_ops for all WPs
+        3. Sends ONE Rails call to process all WPs
+
+        Returns (success_count, error_count)
+        """
+        if not batch:
+            return 0, 0
+
+        batch_size = len(batch)
+        self.logger.info(f"Processing batch of {batch_size} WPs with parallel Jira fetch")
+
+        # Step 1: Parallel fetch Jira changelogs and build rails_ops
+        # ThreadPoolExecutor is safe for Jira API calls
+        batch_data = []
+
+        def fetch_and_build(item):
+            issue, existing_wp, project_id = item
+            jira_key = getattr(issue, "key", "unknown")
+            wp_id = existing_wp.get("id")
+            rails_ops = self._build_rails_ops_for_issue(issue, existing_wp)
+            return {
+                "wp_id": wp_id,
+                "jira_key": jira_key,
+                "rails_ops": rails_ops
+            }
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(fetch_and_build, item): item for item in batch}
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    if result["rails_ops"]:  # Only include WPs with actual operations
+                        batch_data.append(result)
+                except Exception as e:
+                    item = futures[future]
+                    jira_key = getattr(item[0], "key", "unknown")
+                    self.logger.warning(f"Failed to fetch/build for {jira_key}: {e}")
+
+        if not batch_data:
+            self.logger.info("No operations to process in this batch")
+            return batch_size, 0  # All succeeded with 0 changes
+
+        self.logger.info(f"Built operations for {len(batch_data)} WPs, executing batch Ruby script")
+
+        # Step 2: Execute batch Ruby script
+        try:
+            # Read the batch Ruby script
+            script_path = Path(__file__).parent.parent / "ruby" / "create_work_package_journals_batch.rb"
+            with open(script_path) as f:
+                ruby_script = f.read()
+
+            # Execute via Rails console using execute_script_with_data
+            # This properly transfers batch_data as input_data and handles JSON output markers
+            result = self.op_client.execute_script_with_data(ruby_script, batch_data, timeout=300)
+
+            # Parse results from the returned dict
+            success_count = 0
+            error_count = 0
+
+            if isinstance(result, dict) and result.get("status") == "success":
+                results = result.get("data", [])
+                if isinstance(results, list):
+                    for r in results:
+                        if r.get("error"):
+                            self.logger.warning(f"Batch error for {r.get('jira_key')}: {r.get('error')}")
+                            error_count += 1
+                        else:
+                            created = r.get("created", 0)
+                            if created > 0:
+                                self.logger.info(f"Added {created} journals to {r.get('jira_key')} (WP#{r.get('wp_id')})")
+                            success_count += 1
+                else:
+                    self.logger.warning(f"Unexpected data format in batch result: {type(results)}")
+                    error_count = len(batch_data)
+            elif isinstance(result, dict) and result.get("status") == "error":
+                self.logger.warning(f"Batch execution error: {result.get('message', 'Unknown error')}")
+                error_count = len(batch_data)
+            else:
+                self.logger.warning(f"Unexpected batch result format: {str(result)[:200]}")
+                error_count = len(batch_data)
+
+            return success_count, error_count
+
+        except Exception as e:
+            self.logger.warning(f"Batch execution failed: {e}")
+            return 0, len(batch_data)
 
     def _iter_all_project_issues(
         self,
@@ -3263,6 +3465,9 @@ class WorkPackageMigration(BaseMigration):
 
             try:
                 work_packages_meta: list[dict[str, Any]] = []
+                # Collect existing WP updates for parallel processing
+                existing_wp_updates: list[tuple[Issue, dict[str, Any], int]] = []
+
                 # Fetch ALL issues without fast-forward filtering
                 for issue in self._iter_all_project_issues(project_key):
                     issues_seen += 1
@@ -3270,8 +3475,8 @@ class WorkPackageMigration(BaseMigration):
                     # Check if work package already exists
                     jira_key = getattr(issue, "key", None)
                     if jira_key and jira_key in existing_wp_map:
-                        # Incremental update: Add only new comments
-                        self._update_existing_work_package(issue, existing_wp_map[jira_key], int(op_project_id))
+                        # Collect for parallel processing instead of sequential
+                        existing_wp_updates.append((issue, existing_wp_map[jira_key], int(op_project_id)))
                         continue
 
                     # Create new work package
@@ -3599,6 +3804,48 @@ class WorkPackageMigration(BaseMigration):
                             self.logger.info("Tail fallback batching complete for %s; created so far: %s", project_key, created_count)
                         except Exception as fb_e:
                             self.logger.warning("Tail fallback batching aborted for %s: %s", project_key, fb_e)
+
+                # Process existing WP updates in batches
+                # Batching amortizes SSH/tmux overhead across multiple WPs
+                # Each batch: parallel Jira fetch, single Rails call
+                WP_BATCH_SIZE = 20  # Number of WPs per batch
+                if existing_wp_updates:
+                    total_wps = len(existing_wp_updates)
+                    num_batches = (total_wps + WP_BATCH_SIZE - 1) // WP_BATCH_SIZE
+                    self.logger.info(
+                        f"Processing {total_wps} existing WP updates in {num_batches} batches "
+                        f"(batch size: {WP_BATCH_SIZE})"
+                    )
+                    total_success = 0
+                    total_errors = 0
+
+                    for batch_idx in range(num_batches):
+                        start_idx = batch_idx * WP_BATCH_SIZE
+                        end_idx = min(start_idx + WP_BATCH_SIZE, total_wps)
+                        batch = existing_wp_updates[start_idx:end_idx]
+
+                        self.logger.info(
+                            f"Batch {batch_idx + 1}/{num_batches}: WPs {start_idx + 1}-{end_idx}"
+                        )
+
+                        try:
+                            success, errors = self._update_existing_work_packages_batch(batch)
+                            total_success += success
+                            total_errors += errors
+                        except Exception as e:
+                            self.logger.warning(f"Batch {batch_idx + 1} failed: {e}")
+                            total_errors += len(batch)
+
+                        # Log progress after each batch
+                        processed = end_idx
+                        self.logger.info(
+                            f"Batch progress: {processed}/{total_wps} WPs "
+                            f"(success: {total_success}, errors: {total_errors})"
+                        )
+
+                    self.logger.info(
+                        f"WP update complete: {total_success} success, {total_errors} errors"
+                    )
 
             except Exception as e:
                 self.logger.exception("Failed migrating project %s: %s", project_key, e)
