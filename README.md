@@ -211,11 +211,14 @@ logging:
 
 ### Core Documentation
 
+- **[Entity Mapping Reference](docs/ENTITY_MAPPING.md)** - Comprehensive Jira→OpenProject field mappings
+- **[Migration Components Catalog](docs/MIGRATION_COMPONENTS.md)** - Module listing with development state
 - **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Development standards, testing, and compliance
 - **[System Architecture](docs/ARCHITECTURE.md)** - Client architecture and component design
 - **[Security Documentation](docs/SECURITY.md)** - Security measures and vulnerability prevention
 - **[Configuration Guide](docs/configuration.md)** - Detailed configuration options
 - **[Workflow & Status Guide](docs/WORKFLOW_STATUS_GUIDE.md)** - Status migration and workflow setup
+- **[Architecture Decisions](docs/adr/)** - ADRs documenting key technical decisions
 
 ### Quick Reference
 

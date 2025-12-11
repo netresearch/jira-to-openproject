@@ -221,3 +221,11 @@ All user inputs, especially Jira keys, are validated to prevent injection attack
 Dynamic content uses Ruby's `inspect` method for safe string formatting in generated scripts.
 
 This architecture provides reliable, maintainable migration processing with proper separation of concerns and robust error handling.
+
+## Related Documentation
+
+- [Entity Mapping Reference](ENTITY_MAPPING.md) - Comprehensive Jira→OpenProject field mappings
+- [Migration Components Catalog](MIGRATION_COMPONENTS.md) - Module listing with development state
+- [Architecture Decisions](adr/) - ADRs documenting key technical decisions
+- [Client API Reference](CLIENT_API.md) - Detailed client layer documentation
+- [Developer Guide](DEVELOPER_GUIDE.md) - Development standards and practices
