@@ -112,9 +112,7 @@ class TestCompanyMigration(unittest.TestCase):
         ]
 
         # Set up the mock return values
-        self.jira_client.get_tempo_customers.return_value = (
-            self.sample_tempo_companies_api
-        )
+        self.jira_client.get_tempo_customers.return_value = self.sample_tempo_companies_api
         self.op_client.get_projects.return_value = self.sample_op_projects
 
     def tearDown(self) -> None:
@@ -147,9 +145,7 @@ class TestCompanyMigration(unittest.TestCase):
         """Test the extract_tempo_companies method."""
         # Setup mocks
         mock_jira_instance = mock_jira_client.return_value
-        mock_jira_instance.get_tempo_customers.return_value = (
-            self.sample_tempo_companies_api
-        )
+        mock_jira_instance.get_tempo_customers.return_value = self.sample_tempo_companies_api
 
         mock_op_instance = mock_op_client.return_value
 
@@ -225,9 +221,7 @@ class TestCompanyMigration(unittest.TestCase):
         assert "2" in companies
         assert companies["1"]["name"] == "ACME Corporation"
         assert companies["2"]["name"] == "Globex Corporation"
-        assert (
-            companies["2"]["id"] == "2"
-        )  # The ID should be added to the second company
+        assert companies["2"]["id"] == "2"  # The ID should be added to the second company
 
     def test_extract_openproject_projects(self) -> None:
         """Test extracting projects from OpenProject."""

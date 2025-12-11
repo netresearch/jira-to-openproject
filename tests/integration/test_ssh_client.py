@@ -57,9 +57,7 @@ class TestSSHClient(unittest.TestCase):
         self.mock_path_class.return_value = self.mock_path_instance
 
         # Make Path constructor return the same mock for any arguments
-        self.mock_path_class.side_effect = (
-            lambda *args, **kwargs: self.mock_path_instance
-        )
+        self.mock_path_class.side_effect = lambda *args, **kwargs: self.mock_path_instance
 
         # Also patch src.clients.ssh_client.Path to return our mock
         self.src_path_patcher = patch(

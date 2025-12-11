@@ -73,7 +73,12 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
         try:
             umap = self.mappings.get_mapping("user") or {}
             if isinstance(user_hint, dict):
-                key = user_hint.get("accountId") or user_hint.get("name") or user_hint.get("email") or user_hint.get("mail")
+                key = (
+                    user_hint.get("accountId")
+                    or user_hint.get("name")
+                    or user_hint.get("email")
+                    or user_hint.get("mail")
+                )
                 if key and key in umap:
                     rec = umap[key]
                     if isinstance(rec, dict) and rec.get("openproject_id"):
@@ -92,7 +97,9 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
-        components_by_project: dict[str, list[dict[str, Any]]] = data.get("components", {}) if isinstance(data, dict) else {}
+        components_by_project: dict[str, list[dict[str, Any]]] = (
+            data.get("components", {}) if isinstance(data, dict) else {}
+        )
 
         proj_map = self.mappings.get_mapping("project") or {}
         updated = 0
@@ -168,5 +175,3 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
                 message=f"Category defaults migration failed: {e}",
                 errors=[str(e)],
             )
-
-

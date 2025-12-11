@@ -11,8 +11,10 @@ import pytest
 try:
     from jira.resources import Issue  # type: ignore
 except (ImportError, AttributeError):  # pragma: no cover - fallback when jira package layout changes
+
     class Issue:  # type: ignore[misc]
         pass
+
 
 from src.migrations.work_package_migration import WorkPackageMigration
 
@@ -112,7 +114,6 @@ class TestPaginationImplementation:
             patch.object(self.migration, "iter_project_issues") as mock_iter,
             patch.object(self.migration, "_save_to_json"),
         ):
-
             # Return issue for the project
             mock_iter.return_value = [mock_issue1]
 
@@ -212,6 +213,4 @@ class TestPaginationImplementation:
                     assert issue.key.startswith("TEST-")
 
                 assert count == 150
-                assert (
-                    mock_fetch.call_count == 4
-                )  # 3 data batches + 1 empty batch to end
+                assert mock_fetch.call_count == 4  # 3 data batches + 1 empty batch to end

@@ -140,9 +140,7 @@ def generate_jira_issue_data(
                 "description": f"This is a test issue {i} for project {project_key}",
                 "issuetype": {"name": issue_type},
                 "status": {"name": status},
-                "assignee": (
-                    {"name": "john.doe"} if random.choice([True, False]) else None
-                ),
+                "assignee": ({"name": "john.doe"} if random.choice([True, False]) else None),
                 "reporter": {"name": "jane.doe"},
                 "priority": {"name": random.choice(["High", "Medium", "Low"])},
                 "project": {
@@ -151,9 +149,7 @@ def generate_jira_issue_data(
                 },
                 "created": generate_timestamp(random.randint(10, 100)),
                 "updated": generate_timestamp(random.randint(0, 10)),
-                "resolutiondate": (
-                    generate_timestamp(0) if status in ["Resolved", "Closed"] else None
-                ),
+                "resolutiondate": (generate_timestamp(0) if status in ["Resolved", "Closed"] else None),
             },
         }
         results.append(issue)

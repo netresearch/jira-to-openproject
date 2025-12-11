@@ -54,10 +54,7 @@ class PriorityMigration(BaseMigration):
             return self.jira_client.get_priorities()
 
         # Raise error for unsupported types
-        msg = (
-            f"PriorityMigration does not support entity type: {entity_type}. "
-            f"Supported types: ['priorities']"
-        )
+        msg = f"PriorityMigration does not support entity type: {entity_type}. Supported types: ['priorities']"
         raise ValueError(msg)
 
     def run(self) -> ComponentResult:

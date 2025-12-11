@@ -47,8 +47,8 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
 
         Returns:
             Empty list (transformation-only, no source entities)
+
         """
-        from typing import Any
         return []
 
     def _ensure_resolution_cf(self) -> int:
@@ -165,5 +165,3 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
                 message=f"Resolution migration failed: {e}",
                 errors=[str(e)],
             )
-
-

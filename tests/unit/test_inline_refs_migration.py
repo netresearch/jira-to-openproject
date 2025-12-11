@@ -37,5 +37,3 @@ def test_inline_refs_invokes_script_with_wp_ids():
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated == 2
-
-

@@ -54,5 +54,3 @@ def test_watcher_migration_adds_watchers(monkeypatch: pytest.MonkeyPatch, _map_s
     res = wm.run()
     assert res.success
     assert op.added == [(10, 5)]
-
-

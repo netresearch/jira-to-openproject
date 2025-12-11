@@ -70,5 +70,3 @@ def test_story_points_migration_sets_cf():
     # PRJ-1, PRJ-2 have values -> 2 updates
     assert ld.success is True
     assert ld.updated == 2
-
-

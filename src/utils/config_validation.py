@@ -52,10 +52,7 @@ class ConfigurationValidationError(Exception):
             return f"{value_str[:50]}...(truncated, {len(value_str)} chars total)"
 
         # Mask potential sensitive patterns
-        if any(
-            pattern in value_str.lower()
-            for pattern in ["password", "token", "key", "secret"]
-        ):
+        if any(pattern in value_str.lower() for pattern in ["password", "token", "key", "secret"]):
             return "[REDACTED]"
 
         return value_str

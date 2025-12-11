@@ -71,5 +71,3 @@ def test_votes_migration_sets_cf():
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated == 1
-
-

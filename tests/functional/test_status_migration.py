@@ -229,9 +229,7 @@ class TestStatusMigration(unittest.TestCase):
             assert status["id"] in result["mapping"]
 
         # Verify that similar names are mapped correctly
-        assert (
-            result["mapping"]["2"]["openproject_id"] == 2
-        )  # "In Progress" -> "In Progress"
+        assert result["mapping"]["2"]["openproject_id"] == 2  # "In Progress" -> "In Progress"
 
     def test_analyze_status_mapping(self) -> None:
         """Test analyzing the status mapping."""

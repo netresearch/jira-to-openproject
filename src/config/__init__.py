@@ -234,7 +234,9 @@ def get_config() -> Config:
 
 
 def get_value(
-    section: SectionName, key: str, default: ConfigValue | None = None,
+    section: SectionName,
+    key: str,
+    default: ConfigValue | None = None,
 ) -> ConfigValue | None:
     """Get a specific configuration value."""
     return _config_loader.get_value(section, key, default)
@@ -298,17 +300,13 @@ def validate_config() -> bool:
                 config_section = openproject_config
                 prefix = "J2O_OPENPROJECT_"
                 # Special handling for OpenProject authentication
-                if not (
-                    config_section.get("api_token") or config_section.get("api_key")
-                ):
+                if not (config_section.get("api_token") or config_section.get("api_key")):
                     missing_vars.append(f"{prefix}API_TOKEN or {prefix}API_KEY")
                 continue
             case _:
                 continue
 
-        missing_vars.extend(
-            f"{prefix}{key.upper()}" for key in required_keys if not config_section.get(key)
-        )
+        missing_vars.extend(f"{prefix}{key.upper()}" for key in required_keys if not config_section.get(key))
 
     if missing_vars:
         logger.error(

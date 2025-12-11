@@ -175,9 +175,7 @@ class TestStalenessManager:
         assert staleness_manager.metrics["staleness_detected"] == 1
         assert staleness_manager.metrics["refreshes_attempted"] == 1
         assert staleness_manager.metrics["fallbacks_applied"] == 1
-        assert (
-            "test_user" not in staleness_manager.cache
-        )  # Should be removed by skip strategy
+        assert "test_user" not in staleness_manager.cache  # Should be removed by skip strategy
 
     def test_user_validation_inactive_user(self, staleness_manager) -> None:
         """Test user validation failing for inactive user."""

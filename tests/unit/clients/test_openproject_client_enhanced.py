@@ -178,14 +178,12 @@ class TestParseRailsOutput:
             ("   ", None),
             # Noisy output with tmux markers
             (
-                "TMUX_CMD_START\n" '[{"id": 1, "name": "Test"}]\n' "TMUX_CMD_END",
+                'TMUX_CMD_START\n[{"id": 1, "name": "Test"}]\nTMUX_CMD_END',
                 [{"id": 1, "name": "Test"}],
             ),
             # Noisy output with Rails prompt
             (
-                "open-project(main):001> puts User.all.to_json\n"
-                '[{"id": 1, "login": "admin"}]\n'
-                "=> nil",
+                'open-project(main):001> puts User.all.to_json\n[{"id": 1, "login": "admin"}]\n=> nil',
                 [{"id": 1, "login": "admin"}],
             ),
             # Unicode and special characters
@@ -234,7 +232,9 @@ class TestParseRailsOutput:
 class TestQueryExecution:
     """Tests for query execution and modification logic."""
 
-    @pytest.mark.skip(reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored")
+    @pytest.mark.skip(
+        reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored"
+    )
     def test_execute_query_to_json_file_uses_pagination_for_collection_query(
         self,
         op_client,
@@ -278,6 +278,7 @@ open-project(prod)>
         import pytest as _pytest
 
         from src.clients.openproject_client import QueryExecutionError
+
         with _pytest.raises(QueryExecutionError):
             op_client._check_console_output_for_errors(severe_output, context="execute_large_query_to_json_file")
 
@@ -416,9 +417,7 @@ class TestErrorPropagation:
         is wrapped in a FileTransferError.
         """
         # Arrange
-        mock_clients["docker_client"].transfer_file_to_container.side_effect = (
-            Exception("Docker daemon not running")
-        )
+        mock_clients["docker_client"].transfer_file_to_container.side_effect = Exception("Docker daemon not running")
 
         # Act & Assert
         with pytest.raises(
@@ -436,7 +435,9 @@ class TestQueryModificationEdgeCases:
     These tests expose the dangerous hardcoded .limit(5) behavior.
     """
 
-    @pytest.mark.skip(reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored")
+    @pytest.mark.skip(
+        reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored"
+    )
     def test_collection_queries_use_pagination_not_hardcoded_limit(self, op_client) -> None:
         """Regression: ensure no silent truncation via hardcoded limit; use batching."""
         # Arrange

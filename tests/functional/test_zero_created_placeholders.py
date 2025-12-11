@@ -67,5 +67,3 @@ def test_statuses_zero_created_gating(mock_jira: MagicMock, mock_op: MagicMock) 
     # run() currently returns success when mapping proceeds; expect gating later
     result = mig.run()
     assert result.success is False
-
-

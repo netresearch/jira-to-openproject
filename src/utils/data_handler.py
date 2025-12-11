@@ -29,6 +29,7 @@ def _json_default(value: Any) -> Any:
         return value.model_dump()
     return str(value)
 
+
 def save_results(
     data: Any,
     filename: Path | str,

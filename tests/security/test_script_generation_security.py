@@ -35,14 +35,10 @@ def _verify_script_safety(script, original_jira_key) -> None:
     script_without_comments = re.sub(r"#.*$", "", script_content, flags=re.MULTILINE)
     script_without_escaped = script_without_comments.replace(escaped_key, "")
 
-    assert (
-        original_jira_key not in script_without_escaped
-    ), f"Unescaped jira_key '{original_jira_key}' found in script"
+    assert original_jira_key not in script_without_escaped, f"Unescaped jira_key '{original_jira_key}' found in script"
 
     # Escaped key should be present in the script
-    assert (
-        escaped_key in script_content
-    ), f"Escaped jira_key '{escaped_key}' not found in script"
+    assert escaped_key in script_content, f"Escaped jira_key '{escaped_key}' not found in script"
 
     # Common injection patterns should not be present
     dangerous_patterns = [
@@ -66,9 +62,7 @@ def _verify_script_safety(script, original_jira_key) -> None:
     ]
 
     for pattern in dangerous_patterns:
-        assert (
-            pattern not in script_content.upper()
-        ), f"Dangerous pattern '{pattern}' found in script"
+        assert pattern not in script_content.upper(), f"Dangerous pattern '{pattern}' found in script"
 
 
 def _verify_script_has_no_dangerous_patterns(script) -> None:
@@ -97,9 +91,7 @@ def _verify_script_has_no_dangerous_patterns(script) -> None:
     ]
 
     for pattern in dangerous_patterns:
-        assert (
-            pattern not in script_content.upper()
-        ), f"Dangerous pattern '{pattern}' found in script"
+        assert pattern not in script_content.upper(), f"Dangerous pattern '{pattern}' found in script"
 
 
 # ---------- Fixtures ----------

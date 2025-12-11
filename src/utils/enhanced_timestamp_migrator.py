@@ -313,16 +313,20 @@ class EnhancedTimestampMigrator:
                 # Also generate Journal operations for activity log
                 created_timestamp = creation_result["rails_operation"].get("timestamp")
                 if created_timestamp and author_id:
-                    result["rails_operations"].append({
-                        "type": "set_journal_created_at",
-                        "jira_key": jira_key,
-                        "timestamp": created_timestamp,
-                    })
-                    result["rails_operations"].append({
-                        "type": "set_journal_user",
-                        "jira_key": jira_key,
-                        "user_id": author_id,
-                    })
+                    result["rails_operations"].append(
+                        {
+                            "type": "set_journal_created_at",
+                            "jira_key": jira_key,
+                            "timestamp": created_timestamp,
+                        }
+                    )
+                    result["rails_operations"].append(
+                        {
+                            "type": "set_journal_user",
+                            "jira_key": jira_key,
+                            "user_id": author_id,
+                        }
+                    )
             if creation_result["warnings"]:
                 result["warnings"].extend(creation_result["warnings"])
 
@@ -360,7 +364,7 @@ class EnhancedTimestampMigrator:
                         self.logger.warning(
                             f"Date constraint violation in {jira_key}: "
                             f"due_date ({due_date_str}) < start_date ({start_date_str}). "
-                            f"Setting due_date = start_date"
+                            f"Setting due_date = start_date",
                         )
                         work_package_data["due_date"] = start_date_str
 
@@ -385,9 +389,7 @@ class EnhancedTimestampMigrator:
 
             # Store migrated timestamps
             result["migrated_timestamps"] = {
-                k: v
-                for k, v in work_package_data.items()
-                if k.endswith(("_at", "_on", "_date")) or "date" in k.lower()
+                k: v for k, v in work_package_data.items() if k.endswith(("_at", "_on", "_date")) or "date" in k.lower()
             }
 
             # Update status based on warnings/errors
@@ -866,15 +868,9 @@ class EnhancedTimestampMigrator:
     def generate_timestamp_report(self) -> dict[str, Any]:
         """Generate comprehensive report on timestamp migration."""
         total_issues = len(self.migration_results)
-        successful = sum(
-            1 for r in self.migration_results.values() if r["status"] == "success"
-        )
-        partial = sum(
-            1 for r in self.migration_results.values() if r["status"] == "partial"
-        )
-        failed = sum(
-            1 for r in self.migration_results.values() if r["status"] == "failed"
-        )
+        successful = sum(1 for r in self.migration_results.values() if r["status"] == "success")
+        partial = sum(1 for r in self.migration_results.values() if r["status"] == "partial")
+        failed = sum(1 for r in self.migration_results.values() if r["status"] == "failed")
 
         # Analyze timestamp types migrated
         timestamp_types = {}
@@ -888,9 +884,7 @@ class EnhancedTimestampMigrator:
                 "successful_migrations": successful,
                 "partial_migrations": partial,
                 "failed_migrations": failed,
-                "success_percentage": (
-                    (successful / total_issues * 100) if total_issues > 0 else 0
-                ),
+                "success_percentage": ((successful / total_issues * 100) if total_issues > 0 else 0),
             },
             "timestamp_types_migrated": timestamp_types,
             "rails_operations_pending": len(self._rails_operations_cache),
@@ -906,9 +900,7 @@ class EnhancedTimestampMigrator:
             results_file = config.get_path("data") / "timestamp_migration_results.json"
 
             # Convert to serializable format
-            serializable_results = {
-                k: dict(v) for k, v in self.migration_results.items()
-            }
+            serializable_results = {k: dict(v) for k, v in self.migration_results.items()}
 
             with results_file.open("w") as f:
                 json.dump(serializable_results, f, indent=2)

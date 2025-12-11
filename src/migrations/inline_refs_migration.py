@@ -129,5 +129,3 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
                 message=f"Inline refs migration failed: {e}",
                 errors=[str(e)],
             )
-
-

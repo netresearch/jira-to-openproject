@@ -211,9 +211,7 @@ class TestPerformanceCache:
         stats = cache.get_stats()
         assert stats["current_size"] == 0
         # Note: get operations during verification may increment hit count
-        assert (
-            stats["hits"] >= 1
-        )  # Statistics preserved, may have additional hits from verification
+        assert stats["hits"] >= 1  # Statistics preserved, may have additional hits from verification
 
 
 class TestConnectionPoolManager:

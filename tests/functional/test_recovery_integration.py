@@ -95,9 +95,7 @@ class TestRecoveryIntegration:
         assert len(checkpoints) > 0
 
         # At least one checkpoint should be completed
-        completed_checkpoints = [
-            cp for cp in checkpoints if cp["status"] == CheckpointStatus.COMPLETED.value
-        ]
+        completed_checkpoints = [cp for cp in checkpoints if cp["status"] == CheckpointStatus.COMPLETED.value]
         assert len(completed_checkpoints) > 0
 
         # 5. Verify cleanup was performed
@@ -131,11 +129,7 @@ class TestRecoveryIntegration:
         assert recovery_plan_id is not None
 
         # 4. Verify recovery plan file exists and contains correct data
-        plan_file = (
-            failed_migration.checkpoint_manager.checkpoint_dir
-            / "recovery_plans"
-            / f"{recovery_plan_id}.json"
-        )
+        plan_file = failed_migration.checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{recovery_plan_id}.json"
         assert plan_file.exists()
 
         with plan_file.open() as f:
@@ -152,9 +146,7 @@ class TestRecoveryIntegration:
         checkpoints = failed_migration.checkpoint_manager.get_checkpoints_for_migration(
             migration_record_id,
         )
-        failed_checkpoints = [
-            cp for cp in checkpoints if cp["status"] == CheckpointStatus.FAILED.value
-        ]
+        failed_checkpoints = [cp for cp in checkpoints if cp["status"] == CheckpointStatus.FAILED.value]
         assert len(failed_checkpoints) > 0
 
     def test_migration_resume_capability(self, mock_migration) -> None:
@@ -271,10 +263,8 @@ class TestRecoveryIntegration:
         mock_migration.complete_current_checkpoint(entities_processed=30)
 
         # Verify progress was tracked
-        all_checkpoints = (
-            mock_migration.checkpoint_manager.get_checkpoints_for_migration(
-                mock_migration._current_migration_record_id,
-            )
+        all_checkpoints = mock_migration.checkpoint_manager.get_checkpoints_for_migration(
+            mock_migration._current_migration_record_id,
         )
         assert len(all_checkpoints) >= 3
 
@@ -349,16 +339,10 @@ class TestRecoveryIntegration:
             mock_migration.checkpoint_manager.complete_checkpoint(checkpoint_id)
 
         # Verify all were completed
-        all_checkpoints = (
-            mock_migration.checkpoint_manager.get_checkpoints_for_migration(
-                migration_record_id,
-            )
+        all_checkpoints = mock_migration.checkpoint_manager.get_checkpoints_for_migration(
+            migration_record_id,
         )
-        completed_count = sum(
-            1
-            for cp in all_checkpoints
-            if cp["status"] == CheckpointStatus.COMPLETED.value
-        )
+        completed_count = sum(1 for cp in all_checkpoints if cp["status"] == CheckpointStatus.COMPLETED.value)
         assert completed_count == 5
 
     def test_recovery_with_data_preservation(self, mock_migration, temp_dirs) -> None:

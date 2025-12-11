@@ -269,9 +269,7 @@ class TestIdempotencyDecorators:
         test_function("test1")
         test_function("test2")
 
-        assert (
-            call_count == 2
-        )  # Both calls executed (no caching due to different UUIDs)
+        assert call_count == 2  # Both calls executed (no caching due to different UUIDs)
 
     def test_decorator_metadata(self) -> None:
         """Test that decorators preserve function metadata."""
@@ -432,17 +430,13 @@ class TestIdempotencyDecorators:
         assert len(results) == 5
 
         # Check that the function was only called once due to idempotency
-        assert (
-            call_counts["count"] == 1
-        ), f"Function should only be called once, but was called {call_counts['count']} times"
+        assert call_counts["count"] == 1, (
+            f"Function should only be called once, but was called {call_counts['count']} times"
+        )
 
         # All should get the same result due to idempotency
-        unique_results = {
-            json.dumps(result, sort_keys=True) for result in results.values()
-        }
-        assert (
-            len(unique_results) == 1
-        ), "All concurrent calls should return same result"
+        unique_results = {json.dumps(result, sort_keys=True) for result in results.values()}
+        assert len(unique_results) == 1, "All concurrent calls should return same result"
 
     def test_decorator_with_no_idempotency_manager(self) -> None:
         """Test decorator behavior when idempotency manager fails to initialize."""

@@ -158,9 +158,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             # Set up required attributes
             migrator.jira_client = jira_client
             migrator.op_client = op_client
-            migrator.openproject_client = (
-                op_client  # YOLO FIX: Add missing attribute alias
-            )
+            migrator.openproject_client = op_client  # YOLO FIX: Add missing attribute alias
             migrator.enhanced_user_mappings = {}
             migrator.refresh_interval_seconds = 3600
             migrator.fallback_strategy = "assign_admin"
@@ -257,7 +255,6 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             patch.object(migrator_instance, "_save_enhanced_mappings"),
             patch("pathlib.Path.write_text"),
         ):
-
             # Test 5 concurrent calls (new limit)
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 futures = [executor.submit(make_call) for _ in range(5)]
@@ -312,9 +309,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             {"accountId": "success"},
         ]
         migrator_instance.retry_config["base_delay"] = base_delay
-        migrator_instance.retry_config["max_retries"] = (
-            attempt + 1
-        )  # Allow enough retries
+        migrator_instance.retry_config["max_retries"] = attempt + 1  # Allow enough retries
 
         with patch("time.sleep") as mock_sleep:
             result = migrator_instance._get_jira_user_with_retry("test.user")
@@ -349,9 +344,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
 
         # Verify error context structure
-        error_logs = [
-            record for record in caplog.records if record.levelname == "ERROR"
-        ]
+        error_logs = [record for record in caplog.records if record.levelname == "ERROR"]
         assert len(error_logs) == 1
 
         log_message = error_logs[0].message
@@ -406,9 +399,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
         assert result is not None
         assert result["jira_username"] == username
         assert "lastRefreshed" in result
-        assert (
-            result["metadata"]["jira_account_id"] == sample_jira_user_data["accountId"]
-        )
+        assert result["metadata"]["jira_account_id"] == sample_jira_user_data["accountId"]
 
     def test_integration_retry_fallback_behavior(self, migrator_instance) -> None:
         """Test integration with retry logic during refresh failures."""
@@ -475,7 +466,6 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             patch.object(migrator_instance, "_save_enhanced_mappings"),
             patch("pathlib.Path.write_text"),
         ):
-
             results = migrator_instance.batch_refresh_stale_mappings(
                 ["user1", "user2", "user3"],
             )
@@ -504,16 +494,11 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             patch.object(migrator_instance, "_save_enhanced_mappings"),
             patch("pathlib.Path.write_text"),
         ):
-
             migrator_instance.batch_refresh_stale_mappings(["user1", "user2"])
 
             # Verify logging includes total stale count - should appear in multiple logs
-            info_logs = [
-                record for record in caplog.records if record.levelname == "INFO"
-            ]
-            completion_logs = [
-                log for log in info_logs if "total stale detected" in log.message
-            ]
+            info_logs = [record for record in caplog.records if record.levelname == "INFO"]
+            completion_logs = [log for log in info_logs if "total stale detected" in log.message]
             # Both start and completion logs should mention total stale
             assert len(completion_logs) >= 1
 
@@ -546,7 +531,6 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             patch("time.sleep"),
             patch.object(migrator_instance, "_save_enhanced_mappings"),
         ):
-
             results = migrator_instance.batch_refresh_stale_mappings(["user1", "user2"])
 
             # Should still report total stale even if refreshes fail
@@ -585,9 +569,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
 
         # Verify the specific concurrent_limit field
-        error_logs = [
-            record for record in caplog.records if record.levelname == "ERROR"
-        ]
+        error_logs = [record for record in caplog.records if record.levelname == "ERROR"]
         assert len(error_logs) == 1
 
         log_message = error_logs[0].message
@@ -623,9 +605,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
                 migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
 
             # Verify accurate active count
-            error_logs = [
-                record for record in caplog.records if record.levelname == "ERROR"
-            ]
+            error_logs = [record for record in caplog.records if record.levelname == "ERROR"]
             assert len(error_logs) == 1
 
             log_message = error_logs[0].message
@@ -660,9 +640,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
 
         # Verify token was redacted - check for the actual pattern that's logged
-        error_logs = [
-            record for record in caplog.records if record.levelname == "ERROR"
-        ]
+        error_logs = [record for record in caplog.records if record.levelname == "ERROR"]
         assert len(error_logs) == 1
 
         log_message = error_logs[0].message
@@ -694,9 +672,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
 
         # Verify Base64 was redacted
-        error_logs = [
-            record for record in caplog.records if record.levelname == "ERROR"
-        ]
+        error_logs = [record for record in caplog.records if record.levelname == "ERROR"]
         assert len(error_logs) == 1
 
         log_message = error_logs[0].message
@@ -725,9 +701,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
 
         # Verify URL was redacted
-        error_logs = [
-            record for record in caplog.records if record.levelname == "ERROR"
-        ]
+        error_logs = [record for record in caplog.records if record.levelname == "ERROR"]
         assert len(error_logs) == 1
 
         log_message = error_logs[0].message
@@ -748,9 +722,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             del migrator_instance.jira_client.get_user_info_with_timeout
 
         # Create a message over 100 characters
-        long_message = (
-            "This is a very long error message " * 5
-        )  # Much longer than 100 chars
+        long_message = "This is a very long error message " * 5  # Much longer than 100 chars
         assert len(long_message) > 100
 
         migrator_instance.jira_client.get_user_info.side_effect = JiraApiError(
@@ -761,9 +733,7 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             migrator_instance._get_jira_user_with_retry("test.user", max_retries=0)
 
         # Verify message was truncated to 100 chars total (97 + "...")
-        error_logs = [
-            record for record in caplog.records if record.levelname == "ERROR"
-        ]
+        error_logs = [record for record in caplog.records if record.levelname == "ERROR"]
         assert len(error_logs) == 1
 
         log_message = error_logs[0].message

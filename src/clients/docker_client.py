@@ -170,9 +170,7 @@ class DockerClient:
         """Copy a file from local machine to the Docker container."""
         # Convert to Path objects if they're strings
         local_path = Path(local_path) if isinstance(local_path, str) else local_path
-        container_path = (
-            Path(container_path) if isinstance(container_path, str) else container_path
-        )
+        container_path = Path(container_path) if isinstance(container_path, str) else container_path
 
         try:
             # Build docker cp command on remote
@@ -233,9 +231,7 @@ class DockerClient:
     ) -> Path:
         """Copy a file from Docker container to local machine."""
         # Convert to Path objects if they're strings
-        container_path = (
-            Path(container_path) if isinstance(container_path, str) else container_path
-        )
+        container_path = Path(container_path) if isinstance(container_path, str) else container_path
         local_path = Path(local_path) if isinstance(local_path, str) else local_path
 
         # Fast-path: If the file doesn't exist yet in the container, avoid invoking
@@ -544,9 +540,7 @@ class DockerClient:
         """
         # Convert to Path objects if they are strings
         local_path = Path(local_path) if isinstance(local_path, str) else local_path
-        container_path = (
-            Path(container_path) if isinstance(container_path, str) else container_path
-        )
+        container_path = Path(container_path) if isinstance(container_path, str) else container_path
 
         # Use a temporary path on the remote server
         remote_temp_path = Path(f"/tmp/{local_path.name}")  # noqa: S108

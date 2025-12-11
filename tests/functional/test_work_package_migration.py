@@ -129,9 +129,7 @@ class TestWorkPackageMigration(unittest.TestCase):
         )
 
         # Assertions
-        assert (
-            mock_load_dict.call_count == 5
-        )  # Should be called 5 times for different mappings
+        assert mock_load_dict.call_count == 5  # Should be called 5 times for different mappings
         assert isinstance(migration.jira_client, MagicMock)
         assert isinstance(migration.op_client, MagicMock)
 
@@ -308,11 +306,13 @@ class TestWorkPackageMigration(unittest.TestCase):
         This guards against silent no-op migrations.
         """
         # Arrange minimal environment
-        mock_iter_issues.return_value = iter([
-            # Two fake issues yielded for the project
-            type("Issue", (), {"id": "1"})(),
-            type("Issue", (), {"id": "2"})(),
-        ])
+        mock_iter_issues.return_value = iter(
+            [
+                # Two fake issues yielded for the project
+                type("Issue", (), {"id": "1"})(),
+                type("Issue", (), {"id": "2"})(),
+            ]
+        )
 
         migration = WorkPackageMigration(
             jira_client=mock_jira_client.return_value,
@@ -321,6 +321,7 @@ class TestWorkPackageMigration(unittest.TestCase):
 
         # Force project filter to contain one project
         from src import config
+
         config.jira_config = config.jira_config or {}
         config.jira_config["projects"] = ["TEST"]
 

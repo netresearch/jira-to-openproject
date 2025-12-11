@@ -64,7 +64,6 @@ def migrator_with_validation(mock_config, mock_clients):
         patch("json.load", return_value={}),
         patch("src.config.migration_config", mock_config.migration_config),
     ):
-
         migrator = EnhancedUserAssociationMigrator(
             jira_client=jira_client,
             op_client=op_client,
@@ -581,9 +580,7 @@ class TestExecuteAssignAdminFallback:
                 "src.utils.enhanced_user_association_migrator.datetime",
             ) as mock_datetime,
         ):
-            mock_datetime.now.return_value.isoformat.return_value = (
-                "2024-01-01T12:00:00Z"
-            )
+            mock_datetime.now.return_value.isoformat.return_value = "2024-01-01T12:00:00Z"
 
             result = migrator_with_validation._execute_assign_admin_fallback(
                 "test.user",
@@ -685,9 +682,7 @@ class TestExecuteCreatePlaceholderFallback:
                 "src.utils.enhanced_user_association_migrator.datetime",
             ) as mock_datetime,
         ):
-            mock_datetime.now.return_value.isoformat.return_value = (
-                "2024-01-01T12:00:00Z"
-            )
+            mock_datetime.now.return_value.isoformat.return_value = "2024-01-01T12:00:00Z"
 
             result = migrator_with_validation._execute_create_placeholder_fallback(
                 "test.user",
@@ -716,9 +711,7 @@ class TestExecuteCreatePlaceholderFallback:
                 "src.utils.enhanced_user_association_migrator.datetime",
             ) as mock_datetime,
         ):
-            mock_datetime.now.return_value.isoformat.return_value = (
-                "2024-01-01T12:00:00Z"
-            )
+            mock_datetime.now.return_value.isoformat.return_value = "2024-01-01T12:00:00Z"
 
             result = migrator_with_validation._execute_create_placeholder_fallback(
                 "test.user",
@@ -800,7 +793,6 @@ class TestRefreshUserMappingIntegration:
             ) as mock_fallback,
             patch.object(migrator_with_validation, "_save_enhanced_mappings"),
         ):
-
             result = migrator_with_validation.refresh_user_mapping("test.user")
 
             mock_fallback.assert_called_once_with(
@@ -827,7 +819,6 @@ class TestRefreshUserMappingIntegration:
                 return_value=None,
             ) as mock_fallback,
         ):
-
             result = migrator_with_validation.refresh_user_mapping("test.user")
 
             mock_fallback.assert_called_once_with("test.user", None, "user_not_found")
@@ -865,10 +856,7 @@ class TestRefreshUserMappingIntegration:
                 "src.utils.enhanced_user_association_migrator.datetime",
             ) as mock_datetime,
         ):
-
-            mock_datetime.now.return_value.isoformat.return_value = (
-                "2024-01-01T12:00:00Z"
-            )
+            mock_datetime.now.return_value.isoformat.return_value = "2024-01-01T12:00:00Z"
             mock_op_mapping.return_value = {"mapping_status": "mapped"}
 
             result = migrator_with_validation.refresh_user_mapping("test.user")
@@ -935,10 +923,7 @@ class TestEdgeCasesAndErrorHandling:
                 "user_inactive",
             )
 
-            assert (
-                "Applying fallback strategy 'skip' for user test.user (reason: user_inactive)"
-                in caplog.text
-            )
+            assert "Applying fallback strategy 'skip' for user test.user (reason: user_inactive)" in caplog.text
 
     def test_all_fallback_methods_store_mapping_in_enhanced_mappings(
         self,
@@ -952,7 +937,6 @@ class TestEdgeCasesAndErrorHandling:
             patch.object(migrator_with_validation, "_save_enhanced_mappings"),
             patch("src.utils.enhanced_user_association_migrator.datetime"),
         ):
-
             result = migrator_with_validation._execute_assign_admin_fallback(
                 "admin.user",
                 "test",
@@ -961,9 +945,7 @@ class TestEdgeCasesAndErrorHandling:
             )
 
             assert "admin.user" in migrator_with_validation.enhanced_user_mappings
-            assert (
-                migrator_with_validation.enhanced_user_mappings["admin.user"] == result
-            )
+            assert migrator_with_validation.enhanced_user_mappings["admin.user"] == result
 
             # Test create_placeholder
             result = migrator_with_validation._execute_create_placeholder_fallback(
@@ -974,7 +956,4 @@ class TestEdgeCasesAndErrorHandling:
             )
 
             assert "placeholder.user" in migrator_with_validation.enhanced_user_mappings
-            assert (
-                migrator_with_validation.enhanced_user_mappings["placeholder.user"]
-                == result
-            )
+            assert migrator_with_validation.enhanced_user_mappings["placeholder.user"] == result

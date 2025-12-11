@@ -1011,8 +1011,6 @@ class TestEnhancedTimestampMigrator:
         timestamps = migrator_with_mocks._extract_all_timestamps(mock_issue)
 
         # Should only include the date custom field
-        custom_fields = [
-            field for field in timestamps if field.startswith("custom_")
-        ]
+        custom_fields = [field for field in timestamps if field.startswith("custom_")]
         assert "custom_customfield_12345" in custom_fields
         assert "custom_customfield_text" not in timestamps

@@ -71,11 +71,9 @@ class RateLimitConfig:
                 "burst_capacity",
                 self.burst_capacity,
             )
-            self.circuit_breaker_threshold = (
-                SecurityValidator.validate_numeric_parameter(
-                    "retry_attempts",
-                    self.circuit_breaker_threshold,
-                )
+            self.circuit_breaker_threshold = SecurityValidator.validate_numeric_parameter(
+                "retry_attempts",
+                self.circuit_breaker_threshold,
             )  # Reuse retry_attempts bounds
 
             # Validate factor parameters
@@ -279,8 +277,7 @@ class RateLimiter:
         if self.config.strategy == RateLimitStrategy.EXPONENTIAL:
             if self.state.consecutive_failures > 0:
                 return min(
-                    self.config.base_delay
-                    * (self.config.exponential_base**self.state.consecutive_failures),
+                    self.config.base_delay * (self.config.exponential_base**self.state.consecutive_failures),
                     self.config.max_delay,
                 )
             return self.config.base_delay
@@ -315,8 +312,7 @@ class RateLimiter:
 
         # Exponential backoff
         backoff_delay = min(
-            self.config.base_delay
-            * (self.config.exponential_base**self.state.consecutive_failures),
+            self.config.base_delay * (self.config.exponential_base**self.state.consecutive_failures),
             self.config.max_delay,
         )
 
@@ -453,8 +449,7 @@ class RateLimiter:
             "consecutive_failures": self.state.consecutive_failures,
             "circuit_breaker_open": self.state.circuit_breaker_open,
             "avg_response_time": (
-                sum(self.state.response_time_history)
-                / len(self.state.response_time_history)
+                sum(self.state.response_time_history) / len(self.state.response_time_history)
                 if self.state.response_time_history
                 else 0
             ),

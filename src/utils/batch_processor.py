@@ -338,9 +338,7 @@ class ThreadSafeBatchProcessor[T, R]:
             "data": all_results,
             "errors": all_errors,
             "execution_time": total_time,
-            "throughput_items_per_second": (
-                processed_count / total_time if total_time > 0 else 0
-            ),
+            "throughput_items_per_second": (processed_count / total_time if total_time > 0 else 0),
         }
 
         self.logger.info(
@@ -373,8 +371,7 @@ class ThreadSafeBatchProcessor[T, R]:
             self._batch_results = []
 
         self.logger.info(
-            f"Starting sequential batch processing: {self._total_items} items, "
-            f"batch_size={self.batch_size}",
+            f"Starting sequential batch processing: {self._total_items} items, batch_size={self.batch_size}",
         )
 
         start_time = time.time()
@@ -427,9 +424,7 @@ class ThreadSafeBatchProcessor[T, R]:
             "data": all_results,
             "errors": all_errors,
             "execution_time": total_time,
-            "throughput_items_per_second": (
-                processed_count / total_time if total_time > 0 else 0
-            ),
+            "throughput_items_per_second": (processed_count / total_time if total_time > 0 else 0),
         }
 
         self.logger.info(
@@ -535,9 +530,7 @@ class StreamingJSONProcessor:
             "results": results,
             "errors": errors,
             "execution_time": total_time,
-            "throughput_items_per_second": (
-                processed_count / total_time if total_time > 0 else 0
-            ),
+            "throughput_items_per_second": (processed_count / total_time if total_time > 0 else 0),
         }
 
         self.logger.info(

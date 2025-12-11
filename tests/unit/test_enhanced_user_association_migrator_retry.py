@@ -39,7 +39,6 @@ class TestEnhancedUserAssociationMigratorRetry:
             patch("builtins.open", mock_open(read_data="{}")),
             patch("pathlib.Path.exists", return_value=False),
         ):
-
             mock_config.get_path.return_value = Path("/tmp/test")
             mock_config.migration_config = {
                 "mapping": {
@@ -80,9 +79,7 @@ class TestEnhancedUserAssociationMigratorRetry:
             "active": True,
         }
 
-        migrator_instance.jira_client.get_user_info_with_timeout.return_value = (
-            expected_user_data
-        )
+        migrator_instance.jira_client.get_user_info_with_timeout.return_value = expected_user_data
 
         result = migrator_instance._get_jira_user_with_retry("test.user")
 
@@ -119,9 +116,7 @@ class TestEnhancedUserAssociationMigratorRetry:
     ) -> None:
         """Test that retries are exhausted after max attempts."""
         # Mock to always raise an error to trigger retries
-        migrator_instance.jira_client.get_user_info_with_timeout.side_effect = (
-            JiraConnectionError("Persistent error")
-        )
+        migrator_instance.jira_client.get_user_info_with_timeout.side_effect = JiraConnectionError("Persistent error")
 
         # Mock time.sleep to speed up test
         with patch("time.sleep"), pytest.raises(JiraConnectionError):
@@ -181,9 +176,7 @@ class TestEnhancedUserAssociationMigratorRetry:
         migrator_instance,
     ) -> None:
         """Test override of max_retries parameter."""
-        migrator_instance.jira_client.get_user_info_with_timeout.side_effect = (
-            JiraConnectionError("Network error")
-        )
+        migrator_instance.jira_client.get_user_info_with_timeout.side_effect = JiraConnectionError("Network error")
 
         with pytest.raises(JiraConnectionError):
             migrator_instance._get_jira_user_with_retry("test.user", max_retries=1)
@@ -273,9 +266,7 @@ class TestEnhancedUserAssociationMigratorRetry:
             "active": True,
         }
 
-        migrator_instance.jira_client.get_user_info_with_timeout.return_value = (
-            expected_user_data
-        )
+        migrator_instance.jira_client.get_user_info_with_timeout.return_value = expected_user_data
 
         migrator_instance._get_jira_user_with_retry("test.user")
 
@@ -319,9 +310,7 @@ class TestEnhancedUserAssociationMigratorRetry:
             "active": True,
         }
 
-        migrator_instance.jira_client.get_user_info_with_timeout.return_value = (
-            expected_user_data
-        )
+        migrator_instance.jira_client.get_user_info_with_timeout.return_value = expected_user_data
 
         result = migrator_instance._get_jira_user_with_retry("test.user")
 
@@ -332,9 +321,7 @@ class TestEnhancedUserAssociationMigratorRetry:
         migrator_instance,
     ) -> None:
         """Test that comprehensive error context is logged."""
-        migrator_instance.jira_client.get_user_info_with_timeout.side_effect = (
-            JiraConnectionError("Network error")
-        )
+        migrator_instance.jira_client.get_user_info_with_timeout.side_effect = JiraConnectionError("Network error")
 
         with patch.object(migrator_instance.logger, "error") as mock_error_log:
             with pytest.raises(JiraConnectionError):

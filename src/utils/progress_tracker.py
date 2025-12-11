@@ -221,13 +221,9 @@ class ProgressTracker:
                 self.metrics.items_per_second = self.metrics.processed_items / elapsed
 
                 # Calculate ETA based on current rate
-                remaining_items = (
-                    self.metrics.total_items - self.metrics.processed_items
-                )
+                remaining_items = self.metrics.total_items - self.metrics.processed_items
                 if self.metrics.items_per_second > 0:
-                    self.metrics.estimated_time_remaining = (
-                        remaining_items / self.metrics.items_per_second
-                    )
+                    self.metrics.estimated_time_remaining = remaining_items / self.metrics.items_per_second
 
             self.metrics.last_update_time = current_time
 
@@ -236,8 +232,7 @@ class ProgressTracker:
             self.progress.update(
                 self.task_id,
                 completed=self.metrics.processed_items,
-                description=message
-                or f"{self.operation_name} - {self.metrics.stage.value}",
+                description=message or f"{self.operation_name} - {self.metrics.stage.value}",
             )
 
         # Trigger callbacks
@@ -289,9 +284,7 @@ class ProgressTracker:
             self._update_thread.join(timeout=1.0)
 
         with self._lock:
-            self.metrics.stage = (
-                ProgressStage.COMPLETED if success else ProgressStage.FAILED
-            )
+            self.metrics.stage = ProgressStage.COMPLETED if success else ProgressStage.FAILED
 
         # Final updates
         if self.progress and self.task_id:
@@ -521,15 +514,9 @@ class MultiStageProgressTracker:
             Dictionary with overall progress information
 
         """
-        total_items = sum(
-            tracker.metrics.total_items for tracker in self.stages.values()
-        )
-        processed_items = sum(
-            tracker.metrics.processed_items for tracker in self.stages.values()
-        )
-        failed_items = sum(
-            tracker.metrics.failed_items for tracker in self.stages.values()
-        )
+        total_items = sum(tracker.metrics.total_items for tracker in self.stages.values())
+        processed_items = sum(tracker.metrics.processed_items for tracker in self.stages.values())
+        failed_items = sum(tracker.metrics.failed_items for tracker in self.stages.values())
 
         overall_elapsed = time.time() - self.overall_start_time
 
@@ -537,9 +524,7 @@ class MultiStageProgressTracker:
             "total_items": total_items,
             "processed_items": processed_items,
             "failed_items": failed_items,
-            "completion_percentage": (
-                (processed_items / total_items * 100) if total_items > 0 else 0
-            ),
+            "completion_percentage": ((processed_items / total_items * 100) if total_items > 0 else 0),
             "elapsed_time": overall_elapsed,
             "current_stage": self.current_stage,
             "stages": {
@@ -574,6 +559,7 @@ class MultiStageProgressTracker:
 
 # Convenience functions for common progress tracking scenarios
 T = TypeVar("T")
+
 
 def track_migration_progress(  # noqa: UP047
     operation_name: str,
@@ -636,4 +622,3 @@ def create_batch_progress_callback(
         )
 
     return callback
-

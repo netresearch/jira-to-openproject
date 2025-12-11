@@ -45,6 +45,7 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
 
         Returns:
             Empty list (transformation-only, no source entities)
+
         """
         return []
 
@@ -132,6 +133,7 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
                 failed += 1
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+
     def run(self) -> ComponentResult:
         """Execute migration pipeline."""
         self.logger.info("Starting %s migration", self.__class__.__name__)
@@ -148,7 +150,9 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
 
         loaded = self._load(mapped)
         if loaded.success:
-            self.logger.info("%s migration completed (updated=%s, failed=%s)", self.__class__.__name__, loaded.updated, loaded.failed)
+            self.logger.info(
+                "%s migration completed (updated=%s, failed=%s)", self.__class__.__name__, loaded.updated, loaded.failed
+            )
         else:
             self.logger.error("%s migration encountered failures (failed=%s)", self.__class__.__name__, loaded.failed)
         return loaded

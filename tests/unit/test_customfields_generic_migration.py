@@ -77,5 +77,3 @@ def test_customfields_generic_migration_extracts_and_sets_cf():
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated >= 1
-
-

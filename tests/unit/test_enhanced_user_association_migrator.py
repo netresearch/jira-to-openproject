@@ -873,9 +873,7 @@ class TestEnhancedUserAssociationMigrator:
         # Should still migrate other associations successfully
         assert work_package_data["assigned_to_id"] == 123  # john.doe
         assert work_package_data["author_id"] == 456  # jane.smith
-        assert (
-            work_package_data.get("watcher_ids", []) == []
-        )  # empty due to fetch failure
+        assert work_package_data.get("watcher_ids", []) == []  # empty due to fetch failure
 
         # Should still be successful overall
         assert result["status"] == "success"

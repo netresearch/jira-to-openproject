@@ -88,9 +88,7 @@ class TimeEntryMigration(BaseMigration):
 
         # Optional project filter from CLI (applied earlier into config.jira_config['projects'])
         allowed_projects = [
-            str(p).upper().strip()
-            for p in (config.jira_config.get("projects") or [])
-            if str(p).strip()
+            str(p).upper().strip() for p in (config.jira_config.get("projects") or []) if str(p).strip()
         ]
 
         migrated: list[dict[str, Any]] = []
@@ -173,18 +171,15 @@ class TimeEntryMigration(BaseMigration):
 
             total_migrated = result.get("total_time_entries", {}).get("migrated", 0)
             total_failed = result.get("total_time_entries", {}).get("failed", 0)
-            total_discovered = (
-                result.get("jira_work_logs", {}).get("discovered", 0)
-                + result.get("tempo_time_entries", {}).get("discovered", 0)
-            )
+            total_discovered = result.get("jira_work_logs", {}).get("discovered", 0) + result.get(
+                "tempo_time_entries", {}
+            ).get("discovered", 0)
 
             # Zero-created gating: discovered > 0 but migrated == 0 should fail
             if total_discovered > 0 and total_migrated == 0:
                 return ComponentResult(
                     success=False,
-                    message=(
-                        "Time entry migration discovered entries but created zero; failing per gating policy"
-                    ),
+                    message=("Time entry migration discovered entries but created zero; failing per gating policy"),
                     details={
                         "status": "failed",
                         "reason": "zero_created_with_input",
@@ -199,11 +194,7 @@ class TimeEntryMigration(BaseMigration):
 
             return ComponentResult(
                 success=success,
-                message=(
-                    "Time entry migration completed"
-                    if success
-                    else "Time entry migration completed with errors"
-                ),
+                message=("Time entry migration completed" if success else "Time entry migration completed with errors"),
                 details={
                     "status": result.get("status", "unknown"),
                     "jira_work_logs": result.get("jira_work_logs", {}),
@@ -225,5 +216,3 @@ class TimeEntryMigration(BaseMigration):
                 details={"status": "failed", "error": str(e)},
                 errors=[str(e)],
             )
-
-

@@ -167,5 +167,3 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
                 message=f"Native tags migration failed: {e}",
                 errors=[str(e)],
             )
-
-

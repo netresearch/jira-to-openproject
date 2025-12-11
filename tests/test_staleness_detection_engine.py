@@ -168,10 +168,7 @@ class TestStaleMappingError:
 
         assert error.username == username
         assert error.reason == "Mapping is stale"
-        assert (
-            str(error)
-            == f"Stale mapping detected for user '{username}': Mapping is stale"
-        )
+        assert str(error) == f"Stale mapping detected for user '{username}': Mapping is stale"
 
     def test_exception_initialization_custom_reason(self) -> None:
         """Test StaleMappingError with custom reason."""
@@ -564,7 +561,6 @@ class TestBatchRefresh:
                 return_value=refreshed_mapping,
             ),
         ):
-
             result = migrator.batch_refresh_stale_mappings()
 
             assert result["total_stale"] == 1
@@ -596,7 +592,6 @@ class TestBatchRefresh:
             ),
             patch.object(migrator, "refresh_user_mapping", side_effect=mock_refresh),
         ):
-
             result = migrator.batch_refresh_stale_mappings(max_retries=2)
 
             assert result["refresh_successful"] == 1
@@ -617,7 +612,6 @@ class TestBatchRefresh:
             ),
             patch.object(migrator, "refresh_user_mapping", return_value=None),
         ):
-
             result = migrator.batch_refresh_stale_mappings(max_retries=1)
 
             assert result["refresh_failed"] == 1
@@ -643,7 +637,6 @@ class TestBatchRefresh:
                 side_effect=Exception("API error"),
             ),
         ):
-
             result = migrator.batch_refresh_stale_mappings(max_retries=1)
 
             assert result["refresh_failed"] == 1
@@ -948,15 +941,11 @@ class TestMappingValidation:
         result = migrator.validate_mapping_freshness()
 
         # Should have recommendations for each stale user
-        stale_recommendations = [
-            r for r in result["recommendations"] if r["action"] == "refresh"
-        ]
+        stale_recommendations = [r for r in result["recommendations"] if r["action"] == "refresh"]
         assert len(stale_recommendations) == 2
 
         # Should have batch refresh recommendation
-        batch_recommendations = [
-            r for r in result["recommendations"] if r["action"] == "batch_refresh"
-        ]
+        batch_recommendations = [r for r in result["recommendations"] if r["action"] == "batch_refresh"]
         assert len(batch_recommendations) == 1
 
     def test_validate_mapping_error_handling(self, basic_migrator) -> None:

@@ -494,12 +494,14 @@ class TestEnhancedAuditTrailMigrator:
         migrator = migrator_with_mocks
         migrator.user_mapping = sample_user_mapping
 
-        comment_payload = [{
-            "id": "c1",
-            "created": "2023-01-17T12:00:00.000+0000",
-            "author": {"name": "john.doe"},
-            "body": "Reviewed change",
-        }]
+        comment_payload = [
+            {
+                "id": "c1",
+                "created": "2023-01-17T12:00:00.000+0000",
+                "author": {"name": "john.doe"},
+                "body": "Reviewed change",
+            }
+        ]
 
         migrator.changelog_data = {
             "TEST-123": {
@@ -517,7 +519,6 @@ class TestEnhancedAuditTrailMigrator:
         operations = migrator.rails_operations
         assert any(op.get("operation") == "create_comment_event" for op in operations)
         assert migrator.migration_results["comments_processed"] == 1
-
 
     @patch("subprocess.run")
     def test_execute_rails_audit_operations_success(
@@ -683,9 +684,7 @@ class TestEnhancedAuditTrailMigrator:
         assert result is True
 
         # Check file exists
-        results_file = (
-            temp_data_dir / "migration_data" / "audit_trail_migration_results.json"
-        )
+        results_file = temp_data_dir / "migration_data" / "audit_trail_migration_results.json"
         assert results_file.exists()
 
         # Check file content
@@ -806,13 +805,13 @@ class TestEnhancedAuditTrailMigrator:
         for i in range(100):
             large_changelog.append(
                 {
-                    "created": f"2023-01-{i+1:02d}T10:30:00.000+0000",
+                    "created": f"2023-01-{i + 1:02d}T10:30:00.000+0000",
                     "author": {"name": "john.doe"},
                     "items": [
                         {
                             "field": "summary",
                             "fromString": f"Title {i}",
-                            "toString": f"Title {i+1}",
+                            "toString": f"Title {i + 1}",
                         },
                     ],
                 },

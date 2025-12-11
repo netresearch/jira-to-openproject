@@ -44,7 +44,9 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
         ff = field_format or "text"
         script = (
             "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{}'); "
-            "if !cf; cf = CustomField.new(name: '{}', field_format: '{}', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id".format(name.replace("'", "\\'"), name.replace("'", "\\'"), ff)
+            "if !cf; cf = CustomField.new(name: '{}', field_format: '{}', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id".format(
+                name.replace("'", "\\'"), name.replace("'", "\\'"), ff
+            )
         )
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
@@ -65,11 +67,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
                 if isinstance(v, dict):
                     normalized.append(
                         str(
-                            v.get("name")
-                            or v.get("value")
-                            or v.get("displayName")
-                            or v.get("id")
-                            or v,
+                            v.get("name") or v.get("value") or v.get("displayName") or v.get("id") or v,
                         ),
                     )
                 else:
@@ -110,11 +108,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
 
                 # Map to OP CF name/type using mapping; fallback to using Jira ID as name
                 map_entry = cf_mapping.get(cf_id, {}) if isinstance(cf_mapping, dict) else {}
-                op_name = (
-                    map_entry.get("openproject_name")
-                    or map_entry.get("jira_name")
-                    or cf_id
-                )
+                op_name = map_entry.get("openproject_name") or map_entry.get("jira_name") or cf_id
                 op_type = map_entry.get("openproject_type", "text")
 
                 norm_value = self._to_string_value(cf_value)
@@ -163,6 +157,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
                     failed += 1
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+
     def run(self) -> ComponentResult:
         """Execute migration pipeline."""
         self.logger.info("Starting %s migration", self.__class__.__name__)
@@ -179,7 +174,9 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
 
         loaded = self._load(mapped)
         if loaded.success:
-            self.logger.info("%s migration completed (updated=%s, failed=%s)", self.__class__.__name__, loaded.updated, loaded.failed)
+            self.logger.info(
+                "%s migration completed (updated=%s, failed=%s)", self.__class__.__name__, loaded.updated, loaded.failed
+            )
         else:
             self.logger.error("%s migration encountered failures (failed=%s)", self.__class__.__name__, loaded.failed)
         return loaded

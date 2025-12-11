@@ -25,8 +25,10 @@ except ImportError:  # pragma: no cover - compatibility for older jira package
 try:
     from jira.resources import Issue  # type: ignore
 except (ImportError, AttributeError):  # pragma: no cover - fallback for newer releases
+
     class Issue:  # type: ignore[misc]
         pass
+
 
 from src.clients.enhanced_jira_client import EnhancedJiraClient
 from src.clients.jira_client import JiraClient
@@ -678,10 +680,7 @@ class TestMemoryEfficiency:
         def mock_search_issues(jql, startAt=0, maxResults=50, **kwargs):
             if startAt >= 1000:  # Simulate end of results
                 return []
-            return [
-                Mock(key=f"TEST-{i}")
-                for i in range(startAt, min(startAt + maxResults, 1000))
-            ]
+            return [Mock(key=f"TEST-{i}") for i in range(startAt, min(startAt + maxResults, 1000))]
 
         mock_jira_client.search_issues.side_effect = mock_search_issues
 

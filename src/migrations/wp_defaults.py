@@ -78,5 +78,3 @@ def apply_required_defaults(
             wp["author_id"] = default_author_id
         if not wp.get("priority_id") and default_priority_id:
             wp["priority_id"] = default_priority_id
-
-

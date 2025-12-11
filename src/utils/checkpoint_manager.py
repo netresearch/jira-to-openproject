@@ -104,9 +104,7 @@ class CheckpointManager:
 
         """
         self.logger = configure_logging("INFO", None)
-        self.checkpoint_dir = (
-            checkpoint_dir or config.get_path("data").parent / "state" / "checkpoints"
-        )
+        self.checkpoint_dir = checkpoint_dir or config.get_path("data").parent / "state" / "checkpoints"
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Ensure checkpoint directory structure exists
@@ -150,9 +148,7 @@ class CheckpointManager:
         """
         checkpoint_id = self._generate_id()
 
-        progress_percentage = (
-            (entities_processed / entities_total * 100) if entities_total > 0 else 0.0
-        )
+        progress_percentage = (entities_processed / entities_total * 100) if entities_total > 0 else 0.0
 
         checkpoint = ProgressCheckpoint(
             checkpoint_id=checkpoint_id,
@@ -224,9 +220,7 @@ class CheckpointManager:
         if entities_processed is not None:
             checkpoint["entities_processed"] = entities_processed
             if checkpoint["entities_total"] > 0:
-                checkpoint["progress_percentage"] = (
-                    entities_processed / checkpoint["entities_total"] * 100
-                )
+                checkpoint["progress_percentage"] = entities_processed / checkpoint["entities_total"] * 100
 
         if metadata:
             checkpoint["metadata"].update(metadata)
@@ -290,9 +284,7 @@ class CheckpointManager:
         checkpoints = self.get_checkpoints_for_migration(migration_record_id)
 
         # Find the last completed checkpoint
-        completed_checkpoints = [
-            cp for cp in checkpoints if cp["status"] == CheckpointStatus.COMPLETED.value
-        ]
+        completed_checkpoints = [cp for cp in checkpoints if cp["status"] == CheckpointStatus.COMPLETED.value]
 
         if not completed_checkpoints:
             return None
@@ -543,9 +535,7 @@ class CheckpointManager:
         # Calculate overall progress
         if tracker["total_steps"] > 0:
             step_progress = tracker["completed_steps"] / tracker["total_steps"]
-            current_progress = (
-                tracker["current_step_progress"] / 100.0 / tracker["total_steps"]
-            )
+            current_progress = tracker["current_step_progress"] / 100.0 / tracker["total_steps"]
             tracker["overall_progress"] = (step_progress + current_progress) * 100.0
 
         tracker["last_update"] = datetime.now(tz=UTC).isoformat()
@@ -592,9 +582,7 @@ class CheckpointManager:
 
     def _save_checkpoint(self, checkpoint: ProgressCheckpoint) -> None:
         """Save a checkpoint to disk."""
-        checkpoint_path = (
-            self.checkpoint_dir / "active" / f"{checkpoint['checkpoint_id']}.json"
-        )
+        checkpoint_path = self.checkpoint_dir / "active" / f"{checkpoint['checkpoint_id']}.json"
         try:
             with checkpoint_path.open("w") as f:
                 json.dump(checkpoint, f, indent=2)
@@ -707,22 +695,16 @@ class CheckpointManager:
 
             if elapsed_minutes > 0:
                 # Calculate throughput (steps per minute)
-                completed_work = tracker["completed_steps"] + (
-                    tracker["current_step_progress"] / 100.0
-                )
+                completed_work = tracker["completed_steps"] + (tracker["current_step_progress"] / 100.0)
                 tracker["throughput_per_minute"] = completed_work / elapsed_minutes
 
                 # Estimate time remaining
                 if tracker["throughput_per_minute"] > 0:
                     remaining_work = tracker["total_steps"] - completed_work
-                    remaining_minutes = (
-                        remaining_work / tracker["throughput_per_minute"]
-                    )
+                    remaining_minutes = remaining_work / tracker["throughput_per_minute"]
 
                     if remaining_minutes < 60:
-                        tracker["estimated_time_remaining"] = (
-                            f"{remaining_minutes:.1f} minutes"
-                        )
+                        tracker["estimated_time_remaining"] = f"{remaining_minutes:.1f} minutes"
                     else:
                         hours = remaining_minutes / 60
                         tracker["estimated_time_remaining"] = f"{hours:.1f} hours"

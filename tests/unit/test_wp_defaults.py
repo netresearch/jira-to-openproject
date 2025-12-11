@@ -8,7 +8,9 @@ class _StubOPClient:
         self._priorities = priorities or []
         self._admins = admins or []
 
-    def execute_large_query_to_json_file(self, query: str, container_file: str = "/tmp/j2o_query.json", timeout: int | None = None):
+    def execute_large_query_to_json_file(
+        self, query: str, container_file: str = "/tmp/j2o_query.json", timeout: int | None = None
+    ):
         if "Type.order(:position).pluck(:id)" in query:
             return list(self._types)
         if "Status.order(:position).pluck(:id)" in query:
@@ -22,6 +24,7 @@ class _StubOPClient:
 
 def test_choose_default_type_id_uses_first_available(monkeypatch):
     import sys
+
     # Bypass heavy base_migration import by injecting minimal module for the test
     sys.modules.setdefault("src.migrations.base_migration", types.ModuleType("base_migration"))
     bm = sys.modules["src.migrations.base_migration"]
@@ -36,6 +39,7 @@ def test_choose_default_type_id_uses_first_available(monkeypatch):
 
 def test_apply_required_defaults_sets_missing_fields(monkeypatch):
     import sys
+
     sys.modules.setdefault("src.migrations.base_migration", types.ModuleType("base_migration"))
     bm = sys.modules["src.migrations.base_migration"]
     bm.BaseMigration = object
@@ -66,5 +70,3 @@ def test_apply_required_defaults_sets_missing_fields(monkeypatch):
     assert r1["status_id"] == 202
     assert r1["priority_id"] == 302
     assert r1["author_id"] == 401
-
-

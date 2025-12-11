@@ -72,5 +72,3 @@ def test_has_mapping_and_get_helpers(tmp_path: Path) -> None:
     m.set_mapping("project", {"X": {"openproject_id": 9}})
     assert m.has_mapping("project")
     assert m.get_op_project_id("X") == 9
-
-

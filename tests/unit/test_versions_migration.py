@@ -91,4 +91,3 @@ def test_versions_migration_end_to_end():
     assert mp.success is True
     assert ld.success is True
     assert ld.updated >= 1
-

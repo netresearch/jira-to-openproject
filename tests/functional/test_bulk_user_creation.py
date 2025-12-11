@@ -385,12 +385,8 @@ def test_user_migration_create_missing_users_with_existing_email(
     assert mock_create_users_in_bulk.call_count == 1
     users_to_create = mock_create_users_in_bulk.call_args[0][0]
     assert len(users_to_create) == 2
-    assert (
-        users_to_create[0]["login"] == "user2" or users_to_create[0]["login"] == "user3"
-    )
-    assert (
-        users_to_create[1]["login"] == "user3" or users_to_create[1]["login"] == "user2"
-    )
+    assert users_to_create[0]["login"] == "user2" or users_to_create[0]["login"] == "user3"
+    assert users_to_create[1]["login"] == "user3" or users_to_create[1]["login"] == "user2"
 
 
 def test_bulk_creation_error_handling(

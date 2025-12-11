@@ -47,6 +47,7 @@ class TestJiraClientWorkLog:
         import time
 
         from src.utils.rate_limiter import create_jira_rate_limiter
+
         client.rate_limiter = create_jira_rate_limiter()
         client.request_count = 0
         client.period_start = time.time()

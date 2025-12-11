@@ -51,9 +51,7 @@ class TestDocumentationStructure:
 
             # Verify file has content
             content = doc_path.read_text()
-            assert (
-                len(content) > 100
-            ), f"Documentation file should have substantial content: {doc_file}"
+            assert len(content) > 100, f"Documentation file should have substantial content: {doc_file}"
 
     def test_developer_guide_structure(self, project_root: Path) -> None:
         """Test that DEVELOPER_GUIDE.md has expected sections."""
@@ -117,9 +115,7 @@ class TestDocumentationStructure:
 
         for removed_file in removed_files:
             file_path = project_root / removed_file
-            assert (
-                not file_path.exists()
-            ), f"Duplicate file should be removed: {removed_file}"
+            assert not file_path.exists(), f"Duplicate file should be removed: {removed_file}"
 
     def test_agents_doc_exists(self, project_root: Path) -> None:
         """Ensure AGENTS.md exists as the AI coding agent rules file."""

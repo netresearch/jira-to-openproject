@@ -87,23 +87,23 @@ def test_migration_class_is_registered_on_import(
 
     # 2. Verify the primary entity type resolution
     # This is crucial for the default behavior of migration components
-    assert (
-        EntityTypeRegistry.resolve(migration_class) == primary_type
-    ), f"Primary entity type for {class_name} should be '{primary_type}'"
+    assert EntityTypeRegistry.resolve(migration_class) == primary_type, (
+        f"Primary entity type for {class_name} should be '{primary_type}'"
+    )
 
     # 3. Verify all supported types are registered in the correct order
     supported_types = EntityTypeRegistry.get_supported_types(migration_class)
-    assert (
-        supported_types == expected_types
-    ), f"Supported types for {class_name} did not match expected order or content"
+    assert supported_types == expected_types, (
+        f"Supported types for {class_name} did not match expected order or content"
+    )
 
     # 4. Verify reverse lookup for all associated entity types
     # This ensures the migration orchestrator can find the correct handler class
     # for any of the entity types a class supports
     for entity_type in expected_types:
-        assert (
-            EntityTypeRegistry.get_class_for_type(entity_type) is migration_class
-        ), f"Reverse lookup for entity type '{entity_type}' failed for {class_name}"
+        assert EntityTypeRegistry.get_class_for_type(entity_type) is migration_class, (
+            f"Reverse lookup for entity type '{entity_type}' failed for {class_name}"
+        )
 
 
 class TestMigrationClassRegistrationIntegration:
@@ -146,9 +146,9 @@ class TestMigrationClassRegistrationIntegration:
 
             # Assert: Should return the primary entity type
             expected_primary = expected_types[0]
-            assert (
-                detected_type == expected_primary
-            ), f"Auto-detection for {class_name} should return '{expected_primary}', got '{detected_type}'"
+            assert detected_type == expected_primary, (
+                f"Auto-detection for {class_name} should return '{expected_primary}', got '{detected_type}'"
+            )
 
     def test_registry_lookup_completeness(self) -> None:
         """Verify that all expected entity types are properly registered in the registry."""
@@ -167,9 +167,9 @@ class TestMigrationClassRegistrationIntegration:
 
         # Assert: All expected types should be registered
         for expected_type in all_expected_types:
-            assert (
-                expected_type in registered_types
-            ), f"Entity type '{expected_type}' should be registered in the registry"
+            assert expected_type in registered_types, (
+                f"Entity type '{expected_type}' should be registered in the registry"
+            )
 
     def test_registry_state_persistence(self) -> None:
         """Verify that registry state persists across multiple imports of the same module."""
@@ -190,17 +190,14 @@ class TestMigrationClassRegistrationIntegration:
         migration_class2 = getattr(module2, class_name)
 
         # Assert: Both imports should refer to the same class and have consistent registry state
-        assert (
-            migration_class1 is migration_class2
-        ), "Multiple imports of the same module should return the same class object"
+        assert migration_class1 is migration_class2, (
+            "Multiple imports of the same module should return the same class object"
+        )
 
         # Verify registry state is consistent for both references
         for migration_class in [migration_class1, migration_class2]:
             assert EntityTypeRegistry.resolve(migration_class) == expected_types[0]
-            assert (
-                EntityTypeRegistry.get_supported_types(migration_class)
-                == expected_types
-            )
+            assert EntityTypeRegistry.get_supported_types(migration_class) == expected_types
 
 
 class TestMigrationClassRegistrationErrorScenarios:
@@ -225,9 +222,9 @@ class TestMigrationClassRegistrationErrorScenarios:
     def test_registry_isolation_between_tests(self) -> None:
         """Verify that the clean_registry fixture properly isolates test state."""
         # Arrange: Check that registry starts empty
-        assert (
-            len(EntityTypeRegistry.get_all_registered_types()) == 0
-        ), "Registry should be empty at the start of each test"
+        assert len(EntityTypeRegistry.get_all_registered_types()) == 0, (
+            "Registry should be empty at the start of each test"
+        )
 
         # Act: Force reload and import a module to populate registry
         import sys
@@ -238,9 +235,7 @@ class TestMigrationClassRegistrationErrorScenarios:
         importlib.import_module(module_path)
 
         # Assert: Registry should now contain types
-        assert (
-            len(EntityTypeRegistry.get_all_registered_types()) > 0
-        ), "Registry should contain types after import"
+        assert len(EntityTypeRegistry.get_all_registered_types()) > 0, "Registry should contain types after import"
 
         # Note: The fixture will clean this up after the test
 
@@ -272,13 +267,10 @@ class TestMigrationClassRegistrationErrorScenarios:
 
             # Assert: All entity types should be available for reverse lookup
             for entity_type in expected_types:
-                assert (
-                    EntityTypeRegistry.get_class_for_type(entity_type)
-                    is migration_class
-                ), f"Entity type '{entity_type}' should resolve to {class_name}"
+                assert EntityTypeRegistry.get_class_for_type(entity_type) is migration_class, (
+                    f"Entity type '{entity_type}' should resolve to {class_name}"
+                )
 
             # Assert: Primary type should be the first in the list
             primary_type = EntityTypeRegistry.resolve(migration_class)
-            assert (
-                primary_type == expected_types[0]
-            ), f"Primary type for {class_name} should be '{expected_types[0]}'"
+            assert primary_type == expected_types[0], f"Primary type for {class_name} should be '{expected_types[0]}'"

@@ -30,6 +30,7 @@ def retry_on_failure(
         Decorated function that retries on failure
 
     """
+
     def decorator(func: F) -> F:
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -41,7 +42,7 @@ def retry_on_failure(
                 except exceptions as e:
                     last_exception = e
                     if attempt < max_attempts - 1:
-                        delay = min(base_delay * (2 ** attempt), max_delay)
+                        delay = min(base_delay * (2**attempt), max_delay)
                         time.sleep(delay)
 
             # All retries exhausted, raise the last exception

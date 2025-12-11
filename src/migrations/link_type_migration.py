@@ -156,9 +156,7 @@ class LinkTypeMigration(BaseMigration):
                     "All link types are mapped to default OpenProject relation types",
                 )
                 result.details["success_count"] = total_link_types
-                result.message = (
-                    f"All {total_link_types} link types were successfully mapped."
-                )
+                result.message = f"All {total_link_types} link types were successfully mapped."
                 result.details["status"] = "success"
                 result.details["created_now"] = 0
                 result.details["preexisting_count"] = total_link_types
@@ -173,8 +171,7 @@ class LinkTypeMigration(BaseMigration):
                     )
                     result.details["success_count"] = total_link_types
                     result.message = (
-                        f"DRY RUN: {len(unmapped_link_types)} link types would be "
-                        "created as custom fields."
+                        f"DRY RUN: {len(unmapped_link_types)} link types would be created as custom fields."
                     )
                     result.details["status"] = "success"
                 else:
@@ -329,11 +326,7 @@ class LinkTypeMigration(BaseMigration):
         filepath = self.data_dir / "link_type_mapping.json"
         analysis_filepath = self.data_dir / "link_type_mapping_analysis.json"
 
-        if (
-            not config.migration_config.get("force", False)
-            and filepath.exists()
-            and analysis_filepath.exists()
-        ):
+        if not config.migration_config.get("force", False) and filepath.exists() and analysis_filepath.exists():
             self.logger.info("Loading existing link type mapping from file.")
             try:
                 with filepath.open() as f:
@@ -360,6 +353,7 @@ class LinkTypeMigration(BaseMigration):
             self.logger.info("No Jira link types available; creating empty mapping")
             self.link_type_mapping = {}
             from src import config as _cfg
+
             _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
             self._build_id_mapping()
             self.analyze_link_type_mapping()
@@ -369,10 +363,7 @@ class LinkTypeMigration(BaseMigration):
         mapping = {}
 
         # Create lookup dictionaries for OpenProject relation types
-        op_types_by_name = {
-            (op_type.get("name") or "").lower(): op_type
-            for op_type in self.op_link_types
-        }
+        op_types_by_name = {(op_type.get("name") or "").lower(): op_type for op_type in self.op_link_types}
         op_types_by_reverse_name = {
             op_type.get("reverseName", "").lower(): op_type
             for op_type in self.op_link_types
@@ -421,14 +412,8 @@ class LinkTypeMigration(BaseMigration):
                 op_id = user_mapping.get("openproject_id")
 
                 # If user mapped to a valid OpenProject relation type
-                if op_id and any(
-                    op_type["id"] == op_id for op_type in self.op_link_types
-                ):
-                    op_type = next(
-                        op_type
-                        for op_type in self.op_link_types
-                        if op_type["id"] == op_id
-                    )
+                if op_id and any(op_type["id"] == op_id for op_type in self.op_link_types):
+                    op_type = next(op_type for op_type in self.op_link_types if op_type["id"] == op_id)
                     match_info.update(
                         {
                             "openproject_id": op_id,
@@ -526,6 +511,7 @@ class LinkTypeMigration(BaseMigration):
 
         self.link_type_mapping = mapping
         from src import config as _cfg
+
         _cfg.mappings.set_mapping("link_type", mapping)
         self._build_id_mapping()
         self.analyze_link_type_mapping()
@@ -547,6 +533,7 @@ class LinkTypeMigration(BaseMigration):
         """
         if not self.link_type_mapping:
             from src import config as _cfg
+
             self.link_type_mapping = _cfg.mappings.get_mapping("link_type") or {}
             if not self.link_type_mapping:
                 self.logger.error(
@@ -559,23 +546,16 @@ class LinkTypeMigration(BaseMigration):
             "matched_types": sum(
                 1
                 for type_data in self.link_type_mapping.values()
-                if type_data["matched_by"] != "none"
-                and not type_data.get("create_custom_field", False)
+                if type_data["matched_by"] != "none" and not type_data.get("create_custom_field", False)
             ),
             "matched_by_name": sum(
-                1
-                for type_data in self.link_type_mapping.values()
-                if type_data["matched_by"] == "name"
+                1 for type_data in self.link_type_mapping.values() if type_data["matched_by"] == "name"
             ),
             "matched_by_outward": sum(
-                1
-                for type_data in self.link_type_mapping.values()
-                if type_data["matched_by"] == "outward"
+                1 for type_data in self.link_type_mapping.values() if type_data["matched_by"] == "outward"
             ),
             "matched_by_inward": sum(
-                1
-                for type_data in self.link_type_mapping.values()
-                if type_data["matched_by"] == "inward"
+                1 for type_data in self.link_type_mapping.values() if type_data["matched_by"] == "inward"
             ),
             "matched_by_similar": sum(
                 1
@@ -583,20 +563,15 @@ class LinkTypeMigration(BaseMigration):
                 if type_data["matched_by"] in ["similar_outward", "similar_inward"]
             ),
             "matched_by_user": sum(
-                1
-                for type_data in self.link_type_mapping.values()
-                if type_data["matched_by"] == "user_defined"
+                1 for type_data in self.link_type_mapping.values() if type_data["matched_by"] == "user_defined"
             ),
             "unmapped_types": sum(
                 1
                 for type_data in self.link_type_mapping.values()
-                if type_data.get("matched_by") == "none"
-                or type_data.get("create_custom_field", False)
+                if type_data.get("matched_by") == "none" or type_data.get("create_custom_field", False)
             ),
             "custom_field_count": sum(
-                1
-                for type_data in self.link_type_mapping.values()
-                if type_data.get("create_custom_field", False)
+                1 for type_data in self.link_type_mapping.values() if type_data.get("create_custom_field", False)
             ),
         }
 
@@ -734,7 +709,7 @@ class LinkTypeMigration(BaseMigration):
         # Pre-mark existing to avoid redundant creation attempts
         to_create: list[dict[str, Any]] = []
         for jira_id, mapping in unmapped_link_types:
-            desired_name = f"Link: {mapping['jira_name'] }".strip()
+            desired_name = f"Link: {mapping['jira_name']}".strip()
             lookup = desired_name.lower()
             if lookup in op_fields_by_name:
                 op_field = op_fields_by_name[lookup]
@@ -768,6 +743,7 @@ class LinkTypeMigration(BaseMigration):
         # If nothing to create, persist mapping and return
         if not to_create:
             from src import config as _cfg
+
             _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
             return {
                 "success": True,
@@ -827,6 +803,7 @@ class LinkTypeMigration(BaseMigration):
         # Save the updated mapping if any fields are now mapped
         if success_count > 0 or error_details:
             from src import config as _cfg
+
             _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
 
         return {

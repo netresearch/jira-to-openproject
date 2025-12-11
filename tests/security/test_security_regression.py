@@ -283,9 +283,7 @@ def test_performance_baseline_maintained(ua_migrator) -> None:
 
     # Performance assertions (reasonable thresholds)
     assert queue_time < 1.0, f"Queueing took too long: {queue_time:.2f}s"
-    assert (
-        generation_time < 2.0
-    ), f"Script generation took too long: {generation_time:.2f}s"
+    assert generation_time < 2.0, f"Script generation took too long: {generation_time:.2f}s"
     assert len(script) > 0, "Script should not be empty"
 
     # Verify all operations were processed

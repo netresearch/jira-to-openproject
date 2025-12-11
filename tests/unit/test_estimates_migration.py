@@ -72,4 +72,3 @@ def test_estimates_migration_end_to_end():
     assert ld.success is True
     # Should update PRJ-1 and PRJ-2; PRJ-3 has no estimates
     assert ld.updated == 2
-

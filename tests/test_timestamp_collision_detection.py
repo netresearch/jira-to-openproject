@@ -2,11 +2,12 @@
 """Unit tests for timestamp collision detection and resolution."""
 
 import sys
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 
-sys.path.insert(0, '/home/sme/p/j2o/src')
+import pytest
+
+sys.path.insert(0, "/home/sme/p/j2o/src")
 
 from migrations.work_package_migration import WorkPackageMigration
 
@@ -26,23 +27,22 @@ class TestTimestampCollisionDetection:
         entries = [
             {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "comment"},
             {"timestamp": "2011-08-23T13:41:22.000+0000", "type": "changelog"},
-            {"timestamp": "2011-08-23T13:41:23.000+0000", "type": "comment"}
+            {"timestamp": "2011-08-23T13:41:23.000+0000", "type": "comment"},
         ]
 
         original_timestamps = [e["timestamp"] for e in entries]
 
         # Simulate the collision detection logic
-        from datetime import datetime, timedelta
 
         for i in range(1, len(entries)):
             current_timestamp = entries[i].get("timestamp", "")
-            previous_timestamp = entries[i-1].get("timestamp", "")
+            previous_timestamp = entries[i - 1].get("timestamp", "")
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
-                if 'T' in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                if "T" in current_timestamp:
+                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
                     dt = dt + timedelta(seconds=1)
-                    entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                    entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
         # Verify no timestamps were modified
         modified_timestamps = [e["timestamp"] for e in entries]
@@ -52,21 +52,20 @@ class TestTimestampCollisionDetection:
         """Test that a single collision is resolved with 1-second separation."""
         entries = [
             {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "comment"},
-            {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "changelog"}
+            {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "changelog"},
         ]
 
         # Simulate the collision detection logic
-        from datetime import datetime, timedelta
 
         for i in range(1, len(entries)):
             current_timestamp = entries[i].get("timestamp", "")
-            previous_timestamp = entries[i-1].get("timestamp", "")
+            previous_timestamp = entries[i - 1].get("timestamp", "")
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
-                if 'T' in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                if "T" in current_timestamp:
+                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
                     dt = dt + timedelta(seconds=1)
-                    entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                    entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
         # Verify collision was resolved
         assert entries[0]["timestamp"] == "2011-08-23T13:41:21.000+0000"
@@ -79,21 +78,20 @@ class TestTimestampCollisionDetection:
             {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "comment"},
             {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "changelog"},
             {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "comment"},
-            {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "changelog"}
+            {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "changelog"},
         ]
 
         # Simulate the collision detection logic
-        from datetime import datetime, timedelta
 
         for i in range(1, len(entries)):
             current_timestamp = entries[i].get("timestamp", "")
-            previous_timestamp = entries[i-1].get("timestamp", "")
+            previous_timestamp = entries[i - 1].get("timestamp", "")
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
-                if 'T' in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                if "T" in current_timestamp:
+                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
                     dt = dt + timedelta(seconds=1)
-                    entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                    entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
         # Verify collisions were resolved by comparing consecutive entries
         # i=1: entries[1] == entries[0]? YES → adjust to 13:41:22
@@ -110,15 +108,13 @@ class TestTimestampCollisionDetection:
             "2011-08-23T13:41:21.000+0000",
             "2011-08-23T13:41:21.000+00:00",
             "2011-08-23T13:41:21.000Z",
-            "2011-08-23T13:41:21+0000"
+            "2011-08-23T13:41:21+0000",
         ]
-
-        from datetime import datetime
 
         for timestamp_str in test_cases:
             try:
-                if 'T' in timestamp_str:
-                    dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                if "T" in timestamp_str:
+                    dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                     assert dt is not None, f"Failed to parse: {timestamp_str}"
             except Exception as e:
                 pytest.fail(f"Failed to parse {timestamp_str}: {e}")
@@ -127,18 +123,17 @@ class TestTimestampCollisionDetection:
         """Test collision detection with mixed timestamp formats."""
         entries = [
             {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "comment"},
-            {"timestamp": "2011-08-23T13:41:21.000+00:00", "type": "changelog"}
+            {"timestamp": "2011-08-23T13:41:21.000+00:00", "type": "changelog"},
         ]
 
         # These should NOT be detected as collisions because format differs
         # But the parsing should handle both
-        from datetime import datetime, timedelta
 
         parsed_timestamps = []
         for entry in entries:
             ts = entry.get("timestamp", "")
-            if 'T' in ts:
-                dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            if "T" in ts:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 parsed_timestamps.append(dt)
 
         # Both should parse to the same datetime
@@ -149,21 +144,19 @@ class TestTimestampCollisionDetection:
         entries = [
             {"timestamp": "", "type": "comment"},
             {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "changelog"},
-            {"timestamp": None, "type": "comment"}
+            {"timestamp": None, "type": "comment"},
         ]
-
-        from datetime import datetime, timedelta
 
         # Should not crash
         for i in range(1, len(entries)):
             current_timestamp = entries[i].get("timestamp", "")
-            previous_timestamp = entries[i-1].get("timestamp", "")
+            previous_timestamp = entries[i - 1].get("timestamp", "")
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
-                if 'T' in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                if "T" in current_timestamp:
+                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
                     dt = dt + timedelta(seconds=1)
-                    entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                    entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
         # Verify no crashes and empty timestamps remain empty
         assert entries[0]["timestamp"] == ""
@@ -173,20 +166,18 @@ class TestTimestampCollisionDetection:
         """Test that millisecond precision is preserved after collision resolution."""
         entries = [
             {"timestamp": "2011-08-23T13:41:21.123+0000", "type": "comment"},
-            {"timestamp": "2011-08-23T13:41:21.123+0000", "type": "changelog"}
+            {"timestamp": "2011-08-23T13:41:21.123+0000", "type": "changelog"},
         ]
-
-        from datetime import datetime, timedelta
 
         for i in range(1, len(entries)):
             current_timestamp = entries[i].get("timestamp", "")
-            previous_timestamp = entries[i-1].get("timestamp", "")
+            previous_timestamp = entries[i - 1].get("timestamp", "")
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
-                if 'T' in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                if "T" in current_timestamp:
+                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
                     dt = dt + timedelta(seconds=1)
-                    entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                    entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
         # Verify milliseconds are preserved
         assert entries[0]["timestamp"] == "2011-08-23T13:41:21.123+0000"
@@ -201,20 +192,18 @@ class TestTimestampCollisionDetection:
             {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "comment"},  # Collision at index 2
             {"timestamp": "2011-08-23T13:41:22.000+0000", "type": "changelog"},
             {"timestamp": "2011-08-23T13:41:23.000+0000", "type": "comment"},
-            {"timestamp": "2011-08-23T13:41:23.000+0000", "type": "changelog"}  # Collision at index 5
+            {"timestamp": "2011-08-23T13:41:23.000+0000", "type": "changelog"},  # Collision at index 5
         ]
-
-        from datetime import datetime, timedelta
 
         for i in range(1, len(entries)):
             current_timestamp = entries[i].get("timestamp", "")
-            previous_timestamp = entries[i-1].get("timestamp", "")
+            previous_timestamp = entries[i - 1].get("timestamp", "")
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
-                if 'T' in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                if "T" in current_timestamp:
+                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
                     dt = dt + timedelta(seconds=1)
-                    entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                    entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
         # Verify collisions were resolved by comparing consecutive entries
         # i=2: entries[2] == entries[1]? YES (both 21) → adjust to 13:41:22
@@ -248,22 +237,20 @@ class TestTimestampCollisionIntegration:
             {"timestamp": "2011-08-23T13:41:21.000+0000", "type": "changelog", "author": "user1"},
             {"timestamp": "2011-08-23T13:42:00.000+0000", "type": "comment", "author": "user2"},
             {"timestamp": "2011-09-03T14:21:26.000+0000", "type": "comment", "author": "user3"},
-            {"timestamp": "2011-09-03T14:21:26.000+0000", "type": "changelog", "author": "user3"}
+            {"timestamp": "2011-09-03T14:21:26.000+0000", "type": "changelog", "author": "user3"},
         ]
-
-        from datetime import datetime, timedelta
 
         collision_count = 0
         for i in range(1, len(entries)):
             current_timestamp = entries[i].get("timestamp", "")
-            previous_timestamp = entries[i-1].get("timestamp", "")
+            previous_timestamp = entries[i - 1].get("timestamp", "")
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
                 collision_count += 1
-                if 'T' in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace('Z', '+00:00'))
+                if "T" in current_timestamp:
+                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
                     dt = dt + timedelta(seconds=1)
-                    entries[i]["timestamp"] = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                    entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
         # Verify 2 collisions were detected and resolved
         assert collision_count == 2, "NRS-182 should have exactly 2 timestamp collisions"

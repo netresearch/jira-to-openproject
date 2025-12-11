@@ -24,4 +24,3 @@ def test_sanitize_wp_dict_removes_links_and_extracts_ids_unit() -> None:
     assert wp.get("type_id") == 7
     assert wp.get("status_id") == 9
     # watcher_ids is a non-AR key and should be removed before assign in Ruby script path; optional here
-

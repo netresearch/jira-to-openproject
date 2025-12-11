@@ -34,12 +34,8 @@ def analyze_project_hierarchy() -> dict[str, Any]:
     company_migration = CompanyMigration(jira_client, op_client)
 
     # Load existing mapping data
-    project_mapping = (
-        project_migration._load_from_json(Path("project_mapping.json")) or {}
-    )
-    company_mapping = (
-        company_migration._load_from_json(Path("company_mapping.json")) or {}
-    )
+    project_mapping = project_migration._load_from_json(Path("project_mapping.json")) or {}
+    company_mapping = company_migration._load_from_json(Path("company_mapping.json")) or {}
 
     # Get all OpenProject projects
     op_projects = op_client.get_projects()
@@ -69,9 +65,7 @@ def analyze_project_hierarchy() -> dict[str, Any]:
                 (p for p in op_projects if str(p.get("id")) == parent_id),
                 None,
             )
-            parent_name = (
-                parent_project.get("name", "Unknown") if parent_project else "Unknown"
-            )
+            parent_name = parent_project.get("name", "Unknown") if parent_project else "Unknown"
 
             projects_with_parent.append(
                 {
@@ -86,9 +80,7 @@ def analyze_project_hierarchy() -> dict[str, Any]:
 
     # Calculate analysis metrics
     total_projects = len(projects_with_parent) + len(projects_without_parent)
-    hierarchy_percentage = (
-        (len(projects_with_parent) / total_projects * 100) if total_projects > 0 else 0
-    )
+    hierarchy_percentage = (len(projects_with_parent) / total_projects * 100) if total_projects > 0 else 0
 
     # Find projects that should have a parent but don't
     expected_parent_mapping = {}

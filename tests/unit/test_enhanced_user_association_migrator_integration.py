@@ -139,7 +139,6 @@ class TestAutoRefreshWorkflow:
             ) as mock_is_stale,
             patch.object(migrator_instance, "refresh_user_mapping") as mock_refresh,
         ):
-
             # Act
             user_info = migrator_instance._get_jira_user_info(username)
 
@@ -171,7 +170,6 @@ class TestAutoRefreshWorkflow:
             ) as mock_is_stale,
             patch.object(migrator_instance, "refresh_user_mapping") as mock_refresh,
         ):
-
             # Act
             migrator_instance._get_jira_user_info(username)
 
@@ -226,10 +224,7 @@ class TestErrorHandlingAndResilience:
         # Assert
         assert result is None
         migrator_instance.logger.error.assert_called_once()
-        assert (
-            "Failed to fetch Jira user info"
-            in migrator_instance.logger.error.call_args[0][0]
-        )
+        assert "Failed to fetch Jira user info" in migrator_instance.logger.error.call_args[0][0]
 
     def test_get_jira_user_info_handles_malformed_json_response(
         self,
@@ -249,10 +244,7 @@ class TestErrorHandlingAndResilience:
         # Assert
         assert result is None
         migrator_instance.logger.error.assert_called_once()
-        assert (
-            "Failed to fetch Jira user info"
-            in migrator_instance.logger.error.call_args[0][0]
-        )
+        assert "Failed to fetch Jira user info" in migrator_instance.logger.error.call_args[0][0]
 
     def test_get_jira_user_info_handles_empty_user_list_response(
         self,
@@ -331,7 +323,6 @@ class TestRefreshUserMapping:
                 return_value=new_timestamp,
             ),
         ):
-
             # Act
             success = migrator_instance.refresh_user_mapping(username)
 
@@ -373,7 +364,6 @@ class TestRefreshUserMapping:
                 return_value=None,
             ),
         ):
-
             # Act
             success = migrator_instance.refresh_user_mapping(username)
 
@@ -392,7 +382,6 @@ class TestRefreshUserMapping:
         # Arrange
         username = "api_fail_user"
         with patch.object(migrator_instance, "_get_jira_user_info", return_value=None):
-
             # Act
             success = migrator_instance.refresh_user_mapping(username)
 
@@ -424,7 +413,6 @@ class TestRefreshUserMapping:
             "_get_jira_user_info",
             side_effect=exception,
         ):
-
             # Act
             success = migrator_instance.refresh_user_mapping(username)
 
@@ -446,7 +434,6 @@ class TestRefreshUserMapping:
             "_get_jira_user_info",
             side_effect=unexpected_error,
         ):
-
             # Act
             success = migrator_instance.refresh_user_mapping(username)
 
@@ -534,11 +521,7 @@ class TestConfigurationValidation:
             assert migrator.fallback_strategy == "assign_admin"
             assert migrator.admin_user_id is None
             # Should log warning about missing admin user ID
-            warning_calls = [
-                call
-                for call in migrator.logger.warning.call_args_list
-                if "assign_admin" in str(call)
-            ]
+            warning_calls = [call for call in migrator.logger.warning.call_args_list if "assign_admin" in str(call)]
             assert len(warning_calls) > 0
 
 
@@ -562,9 +545,7 @@ class TestEdgeCasesAndBoundaries:
 
         # Test case 2: Just under threshold (should be fresh)
         just_fresh_time = (now - timedelta(seconds=86399)).isoformat()
-        migrator_instance.enhanced_user_mappings[username][
-            "lastRefreshed"
-        ] = just_fresh_time
+        migrator_instance.enhanced_user_mappings[username]["lastRefreshed"] = just_fresh_time
 
         # Act & Assert
         assert migrator_instance.is_mapping_stale(username) is False

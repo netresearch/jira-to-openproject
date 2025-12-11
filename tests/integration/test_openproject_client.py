@@ -87,17 +87,11 @@ class TestOpenProjectClient(unittest.TestCase):
         self.mock_os.path.basename.side_effect = os.path.basename  # Use real basename
         self.mock_os.path.getsize.return_value = 1024
         self.mock_os.path.join.side_effect = os.path.join  # Use real join function
-        self.mock_os.path.abspath.side_effect = (
-            lambda x: x
-        )  # Simplify abspath for testing
-        self.mock_os.makedirs.side_effect = (
-            lambda path, exist_ok=False: None
-        )  # Do nothing but don't raise error
+        self.mock_os.path.abspath.side_effect = lambda x: x  # Simplify abspath for testing
+        self.mock_os.makedirs.side_effect = lambda path, exist_ok=False: None  # Do nothing but don't raise error
         self.mock_os.access.return_value = True
         self.mock_os.unlink = MagicMock()
-        self.mock_os.urandom.return_value = (
-            b"1234"  # Mock urandom for deterministic testing
-        )
+        self.mock_os.urandom.return_value = b"1234"  # Mock urandom for deterministic testing
 
         # Initialize OpenProjectClient after all mocks are set up
         self.op_client = OpenProjectClient()
@@ -215,10 +209,8 @@ class TestOpenProjectClient(unittest.TestCase):
     def test_transfer_and_execute_script_ssh_failure(self) -> None:
         """Test script execution failing during SSH transfer."""
         # Mock the rails_client._send_command_to_tmux to throw a CommandExecutionError
-        self.mock_rails_client._send_command_to_tmux.side_effect = (
-            CommandExecutionError(
-                "SSH transfer failed: Connection refused",
-            )
+        self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError(
+            "SSH transfer failed: Connection refused",
         )
 
         # Execute the test with expected exception
@@ -231,10 +223,8 @@ class TestOpenProjectClient(unittest.TestCase):
     def test_transfer_and_execute_script_docker_failure(self) -> None:
         """Test script execution failing during Docker transfer."""
         # Mock the rails_client._send_command_to_tmux to throw a CommandExecutionError
-        self.mock_rails_client._send_command_to_tmux.side_effect = (
-            CommandExecutionError(
-                "Failed to copy script to container",
-            )
+        self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError(
+            "Failed to copy script to container",
         )
 
         # Execute the test with expected exception
@@ -263,9 +253,7 @@ class TestOpenProjectClient(unittest.TestCase):
     def test_execute_query_error(self) -> None:
         """Test query execution with error."""
         # Mock rails_client._send_command_to_tmux to raise an exception
-        self.mock_rails_client._send_command_to_tmux.side_effect = (
-            CommandExecutionError("Query execution failed")
-        )
+        self.mock_rails_client._send_command_to_tmux.side_effect = CommandExecutionError("Query execution failed")
 
         # Execute the query with error expected
         with pytest.raises(CommandExecutionError) as context:
@@ -333,12 +321,8 @@ class TestOpenProjectClient(unittest.TestCase):
         # Patch random.randint to return a fixed value
         with patch("src.clients.openproject_client.random.randint", return_value=12345):
             # Configure mock for successful validation
-            self.mock_rails_client.execute.side_effect = (
-                None  # Clear any previous side effects
-            )
-            self.mock_rails_client.execute.return_value = (
-                "OPENPROJECT_CONNECTION_TEST_12345"
-            )
+            self.mock_rails_client.execute.side_effect = None  # Clear any previous side effects
+            self.mock_rails_client.execute.return_value = "OPENPROJECT_CONNECTION_TEST_12345"
 
             # Test is_connected
             result = self.op_client.is_connected()

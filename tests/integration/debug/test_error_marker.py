@@ -41,15 +41,9 @@ def test_error_marker_detection() -> None:
         # Instead of checking for "Ruby error:" which might be in the template,
         # check for "Ruby error:" followed by actual error details, indicating a real error
         assert "ERROR_MARKER" in result1, "Test string marker not found in output"
-        assert (
-            "Ruby error: NameError:" not in result1
-        ), "Unexpected actual error detected in output"
-        assert (
-            "Ruby error: SyntaxError:" not in result1
-        ), "Unexpected actual error detected in output"
-        assert (
-            "Command output: This is just a test ERROR_MARKER string" in result1
-        ), "Expected output string not found"
+        assert "Ruby error: NameError:" not in result1, "Unexpected actual error detected in output"
+        assert "Ruby error: SyntaxError:" not in result1, "Unexpected actual error detected in output"
+        assert "Command output: This is just a test ERROR_MARKER string" in result1, "Expected output string not found"
         print(
             "✅ TEST 1 PASSED: Command with error markers in code correctly detected as success",
         )
@@ -89,9 +83,7 @@ def test_error_marker_detection() -> None:
         result3 = rails_client.execute(command3)
         print(f"Command result: {result3}")
         assert "SUCCESS" in result3, "Success marker not found in output"
-        assert (
-            "Ruby error: NameError:" not in result3
-        ), "Unexpected error detected in output"
+        assert "Ruby error: NameError:" not in result3, "Unexpected error detected in output"
         print(
             "✅ TEST 3 PASSED: Command with success marker correctly detected as success",
         )

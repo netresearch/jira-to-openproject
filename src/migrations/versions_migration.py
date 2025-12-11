@@ -98,7 +98,9 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 continue
 
         materialized = {k: sorted(list(v)) for k, v in by_project.items() if v}
-        return ComponentResult(success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized})
+        return ComponentResult(
+            success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized}
+        )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
@@ -263,6 +265,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
             failed += len(updates)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+
     def run(self) -> ComponentResult:
         """Execute versions migration pipeline."""
         self.logger.info("Starting versions migration")

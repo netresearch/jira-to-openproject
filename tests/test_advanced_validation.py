@@ -225,14 +225,8 @@ class TestPreMigrationValidator:
         results = await validator._validate_jira_data(jira_data, {})
 
         assert len(results) == 2
-        assert any(
-            r.level == ValidationLevel.CRITICAL and "issues" in r.message
-            for r in results
-        )
-        assert any(
-            r.level == ValidationLevel.CRITICAL and "workflows" in r.message
-            for r in results
-        )
+        assert any(r.level == ValidationLevel.CRITICAL and "issues" in r.message for r in results)
+        assert any(r.level == ValidationLevel.CRITICAL and "workflows" in r.message for r in results)
 
     @pytest.mark.asyncio
     async def test_validate_project_missing_fields(self) -> None:

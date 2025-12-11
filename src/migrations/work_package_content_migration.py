@@ -24,9 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src import config
@@ -101,6 +99,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             True if mapping was loaded successfully
+
         """
         if not self.work_package_mapping_file.exists():
             self.logger.error(
@@ -183,6 +182,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Yields:
             Individual Jira Issue objects with all fields
+
         """
         start_at = 0
         batch_size = config.migration_config.get("batch_size", 100)
@@ -247,6 +247,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             Text with converted references
+
         """
         if not text:
             return ""
@@ -276,6 +277,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             OpenProject WP ID or None
+
         """
         jira_id = str(jira_issue.id)
         if jira_id in self.work_package_mapping:
@@ -304,6 +306,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             True if successful
+
         """
         description = getattr(jira_issue.fields, "description", None)
         if not description:
@@ -335,6 +338,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             True if successful
+
         """
         # Get custom field values from Jira issue
         raw_fields = getattr(jira_issue, "raw", {}).get("fields", {})
@@ -379,6 +383,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             Number of comments migrated
+
         """
         migrated = 0
 
@@ -426,6 +431,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             Number of watchers added
+
         """
         added = 0
 
@@ -461,6 +467,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             Results dictionary
+
         """
         results = {
             "description": False,
@@ -481,6 +488,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             Migration results dictionary
+
         """
         if not self.work_package_mapping:
             return {
@@ -585,6 +593,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             ComponentResult with migration status
+
         """
         start_time = datetime.now(tz=UTC)
 

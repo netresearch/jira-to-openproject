@@ -31,10 +31,7 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
         # Import via module so tests can monkeypatch src.mappings.Mappings
 
         self.mappings = config.mappings
-        self.property_key = (
-            config.migration_config.get("simpletasks_property_key")
-            or "com.topshelf.simple-tasklists"
-        )
+        self.property_key = config.migration_config.get("simpletasks_property_key") or "com.topshelf.simple-tasklists"
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities for transformation.
@@ -170,5 +167,3 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
                 message=f"Simpletasks migration failed: {e}",
                 errors=[str(e)],
             )
-
-

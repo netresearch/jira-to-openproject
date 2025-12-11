@@ -63,5 +63,3 @@ def test_remote_links_migration_renders_markdown_and_updates():
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated == 2
-
-

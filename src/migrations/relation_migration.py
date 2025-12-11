@@ -228,12 +228,8 @@ class RelationMigration(BaseMigration):
             },
         )
         result.success = errors == 0
-        result.message = (
-            f"Relations created={created}, skipped={skipped}, errors={errors}"
-        )
+        result.message = f"Relations created={created}, skipped={skipped}, errors={errors}"
         logger.info(result.message)
         # Save simple summary
         self._save_to_json(result.details, Path("relation_migration_summary.json"))
         return result
-
-

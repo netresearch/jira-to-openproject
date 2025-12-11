@@ -45,6 +45,7 @@ class LabelsMigration(BaseMigration):  # noqa: D101
 
         Returns:
             Empty list (transformation-only, no source entities)
+
         """
         return []
 
@@ -164,5 +165,3 @@ class LabelsMigration(BaseMigration):  # noqa: D101
                 message=f"Labels migration failed: {e}",
                 errors=[str(e)],
             )
-
-

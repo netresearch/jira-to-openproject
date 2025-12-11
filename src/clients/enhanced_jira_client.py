@@ -62,10 +62,7 @@ class EnhancedJiraClient(JiraClient):
             return {}
 
         results: dict[str, Issue | None] = {}
-        batches = [
-            issue_keys[i : i + self.batch_size]
-            for i in range(0, len(issue_keys), self.batch_size)
-        ]
+        batches = [issue_keys[i : i + self.batch_size] for i in range(0, len(issue_keys), self.batch_size)]
 
         with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
             futures: list[Any] = []
@@ -104,10 +101,7 @@ class EnhancedJiraClient(JiraClient):
             return {}
 
         results: dict[str, list[dict[str, Any]]] = {}
-        batches = [
-            issue_keys[i : i + self.batch_size]
-            for i in range(0, len(issue_keys), self.batch_size)
-        ]
+        batches = [issue_keys[i : i + self.batch_size] for i in range(0, len(issue_keys), self.batch_size)]
 
         def _fetch_batch(keys: list[str]) -> dict[str, list[dict[str, Any]]]:
             # Minimal placeholder; in tests, future results are provided via patching
@@ -140,10 +134,7 @@ class EnhancedJiraClient(JiraClient):
         if not issue_keys:
             return results
 
-        batches = [
-            issue_keys[i : i + self.batch_size]
-            for i in range(0, len(issue_keys), self.batch_size)
-        ]
+        batches = [issue_keys[i : i + self.batch_size] for i in range(0, len(issue_keys), self.batch_size)]
 
         def _fetch_meta(keys: list[str]) -> dict[str, dict[str, Any]]:
             # Placeholder simulating metadata retrieval; include keys so tests can assert values

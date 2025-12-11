@@ -148,12 +148,8 @@ def assert_migration_complete(migration_result: dict[str, Any]) -> None:
         AssertionError: If the migration did not complete successfully
 
     """
-    assert (
-        migration_result["success"] is True
-    ), f"Migration failed: {migration_result.get('error', 'Unknown error')}"
-    assert (
-        "error" not in migration_result
-    ), f"Migration had errors: {migration_result.get('error')}"
+    assert migration_result["success"] is True, f"Migration failed: {migration_result.get('error', 'Unknown error')}"
+    assert "error" not in migration_result, f"Migration had errors: {migration_result.get('error')}"
 
     # Assert other expected result properties depending on your implementation
     assert "duration" in migration_result, "Migration result missing duration"

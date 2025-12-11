@@ -57,9 +57,7 @@ class TempoAccountMigration:
 
         # Base Tempo API URL - typically {jira_url}/rest/tempo-accounts/1 for Server
         # or a separate endpoint for Cloud
-        self.tempo_api_base = (
-            f"{jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
-        )
+        self.tempo_api_base = f"{jira_config.get('url', '').rstrip('/')}/rest/tempo-accounts/1"
 
         # Setup auth for Tempo API
         self.tempo_auth_headers = {
@@ -155,9 +153,7 @@ class TempoAccountMigration:
             self.extract_openproject_companies()
 
         # Create a lookup dictionary for OpenProject companies by name
-        op_companies_by_name = {
-            company.get("name", "").lower(): company for company in self.op_companies
-        }
+        op_companies_by_name = {company.get("name", "").lower(): company for company in self.op_companies}
 
         mapping = {}
         for tempo_account in self.accounts:
@@ -195,12 +191,8 @@ class TempoAccountMigration:
 
         # Log statistics
         total_accounts = len(mapping)
-        matched_accounts = sum(
-            1 for account in mapping.values() if account["matched_by"] != "none"
-        )
-        match_percentage = (
-            (matched_accounts / total_accounts) * 100 if total_accounts > 0 else 0
-        )
+        matched_accounts = sum(1 for account in mapping.values() if account["matched_by"] != "none")
+        match_percentage = (matched_accounts / total_accounts) * 100 if total_accounts > 0 else 0
 
         logger.info("Account mapping created for %s Tempo accounts", total_accounts)
         logger.info(
@@ -313,9 +305,7 @@ class TempoAccountMigration:
 
         # Iterate through the mapping and create missing companies
         accounts_to_process = [
-            (tempo_id, mapping)
-            for tempo_id, mapping in self.account_mapping.items()
-            if mapping["matched_by"] == "none"
+            (tempo_id, mapping) for tempo_id, mapping in self.account_mapping.items() if mapping["matched_by"] == "none"
         ]
 
         logger.info(
@@ -374,24 +364,14 @@ class TempoAccountMigration:
 
         # Log statistics
         total_accounts = len(self.account_mapping)
-        matched_accounts = sum(
-            1
-            for account in self.account_mapping.values()
-            if account["matched_by"] != "none"
-        )
-        created_accounts = sum(
-            1
-            for account in self.account_mapping.values()
-            if account["matched_by"] == "created"
-        )
+        matched_accounts = sum(1 for account in self.account_mapping.values() if account["matched_by"] != "none")
+        created_accounts = sum(1 for account in self.account_mapping.values() if account["matched_by"] == "created")
 
         logger.success(
             "Tempo account migration complete for %s accounts",
             total_accounts,
         )
-        match_percentage = (
-            (matched_accounts / total_accounts * 100) if total_accounts > 0 else 0
-        )
+        match_percentage = (matched_accounts / total_accounts * 100) if total_accounts > 0 else 0
         logger.info(
             f"Successfully matched {matched_accounts} accounts ({match_percentage:.1f}% of total)",
         )
@@ -421,25 +401,13 @@ class TempoAccountMigration:
         # Analyze the mapping
         analysis = {
             "total_accounts": len(self.account_mapping),
-            "matched_accounts": sum(
-                1
-                for account in self.account_mapping.values()
-                if account["matched_by"] != "none"
-            ),
-            "matched_by_name": sum(
-                1
-                for account in self.account_mapping.values()
-                if account["matched_by"] == "name"
-            ),
+            "matched_accounts": sum(1 for account in self.account_mapping.values() if account["matched_by"] != "none"),
+            "matched_by_name": sum(1 for account in self.account_mapping.values() if account["matched_by"] == "name"),
             "matched_by_creation": sum(
-                1
-                for account in self.account_mapping.values()
-                if account["matched_by"] == "created"
+                1 for account in self.account_mapping.values() if account["matched_by"] == "created"
             ),
             "unmatched_accounts": sum(
-                1
-                for account in self.account_mapping.values()
-                if account["matched_by"] == "none"
+                1 for account in self.account_mapping.values() if account["matched_by"] == "none"
             ),
             "unmatched_details": [
                 {

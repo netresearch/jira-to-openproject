@@ -51,6 +51,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
 
         Returns:
             Empty list (transformation-only, no source entities)
+
         """
         return []
 
@@ -205,6 +206,3 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
                 message=f"Story points migration failed: {e}",
                 errors=[str(e)],
             )
-
-
-

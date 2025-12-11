@@ -213,9 +213,7 @@ class OpenProjectCleaner:
                     elif entity_type == "it":
                         results["issue_types_deleted"] = self.cleanup_issue_types()
                     elif entity_type == "is":
-                        results["issue_statuses_deleted"] = (
-                            self.cleanup_issue_statuses()
-                        )
+                        results["issue_statuses_deleted"] = self.cleanup_issue_statuses()
                 except Exception:
                     logger.exception("Error during cleanup of %s", entity_type)
 
@@ -237,7 +235,8 @@ class OpenProjectCleaner:
             logger.info("  Issue statuses deleted: %s", results["issue_statuses_deleted"])
         if "il" in self.entities:
             logger.info(
-                "  Issue link types deleted: %s", results["issue_link_types_deleted"],
+                "  Issue link types deleted: %s",
+                results["issue_link_types_deleted"],
             )
 
         return results

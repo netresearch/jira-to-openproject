@@ -1,4 +1,3 @@
-
 from src.migration import _extract_counts
 from src.models.component_results import ComponentResult
 
@@ -71,5 +70,3 @@ def test_extract_counts_final_fallback_sum() -> None:
     )
     sc, fc, tc = _extract_counts(result)
     assert (sc, fc, tc) == (4, 0, 4)
-
-

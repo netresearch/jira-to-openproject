@@ -95,12 +95,10 @@ class RailsConsoleClient:
         """
         try:
             lines = [ln.strip() for ln in text.split("\n")]
+
             # Filter out prompts, markers, and Ruby nil/inspects
             def is_noise(ln: str) -> bool:
-                return (
-                    not ln
-                    or ln.startswith(("--EXEC_", "TMUX_CMD_", "=> ", "irb(main):", "open-project("))
-                )
+                return not ln or ln.startswith(("--EXEC_", "TMUX_CMD_", "=> ", "irb(main):", "open-project("))
 
             candidates = [ln for ln in lines if not is_noise(ln)]
 
@@ -385,6 +383,7 @@ class RailsConsoleClient:
         """
 
         end_with_comment = script_end_comment_out
+
         # Build provenance header for every console execution
         def _provenance_hint() -> str:
             try:
@@ -500,7 +499,7 @@ class RailsConsoleClient:
         start_line_index = -1
         for idx, line in enumerate(all_lines):
             stripped = line.strip()
-            if (start_marker_out in stripped):
+            if start_marker_out in stripped:
                 start_line_index = idx
                 break
         if start_line_index == -1:
@@ -575,7 +574,7 @@ class RailsConsoleClient:
         end_line_index = -1
         for idx in range(start_line_index + 1, len(all_lines)):
             stripped = all_lines[idx].strip()
-            if (end_marker_out in stripped):
+            if end_marker_out in stripped:
                 end_line_index = idx
                 break
         if end_line_index == -1:
@@ -640,9 +639,7 @@ class RailsConsoleClient:
                         len(candidate_lines),
                     )
                     return "\n".join(candidate_lines)
-                msg = (
-                    f"End marker '{end_marker_out}' not found in output and no clear output could be extracted"
-                )
+                msg = f"End marker '{end_marker_out}' not found in output and no clear output could be extracted"
                 raise CommandExecutionError(msg)
             msg = f"End marker '{end_marker_out}' not found in output"
             raise CommandExecutionError(msg)
@@ -659,9 +656,7 @@ class RailsConsoleClient:
             raise RubyError(error_message)
 
         # Build command output from lines strictly between markers, excluding any marker lines
-        out_lines = [
-            ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")
-        ]
+        out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
         command_output = "\n".join(out_lines).strip()
 
         error_patterns = [
@@ -733,9 +728,7 @@ class RailsConsoleClient:
         last_line = non_empty_lines[-1]
         logger.debug("Last line: '%s'", last_line)
 
-        if any(
-            pattern in last_line for pattern in ready_patterns
-        ) or last_line.endswith(">"):
+        if any(pattern in last_line for pattern in ready_patterns) or last_line.endswith(">"):
             result["prompt"] = last_line
             result["state"] = "ready"
             result["ready"] = True
@@ -1000,19 +993,11 @@ class RailsConsoleClient:
 
             # drop all return lines from last_output
             last_output = "\n".join(
-                [
-                    line.strip()
-                    for line in last_output.split("\n")
-                    if not line.strip().startswith("=> ")
-                ],
+                [line.strip() for line in last_output.split("\n") if not line.strip().startswith("=> ")],
             )
             # drop all lines irb(main):30486>
             last_output = "\n".join(
-                [
-                    line.strip()
-                    for line in last_output.split("\n")
-                    if not line.strip().startswith("irb(main):")
-                ],
+                [line.strip() for line in last_output.split("\n") if not line.strip().startswith("irb(main):")],
             )
             # Do not slice out EXEC markers here; higher-level parser relies on them
 

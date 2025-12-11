@@ -111,5 +111,3 @@ def test_run_creates_with_swap(monkeypatch: pytest.MonkeyPatch, _map_store):
     assert op.created == [(20, 10, "blocks")]
     assert res.details["created"] == 1
     assert res.success
-
-

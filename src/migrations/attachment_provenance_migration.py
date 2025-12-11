@@ -69,12 +69,14 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                 author = self._get(a, "author")
                 if not isinstance(filename, str) or not filename.strip():
                     continue
-                items.append({
-                    "jira_key": k,
-                    "filename": filename,
-                    "created": created,
-                    "author": author,
-                })
+                items.append(
+                    {
+                        "jira_key": k,
+                        "filename": filename,
+                        "created": created,
+                        "author": author,
+                    }
+                )
         return ComponentResult(success=True, data={"items": items})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
@@ -90,12 +92,14 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
             author_id = self._resolve_user_id(it.get("author"))
             created_at = it.get("created") if isinstance(it.get("created"), str) else None
-            out.append({
-                "work_package_id": wp_id,
-                "filename": it.get("filename"),
-                "author_id": author_id,
-                "created_at": created_at,
-            })
+            out.append(
+                {
+                    "work_package_id": wp_id,
+                    "filename": it.get("filename"),
+                    "author_id": author_id,
+                    "created_at": created_at,
+                }
+            )
         return ComponentResult(success=True, data={"updates": out})
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
@@ -126,6 +130,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
         failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+
     def run(self) -> ComponentResult:
         """Execute attachment provenance migration pipeline."""
         self.logger.info("Starting attachment provenance migration")
@@ -142,7 +147,9 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
 
         loaded = self._load(mapped)
         if loaded.success:
-            self.logger.info("Attachment provenance migration completed (updated=%s, failed=%s)", loaded.updated, loaded.failed)
+            self.logger.info(
+                "Attachment provenance migration completed (updated=%s, failed=%s)", loaded.updated, loaded.failed
+            )
         else:
             self.logger.error("Attachment provenance migration encountered failures (failed=%s)", loaded.failed)
         return loaded

@@ -79,4 +79,3 @@ def test_affects_versions_migration_end_to_end():
     assert ld.success is True
     # Two issues have versions; third empty
     assert ld.updated == 2
-

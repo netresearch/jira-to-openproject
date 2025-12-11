@@ -77,9 +77,7 @@ class TestCheckpointManager:
         assert checkpoint["status"] == CheckpointStatus.PENDING.value
 
         # Verify checkpoint file was created
-        checkpoint_file = (
-            checkpoint_manager.checkpoint_dir / "active" / f"{checkpoint_id}.json"
-        )
+        checkpoint_file = checkpoint_manager.checkpoint_dir / "active" / f"{checkpoint_id}.json"
         assert checkpoint_file.exists()
 
     def test_start_checkpoint(self, checkpoint_manager, sample_checkpoint_data) -> None:
@@ -111,9 +109,7 @@ class TestCheckpointManager:
         assert checkpoint_id not in checkpoint_manager._active_checkpoints
 
         # Verify completed file exists
-        completed_file = (
-            checkpoint_manager.checkpoint_dir / "completed" / f"{checkpoint_id}.json"
-        )
+        completed_file = checkpoint_manager.checkpoint_dir / "completed" / f"{checkpoint_id}.json"
         assert completed_file.exists()
 
         # Verify completion data
@@ -141,9 +137,7 @@ class TestCheckpointManager:
         assert checkpoint_id not in checkpoint_manager._active_checkpoints
 
         # Verify failed file exists
-        failed_file = (
-            checkpoint_manager.checkpoint_dir / "failed" / f"{checkpoint_id}.json"
-        )
+        failed_file = checkpoint_manager.checkpoint_dir / "failed" / f"{checkpoint_id}.json"
         assert failed_file.exists()
 
         # Verify failure data
@@ -265,9 +259,7 @@ class TestCheckpointManager:
 
         # Verify recovery plan was created
         assert plan_id is not None
-        plan_file = (
-            checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{plan_id}.json"
-        )
+        plan_file = checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{plan_id}.json"
         assert plan_file.exists()
 
         # Verify plan content
@@ -275,10 +267,7 @@ class TestCheckpointManager:
             plan_data = json.load(f)
         assert plan_data["failure_type"] == "network_error"
         assert plan_data["error_message"] == "Network connection lost"
-        assert (
-            plan_data["recommended_action"]
-            == RecoveryAction.RETRY_FROM_CHECKPOINT.value
-        )
+        assert plan_data["recommended_action"] == RecoveryAction.RETRY_FROM_CHECKPOINT.value
         assert plan_data["checkpoint_id"] == checkpoint_id
         assert "Check network connectivity" in plan_data["manual_steps"]
 
@@ -394,9 +383,7 @@ class TestCheckpointManager:
         assert checkpoint_id not in checkpoint_manager._active_checkpoints
 
         # Checkpoint should be moved to completed
-        completed_file = (
-            checkpoint_manager.checkpoint_dir / "completed" / f"{checkpoint_id}.json"
-        )
+        completed_file = checkpoint_manager.checkpoint_dir / "completed" / f"{checkpoint_id}.json"
         assert completed_file.exists()
 
     def test_throughput_calculation(self, checkpoint_manager) -> None:
@@ -459,24 +446,16 @@ class TestCheckpointManager:
         checkpoint_id = checkpoint_manager.create_checkpoint(**sample_checkpoint_data)
 
         # Verify file was created with correct content
-        checkpoint_file = (
-            checkpoint_manager.checkpoint_dir / "active" / f"{checkpoint_id}.json"
-        )
+        checkpoint_file = checkpoint_manager.checkpoint_dir / "active" / f"{checkpoint_id}.json"
         assert checkpoint_file.exists()
 
         with checkpoint_file.open() as f:
             saved_data = json.load(f)
 
         assert saved_data["checkpoint_id"] == checkpoint_id
-        assert (
-            saved_data["migration_record_id"]
-            == sample_checkpoint_data["migration_record_id"]
-        )
+        assert saved_data["migration_record_id"] == sample_checkpoint_data["migration_record_id"]
         assert saved_data["step_name"] == sample_checkpoint_data["step_name"]
-        assert (
-            saved_data["entities_processed"]
-            == sample_checkpoint_data["entities_processed"]
-        )
+        assert saved_data["entities_processed"] == sample_checkpoint_data["entities_processed"]
 
     def test_recovery_plan_execution_mock(
         self,
@@ -517,13 +496,9 @@ class TestCheckpointManager:
         )
 
         # Load and verify plan
-        plan_file = (
-            checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{plan_id}.json"
-        )
+        plan_file = checkpoint_manager.checkpoint_dir / "recovery_plans" / f"{plan_id}.json"
         with plan_file.open() as f:
             plan_data = json.load(f)
 
-        assert (
-            plan_data["recommended_action"] == RecoveryAction.MANUAL_INTERVENTION.value
-        )
+        assert plan_data["recommended_action"] == RecoveryAction.MANUAL_INTERVENTION.value
         assert len(plan_data["manual_steps"]) > 0

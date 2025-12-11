@@ -208,17 +208,11 @@ class TestDatabaseConfiguration:
                     if env_password:  # Non-empty password
                         config_loader = ConfigLoader()
                         expected_password = env_password
-                        assert (
-                            config_loader.config["database"]["postgres_password"]
-                            == expected_password
-                        )
+                        assert config_loader.config["database"]["postgres_password"] == expected_password
                     else:  # Empty password should fall back to Docker secret
                         config_loader = ConfigLoader()
                         expected_password = "docker_secret_password"
-                        assert (
-                            config_loader.config["database"]["postgres_password"]
-                            == expected_password
-                        )
+                        assert config_loader.config["database"]["postgres_password"] == expected_password
 
     @patch("src.config_loader.Path")
     @patch("src.config_loader.load_dotenv")
@@ -231,9 +225,7 @@ class TestDatabaseConfiguration:
         # Arrange
         mock_path_instance = mock_path.return_value
         mock_path_instance.exists.return_value = True
-        mock_path_instance.read_text.return_value = (
-            "docker_secret_password\n"  # With whitespace
-        )
+        mock_path_instance.read_text.return_value = "docker_secret_password\n"  # With whitespace
 
         # Mock all the other initialization methods
         with patch("src.config_loader.ConfigLoader._load_yaml_config") as mock_yaml:
@@ -244,13 +236,8 @@ class TestDatabaseConfiguration:
                     config_loader = ConfigLoader()
 
         # Assert
-        assert (
-            config_loader.config["database"]["postgres_password"]
-            == "docker_secret_password"
-        )
-        assert (
-            config_loader.config["database"]["postgres_db"] == "jira_migration"
-        )  # Default value
+        assert config_loader.config["database"]["postgres_password"] == "docker_secret_password"
+        assert config_loader.config["database"]["postgres_db"] == "jira_migration"  # Default value
 
     @patch("src.config_loader.Path")
     @patch("src.config_loader.load_dotenv")

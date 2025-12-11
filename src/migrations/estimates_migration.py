@@ -207,5 +207,3 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
                 message=f"Estimates migration failed: {e}",
                 errors=[str(e)],
             )
-
-

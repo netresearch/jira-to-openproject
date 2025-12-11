@@ -77,6 +77,7 @@ class UserMigration(BaseMigration):
         self.jira_users = self._load_from_json(Path("jira_users.json")) or []
         self.op_users = self._load_from_json(Path("op_users.json")) or []
         from src import config as _cfg
+
         self.user_mapping = _cfg.mappings.get_mapping("user") or {}
 
         # Caches for provenance helpers
@@ -200,9 +201,7 @@ class UserMigration(BaseMigration):
         self.op_users = valid_users
         self.logger.info("Filtered to %d valid user records", len(self.op_users))
 
-        op_users_by_username = {
-            user.get("login", "").lower(): user for user in self.op_users if user.get("login")
-        }
+        op_users_by_username = {user.get("login", "").lower(): user for user in self.op_users if user.get("login")}
         # Prefer deterministic mapping via J2O provenance custom fields
         op_users_by_origin_key: dict[str, dict[str, Any]] = {}
         op_users_by_origin_id: dict[str, dict[str, Any]] = {}
@@ -313,6 +312,7 @@ class UserMigration(BaseMigration):
 
         # Save the mapping via controller only
         from src import config as _cfg
+
         _cfg.mappings.set_mapping("user", mapping)
         self.user_mapping = mapping
 
@@ -360,9 +360,7 @@ class UserMigration(BaseMigration):
         # Handle collisions by appending counter
         counter = 1
         while True:
-            candidate_email = (
-                f"{sanitized_login}.{counter}@{config.FALLBACK_MAIL_DOMAIN}"
-            )
+            candidate_email = f"{sanitized_login}.{counter}@{config.FALLBACK_MAIL_DOMAIN}"
             if candidate_email not in existing_emails:
                 return candidate_email
             counter += 1
@@ -476,11 +474,7 @@ class UserMigration(BaseMigration):
                 "I18n.available_locales.map(&:to_s)",
             )
             if isinstance(locales, list):
-                normalized = {
-                    str(locale).strip().lower().replace("-", "_")
-                    for locale in locales
-                    if locale
-                }
+                normalized = {str(locale).strip().lower().replace("-", "_") for locale in locales if locale}
                 self._supported_languages = normalized
             else:
                 self._supported_languages = set()
@@ -575,7 +569,8 @@ class UserMigration(BaseMigration):
             if digest == cached_digest and avatar_url == cached_url:
                 self._avatar_cache[jira_key] = cache_entry
                 self.logger.debug(
-                    "Skipping avatar upload for %s (digest match)", jira_key,
+                    "Skipping avatar upload for %s (digest match)",
+                    jira_key,
                 )
                 skipped += 1
                 continue
@@ -671,10 +666,7 @@ class UserMigration(BaseMigration):
         if not jira_user:
             return
 
-        needs_enrichment = any(
-            not jira_user.get(field)
-            for field in ("accountId", "timeZone", "locale", "avatarUrls")
-        )
+        needs_enrichment = any(not jira_user.get(field) for field in ("accountId", "timeZone", "locale", "avatarUrls"))
 
         if not needs_enrichment:
             return
@@ -745,7 +737,6 @@ class UserMigration(BaseMigration):
             "avatar_url": avatar_url,
         }
 
-
     def create_missing_users(self, batch_size: int | None = None) -> dict[str, Any]:
         """Create missing users in OpenProject using the LDAP synchronization.
 
@@ -768,9 +759,7 @@ class UserMigration(BaseMigration):
         if not self.user_mapping:
             self.create_user_mapping()
 
-        missing_users = [
-            user for user in self.user_mapping.values() if user["matched_by"] == "none"
-        ]
+        missing_users = [user for user in self.user_mapping.values() if user["matched_by"] == "none"]
 
         total = len(missing_users)
         created = 0
@@ -808,16 +797,8 @@ class UserMigration(BaseMigration):
                     users_to_create = []
                 for user in batch:
                     # Split display name into first and last name - handle empty display names
-                    display_name = (
-                        user["jira_display_name"].strip()
-                        if user["jira_display_name"]
-                        else ""
-                    )
-                    names = (
-                        ["User", user["jira_name"]]
-                        if not display_name
-                        else display_name.split(" ", 1)
-                    )
+                    display_name = user["jira_display_name"].strip() if user["jira_display_name"] else ""
+                    names = ["User", user["jira_name"]] if not display_name else display_name.split(" ", 1)
 
                     first_name = names[0].strip() if names[0].strip() else "User"
                     last_name = names[1] if len(names) > 1 else user["jira_name"]
@@ -847,25 +828,33 @@ class UserMigration(BaseMigration):
 
                     cf_payload: list[dict[str, Any]] = []
                     if origin_meta.get("origin_system") and cf_ids.get("J2O Origin System"):
-                        cf_payload.append({
-                            "id": cf_ids["J2O Origin System"],
-                            "value": origin_meta["origin_system"],
-                        })
+                        cf_payload.append(
+                            {
+                                "id": cf_ids["J2O Origin System"],
+                                "value": origin_meta["origin_system"],
+                            }
+                        )
                     if origin_meta.get("user_id") and cf_ids.get("J2O User ID"):
-                        cf_payload.append({
-                            "id": cf_ids["J2O User ID"],
-                            "value": origin_meta["user_id"],
-                        })
+                        cf_payload.append(
+                            {
+                                "id": cf_ids["J2O User ID"],
+                                "value": origin_meta["user_id"],
+                            }
+                        )
                     if origin_meta.get("user_key") and cf_ids.get("J2O User Key"):
-                        cf_payload.append({
-                            "id": cf_ids["J2O User Key"],
-                            "value": origin_meta["user_key"],
-                        })
+                        cf_payload.append(
+                            {
+                                "id": cf_ids["J2O User Key"],
+                                "value": origin_meta["user_key"],
+                            }
+                        )
                     if origin_meta.get("external_url") and cf_ids.get("J2O External URL"):
-                        cf_payload.append({
-                            "id": cf_ids["J2O External URL"],
-                            "value": origin_meta["external_url"],
-                        })
+                        cf_payload.append(
+                            {
+                                "id": cf_ids["J2O External URL"],
+                                "value": origin_meta["external_url"],
+                            }
+                        )
 
                     user_record: dict[str, Any] = {
                         "login": user["jira_name"],
@@ -934,8 +923,7 @@ class UserMigration(BaseMigration):
                             continue
                         messages = [str(m).lower() for m in err.get("errors", [])]
                         duplicate_violation = any(
-                            "username has already been taken" in msg
-                            or "email has already been taken" in msg
+                            "username has already been taken" in msg or "email has already been taken" in msg
                             for msg in messages
                         )
                         if not duplicate_violation:
@@ -945,9 +933,7 @@ class UserMigration(BaseMigration):
                         target_mapping = batch[idx]
                         jira_key = target_mapping.get("jira_key")
                         jira_user = jira_index.get(str(jira_key)) if jira_key else None
-                        origin_meta = (
-                            self._build_user_origin_metadata(jira_user) if jira_user else {}
-                        )
+                        origin_meta = self._build_user_origin_metadata(jira_user) if jira_user else {}
 
                         existing_op_user: dict[str, Any] | None = None
                         login_candidate = target_mapping.get("jira_name") or target_mapping.get("jira_display_name")
@@ -965,9 +951,7 @@ class UserMigration(BaseMigration):
 
                         if (not existing_op_user) and login_candidate:
                             try:
-                                ruby_expr = (
-                                    f"user = User.find_by(login: {json.dumps(login_candidate)}); user && user.as_json.merge({{ 'mail' => user.mail }})"
-                                )
+                                ruby_expr = f"user = User.find_by(login: {json.dumps(login_candidate)}); user && user.as_json.merge({{ 'mail' => user.mail }})"
                                 existing_op_user = self.op_client.execute_json_query(ruby_expr)
                             except Exception:
                                 existing_op_user = None
@@ -977,9 +961,8 @@ class UserMigration(BaseMigration):
                             op_id = int(existing_op_user["id"])  # type: ignore[arg-type]
                             target_mapping["openproject_id"] = op_id
                             target_mapping["openproject_login"] = existing_op_user.get("login")
-                            target_mapping["openproject_email"] = (
-                                existing_op_user.get("mail")
-                                or existing_op_user.get("email")
+                            target_mapping["openproject_email"] = existing_op_user.get("mail") or existing_op_user.get(
+                                "email"
                             )
                             target_mapping["matched_by"] = "username_existing"
 
@@ -1023,18 +1006,22 @@ class UserMigration(BaseMigration):
                         idx = item.get("index")
                         if isinstance(idx, int) and 0 <= idx < len(meta):
                             m = meta[idx]
-                            created_users.append({
-                                "status": "success",
-                                "login": m.get("login"),
-                                "mail": m.get("mail"),
-                                "id": item.get("id"),
-                            })
+                            created_users.append(
+                                {
+                                    "status": "success",
+                                    "login": m.get("login"),
+                                    "mail": m.get("mail"),
+                                    "id": item.get("id"),
+                                }
+                            )
 
                     # Log a few errors safely
                     if error_list and self.logger.isEnabledFor(logging.DEBUG):
                         for err in error_list[:3]:
                             idx = err.get("index")
-                            safe_login = meta[idx]["login"] if isinstance(idx, int) and 0 <= idx < len(meta) else "unknown"
+                            safe_login = (
+                                meta[idx]["login"] if isinstance(idx, int) and 0 <= idx < len(meta) else "unknown"
+                            )
                             self.logger.debug("User creation error: %s -> %s", safe_login, err.get("errors", []))
 
                     tracker.add_log_item(
@@ -1128,7 +1115,11 @@ class UserMigration(BaseMigration):
 
             custom_fields: list[dict[str, Any]] = []
             existing_origin_system = (op_user or {}).get("j2o_origin_system") if op_user else None
-            if meta["origin_system"] and meta["origin_system"] != existing_origin_system and cf_ids.get("J2O Origin System"):
+            if (
+                meta["origin_system"]
+                and meta["origin_system"] != existing_origin_system
+                and cf_ids.get("J2O Origin System")
+            ):
                 custom_fields.append({"id": cf_ids["J2O Origin System"], "value": meta["origin_system"]})
 
             existing_user_id = (op_user or {}).get("j2o_user_id") if op_user else None
@@ -1286,20 +1277,12 @@ class UserMigration(BaseMigration):
             "matched_by_username": matched_by_username,
             "matched_by_email": matched_by_email,
             "not_matched": not_matched,
-            "username_match_percentage": (
-                (matched_by_username / total_users) * 100 if total_users > 0 else 0
-            ),
-            "email_match_percentage": (
-                (matched_by_email / total_users) * 100 if total_users > 0 else 0
-            ),
+            "username_match_percentage": ((matched_by_username / total_users) * 100 if total_users > 0 else 0),
+            "email_match_percentage": ((matched_by_email / total_users) * 100 if total_users > 0 else 0),
             "total_match_percentage": (
-                ((matched_by_username + matched_by_email) / total_users) * 100
-                if total_users > 0
-                else 0
+                ((matched_by_username + matched_by_email) / total_users) * 100 if total_users > 0 else 0
             ),
-            "not_matched_percentage": (
-                (not_matched / total_users) * 100 if total_users > 0 else 0
-            ),
+            "not_matched_percentage": ((not_matched / total_users) * 100 if total_users > 0 else 0),
         }
 
         # Display the analysis
@@ -1343,10 +1326,7 @@ class UserMigration(BaseMigration):
         """
         if entity_type == "users":
             return self.jira_client.get_users()
-        msg = (
-            f"UserMigration does not support entity type: {entity_type}. "
-            f"Supported types: ['users']"
-        )
+        msg = f"UserMigration does not support entity type: {entity_type}. Supported types: ['users']"
         raise ValueError(
             msg,
         )

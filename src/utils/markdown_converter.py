@@ -134,8 +134,8 @@ class MarkdownConverter:
         self.emoticon_map = {
             "(y)": "👍",  # thumbs up
             "(n)": "👎",  # thumbs down
-            "(/)": "✓",   # checkmark
-            "(x)": "✗",   # cross/x
+            "(/)": "✓",  # checkmark
+            "(x)": "✗",  # cross/x
             "(i)": "ℹ️",  # info
             "(!)": "⚠️",  # warning
             "(+)": "➕",  # plus
@@ -357,6 +357,7 @@ class MarkdownConverter:
 
         Returns:
             Text with emoticons converted to UTF-8 equivalents
+
         """
         for jira_emoticon, unicode_char in self.emoticon_map.items():
             text = text.replace(jira_emoticon, unicode_char)

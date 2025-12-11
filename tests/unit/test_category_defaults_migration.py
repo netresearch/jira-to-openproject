@@ -54,5 +54,3 @@ def test_category_defaults_sets_assignee_from_component_lead():
     assert ld.success is True
     # two components -> two updates
     assert ld.updated == 2
-
-

@@ -55,5 +55,3 @@ def test_native_tags_assigns_tags_to_work_packages():
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated == 1
-
-

@@ -350,10 +350,7 @@ class StalenessManager:
 
         # Check if required fields are present
         required_fields = ["accountId", "displayName"]
-        return all(
-            not (field not in user_data or not user_data[field])
-            for field in required_fields
-        )
+        return all(not (field not in user_data or not user_data[field]) for field in required_fields)
 
     def _apply_fallback_strategy(
         self,

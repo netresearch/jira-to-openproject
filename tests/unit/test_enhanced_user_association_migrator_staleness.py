@@ -61,7 +61,6 @@ class TestStalenessDetection:
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
             # MetricsCollector removed (enterprise bloat)
         ):
-
             # Clean config setup
             mock_config.get_path.return_value = Path("/tmp/test_clean")
             mock_config.migration_config = {
@@ -217,7 +216,6 @@ class TestDurationParsing:
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
             # MetricsCollector removed (enterprise bloat)
         ):
-
             # Clean config setup with duration-specific settings
             mock_config.get_path.return_value = Path("/tmp/test_duration")
             mock_config.migration_config = {
@@ -330,7 +328,6 @@ class TestConfigurationLoading:
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
             # MetricsCollector removed (enterprise bloat)
         ):
-
             # Clean config setup
             mock_config.get_path.return_value = Path("/tmp/test_config")
             mock_config.migration_config = {
@@ -416,7 +413,6 @@ class TestRefreshUserMapping:
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
             # MetricsCollector removed (enterprise bloat)
         ):
-
             # Clean config setup with refresh-specific settings
             mock_config.get_path.return_value = Path("/tmp/test_refresh")
             mock_config.migration_config = {
@@ -661,7 +657,6 @@ class TestBackwardsCompatibility:
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
             # MetricsCollector removed (enterprise bloat)
         ):
-
             mock_config.get_path.return_value = Path("/tmp/test_legacy")
             mock_config.migration_config = {
                 "mapping": {
@@ -681,9 +676,7 @@ class TestBackwardsCompatibility:
             migrator._save_enhanced_mappings = MagicMock()
 
             # The load should fail due to invalid JSON structure and fall back to creating from basic mapping
-            assert (
-                len(migrator.enhanced_user_mappings) >= 0
-            )  # Should be empty or have basic mappings
+            assert len(migrator.enhanced_user_mappings) >= 0  # Should be empty or have basic mappings
 
     def test_load_mixed_cache_file(self, mock_jira_client, mock_op_client) -> None:
         """Test loading cache file with mixed old and new formats."""
@@ -703,7 +696,6 @@ class TestBackwardsCompatibility:
             patch("src.utils.enhanced_user_association_migrator.config") as mock_config,
             # MetricsCollector removed (enterprise bloat)
         ):
-
             mock_config.get_path.return_value = Path("/tmp/test_mixed")
             mock_config.migration_config = {
                 "mapping": {
@@ -773,7 +765,6 @@ class TestSecurityFeatures:
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
             # MetricsCollector removed (enterprise bloat)
         ):
-
             # Clean config setup with security-specific settings
             mock_config.get_path.return_value = Path("/tmp/test_security")
             mock_config.migration_config = {

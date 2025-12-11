@@ -300,9 +300,7 @@ class TestDockerClient(unittest.TestCase):
         # Assert
         assert result == Path("/local/path")  # Should return the path
         # With optimistic execution, check_file_exists_in_container is not called on success
-        assert (
-            self.mock_ssh_client.execute_command.call_count >= 2
-        )  # mkdir and docker cp commands
+        assert self.mock_ssh_client.execute_command.call_count >= 2  # mkdir and docker cp commands
         self.mock_ssh_client.check_remote_file_exists.assert_called_once()  # Check if local file exists
         self.mock_ssh_client.get_remote_file_size.assert_called_once()  # Get file size
 

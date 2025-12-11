@@ -9,6 +9,7 @@ import pytest
 try:
     import pybreaker  # type: ignore  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests
+
     class _CircuitBreaker:  # pragma: no cover - minimal behavior
         def __init__(self, *args, **kwargs) -> None:
             return None
@@ -37,6 +38,7 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
 try:
     from pydantic import BaseModel as _PydanticBaseModel  # type: ignore  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests
+
     class _FieldInfo:
         def __init__(self, *, default=None, default_factory=None) -> None:
             self.default = default
@@ -71,10 +73,12 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
 try:
     import structlog  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests
+
     class _StubLogger:
         def __getattr__(self, _name):
             def _noop(*_args, **_kwargs):
                 return None
+
             return _noop
 
     class _StdlibNS(types.SimpleNamespace):
@@ -150,9 +154,11 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
 try:
     import tenacity  # type: ignore  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests
+
     def _pass_through(*_args, **_kwargs):
         def _decorator(func):
             return func
+
         return _decorator
 
     tenacity_stub = types.SimpleNamespace(
@@ -214,7 +220,9 @@ def patched_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     dummy = DummyMappings()
     monkeypatch.setattr(global_config, "mappings", dummy, raising=False)
     monkeypatch.setattr(global_config, "get_mappings", lambda: dummy, raising=False)
-    monkeypatch.setattr(global_config, "migration_config", {"attachment_path": attachment_dir.as_posix()}, raising=False)
+    monkeypatch.setattr(
+        global_config, "migration_config", {"attachment_path": attachment_dir.as_posix()}, raising=False
+    )
     monkeypatch.setattr(global_config, "get_path", lambda _name: tmp_path, raising=False)
     return attachment_dir
 

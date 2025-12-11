@@ -526,10 +526,7 @@ class OpenProjectClient:
 
         # Compose Ruby script with a small header that loads JSON into `input_data`
         container_data_path = Path("/tmp") / local_data_path.name  # noqa: S108
-        header = (
-            "require 'json'\n"
-            f"input_data = JSON.parse(File.read('{container_data_path.as_posix()}'))\n"
-        )
+        header = f"require 'json'\ninput_data = JSON.parse(File.read('{container_data_path.as_posix()}'))\n"
         full_script = header + script_content
 
         local_script_path: Path | None = None
@@ -559,10 +556,7 @@ class OpenProjectClient:
 
                 # First, send a Ruby command to define the unique markers for this execution
                 # The script will use these instead of hardcoded markers
-                marker_setup = (
-                    f"$j2o_start_marker = '{unique_start_marker}'; "
-                    f"$j2o_end_marker = '{unique_end_marker}'"
-                )
+                marker_setup = f"$j2o_start_marker = '{unique_start_marker}'; $j2o_end_marker = '{unique_end_marker}'"
                 subprocess.run(
                     [tmux, "send-keys", "-t", target, marker_setup, "Enter"],
                     capture_output=True,
@@ -622,6 +616,7 @@ class OpenProjectClient:
                     ConsoleNotReadyError,
                     RubyError,
                 )
+
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
                     # Respect configuration: only fall back to rails runner when explicitly enabled
                     if not config.migration_config.get("enable_runner_fallback", False):
@@ -660,14 +655,18 @@ class OpenProjectClient:
             # DEBUG: Log marker positions
             logger.debug(
                 "Marker extraction: start_idx=%s, end_idx=%s, marker=%s, output_len=%d",
-                start_idx, end_idx, exec_id, len(output)
+                start_idx,
+                end_idx,
+                exec_id,
+                len(output),
             )
             if start_idx != -1 and end_idx != -1:
-                json_preview = output[start_idx:end_idx + len(unique_end_marker)][:200]
+                json_preview = output[start_idx : end_idx + len(unique_end_marker)][:200]
                 logger.debug("JSON region preview: %r", json_preview)
 
             if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
                 json_str = output[start_idx + len(unique_start_marker) : end_idx].strip()
+
                 # Fallback parsing with sanitization to guard against stray control chars from IRB/tmux
                 def _try_parse(s: str) -> Any:  # noqa: ANN401
                     return json.loads(s)
@@ -727,14 +726,16 @@ class OpenProjectClient:
                             parsed = _try_parse(candidate)
                         except json.JSONDecodeError as e:
                             # Debug: log the problematic area
-                            pos = e.pos if hasattr(e, 'pos') else 0
+                            pos = e.pos if hasattr(e, "pos") else 0
                             start_ctx = max(0, pos - 20)
                             end_ctx = min(len(candidate), pos + 20)
                             ctx = candidate[start_ctx:end_ctx]
-                            char_at_pos = repr(candidate[pos:pos+5]) if pos < len(candidate) else "EOF"
+                            char_at_pos = repr(candidate[pos : pos + 5]) if pos < len(candidate) else "EOF"
                             logger.warning(
                                 "JSON parse error at pos %d: char=%s, context=%r",
-                                pos, char_at_pos, ctx
+                                pos,
+                                char_at_pos,
+                                ctx,
                             )
                             q_msg = f"Failed to parse JSON output: {e}"
                             raise QueryExecutionError(q_msg) from e
@@ -894,6 +895,7 @@ class OpenProjectClient:
         # Build Ruby that writes JSON to file without printing large output to console
         # IMPORTANT: Do not shell-quote here; we need the actual path string in Ruby.
         ruby_path_literal = str(container_file).replace("'", "\\'")
+
         # Build provenance hint: where did this originate?
         # Compose a concise hint like: "j2o: migration/work_packages func=_migrate_work_packages project=NRS ts=..."
         def _caller_hint(default_component: str) -> str:
@@ -997,19 +999,13 @@ class OpenProjectClient:
                     )
                 except Exception as e:
                     # Fallback to rails runner on console instability
-                    runner_cmd = (
-                        f"(cd /app || cd /opt/openproject) && "
-                        f"bundle exec rails runner {runner_script_path}"
-                    )
+                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
                         q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
                         raise QueryExecutionError(q_msg) from e
             else:
-                runner_cmd = (
-                    f"(cd /app || cd /opt/openproject) && "
-                    f"bundle exec rails runner {runner_script_path}"
-                )
+                runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                 stdout, stderr, rc = self.docker_client.execute_command(
                     runner_cmd,
                     timeout=timeout or 120,
@@ -1043,10 +1039,7 @@ class OpenProjectClient:
                     with local_tmp.open("w", encoding="utf-8") as f:
                         f.write(ruby_script)
                     self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-                    runner_cmd = (
-                        f"(cd /app || cd /opt/openproject) && "
-                        f"bundle exec rails runner {runner_script_path}"
-                    )
+                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
                         q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
@@ -1126,9 +1119,7 @@ class OpenProjectClient:
         lines = [ln.strip() for ln in output.strip().splitlines()]
         has_error_marker = any(ln == "--EXEC_ERROR--" or ln.startswith("--EXEC_ERROR--") for ln in lines)
         severe_pattern = (
-            ("SystemStackError" in output)
-            or ("full_message':" in output)
-            or ("stack level too deep" in output)
+            ("SystemStackError" in output) or ("full_message':" in output) or ("stack level too deep" in output)
         )
         if has_error_marker or severe_pattern:
             # Preserve the most informative lines to aid diagnosis
@@ -1159,10 +1150,7 @@ class OpenProjectClient:
         lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
         if not any(expected_prefix in ln for ln in lines):
             sample = " | ".join(lines[:5])
-            q_msg = (
-                f"Unexpected console output during {context}; expected '{expected_prefix}...'. "
-                f"Got: {sample[:300]}"
-            )
+            q_msg = f"Unexpected console output during {context}; expected '{expected_prefix}...'. Got: {sample[:300]}"
             raise QueryExecutionError(q_msg)
 
     # Removed rails runner helper; all scripts go through persistent tmux console
@@ -1238,9 +1226,7 @@ class OpenProjectClient:
                     self.rate_limiter.record_response(operation_time, 200)
 
                     # If we get no data or empty array, we're done
-                    if not batch_data or (
-                        isinstance(batch_data, list) and len(batch_data) == 0
-                    ):
+                    if not batch_data or (isinstance(batch_data, list) and len(batch_data) == 0):
                         break
 
                     # If we get a single item instead of array, wrap it
@@ -1364,9 +1350,7 @@ class OpenProjectClient:
                         return False
                     if val.isdigit():
                         return int(val)
-                    if (val.startswith('"') and val.endswith('"')) or (
-                        val.startswith("'") and val.endswith("'")
-                    ):
+                    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
                         return val[1:-1]
                     return val
 
@@ -1401,7 +1385,7 @@ class OpenProjectClient:
                 lines2 = text.split("\n")
                 for i, ln in enumerate(lines2):
                     if ln.strip().startswith("=> nil") and i > 0:
-                        prev = lines2[i-1].strip()
+                        prev = lines2[i - 1].strip()
                         if prev.startswith(("[", "{")):
                             try:
                                 return json.loads(prev)
@@ -1531,7 +1515,14 @@ class OpenProjectClient:
             msg = f"Failed to ensure custom field '{name}': {e}"
             raise QueryExecutionError(msg) from e
 
-    def ensure_custom_field(self, name: str, *, field_format: str = "string", cf_type: str = "WorkPackageCustomField", searchable: bool = False) -> dict[str, Any]:
+    def ensure_custom_field(
+        self,
+        name: str,
+        *,
+        field_format: str = "string",
+        cf_type: str = "WorkPackageCustomField",
+        searchable: bool = False,
+    ) -> dict[str, Any]:
         """Ensure a CustomField exists for the given type, create if missing.
 
         Args:
@@ -1542,6 +1533,7 @@ class OpenProjectClient:
 
         Returns:
             Dict with custom field attributes (id, name, field_format, type)
+
         """
         # Set searchable attribute in Ruby (true/false, not Python bool)
         searchable_str = "true" if searchable else "false"
@@ -1859,11 +1851,7 @@ class OpenProjectClient:
         if not valid_role_ids:
             return {"success": False, "error": "role_ids empty"}
 
-        head = (
-            f"project_id = {int(project_id)}\n"
-            f"user_id = {int(user_id)}\n"
-            f"role_ids = {json.dumps(valid_role_ids)}\n"
-        )
+        head = f"project_id = {int(project_id)}\nuser_id = {int(user_id)}\nrole_ids = {json.dumps(valid_role_ids)}\n"
         body = """
 project = Project.find_by(id: project_id)
 user = User.find_by(id: user_id)
@@ -2268,9 +2256,7 @@ JSON_DATA
         # Escape braces in f-string; Ruby string content uses literal markers.
         marker_start = "<!-- J2O_ORIGIN_START -->"
         marker_end = "<!-- J2O_ORIGIN_END -->"
-        payload = (
-            f"system={origin_system};key={project_key};id={external_id or ''};url={external_url or ''}"
-        )
+        payload = f"system={origin_system};key={project_key};id={external_id or ''};url={external_url or ''}"
 
     def upsert_project_origin_attributes(
         self,
@@ -2300,9 +2286,7 @@ JSON_DATA
         # Escape braces in f-string; Ruby string content uses literal markers.
         marker_start = "<!-- J2O_ORIGIN_START -->"
         marker_end = "<!-- J2O_ORIGIN_END -->"
-        payload = (
-            f"system={origin_system};key={project_key};id={external_id or ''};url={external_url or ''}"
-        )
+        payload = f"system={origin_system};key={project_key};id={external_id or ''};url={external_url or ''}"
         # Ruby script to insert/replace the origin block in description
         script = (
             "project = Project.find(%d)\n" % project_id
@@ -2523,7 +2507,9 @@ JSON_DATA
             return result if isinstance(result, dict) else {"updated": 0, "examined": 0}
         except Exception as e:  # noqa: BLE001
             self.logger.warning(
-                "Failed to set J2O Last Update Date for project %s: %s", project_id, e,
+                "Failed to set J2O Last Update Date for project %s: %s",
+                project_id,
+                e,
             )
             return {"updated": 0, "examined": 0, "error": str(e)}
 
@@ -2587,9 +2573,9 @@ JSON_DATA
                         # Read the .rb file content and prepare it for inline insertion
                         rb_content = f.read()
                         # Remove the header comments (first 9 lines) to avoid duplication
-                        lines = rb_content.split('\n')
+                        lines = rb_content.split("\n")
                         # Keep everything after line 9 (the actual Ruby code)
-                        journal_creation_ruby = '\n'.join(lines[9:])
+                        journal_creation_ruby = "\n".join(lines[9:])
                 except Exception as e:
                     logger.warning(f"Failed to load journal creation template: {e}")
                     journal_creation_ruby = ""
@@ -2648,7 +2634,7 @@ JSON_DATA
             "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end\n"
             "begin; GoodJob.logger = Logger.new(nil); rescue; end\n"
             "verbose = (ENV['J2O_BULK_RUBY_VERBOSE'] == '1')\n"
-            "puts \"[RUBY] Verbose mode: #{verbose}\"\n"
+            'puts "[RUBY] Verbose mode: #{verbose}"\n'
             "STDOUT.flush\n"
             "progress_file = ENV['J2O_BULK_PROGRESS_FILE']\n"
             "begin; FileUtils.rm_f(progress_file); rescue; end if progress_file\n"
@@ -2663,11 +2649,11 @@ JSON_DATA
             "data.each_with_index do |attrs, idx|\n"
             "  # Debug: Inspect attrs hash for Bug #32\n"
             "  if idx == 0 && model_name == 'WorkPackage'\n"
-            "    puts \"[BUG32-DEBUG] attrs.class = #{attrs.class}\"\n"
-            "    puts \"[BUG32-DEBUG] attrs.keys.count = #{attrs.keys.count}\"\n"
-            "    puts \"[BUG32-DEBUG] attrs.keys = #{attrs.keys.inspect}\"\n"
+            '    puts "[BUG32-DEBUG] attrs.class = #{attrs.class}"\n'
+            '    puts "[BUG32-DEBUG] attrs.keys.count = #{attrs.keys.count}"\n'
+            '    puts "[BUG32-DEBUG] attrs.keys = #{attrs.keys.inspect}"\n'
             "    puts \"[BUG32-DEBUG] attrs['_rails_operations'] present? #{!attrs['_rails_operations'].nil?}\"\n"
-            "    puts \"[BUG32-DEBUG] attrs[:_rails_operations] present? #{!attrs[:_rails_operations].nil?}\"\n"
+            '    puts "[BUG32-DEBUG] attrs[:_rails_operations] present? #{!attrs[:_rails_operations].nil?}"\n'
             "    if attrs['_rails_operations']\n"
             "      puts \"[BUG32-DEBUG] _rails_operations count = #{attrs['_rails_operations'].length}\"\n"
             "    end\n"
@@ -2789,8 +2775,13 @@ JSON_DATA
             '          puts "J2O bulk item #{idx}: CF assignment error: #{e.class}: #{e.message}" if verbose\n'
             "        end\n"
             "      end\n"
-            f"      # BUG #32 FIX: Journal creation logic loaded from template\n"
-            + ('\n'.join(f"      {line}" for line in journal_creation_ruby.split('\n')) if journal_creation_ruby else "") + "\n"
+            "      # BUG #32 FIX: Journal creation logic loaded from template\n"
+            + (
+                "\n".join(f"      {line}" for line in journal_creation_ruby.split("\n"))
+                if journal_creation_ruby
+                else ""
+            )
+            + "\n"
             "      created << {'index' => idx, 'id' => rec.id}\n"
             '      puts "J2O bulk item #{idx}: saved id=#{rec.id}" if verbose\n'
             "    else\n"
@@ -2875,10 +2866,7 @@ JSON_DATA
                         raise QueryExecutionError(
                             "Rails console execution failed and runner fallback is disabled",
                         ) from e
-                    runner_cmd = (
-                        f"(cd /app || cd /opt/openproject) && "
-                        f"bundle exec rails runner {runner_script_path}"
-                    )
+                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                     try:
                         stdout, stderr, rc = self.docker_client.execute_command(
                             runner_cmd,
@@ -2907,10 +2895,7 @@ JSON_DATA
                     if stdout:
                         logger.info("runner stdout: %s", stdout[:500])
             else:
-                runner_cmd = (
-                    f"(cd /app || cd /opt/openproject) && "
-                    f"bundle exec rails runner {runner_script_path}"
-                )
+                runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                 try:
                     stdout, stderr, rc = self.docker_client.execute_command(
                         runner_cmd,
@@ -2942,7 +2927,7 @@ JSON_DATA
             # Execute via persistent Rails console with suppressed output (file-based result only)
             try:
                 # Allow opt-in console progress visibility
-                suppress = (os.environ.get("J2O_BULK_PROGRESS_CONSOLE", "0") != "1")
+                suppress = os.environ.get("J2O_BULK_PROGRESS_CONSOLE", "0") != "1"
                 output = self.rails_client.execute(full_script, timeout=timeout or 120, suppress_output=suppress)
             except Exception as e:
                 _msg = f"Rails execution failed for bulk_create_records: {e}"
@@ -3172,9 +3157,7 @@ JSON_DATA
                     "504",
                 ]
 
-                is_transient = any(
-                    indicator in error_message for indicator in transient_indicators
-                )
+                is_transient = any(indicator in error_message for indicator in transient_indicators)
 
                 if not is_transient or attempt >= max_retries:
                     # Don't retry for non-transient errors or if out of retries
@@ -3463,8 +3446,7 @@ JSON_DATA
         else:
             if not isinstance(result, dict):
                 msg = (
-                    f"Failed to update {model}: Invalid response from OpenProject "
-                    f"(type={type(result)}, value={result})"
+                    f"Failed to update {model}: Invalid response from OpenProject (type={type(result)}, value={result})"
                 )
                 raise QueryExecutionError(msg)
             return result
@@ -3682,9 +3664,7 @@ JSON_DATA
                     type(json_data),
                     str(json_data)[:200],
                 )
-                msg = (
-                    f"Invalid users data format - expected list, got {type(json_data)}"
-                )
+                msg = f"Invalid users data format - expected list, got {type(json_data)}"
                 raise QueryExecutionError(msg)
 
             # Update cache
@@ -3693,7 +3673,6 @@ JSON_DATA
 
             logger.info("Retrieved %d users from OpenProject", len(self._users_cache))
             return self._users_cache
-
 
     def get_user(self, user_identifier: int | str) -> dict[str, Any]:  # noqa: C901, PLR0912
         """Get a single user by id, email, or login.
@@ -3755,7 +3734,7 @@ JSON_DATA
                 for user in self._users_cache or []:
                     if user.get("login") == login:
                         # Opportunistically cache by email for future lookups
-                        email = (user.get("mail") or user.get("email"))
+                        email = user.get("mail") or user.get("email")
                         if isinstance(email, str):
                             self._users_by_email_cache[email.lower()] = user
                         return user
@@ -3763,7 +3742,7 @@ JSON_DATA
             # Fallback to direct lookup by login
             user = self.find_record("User", {"login": login})
             # Opportunistically cache by email for future lookups
-            email = (user.get("mail") or user.get("email"))
+            email = user.get("mail") or user.get("email")
             if isinstance(email, str):
                 self._users_by_email_cache[email.lower()] = user
             return user  # noqa: TRY300
@@ -3794,10 +3773,7 @@ JSON_DATA
         email_lower = email.lower()
 
         # Check cache first
-        if (
-            hasattr(self, "_users_by_email_cache")
-            and email_lower in self._users_by_email_cache
-        ):
+        if hasattr(self, "_users_by_email_cache") and email_lower in self._users_by_email_cache:
             return self._users_by_email_cache[email_lower]
 
         # Try to load all users to populate cache
@@ -3961,6 +3937,7 @@ JSON_DATA
                     ConsoleNotReadyError,
                     RubyError,
                 )
+
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
                     if not config.migration_config.get("enable_runner_fallback", False):
                         # Respect user's preference to avoid per-request rails runner fallback
@@ -3980,10 +3957,7 @@ JSON_DATA
                     with local_tmp.open("w", encoding="utf-8") as f:
                         f.write(ruby_runner)
                     self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-                    runner_cmd = (
-                        f"(cd /app || cd /opt/openproject) && "
-                        f"bundle exec rails runner {runner_script_path}"
-                    )
+                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
                         msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
@@ -4061,6 +4035,7 @@ JSON_DATA
                     ConsoleNotReadyError,
                     RubyError,
                 )
+
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
                     if not config.migration_config.get("enable_runner_fallback", False):
                         raise
@@ -4079,10 +4054,7 @@ JSON_DATA
                     with local_tmp.open("w", encoding="utf-8") as f:
                         f.write(ruby_runner)
                     self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-                    runner_cmd = (
-                        f"(cd /app || cd /opt/openproject) && "
-                        f"bundle exec rails runner {runner_script_path}"
-                    )
+                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
                         _emsg = f"rails runner failed (rc={rc}): {stderr[:500]}"
@@ -4152,9 +4124,7 @@ JSON_DATA
             scope = "Project.where(parent_id: nil)" if top_level_only else "Project.all"
             write_query = (
                 "require 'json'\n"
-                 "projects = "
-                + scope
-                + ".includes(:enabled_modules).map do |p|\n"
+                "projects = " + scope + ".includes(:enabled_modules).map do |p|\n"
                 "  {\n"
                 "    id: p.id,\n"
                 "    name: p.name,\n"
@@ -4167,9 +4137,7 @@ JSON_DATA
                 "    active: p.active?,\n"
                 "    enabled_modules: p.enabled_module_names\n"
                 "  }\n"
-                "end\n"
-                + f"File.write({file_path_interpolated}, JSON.pretty_generate(projects))\n"
-                + "nil"
+                "end\n" + f"File.write({file_path_interpolated}, JSON.pretty_generate(projects))\n" + "nil"
             )
 
             # Execute the write command - verify console output and fallback if needed
@@ -4183,6 +4151,7 @@ JSON_DATA
                     ConsoleNotReadyError,
                     RubyError,
                 )
+
                 if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
                     if not config.migration_config.get("enable_runner_fallback", False):
                         raise
@@ -4199,9 +4168,7 @@ JSON_DATA
                         ").as_json\n"
                     )
                     all_selector_line = (
-                        "projects = Project.all.select("
-                        ":id, :name, :identifier, :description, :status_code"
-                        ").as_json\n"
+                        "projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n"
                     )
                     ruby_runner = (
                         "require 'json'\n"
@@ -4211,10 +4178,7 @@ JSON_DATA
                     with local_tmp.open("w", encoding="utf-8") as f:
                         f.write(ruby_runner)
                     self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-                    runner_cmd = (
-                        f"(cd /app || cd /opt/openproject) && "
-                        f"bundle exec rails runner {runner_script_path}"
-                    )
+                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                     stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
                     if rc != 0:
                         _emsg = f"rails runner failed (rc={rc}): {stderr[:500]}"
@@ -4244,7 +4208,7 @@ JSON_DATA
                 len(file_content),
             )
 
-                # Parse the JSON content
+            # Parse the JSON content
             try:
                 result = json.loads(file_content)
             except json.JSONDecodeError as e:
@@ -4264,9 +4228,7 @@ JSON_DATA
                     type(result),
                     str(result)[:200],
                 )
-                msg = (
-                    f"Invalid projects data format - expected list, got {type(result)}"
-                )
+                msg = f"Invalid projects data format - expected list, got {type(result)}"
                 raise QueryExecutionError(msg)  # noqa: TRY301
 
             # Validate and clean project data
@@ -4520,8 +4482,7 @@ JSON_DATA
 
         if not all([work_package_id, user_id, activity_id]):
             msg = (
-                f"Missing required IDs: work_package_id={work_package_id}, "
-                f"user_id={user_id}, activity_id={activity_id}"
+                f"Missing required IDs: work_package_id={work_package_id}, user_id={user_id}, activity_id={activity_id}"
             )
             raise ValueError(
                 msg,
@@ -4547,8 +4508,8 @@ JSON_DATA
             user_id: {user_id},
             logged_by_id: {user_id},
             activity_id: {activity_id},
-            hours: {time_entry_data.get('hours', 0)},
-            spent_on: Date.parse('{time_entry_data.get('spentOn', '')}'),
+            hours: {time_entry_data.get("hours", 0)},
+            spent_on: Date.parse('{time_entry_data.get("spentOn", "")}'),
             comments: {comment_str!r}
           )
 
@@ -4565,7 +4526,7 @@ JSON_DATA
 
           # Provenance CF for time entries: J2O Origin Worklog Key
           begin
-            key = {time_entry_data.get('_meta', {}).get('jira_worklog_key')!r}
+            key = {time_entry_data.get("_meta", {}).get("jira_worklog_key")!r}
             if key
               cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
               if !cf
@@ -4682,6 +4643,7 @@ JSON_DATA
         except Exception as e:
             msg = "Failed to retrieve time entries."
             raise QueryExecutionError(msg) from e
+
     # ----- Priority helpers -----
     def get_issue_priorities(self) -> list[dict[str, Any]]:
         """Return list of IssuePriority with id, name, position, is_default, active."""
@@ -4698,9 +4660,7 @@ JSON_DATA
             return []
 
     def find_issue_priority_by_name(self, name: str) -> dict[str, Any] | None:
-        script = (
-            f"p = IssuePriority.find_by(name: {json.dumps(name)}); p && {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}"
-        )
+        script = f"p = IssuePriority.find_by(name: {json.dumps(name)}); p && {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}"
         try:
             result = self.execute_json_query(script)
             return result if isinstance(result, dict) else None
@@ -5032,13 +4992,18 @@ result.to_json
             "end",
             "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))",
         ]
-        ruby = "\n".join([
-            "require 'json'",
-            "require 'date'",
-            "require 'logger'",
-            *header_lines,
-            *ruby_lines,
-        ]) + "\n"
+        ruby = (
+            "\n".join(
+                [
+                    "require 'json'",
+                    "require 'date'",
+                    "require 'logger'",
+                    *header_lines,
+                    *ruby_lines,
+                ]
+            )
+            + "\n"
+        )
 
         try:
             _ = self.rails_client.execute(ruby, timeout=120, suppress_output=True)
@@ -5148,7 +5113,7 @@ result.to_json
               wp.assigned_to = User.find(wp_data['assigned_to_id'])
             end
 
-            # Assign provenance custom fields if provided as [{id,value}]
+            # Assign provenance custom fields if provided as [{id, value}]
             begin
               cf_items = wp_data['custom_fields']
               if cf_items && cf_items.respond_to?(:each)
@@ -5203,11 +5168,7 @@ result.to_json
 
         try:
             result = self.execute_json_query(script)
-            return (
-                result
-                if isinstance(result, dict)
-                else {"created": 0, "failed": len(work_packages), "results": []}
-            )
+            return result if isinstance(result, dict) else {"created": 0, "failed": len(work_packages), "results": []}
         except Exception as e:
             msg = f"Failed to batch create work packages: {e}"
             raise QueryExecutionError(msg) from e
@@ -5725,9 +5686,7 @@ result.to_json
         payload_bytes = len(values_json.encode("utf-8"))
         max_payload_bytes = 256_000  # 256 KB limit
         if payload_bytes > max_payload_bytes:
-            msg = (
-                f"Batch payload {payload_bytes} bytes exceeds {max_payload_bytes} limit"
-            )
+            msg = f"Batch payload {payload_bytes} bytes exceeds {max_payload_bytes} limit"
             raise ValueError(
                 msg,
             )

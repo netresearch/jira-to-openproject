@@ -48,6 +48,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
 
         Returns:
             Empty list (transformation-only, no source entities)
+
         """
         return []
 
@@ -259,9 +260,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
             if not (isinstance(entry, dict) and entry.get("openproject_id")):
                 continue
             sprint_names = [
-                item.strip()
-                for item in str(text or "").split(",")
-                if item and isinstance(item, str) and item.strip()
+                item.strip() for item in str(text or "").split(",") if item and isinstance(item, str) and item.strip()
             ]
             version_entry = None
             for candidate in sprint_names:

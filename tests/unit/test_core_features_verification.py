@@ -368,8 +368,9 @@ class TestIntegrationVerification:
         ]
 
         for component in required_components:
-            assert component in DEFAULT_COMPONENT_SEQUENCE, \
+            assert component in DEFAULT_COMPONENT_SEQUENCE, (
                 f"Component '{component}' missing from DEFAULT_COMPONENT_SEQUENCE"
+            )
 
     def test_migration_component_factories(self):
         """Verify component factories are registered for all components."""
@@ -425,17 +426,14 @@ class TestJ2O96MigrationCompleteness:
         for component_name in DEFAULT_COMPONENT_SEQUENCE:
             # Get the factory for this component
             factory = factories.get(component_name)
-            assert factory is not None, \
-                f"Component '{component_name}' has no factory in _build_component_factories"
+            assert factory is not None, f"Component '{component_name}' has no factory in _build_component_factories"
 
             # Instantiate the migration
             migration_instance = factory()
 
             # Verify run() method exists
-            assert hasattr(migration_instance, "run"), \
-                f"Component '{component_name}' has no run() method"
-            assert callable(migration_instance.run), \
-                f"Component '{component_name}' run() is not callable"
+            assert hasattr(migration_instance, "run"), f"Component '{component_name}' has no run() method"
+            assert callable(migration_instance.run), f"Component '{component_name}' run() is not callable"
 
             # Verify run() is not the BaseMigration default implementation
             # by checking if run() is defined in the migration's own class
@@ -448,8 +446,9 @@ class TestJ2O96MigrationCompleteness:
                 incomplete_migrations.append(component_name)
 
         # Fail loudly if any migrations are incomplete
-        assert len(incomplete_migrations) == 0, \
+        assert len(incomplete_migrations) == 0, (
             f"The following {len(incomplete_migrations)} migrations lack proper run() implementations: {', '.join(incomplete_migrations)}"
+        )
 
     def test_migration_run_methods_return_component_result(self):
         """Verify all migration run() methods have proper return type annotations."""
@@ -477,14 +476,16 @@ class TestJ2O96MigrationCompleteness:
 
             # Verify return annotation
             return_annotation = signature.return_annotation
-            assert return_annotation is not inspect.Signature.empty, \
+            assert return_annotation is not inspect.Signature.empty, (
                 f"Component '{component_name}' run() method lacks return type annotation"
+            )
 
             # Check if it's ComponentResult (handle both direct type and string annotation)
             if return_annotation != inspect.Signature.empty:
                 annotation_str = str(return_annotation)
-                assert "ComponentResult" in annotation_str, \
+                assert "ComponentResult" in annotation_str, (
                     f"Component '{component_name}' run() should return ComponentResult, got {annotation_str}"
+                )
 
 
 if __name__ == "__main__":

@@ -44,10 +44,7 @@ class WorkflowMigration(BaseMigration):
         """
         # Check if this is the entity type we handle
         if entity_type != "workflows":
-            msg = (
-                f"WorkflowMigration does not support entity type: {entity_type}. "
-                f"Supported types: ['workflows']"
-            )
+            msg = f"WorkflowMigration does not support entity type: {entity_type}. Supported types: ['workflows']"
             raise ValueError(msg)
 
         # Fetch issue types (API call 1)
@@ -72,9 +69,7 @@ class WorkflowMigration(BaseMigration):
             roles = []
 
         issue_type_by_id = {
-            str(item.get("id")): item.get("name")
-            for item in issue_types
-            if item.get("id") and item.get("name")
+            str(item.get("id")): item.get("name") for item in issue_types if item.get("id") and item.get("name")
         }
 
         issue_type_to_workflow: dict[str, str] = {}
@@ -88,11 +83,7 @@ class WorkflowMigration(BaseMigration):
                         issue_type_to_workflow[jira_name] = workflow_name
                         workflow_names.add(workflow_name)
             default_workflow = scheme.get("defaultWorkflow")
-            if (
-                isinstance(default_workflow, str)
-                and default_workflow
-                and not issue_type_to_workflow
-            ):
+            if isinstance(default_workflow, str) and default_workflow and not issue_type_to_workflow:
                 # Fallback: apply default workflow to every known issue type if no explicit mappings
                 for name in issue_type_by_id.values():
                     if name not in issue_type_to_workflow:
@@ -139,9 +130,7 @@ class WorkflowMigration(BaseMigration):
             )
 
         issue_type_by_id = {
-            str(item.get("id")): item.get("name")
-            for item in issue_types
-            if item.get("id") and item.get("name")
+            str(item.get("id")): item.get("name") for item in issue_types if item.get("id") and item.get("name")
         }
 
         issue_type_to_workflow: dict[str, str] = {}
@@ -155,11 +144,7 @@ class WorkflowMigration(BaseMigration):
                         issue_type_to_workflow[jira_name] = workflow_name
                         workflow_names.add(workflow_name)
             default_workflow = scheme.get("defaultWorkflow")
-            if (
-                isinstance(default_workflow, str)
-                and default_workflow
-                and not issue_type_to_workflow
-            ):
+            if isinstance(default_workflow, str) and default_workflow and not issue_type_to_workflow:
                 # Fallback: apply default workflow to every known issue type if no explicit mappings
                 for name in issue_type_by_id.values():
                     if name not in issue_type_to_workflow:
@@ -229,9 +214,7 @@ class WorkflowMigration(BaseMigration):
             ["Project admin", "Project member"],
         )
         role_ids = [
-            int(role["id"])
-            for role in roles
-            if int(role.get("id", 0)) > 0 and role.get("name") in desired_role_names
+            int(role["id"]) for role in roles if int(role.get("id", 0)) > 0 and role.get("name") in desired_role_names
         ]
         if not role_ids:
             role_ids = [int(role["id"]) for role in roles if int(role.get("id", 0)) > 0]
@@ -290,11 +273,8 @@ class WorkflowMigration(BaseMigration):
                     from_status_list = []
 
                 for from_status_id in from_status_list:
-                    from_entry = (
-                        status_by_id.get(str(from_status_id))
-                        or status_by_name.get(
-                            str(transition.get("name", "")).lower(),
-                        )
+                    from_entry = status_by_id.get(str(from_status_id)) or status_by_name.get(
+                        str(transition.get("name", "")).lower(),
                     )
                     if not from_entry:
                         skipped.append(

@@ -255,9 +255,7 @@ class TestTimezoneDetectionIntegration:
                     op_client=mock_op_client,
                 )
 
-                assert (
-                    migrator.jira_timezone == expected_tz
-                ), f"Failed mapping {jira_tz} -> {expected_tz}"
+                assert migrator.jira_timezone == expected_tz, f"Failed mapping {jira_tz} -> {expected_tz}"
 
     def test_integration_with_work_package_migration(
         self,
@@ -326,9 +324,7 @@ class TestTimezoneDetectionIntegration:
                 )
 
                 # Should fallback to UTC for all malformed responses
-                assert (
-                    migrator.jira_timezone == "UTC"
-                ), f"Failed for response: {malformed_response}"
+                assert migrator.jira_timezone == "UTC", f"Failed for response: {malformed_response}"
 
                 # Should log warning for malformed responses (except empty which logs different message)
                 if malformed_response:  # Only check for non-empty responses

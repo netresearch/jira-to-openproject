@@ -60,22 +60,20 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
         for service_name, service_config in services.items():
             with self.subTest(service=service_name):
                 if service_name in services_needing_custom_user:
-                    assert (
-                        "user" in service_config
-                    ), f"Service {service_name} missing user configuration"
+                    assert "user" in service_config, f"Service {service_name} missing user configuration"
 
                     user_config = service_config["user"]
 
                     # Should use environment variable format
-                    assert (
-                        "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}" in user_config
-                    ), f"Service {service_name} user config should use UID/GID environment variables"
+                    assert "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}" in user_config, (
+                        f"Service {service_name} user config should use UID/GID environment variables"
+                    )
 
                 elif service_name in services_with_builtin_users:
                     # These services should NOT have custom user mapping - they use built-in non-root users
-                    assert (
-                        "user" not in service_config
-                    ), f"Service {service_name} should not have custom user mapping (uses built-in non-root user)"
+                    assert "user" not in service_config, (
+                        f"Service {service_name} should not have custom user mapping (uses built-in non-root user)"
+                    )
 
     def test_all_services_have_resource_limits(self) -> None:
         """Test that all services have resource limits configured."""
@@ -86,25 +84,17 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
 
         for service_name, service_config in services.items():
             with self.subTest(service=service_name):
-                assert (
-                    "deploy" in service_config
-                ), f"Service {service_name} missing deploy configuration"
+                assert "deploy" in service_config, f"Service {service_name} missing deploy configuration"
 
                 deploy_config = service_config["deploy"]
-                assert (
-                    "resources" in deploy_config
-                ), f"Service {service_name} missing resources in deploy"
+                assert "resources" in deploy_config, f"Service {service_name} missing resources in deploy"
 
                 resources = deploy_config["resources"]
-                assert (
-                    "limits" in resources
-                ), f"Service {service_name} missing resource limits"
+                assert "limits" in resources, f"Service {service_name} missing resource limits"
 
                 limits = resources["limits"]
                 assert "cpus" in limits, f"Service {service_name} missing CPU limits"
-                assert (
-                    "memory" in limits
-                ), f"Service {service_name} missing memory limits"
+                assert "memory" in limits, f"Service {service_name} missing memory limits"
 
     def test_service_specific_configurations(self) -> None:
         """Test service-specific security configurations."""
@@ -127,14 +117,10 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
             # Memory should be at least 512MB
             if memory_limit.endswith("M"):
                 memory_val = int(memory_limit[:-1])
-                assert (
-                    memory_val >= 512
-                ), "App service should have at least 512MB memory"
+                assert memory_val >= 512, "App service should have at least 512MB memory"
             elif memory_limit.endswith("G"):
                 memory_val = float(memory_limit[:-1]) * 1024
-                assert (
-                    memory_val >= 512
-                ), "App service should have at least 512MB memory"
+                assert memory_val >= 512, "App service should have at least 512MB memory"
 
         # Test database service has appropriate limits
         if "postgres" in services:
@@ -149,9 +135,7 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
             # Check memory is reasonable for database
             if memory_limit.endswith("G"):
                 memory_val = float(memory_limit[:-1])
-                assert (
-                    memory_val >= 0.5
-                ), "Postgres service should have at least 512MB memory"
+                assert memory_val >= 0.5, "Postgres service should have at least 512MB memory"
 
     def test_security_best_practices(self) -> None:
         """Test that security best practices are followed."""
@@ -205,8 +189,7 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
 
                             # Check if it's a named volume or safe bind mount
                             is_safe = source_path in safe_named_volumes or any(
-                                source_path.startswith(safe)
-                                for safe in safe_bind_mounts
+                                source_path.startswith(safe) for safe in safe_bind_mounts
                             )
 
                             if not is_safe:
@@ -225,9 +208,7 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
             env_content = f.read()
 
         # Check for Docker security configuration section
-        assert (
-            "DOCKER SECURITY SETTINGS" in env_content
-        ), ".env.example missing Docker security settings section"
+        assert "DOCKER SECURITY SETTINGS" in env_content, ".env.example missing Docker security settings section"
 
         # Check for required variables
         assert "DOCKER_UID" in env_content, ".env.example missing DOCKER_UID"
@@ -261,15 +242,11 @@ class TestDockerfileSecurityConfiguration(unittest.TestCase):
             dockerfile_content = f.read()
 
         # Check for user creation
-        assert (
-            "useradd" in dockerfile_content
-        ), "Dockerfile should create a non-root user"
+        assert "useradd" in dockerfile_content, "Dockerfile should create a non-root user"
         assert "appuser" in dockerfile_content, "Dockerfile should create 'appuser'"
 
         # Check for USER directive
-        assert (
-            "USER appuser" in dockerfile_content
-        ), "Dockerfile should switch to non-root user"
+        assert "USER appuser" in dockerfile_content, "Dockerfile should switch to non-root user"
 
         # Check UID is 1000 (non-root)
         assert "-u 1000" in dockerfile_content, "User should be created with UID 1000"
@@ -280,12 +257,8 @@ class TestDockerfileSecurityConfiguration(unittest.TestCase):
             dockerfile_content = f.read()
 
         # Check for chown operations
-        assert (
-            "chown" in dockerfile_content
-        ), "Dockerfile should set proper file ownership"
-        assert (
-            "appuser:appuser" in dockerfile_content
-        ), "Files should be owned by appuser"
+        assert "chown" in dockerfile_content, "Dockerfile should set proper file ownership"
+        assert "appuser:appuser" in dockerfile_content, "Files should be owned by appuser"
 
     def test_dockerfile_security_best_practices(self) -> None:
         """Test that Dockerfile follows security best practices."""

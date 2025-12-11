@@ -52,10 +52,7 @@ class GroupMigration(BaseMigration):
         """
         # Check if this is the entity type we handle
         if entity_type != "groups":
-            msg = (
-                f"GroupMigration does not support entity type: {entity_type}. "
-                f"Supported types: ['groups']"
-            )
+            msg = f"GroupMigration does not support entity type: {entity_type}. Supported types: ['groups']"
             raise ValueError(msg)
 
         # Fetch Jira groups (API call 1)
@@ -232,7 +229,9 @@ class GroupMigration(BaseMigration):
             "role_assignments": role_updates,
         }
         self.logger.info(
-            "Group migration summary: %s created, %s synced", created_count, len(mapping),
+            "Group migration summary: %s created, %s synced",
+            created_count,
+            len(mapping),
         )
         return summary
 
@@ -358,7 +357,7 @@ class GroupMigration(BaseMigration):
             role_ids = self._resolve_role_ids(assignment["role_name"], role_lookup)
             if not role_ids:
                 continue
-            payload_by_pair[(group_name, assignment["openproject_project_id"] )].update(role_ids)
+            payload_by_pair[(group_name, assignment["openproject_project_id"])].update(role_ids)
 
         payload: list[dict[str, Any]] = []
         for (group_name, project_id), role_ids in payload_by_pair.items():

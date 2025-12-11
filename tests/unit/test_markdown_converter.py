@@ -143,16 +143,10 @@ Plain text content
         converter = MarkdownConverter()
 
         # URL only
-        assert (
-            converter.convert("[http://example.com]")
-            == "[http://example.com](http://example.com)"
-        )
+        assert converter.convert("[http://example.com]") == "[http://example.com](http://example.com)"
 
         # Title and URL
-        assert (
-            converter.convert("[Example Site|http://example.com]")
-            == "[Example Site](http://example.com)"
-        )
+        assert converter.convert("[Example Site|http://example.com]") == "[Example Site](http://example.com)"
 
         # Title only (internal link)
         assert converter.convert("[Internal Page]") == "[Internal Page](Internal Page)"

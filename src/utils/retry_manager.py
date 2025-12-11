@@ -197,9 +197,7 @@ class RetryManager:
                     break
 
                 # Calculate delay for next attempt
-                if (
-                    attempt < self.config.max_attempts - 1
-                ):  # Don't delay after last attempt
+                if attempt < self.config.max_attempts - 1:  # Don't delay after last attempt
                     delay = self._calculate_delay(attempt)
                     total_delay += delay
 
@@ -349,11 +347,7 @@ class AsyncRetryManager:
             return False
         if exception and not isinstance(exception, cfg.retryable_exceptions):
             return False
-        if (
-            cfg.retry_on_status_codes
-            and hasattr(exception, "response")
-            and hasattr(exception.response, "status_code")
-        ):
+        if cfg.retry_on_status_codes and hasattr(exception, "response") and hasattr(exception.response, "status_code"):
             return exception.response.status_code in cfg.retry_on_status_codes
         if cfg.retry_on_result and result is not None:
             return cfg.retry_on_result(result)  # type: ignore[arg-type]
@@ -405,9 +399,7 @@ class AsyncRetryManager:
                     break
 
                 # Calculate delay for next attempt
-                if (
-                    attempt < self.config.max_attempts - 1
-                ):  # Don't delay after last attempt
+                if attempt < self.config.max_attempts - 1:  # Don't delay after last attempt
                     delay = self._calculate_delay(attempt)
                     total_delay += delay
 

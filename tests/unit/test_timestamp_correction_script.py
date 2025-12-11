@@ -78,7 +78,6 @@ class TestTimestampCorrectionScript:
             patch("fix_timestamp_timezones.OpenProjectClient", return_value=op_client),
             patch("fix_timestamp_timezones.config") as mock_config,
         ):
-
             mock_config.logger = Mock()
 
             script = TimestampCorrectionScript(dry_run=True, batch_size=2)
@@ -100,7 +99,6 @@ class TestTimestampCorrectionScript:
             patch("fix_timestamp_timezones.OpenProjectClient", return_value=op_client),
             patch("fix_timestamp_timezones.config") as mock_config,
         ):
-
             mock_config.logger = Mock()
 
             script = TimestampCorrectionScript(dry_run=True, batch_size=50)
@@ -123,7 +121,6 @@ class TestTimestampCorrectionScript:
             patch("fix_timestamp_timezones.OpenProjectClient", return_value=op_client),
             patch("fix_timestamp_timezones.config") as mock_config,
         ):
-
             mock_config.logger = Mock()
 
             script = TimestampCorrectionScript(dry_run=False, batch_size=100)
@@ -285,9 +282,7 @@ class TestTimestampCorrectionScript:
         # Field with date/time in type should be detected
         assert script._is_timestamp_field({"type": "datetime", "value": "test"}) is True
         assert script._is_timestamp_field({"type": "date", "value": "test"}) is True
-        assert (
-            script._is_timestamp_field({"type": "timestamp", "value": "test"}) is True
-        )
+        assert script._is_timestamp_field({"type": "timestamp", "value": "test"}) is True
 
         # Field without date/time in type should not be detected by type alone
         assert script._is_timestamp_field({"type": "string", "value": "test"}) is False
@@ -311,10 +306,7 @@ class TestTimestampCorrectionScript:
         )
 
         # Non-timestamp values should not be detected
-        assert (
-            script._is_timestamp_field({"type": "string", "value": "Not a timestamp"})
-            is False
-        )
+        assert script._is_timestamp_field({"type": "string", "value": "Not a timestamp"}) is False
         assert script._is_timestamp_field({"type": "string", "value": ""}) is False
 
     def test_process_work_package_with_corrections_dry_run(
@@ -405,9 +397,7 @@ class TestTimestampCorrectionScript:
         # Verify update data structure
         update_data = call_args[1]["data"]
         assert update_data["createdAt"] == "2023-01-15T11:30:00+01:00"
-        assert (
-            update_data["customFields"]["10001"]["value"] == "2023-01-17T13:00:00+01:00"
-        )
+        assert update_data["customFields"]["10001"]["value"] == "2023-01-17T13:00:00+01:00"
 
     def test_apply_corrections_api_error(self, script_with_mocks) -> None:
         """Test handling API error when applying corrections."""

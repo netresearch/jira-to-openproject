@@ -350,9 +350,7 @@ async def websocket_progress(websocket: WebSocket) -> None:
                 if message.get("type") == "heartbeat":
                     # Update heartbeat timestamp
                     if websocket in manager.connection_metadata:
-                        manager.connection_metadata[websocket]["last_heartbeat"] = (
-                            datetime.now(UTC)
-                        )
+                        manager.connection_metadata[websocket]["last_heartbeat"] = datetime.now(UTC)
 
                     # Send heartbeat response
                     await manager.send_personal_message(
@@ -458,9 +456,7 @@ async def resume_migration_background() -> None:
     try:
         if migration_state["pause_time"]:
             # Calculate total pause time
-            pause_duration = (
-                datetime.now(UTC) - migration_state["pause_time"]
-            ).total_seconds()
+            pause_duration = (datetime.now(UTC) - migration_state["pause_time"]).total_seconds()
             migration_state["total_pause_time"] += int(pause_duration)
             migration_state["pause_time"] = None
 
@@ -537,13 +533,9 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
             }
 
             if migration_state["start_time"]:
-                elapsed_time = (
-                    datetime.now(UTC) - migration_state["start_time"]
-                ).total_seconds()
+                elapsed_time = (datetime.now(UTC) - migration_state["start_time"]).total_seconds()
                 if elapsed_time > 0:
-                    entities_per_second = (
-                        progress_data.get("processed_entities", 0) / elapsed_time
-                    )
+                    entities_per_second = progress_data.get("processed_entities", 0) / elapsed_time
 
         metrics = MigrationMetrics(
             migration_id=migration_id or migration_state.get("migration_id", "none"),
@@ -582,8 +574,7 @@ async def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
             content={
                 "csv_content": csv_content,
                 "filename": (
-                    f"migration_metrics_{migration_id or 'current'}_"
-                    f"{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.csv"
+                    f"migration_metrics_{migration_id or 'current'}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.csv"
                 ),
             },
         )
@@ -601,16 +592,8 @@ async def get_migration_status() -> JSONResponse:
             "is_running": migration_state["is_running"],
             "migration_id": migration_state["migration_id"],
             "current_component": migration_state["current_component"],
-            "start_time": (
-                migration_state["start_time"].isoformat()
-                if migration_state["start_time"]
-                else None
-            ),
-            "pause_time": (
-                migration_state["pause_time"].isoformat()
-                if migration_state["pause_time"]
-                else None
-            ),
+            "start_time": (migration_state["start_time"].isoformat() if migration_state["start_time"] else None),
+            "pause_time": (migration_state["pause_time"].isoformat() if migration_state["pause_time"] else None),
             "total_pause_time": migration_state["total_pause_time"],
             "status": "running" if migration_state["is_running"] else "idle",
         }
@@ -719,9 +702,7 @@ async def websocket_dashboard(websocket: WebSocket) -> None:
                 if message.get("type") == "heartbeat":
                     # Update heartbeat timestamp
                     if websocket in manager.connection_metadata:
-                        manager.connection_metadata[websocket]["last_heartbeat"] = (
-                            datetime.now(UTC)
-                        )
+                        manager.connection_metadata[websocket]["last_heartbeat"] = datetime.now(UTC)
 
                     # Send heartbeat response
                     await manager.send_personal_message(

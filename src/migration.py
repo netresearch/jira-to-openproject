@@ -1,4 +1,3 @@
-
 """Master migration script for Jira to OpenProject migration.
 
 This script orchestrates the complete migration process with performance optimization.
@@ -163,6 +162,7 @@ def _component_has_errors(result: ComponentResult | None) -> bool:  # noqa: C901
     if int(getattr(result, "failed_types", 0)) > 0:
         return True
     return int(getattr(result, "failed_issues", 0)) > 0
+
 
 # Helper: robustly extract success/failed/total counts for summaries
 def _extract_counts(result: ComponentResult) -> tuple[int, int, int]:
@@ -469,6 +469,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 "Running in DRY RUN mode - no changes will be made to OpenProject",
             )
             import asyncio as _asyncio  # noqa: PLC0415
+
             await _asyncio.sleep(1)  # Give the user a moment to see this warning
             mode = "DRY RUN"
         else:
@@ -504,10 +505,14 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         backup_path = None
         # Heuristic no-op plan detection (placeholder for future preflight analysis)
         plan_noop = False
-        if not config.migration_config.get(
-            "no_backup",
-            False,
-        ) and not config.migration_config.get("dry_run", False) and not plan_noop:
+        if (
+            not config.migration_config.get(
+                "no_backup",
+                False,
+            )
+            and not config.migration_config.get("dry_run", False)
+            and not plan_noop
+        ):
             config.logger.info("Creating backup before migration...")
             backup_path = create_backup()
             if backup_path:
@@ -586,12 +591,12 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 "tmux_session_name",
                 None,
             ),
-                # Reuse previously initialized clients to avoid duplicate init/logging
-                ssh_client=ssh_client,
-                docker_client=docker_client,
-                rails_client=rails_client,
-                **op_performance_config,
-            )
+            # Reuse previously initialized clients to avoid duplicate init/logging
+            ssh_client=ssh_client,
+            docker_client=docker_client,
+            rails_client=rails_client,
+            **op_performance_config,
+        )
 
         config.logger.success("All clients initialized successfully")
 
@@ -697,6 +702,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         from src.migrations.base_migration import (  # noqa: PLC0415
                             BaseMigration,  # local import to avoid cycles
                         )
+
                         if component.__class__.run is BaseMigration.run:
                             src_file = inspect.getsourcefile(component.__class__) or "<unknown>"
                             config.logger.warning(
@@ -715,8 +721,11 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                 )
                                 # Fallback: if this is the work_packages component and subclass didn't override run,
                                 # directly call its migrate_work_packages() wrapper to proceed.
-                                if (component_name == "work_packages" and not has_own and
-                                        hasattr(component, "migrate_work_packages")):
+                                if (
+                                    component_name == "work_packages"
+                                    and not has_own
+                                    and hasattr(component, "migrate_work_packages")
+                                ):
                                     config.logger.warning(
                                         "Falling back to migrate_work_packages() because run() is not overridden",
                                     )
@@ -749,6 +758,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                     entity_type = None
                     try:
                         from src.migrations.base_migration import EntityTypeRegistry
+
                         entity_type = EntityTypeRegistry.resolve(component.__class__)
                     except (ValueError, AttributeError):
                         # If entity type can't be resolved, run_with_change_detection will fall back to run()
@@ -872,10 +882,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                     result = "[bold green]SUCCEEDED[/bold green]"
                                 else:
                                     result = "[bold red]FAILED[/bold red]"
-                            if (
-                                hasattr(current_result, "errors")
-                                and current_result.errors
-                            ):
+                            if hasattr(current_result, "errors") and current_result.errors:
                                 result = f"[bold red]FAILED[/bold red] with errors: {current_result.errors}"
 
                         console.rule(f"Component '{component_name}' has {result}.")
@@ -883,9 +890,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                         if results.overall["status"] != "success":
                             console.print("WARNING: Previous component had errors.")
 
-                        next_component = components[
-                            components.index(component_name) + 1
-                        ]
+                        next_component = components[components.index(component_name) + 1]
 
                         user_input = (
                             input(
@@ -913,11 +918,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 )
 
                 # Check if component failed - use success flag as primary indicator
-                component_failed = (
-                    not current_component_result.success
-                    if current_component_result
-                    else True
-                )
+                component_failed = not current_component_result.success if current_component_result else True
 
                 # Stop for critical components regardless of stop_on_error flag
                 if component_failed and component_name in ["users", "projects"]:
@@ -1100,6 +1101,7 @@ def setup_tmux_session() -> bool:
     try:
         # Check if tmux is installed
         import shutil as _shutil  # noqa: PLC0415
+
         tmux_bin = _shutil.which("tmux") or "tmux"
         subprocess.run([tmux_bin, "-V"], check=True, capture_output=True)  # noqa: S603
 
@@ -1269,9 +1271,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             jira_client=jira_client,
                             op_client=op_client,
                         )
-                        cf_mapping_update_result = (
-                            custom_field_migration.update_mapping_file()
-                        )
+                        cf_mapping_update_result = custom_field_migration.update_mapping_file()
                         if cf_mapping_update_result:
                             config.logger.success(
                                 "Custom field mapping updated successfully.",
@@ -1286,9 +1286,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             jira_client=jira_client,
                             op_client=op_client,
                         )
-                        issue_type_mapping_update_result = (
-                            issue_type_migration.update_mapping_file()
-                        )
+                        issue_type_mapping_update_result = issue_type_migration.update_mapping_file()
                         if issue_type_mapping_update_result:
                             config.logger.success(
                                 "Issue type mapping updated successfully.",
@@ -1329,11 +1327,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         # Display migration results summary
         if migration_result:
             # Fix: Access MigrationResult properties correctly (it's an object, not a dict)
-            overall_status = (
-                migration_result.overall.status
-                if hasattr(migration_result, "overall")
-                else "unknown"
-            )
+            overall_status = migration_result.overall.status if hasattr(migration_result, "overall") else "unknown"
 
             # Show summary header based on status
             if overall_status == "success":
@@ -1346,18 +1340,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             # Print component results
             config.logger.info("Component results:")
             # Fix: Access components property correctly
-            component_items = (
-                migration_result.components.items()
-                if hasattr(migration_result, "components")
-                else {}
-            )
+            component_items = migration_result.components.items() if hasattr(migration_result, "components") else {}
             for component, comp_result in component_items:
                 # Access status from details
-                status = (
-                    comp_result.details.get("status", "unknown")
-                    if comp_result.details
-                    else "unknown"
-                )
+                status = comp_result.details.get("status", "unknown") if comp_result.details else "unknown"
                 if status == "success":
                     config.logger.success("✓ %s: %s", component, status)
                 elif status == "interrupted":

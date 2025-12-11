@@ -1,4 +1,3 @@
-
 """SSHClient.
 
 Handles SSH operations to remote servers, including command execution and file transfers.
@@ -614,9 +613,7 @@ class SSHClient:
 
         """
         # Convert to string for the remote command
-        remote_path_str = (
-            str(remote_path) if isinstance(remote_path, Path) else remote_path
-        )
+        remote_path_str = str(remote_path) if isinstance(remote_path, Path) else remote_path
 
         try:
             cmd = f"test -e {quote(remote_path_str)} && echo 'EXISTS' || echo 'NOT_EXISTS'"
@@ -638,9 +635,7 @@ class SSHClient:
 
         """
         # Convert to string for the remote command
-        remote_path_str = (
-            str(remote_path) if isinstance(remote_path, Path) else remote_path
-        )
+        remote_path_str = str(remote_path) if isinstance(remote_path, Path) else remote_path
 
         try:
             cmd = f"stat -c '%s' {quote(remote_path_str)} 2>/dev/null || echo 'NOT_EXISTS'"

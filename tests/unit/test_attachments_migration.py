@@ -28,7 +28,9 @@ class DummyIssue:
 class DummyJira:
     def __init__(self) -> None:
         self.issues = {
-            "PRJ-1": DummyIssue("PRJ-1", [DummyAtt("1", "a.txt", "http://example/a"), DummyAtt("2", "b.txt", "http://example/b")]),
+            "PRJ-1": DummyIssue(
+                "PRJ-1", [DummyAtt("1", "a.txt", "http://example/a"), DummyAtt("2", "b.txt", "http://example/b")]
+            ),
             "PRJ-2": DummyIssue("PRJ-2", [DummyAtt("3", "a.txt", "http://example/a")]),
         }
 
@@ -83,4 +85,3 @@ def test_attachments_migration_end_to_end(tmp_path: Path):
     assert mp.success is True
     assert ld.success is True
     assert ld.updated >= 2
-

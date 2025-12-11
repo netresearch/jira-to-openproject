@@ -451,8 +451,7 @@ class TimeEntryMigrator:
 
         # Calculate failed transformations
         total_extracted = (
-            self.migration_results["jira_work_logs_extracted"]
-            + self.migration_results["tempo_entries_extracted"]
+            self.migration_results["jira_work_logs_extracted"] + self.migration_results["tempo_entries_extracted"]
         )
         self.migration_results["failed_transformations"] = (
             total_extracted - self.migration_results["successful_transformations"]
@@ -571,19 +570,11 @@ class TimeEntryMigrator:
                 failed = int(batch_result.get("failed", 0))
                 migration_summary["successful_migrations"] += created
                 migration_summary["failed_migrations"] += failed
-                ids = [
-                    r.get("id")
-                    for r in batch_result.get("results", [])
-                    if r.get("success") and r.get("id")
-                ]
+                ids = [r.get("id") for r in batch_result.get("results", []) if r.get("success") and r.get("id")]
                 migration_summary["created_time_entry_ids"].extend(ids)
                 processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
-                self.migration_results["successful_migrations"] = migration_summary[
-                    "successful_migrations"
-                ]
-                self.migration_results["failed_migrations"] = migration_summary[
-                    "failed_migrations"
-                ]
+                self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
+                self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
                 self.migration_results["processing_time_seconds"] += processing_time
                 self.logger.success(
                     "Migration completed (batch): %d successful, %d failed in %.2fs",
@@ -623,6 +614,7 @@ class TimeEntryMigrator:
 
             entry_batch = filtered_batch
             if concurrency > 1 and not dry_run:
+
                 def _create(entry: dict[str, Any]) -> tuple[bool, int | None, str | None]:
                     is_valid, reason = self._validate_time_entry_with_reason(entry)
                     if not is_valid:
@@ -760,9 +752,7 @@ class TimeEntryMigrator:
             # Update work package mapping from migrated issues
             for issue in migrated_issues:
                 if issue.get("jira_key") and issue.get("work_package_id"):
-                    self.work_package_mapping[issue["jira_key"]] = issue[
-                        "work_package_id"
-                    ]
+                    self.work_package_mapping[issue["jira_key"]] = issue["work_package_id"]
 
             # Ensure required project modules are enabled (Time and costs)
             try:
@@ -794,11 +784,7 @@ class TimeEntryMigrator:
             failed_count = self.migration_results.get("failed_migrations", 0)
 
             return {
-                "status": (
-                    "success"
-                    if failed_count == 0
-                    else ("partial_success" if migrated_count > 0 else "failed")
-                ),
+                "status": ("success" if failed_count == 0 else ("partial_success" if migrated_count > 0 else "failed")),
                 "jira_work_logs": {
                     "discovered": jira_discovered,
                 },
@@ -847,7 +833,10 @@ class TimeEntryMigrator:
             # Configure fast-forward once per run
             try:
                 self._ff_enabled = os.environ.get("J2O_TIME_ENTRY_FAST_FORWARD", "0").lower() in ("1", "true", "yes")
-                self._ff_field = (os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower() in ("created", "updated") and os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower()) or "updated"
+                self._ff_field = (
+                    os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower() in ("created", "updated")
+                    and os.environ.get("J2O_TIME_ENTRY_FF_FIELD", "updated").lower()
+                ) or "updated"
             except Exception:
                 self._ff_enabled = False
                 self._ff_field = "updated"
@@ -946,10 +935,7 @@ class TimeEntryMigrator:
             report = {
                 "migration_summary": self.migration_results,
                 "extraction_details": {
-                    "jira_work_logs_by_issue": {
-                        issue: len(logs)
-                        for issue, logs in self.extracted_work_logs.items()
-                    },
+                    "jira_work_logs_by_issue": {issue: len(logs) for issue, logs in self.extracted_work_logs.items()},
                     "tempo_entries_total": len(self.extracted_tempo_entries),
                 },
                 "mapping_statistics": {
@@ -960,18 +946,10 @@ class TimeEntryMigrator:
                 "transformation_details": {
                     "total_transformed": len(self.transformed_time_entries),
                     "jira_entries": len(
-                        [
-                            e
-                            for e in self.transformed_time_entries
-                            if e.get("_meta", {}).get("jira_work_log_id")
-                        ],
+                        [e for e in self.transformed_time_entries if e.get("_meta", {}).get("jira_work_log_id")],
                     ),
                     "tempo_entries": len(
-                        [
-                            e
-                            for e in self.transformed_time_entries
-                            if e.get("_meta", {}).get("tempo_worklog_id")
-                        ],
+                        [e for e in self.transformed_time_entries if e.get("_meta", {}).get("tempo_worklog_id")],
                     ),
                 },
                 "generated_at": datetime.now(tz=UTC).isoformat(),
@@ -995,16 +973,12 @@ class TimeEntryMigrator:
         """
         return {
             "total_work_logs_found": self.migration_results["total_work_logs_found"],
-            "successful_transformations": self.migration_results[
-                "successful_transformations"
-            ],
+            "successful_transformations": self.migration_results["successful_transformations"],
             "successful_migrations": self.migration_results["successful_migrations"],
             "failed_migrations": self.migration_results["failed_migrations"],
             "error_count": len(self.migration_results["errors"]),
             "warning_count": len(self.migration_results["warnings"]),
-            "processing_time_seconds": self.migration_results[
-                "processing_time_seconds"
-            ],
+            "processing_time_seconds": self.migration_results["processing_time_seconds"],
             "success_rate": (
                 self.migration_results["successful_migrations"]
                 / max(self.migration_results["total_work_logs_found"], 1)

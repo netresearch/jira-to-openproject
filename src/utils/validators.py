@@ -54,9 +54,7 @@ def validate_jira_key(jira_key: str) -> None:
         raise ValueError(msg)
 
     if len(jira_key) > MAX_JIRA_KEY_LENGTH:
-        msg = (
-            f"JIRA key too long ({len(jira_key)} chars). Maximum allowed: {MAX_JIRA_KEY_LENGTH} characters."
-        )
+        msg = f"JIRA key too long ({len(jira_key)} chars). Maximum allowed: {MAX_JIRA_KEY_LENGTH} characters."
         raise ValueError(
             msg,
         )
@@ -64,10 +62,7 @@ def validate_jira_key(jira_key: str) -> None:
     # Check for control characters (ASCII < 32)
     for char in jira_key:
         if ord(char) < MIN_PRINTABLE_ASCII:
-            msg = (
-                f"JIRA key contains control characters (ASCII {ord(char)}). "
-                "Only A-Z, 0-9, and hyphens allowed."
-            )
+            msg = f"JIRA key contains control characters (ASCII {ord(char)}). Only A-Z, 0-9, and hyphens allowed."
             raise ValueError(
                 msg,
             )

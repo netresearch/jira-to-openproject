@@ -118,8 +118,10 @@ class IssueTypeMigration(BaseMigration):
         )
         # Load via mapping controller to keep cache authoritative
         from src import config as _cfg
+
         self.issue_type_mapping = _cfg.mappings.get_mapping("issue_type") or {}
         from src import config as _cfg
+
         self.issue_type_id_mapping = _cfg.mappings.get_mapping("issue_type_id") or {}
         self.logger.info("Loaded %s Jira issue types", len(self.jira_issue_types))
         self.logger.info(
@@ -238,10 +240,7 @@ class IssueTypeMigration(BaseMigration):
         if not self.op_work_package_types:
             self.extract_openproject_work_package_types()
 
-        op_types_by_name = {
-            type_data.get("name", "").lower(): type_data
-            for type_data in self.op_work_package_types
-        }
+        op_types_by_name = {type_data.get("name", "").lower(): type_data for type_data in self.op_work_package_types}
 
         mapping = {}
         for jira_type in self.jira_issue_types:
@@ -316,14 +315,8 @@ class IssueTypeMigration(BaseMigration):
         self._save_to_json(mapping, Path("issue_type_mapping_template.json"))
 
         total_types = len(mapping)
-        matched_types = sum(
-            1
-            for type_data in mapping.values()
-            if type_data["openproject_id"] is not None
-        )
-        to_create_types = sum(
-            1 for type_data in mapping.values() if type_data["openproject_id"] is None
-        )
+        matched_types = sum(1 for type_data in mapping.values() if type_data["openproject_id"] is not None)
+        to_create_types = sum(1 for type_data in mapping.values() if type_data["openproject_id"] is None)
         match_percentage = (matched_types / total_types) * 100 if total_types > 0 else 0
 
         self.logger.info("Issue type mapping created for %s types", total_types)
@@ -437,16 +430,8 @@ class IssueTypeMigration(BaseMigration):
 
         # Update stats after normalization
         total_types = len(normalized_mapping)
-        matched_types = sum(
-            1
-            for type_data in normalized_mapping.values()
-            if type_data["openproject_id"] is not None
-        )
-        to_create_types = sum(
-            1
-            for type_data in normalized_mapping.values()
-            if type_data["openproject_id"] is None
-        )
+        matched_types = sum(1 for type_data in normalized_mapping.values() if type_data["openproject_id"] is not None)
+        to_create_types = sum(1 for type_data in normalized_mapping.values() if type_data["openproject_id"] is None)
         match_percentage = (matched_types / total_types) * 100 if total_types > 0 else 0
 
         self.logger.info("After normalization: %s types total", total_types)
@@ -510,9 +495,7 @@ class IssueTypeMigration(BaseMigration):
         # Check if the type already exists to avoid duplicates
         # Use parameterized query to prevent Rails injection
         safe_type_name = self.ruby_escape(type_name)
-        check_command = (
-            f"existing_type = Type.where(\"name ilike ?\", '{safe_type_name}').first"
-        )
+        check_command = f"existing_type = Type.where(\"name ilike ?\", '{safe_type_name}').first"
         check_result = self.op_client.execute_query(check_command)
         self.logger.debug(
             f"check_result type: {type(check_result)}, value: {check_result}",
@@ -557,10 +540,7 @@ class IssueTypeMigration(BaseMigration):
                     "error": "Invalid result type from execute_query (id_result)",
                 }
 
-            if (
-                id_result["status"] == "success"
-                and id_result["output"].strip().isdigit()
-            ):
+            if id_result["status"] == "success" and id_result["output"].strip().isdigit():
                 type_id = int(id_result["output"].strip())
                 return {
                     "status": "success",
@@ -646,10 +626,7 @@ class IssueTypeMigration(BaseMigration):
                     "error": "Invalid result type from execute_query (verify_result)",
                 }
 
-            if (
-                verify_result["status"] == "success"
-                and "true" in verify_result["output"]
-            ):
+            if verify_result["status"] == "success" and "true" in verify_result["output"]:
                 self.logger.info(
                     "Verified work package type '%s' with ID %s exists",
                     type_name,
@@ -685,9 +662,7 @@ class IssueTypeMigration(BaseMigration):
 
         # Get existing types to avoid creating duplicates
         existing_types = self.check_existing_work_package_types()
-        existing_names = [
-            type_data.get("name", "").lower() for type_data in existing_types
-        ]
+        existing_names = [type_data.get("name", "").lower() for type_data in existing_types]
 
         # Create lookup dictionary for O(1) access instead of O(n) linear search
         # This optimizes the algorithm from O(n²) to O(n)
@@ -715,12 +690,8 @@ class IssueTypeMigration(BaseMigration):
                                 "Work package type '%s' already exists, updating mapping",
                                 op_type_name,
                             )
-                            self.issue_type_mapping[type_name][
-                                "openproject_id"
-                            ] = existing_id
-                            self.issue_type_mapping[type_name][
-                                "matched_by"
-                            ] = "found_existing"
+                            self.issue_type_mapping[type_name]["openproject_id"] = existing_id
+                            self.issue_type_mapping[type_name]["matched_by"] = "found_existing"
                     continue
 
                 # Only add unique type names to prevent duplicates
@@ -739,6 +710,7 @@ class IssueTypeMigration(BaseMigration):
             self.logger.info("No new work package types to create")
             # Persist the current in-memory mapping so orchestrator can see it
             from src import config as _cfg
+
             _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
             # Also persist the ID mapping for downstream components
             final_mapping: dict[int, int] = {}
@@ -762,16 +734,20 @@ class IssueTypeMigration(BaseMigration):
             meta: list[dict[str, Any]] = []
             for mapping in self.issue_type_mapping.values():
                 if mapping.get("openproject_id") is None:
-                    meta.append({
-                        "jira_type_name": mapping.get("jira_name"),
-                        "proposed_name": mapping.get("openproject_name"),
-                    })
-                    records.append({
-                        "name": mapping.get("openproject_name"),
-                        "is_milestone": bool(mapping.get("is_milestone", False)),
-                        "is_default": bool(mapping.get("is_default", False)),
-                        # Color creation/linking moved to Python pre-processing later if needed
-                    })
+                    meta.append(
+                        {
+                            "jira_type_name": mapping.get("jira_name"),
+                            "proposed_name": mapping.get("openproject_name"),
+                        }
+                    )
+                    records.append(
+                        {
+                            "name": mapping.get("openproject_name"),
+                            "is_milestone": bool(mapping.get("is_milestone", False)),
+                            "is_default": bool(mapping.get("is_default", False)),
+                            # Color creation/linking moved to Python pre-processing later if needed
+                        }
+                    )
 
             result = self.op_client.bulk_create_records(
                 model="Type",
@@ -798,6 +774,7 @@ class IssueTypeMigration(BaseMigration):
 
             # Persist mappings
             from src import config as _cfg
+
             _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
             final_mapping = {}
             for type_name, m in self.issue_type_mapping.items():
@@ -844,9 +821,7 @@ class IssueTypeMigration(BaseMigration):
                     op_types_to_create[op_type_name] = mapping
 
         total_types_needing_creation = sum(
-            1
-            for mapping in self.issue_type_mapping.values()
-            if mapping["openproject_id"] is None
+            1 for mapping in self.issue_type_mapping.values() if mapping["openproject_id"] is None
         )
 
         if op_types_to_create:
@@ -870,6 +845,7 @@ class IssueTypeMigration(BaseMigration):
                 final_mapping[jira_id] = op_id
 
         from src import config as _cfg
+
         _cfg.mappings.set_mapping("issue_type_id", final_mapping)
 
         return self.analyze_issue_type_mapping()
@@ -887,14 +863,10 @@ class IssueTypeMigration(BaseMigration):
         analysis: dict[str, Any] = {
             "total_jira_types": len(self.issue_type_mapping),
             "matched_op_types": sum(
-                1
-                for mapping in self.issue_type_mapping.values()
-                if mapping.get("openproject_id") is not None
+                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is not None
             ),
             "types_to_create": sum(
-                1
-                for mapping in self.issue_type_mapping.values()
-                if mapping.get("openproject_id") is None
+                1 for mapping in self.issue_type_mapping.values() if mapping.get("openproject_id") is None
             ),
             "mapping_details": self.issue_type_mapping,
             "unmatched_details": [
@@ -1031,10 +1003,7 @@ class IssueTypeMigration(BaseMigration):
             op_name = type_data.get("openproject_name", "")
 
             # Skip if already mapped
-            if (
-                type_data.get("openproject_id")
-                and type_data.get("matched_by") != "default_mapping_to_create"
-            ):
+            if type_data.get("openproject_id") and type_data.get("matched_by") != "default_mapping_to_create":
                 already_mapped_count += 1
                 continue
 
@@ -1051,9 +1020,7 @@ class IssueTypeMigration(BaseMigration):
                 )
                 self.issue_type_mapping[jira_type_name]["openproject_id"] = op_id
                 self.issue_type_mapping[jira_type_name]["matched_by"] = (
-                    "created"
-                    if type_data.get("matched_by") == "default_mapping_to_create"
-                    else "exact_match"
+                    "created" if type_data.get("matched_by") == "default_mapping_to_create" else "exact_match"
                 )
                 updated_count += 1
             else:
@@ -1066,6 +1033,7 @@ class IssueTypeMigration(BaseMigration):
         # Save the updated mapping through controller
         if updated_count > 0:
             from src import config as _cfg
+
             _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
             self.logger.info("Updated mapping for %s work package types", updated_count)
         else:
@@ -1108,16 +1076,11 @@ class IssueTypeMigration(BaseMigration):
             results = ComponentResult(
                 success=True,
                 total_types=len(self.issue_type_mapping),
-                matched_types=sum(
-                    1
-                    for t in self.issue_type_mapping.values()
-                    if t.get("openproject_id") is not None
-                ),
+                matched_types=sum(1 for t in self.issue_type_mapping.values() if t.get("openproject_id") is not None),
                 normalized_types=sum(
                     1
                     for t in self.issue_type_mapping.values()
-                    if t.get("matched_by", "").startswith("normalized_to_")
-                    or t.get("matched_by") == "fallback_to_task"
+                    if t.get("matched_by", "").startswith("normalized_to_") or t.get("matched_by") == "fallback_to_task"
                 ),
                 created_types=0,
                 dry_run=True,

@@ -80,5 +80,3 @@ def test_sprint_epic_migration_sets_parent_and_sprint_cf():
     # Expect: 1 parent link (PRJ-1 -> EPIC-1) + 2 sprint CF updates (EPIC-1, PRJ-1)
     # batch_update_work_packages updated=1, CF updates add 2 more -> updated==3
     assert ld.updated == 3
-
-

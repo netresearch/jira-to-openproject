@@ -54,11 +54,7 @@ class FileRegistry:
             category: Optional category, if None searches all categories
 
         """
-        categories = (
-            [category]
-            if category and category in self._files
-            else list(self._files.keys())
-        )
+        categories = [category] if category and category in self._files else list(self._files.keys())
 
         for cat in categories:
             if file_path in self._files[cat]:

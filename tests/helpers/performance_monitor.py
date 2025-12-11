@@ -114,19 +114,13 @@ class TestPerformanceMonitor:
             "individual_tests": [asdict(m) for m in self.metrics],
             "summary": {
                 "total_runtime": time.time() - self.start_time,
-                "tests_per_second": (
-                    len(self.metrics) / (time.time() - self.start_time)
-                    if self.metrics
-                    else 0
-                ),
+                "tests_per_second": (len(self.metrics) / (time.time() - self.start_time) if self.metrics else 0),
                 "generated_at": datetime.now().isoformat(),
             },
         }
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_file = (
-            self.output_dir / f"test_performance_{suite_name}_{timestamp}.json"
-        )
+        report_file = self.output_dir / f"test_performance_{suite_name}_{timestamp}.json"
 
         with open(report_file, "w") as f:
             json.dump(report, f, indent=2)

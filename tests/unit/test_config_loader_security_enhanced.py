@@ -55,9 +55,7 @@ class TestConfigLoaderSecurityEnhanced:
 
                 # Assert - Password should not appear in any log messages
                 for record in caplog.records:
-                    assert (
-                        test_password not in record.getMessage()
-                    ), f"Password exposed in log: {record.getMessage()}"
+                    assert test_password not in record.getMessage(), f"Password exposed in log: {record.getMessage()}"
                     assert test_password not in str(
                         record.args,
                     ), f"Password exposed in log args: {record.args}"
@@ -85,9 +83,7 @@ class TestConfigLoaderSecurityEnhanced:
         mock_path_instance = mock_path.return_value
         mock_path_instance.exists.return_value = True
         secret_password = "docker_secret_password_456!@#"
-        mock_path_instance.read_text.return_value = (
-            f"  {secret_password}  \n"  # With whitespace
-        )
+        mock_path_instance.read_text.return_value = f"  {secret_password}  \n"  # With whitespace
 
         with patch.dict(os.environ, {}, clear=True):  # No env var
             with caplog.at_level(logging.DEBUG):
@@ -96,9 +92,9 @@ class TestConfigLoaderSecurityEnhanced:
 
                 # Assert - Password should not appear in any log messages
                 for record in caplog.records:
-                    assert (
-                        secret_password not in record.getMessage()
-                    ), f"Docker secret password exposed in log: {record.getMessage()}"
+                    assert secret_password not in record.getMessage(), (
+                        f"Docker secret password exposed in log: {record.getMessage()}"
+                    )
                     assert secret_password not in str(
                         record.args,
                     ), f"Docker secret password exposed in log args: {record.args}"
@@ -138,9 +134,7 @@ class TestConfigLoaderSecurityEnhanced:
                 ConfigLoader()
 
             # Verify permission error was logged properly (class name only, no details)
-            warning_messages = [
-                r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
-            ]
+            warning_messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
             assert any("PermissionError" in msg for msg in warning_messages)
 
             # Ensure no sensitive data in logs
@@ -226,9 +220,7 @@ class TestConfigLoaderSecurityEnhanced:
             config = config_loader.get_config()
 
             # SQL injection should be treated as invalid log level and ignored
-            assert (
-                config["migration"].get("log_level") != "DEBUG'; DROP TABLE users; --"
-            )
+            assert config["migration"].get("log_level") != "DEBUG'; DROP TABLE users; --"
 
             # Large numbers should be treated as strings, not cause overflow
             jira_config = config.get("jira", {})

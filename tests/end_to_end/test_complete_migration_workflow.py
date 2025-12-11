@@ -511,7 +511,6 @@ class TestCompleteMigrationWorkflow:
             patch("pathlib.Path.exists", mock_path_exists),
             patch("builtins.open", create=True) as mock_open,
         ):
-
             # Set up clients without spec restrictions
             mock_jira = MagicMock()
             mock_jira_class.return_value = mock_jira
@@ -573,9 +572,7 @@ class TestCompleteMigrationWorkflow:
                 mock_file_handle = MagicMock()
 
                 # Determine content based on filename
-                filename_str = (
-                    str(filename.name) if hasattr(filename, "name") else str(filename)
-                )
+                filename_str = str(filename.name) if hasattr(filename, "name") else str(filename)
 
                 # Check if it's one of our specific files
                 for file_key, content in file_content_map.items():
@@ -667,12 +664,15 @@ class TestCompleteMigrationWorkflow:
                     },
                 )
 
-                with patch(
-                    "src.config.migration_config",
-                    adjusted_config,
-                ), patch(
-                    "src.migrations.attachments_migration.AttachmentsMigration._download_attachment",
-                    side_effect=lambda self, url, dest_path: dest_path.write_bytes(b"stub") or dest_path,
+                with (
+                    patch(
+                        "src.config.migration_config",
+                        adjusted_config,
+                    ),
+                    patch(
+                        "src.migrations.attachments_migration.AttachmentsMigration._download_attachment",
+                        side_effect=lambda self, url, dest_path: dest_path.write_bytes(b"stub") or dest_path,
+                    ),
                 ):
                     result = await run_migration(
                         components=[
@@ -761,7 +761,6 @@ class TestCompleteMigrationWorkflow:
             patch("pathlib.Path.exists", mock_path_exists),
             patch("builtins.open", create=True) as mock_open,
         ):
-
             # Set up clients without spec restrictions
             mock_jira = MagicMock()
             mock_jira_class.return_value = mock_jira
@@ -874,7 +873,6 @@ class TestCompleteMigrationWorkflow:
             patch("pathlib.Path.exists", mock_path_exists),
             patch("builtins.open", create=True) as mock_open,
         ):
-
             # Set up clients without spec restrictions
             mock_jira = MagicMock()
             mock_jira_class.return_value = mock_jira
@@ -1046,7 +1044,6 @@ class TestCompleteMigrationWorkflow:
             patch("pathlib.Path.exists", mock_path_exists),
             patch("builtins.open", create=True) as mock_open,
         ):
-
             # Set up clients without spec restrictions
             mock_jira = MagicMock()
             mock_jira_class.return_value = mock_jira
@@ -1098,9 +1095,7 @@ class TestCompleteMigrationWorkflow:
             assert result.overall["status"] == "success"
 
             # Validate performance (should complete within reasonable time)
-            assert (
-                migration_time < 60
-            )  # Should complete within 1 minute for test dataset
+            assert migration_time < 60  # Should complete within 1 minute for test dataset
 
             # Validate all components succeeded
             for component_result in result.components.values():
@@ -1162,7 +1157,6 @@ class TestCompleteMigrationWorkflow:
             patch("pathlib.Path.exists", mock_path_exists),
             patch("builtins.open", create=True) as mock_open,
         ):
-
             # Set up clients without spec restrictions
             mock_jira = MagicMock()
             mock_jira_class.return_value = mock_jira

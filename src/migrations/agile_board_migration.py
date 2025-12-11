@@ -232,12 +232,8 @@ class AgileBoardMigration(BaseMigration):
 
         for board in boards:
             project_key = board.get("project_key")
-            project_entry = (
-                self.project_mapping.get(project_key) if project_key else None
-            )
-            op_project_id = (
-                int(project_entry.get("openproject_id", 0)) if isinstance(project_entry, dict) else 0
-            )
+            project_entry = self.project_mapping.get(project_key) if project_key else None
+            op_project_id = int(project_entry.get("openproject_id", 0)) if isinstance(project_entry, dict) else 0
 
             if op_project_id <= 0:
                 skipped_boards.append(
@@ -274,12 +270,8 @@ class AgileBoardMigration(BaseMigration):
 
         for sprint in sprints:
             project_key = sprint.get("project_key")
-            project_entry = (
-                self.project_mapping.get(project_key) if project_key else None
-            )
-            op_project_id = (
-                int(project_entry.get("openproject_id", 0)) if isinstance(project_entry, dict) else 0
-            )
+            project_entry = self.project_mapping.get(project_key) if project_key else None
+            op_project_id = int(project_entry.get("openproject_id", 0)) if isinstance(project_entry, dict) else 0
             if op_project_id <= 0:
                 skipped_sprints.append(
                     {

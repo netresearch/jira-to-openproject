@@ -54,6 +54,7 @@ try:  # pragma: no cover - exercised via import path, not logic
     from src.clients.rails_console_client import RailsConsoleClient
     from src.clients.ssh_client import SSHClient
 except ModuleNotFoundError:  # lightweight stubs for unit-only runs
+
     class DockerClient:  # type: ignore[no-redef]
         pass
 
@@ -284,8 +285,7 @@ def _load_env_file_cached(file_path: str) -> dict:
             _env_cache[file_path] = {
                 k: v
                 for k, v in os.environ.items()
-                if k not in temp_env
-                and not any(sensitive in k.upper() for sensitive in sensitive_keys)
+                if k not in temp_env and not any(sensitive in k.upper() for sensitive in sensitive_keys)
             }
         else:
             _env_cache[file_path] = {}
@@ -491,25 +491,45 @@ def configure_external_clients_mocking(pytestconfig: Config) -> Generator[None]:
         default=False,
     )
 
-    live_jira = live_all or _env_flag("J2O_LIVE_JIRA", False) or pytestconfig.getoption(
-        "--live-jira",
-        default=False,
+    live_jira = (
+        live_all
+        or _env_flag("J2O_LIVE_JIRA", False)
+        or pytestconfig.getoption(
+            "--live-jira",
+            default=False,
+        )
     )
-    live_op = live_all or _env_flag("J2O_LIVE_OPENPROJECT", False) or pytestconfig.getoption(
-        "--live-openproject",
-        default=False,
+    live_op = (
+        live_all
+        or _env_flag("J2O_LIVE_OPENPROJECT", False)
+        or pytestconfig.getoption(
+            "--live-openproject",
+            default=False,
+        )
     )
-    live_rails = live_all or _env_flag("J2O_LIVE_RAILS", False) or pytestconfig.getoption(
-        "--live-rails",
-        default=False,
+    live_rails = (
+        live_all
+        or _env_flag("J2O_LIVE_RAILS", False)
+        or pytestconfig.getoption(
+            "--live-rails",
+            default=False,
+        )
     )
-    live_docker = live_all or _env_flag("J2O_LIVE_DOCKER", False) or pytestconfig.getoption(
-        "--live-docker",
-        default=False,
+    live_docker = (
+        live_all
+        or _env_flag("J2O_LIVE_DOCKER", False)
+        or pytestconfig.getoption(
+            "--live-docker",
+            default=False,
+        )
     )
-    live_ssh = live_all or _env_flag("J2O_LIVE_SSH", False) or pytestconfig.getoption(
-        "--live-ssh",
-        default=False,
+    live_ssh = (
+        live_all
+        or _env_flag("J2O_LIVE_SSH", False)
+        or pytestconfig.getoption(
+            "--live-ssh",
+            default=False,
+        )
     )
 
     mp = pytest.MonkeyPatch()

@@ -105,10 +105,7 @@ class TestTimeEntryTransformer:
         assert "_embedded" in result
         assert result["_embedded"]["user"]["href"] == "/api/v3/users/123"
         assert result["_embedded"]["workPackage"]["href"] == "/api/v3/work_packages/789"
-        assert (
-            result["_embedded"]["activity"]["href"]
-            == "/api/v3/time_entries/activities/1"
-        )
+        assert result["_embedded"]["activity"]["href"] == "/api/v3/time_entries/activities/1"
 
         # Check metadata
         assert "_meta" in result
@@ -163,10 +160,7 @@ class TestTimeEntryTransformer:
         assert "_embedded" in result
         assert result["_embedded"]["user"]["href"] == "/api/v3/users/456"
         assert result["_embedded"]["workPackage"]["href"] == "/api/v3/work_packages/789"
-        assert (
-            result["_embedded"]["activity"]["href"]
-            == "/api/v3/time_entries/activities/3"
-        )
+        assert result["_embedded"]["activity"]["href"] == "/api/v3/time_entries/activities/3"
 
         # Check Tempo-specific metadata
         assert result["_meta"]["tempo_worklog_id"] == 67890
@@ -240,9 +234,7 @@ class TestTimeEntryTransformer:
     def test_parse_jira_date_formats(self, transformer) -> None:
         """Test parsing various Jira date formats."""
         # Standard format
-        assert (
-            transformer._parse_jira_date("2023-12-01T10:30:00.000+0000") == "2023-12-01"
-        )
+        assert transformer._parse_jira_date("2023-12-01T10:30:00.000+0000") == "2023-12-01"
 
         # Without timezone
         assert transformer._parse_jira_date("2023-12-01T10:30:00") == "2023-12-01"
@@ -276,9 +268,7 @@ class TestTimeEntryTransformer:
         assert transformer._detect_activity("Writing docs for the API") == 4
 
         # Test default fallback
-        assert (
-            transformer._detect_activity("Some random work") == 1
-        )  # default_activity_id
+        assert transformer._detect_activity("Some random work") == 1  # default_activity_id
 
     def test_detect_activity_from_tempo_attributes(self, transformer) -> None:
         """Test activity detection from Tempo work attributes."""

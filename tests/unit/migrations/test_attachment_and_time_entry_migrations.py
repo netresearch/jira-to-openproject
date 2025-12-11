@@ -153,4 +153,3 @@ def test_time_entry_zero_created_guard(monkeypatch, tmp_path):
 
     success_result = migration.run()
     assert success_result.success
-

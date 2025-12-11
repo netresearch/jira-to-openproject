@@ -45,6 +45,7 @@ class VotesMigration(BaseMigration):  # noqa: D101
 
         Returns:
             Empty list (transformation-only, no source entities)
+
         """
         return []
 
@@ -155,5 +156,3 @@ class VotesMigration(BaseMigration):  # noqa: D101
                 message=f"Votes migration failed: {e}",
                 errors=[str(e)],
             )
-
-

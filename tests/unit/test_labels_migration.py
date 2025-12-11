@@ -14,7 +14,7 @@ class DummyIssue:
 
 class DummyJira:
     def batch_get_issues(self, keys):
-        return {"J1": DummyIssue(["x", "y", "x"]) , "J2": DummyIssue([])}
+        return {"J1": DummyIssue(["x", "y", "x"]), "J2": DummyIssue([])}
 
 
 class DummyOp:
@@ -58,4 +58,3 @@ def test_labels_migration_sets_cf_text():
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated >= 1
-

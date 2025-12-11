@@ -100,11 +100,7 @@ class StatusMigration(BaseMigration):
         # Check if this is the entity type we handle
         if entity_type in ("statuses", "status_types"):
             # Use the same API call pattern as extract_jira_statuses()
-            if (
-                self.jira_client is None
-                or not hasattr(self.jira_client, "jira")
-                or self.jira_client.jira is None
-            ):
+            if self.jira_client is None or not hasattr(self.jira_client, "jira") or self.jira_client.jira is None:
                 msg = "Jira client is not properly initialized"
                 logger.error(msg)
                 raise ValueError(msg)
@@ -157,11 +153,7 @@ class StatusMigration(BaseMigration):
 
         try:
             # Check if jira_client and jira attribute exist
-            if (
-                self.jira_client is None
-                or not hasattr(self.jira_client, "jira")
-                or self.jira_client.jira is None
-            ):
+            if self.jira_client is None or not hasattr(self.jira_client, "jira") or self.jira_client.jira is None:
                 msg = "Jira client is not properly initialized"
                 logger.error(msg)
                 raise MigrationError(msg)
@@ -453,6 +445,7 @@ class StatusMigration(BaseMigration):
 
         self.status_mapping = mapping
         from src import config as _cfg
+
         _cfg.mappings.set_mapping("status", mapping)
 
         return mapping
@@ -526,6 +519,7 @@ class StatusMigration(BaseMigration):
 
             # Save status mapping via controller only
             from src import config as _cfg
+
             _cfg.mappings.set_mapping("status", status_mapping)
             logger.info(
                 f"[DRY RUN] Found {already_exists_count} existing statuses, would create {created_count} new statuses",
@@ -644,6 +638,7 @@ class StatusMigration(BaseMigration):
         # Save status mapping
         if status_mapping:
             from src import config as _cfg
+
             _cfg.mappings.set_mapping("status", status_mapping)
 
             # Update the mappings instance
@@ -680,6 +675,7 @@ class StatusMigration(BaseMigration):
 
         if not self.status_mapping:
             from src import config as _cfg
+
             self.status_mapping = _cfg.mappings.get_mapping("status") or {}
 
         if not self.status_mapping:
@@ -691,11 +687,7 @@ class StatusMigration(BaseMigration):
 
         # Count statuses
         total_statuses = len(self.status_mapping)
-        mapped_statuses = sum(
-            1
-            for s in self.status_mapping.values()
-            if s.get("openproject_id") is not None
-        )
+        mapped_statuses = sum(1 for s in self.status_mapping.values() if s.get("openproject_id") is not None)
         unmapped_statuses = total_statuses - mapped_statuses
 
         # List unmapped statuses
@@ -728,11 +720,7 @@ class StatusMigration(BaseMigration):
         self.status_mapping = {}
 
         # Check if mappings exists and has status_mapping attribute
-        if (
-            hasattr(config, "mappings")
-            and config.mappings is not None
-            and hasattr(config.mappings, "status_mapping")
-        ):
+        if hasattr(config, "mappings") and config.mappings is not None and hasattr(config.mappings, "status_mapping"):
             self.status_mapping = config.mappings.status_mapping.copy()
 
         try:
@@ -758,9 +746,7 @@ class StatusMigration(BaseMigration):
                 logger.info("[DRY RUN] Simulating status migration success")
 
                 # Create simulated mapping for all statuses
-                op_statuses_by_name = {
-                    s.get("name", "").lower(): s for s in self.op_statuses
-                }
+                op_statuses_by_name = {s.get("name", "").lower(): s for s in self.op_statuses}
                 for jira_status in self.jira_statuses:
                     jira_id: str = jira_status.get("id", "")
                     name: str = jira_status.get("name", "")
@@ -786,6 +772,7 @@ class StatusMigration(BaseMigration):
 
                 # Save the mapping via controller
                 from src import config as _cfg
+
                 _cfg.mappings.set_mapping("status", self.status_mapping)
 
                 # If we have a mappings object, update it

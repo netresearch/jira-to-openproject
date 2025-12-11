@@ -3,12 +3,6 @@ from pathlib import Path
 
 
 def test_generated_work_packages_json_has_no_links() -> None:
-
-
-
-
-
-
     project_root = Path(__file__).resolve().parents[2]
     data_dir = project_root / "var" / "data"
     assert data_dir.exists(), "var/data directory must exist"
@@ -27,5 +21,3 @@ def test_generated_work_packages_json_has_no_links() -> None:
         for idx, item in enumerate(arr if isinstance(arr, list) else [arr]):
             assert isinstance(item, dict), f"{jf} entry #{idx} is not an object"
             assert "_links" not in item, f"{jf} entry #{idx} unexpectedly contains _links"
-
-

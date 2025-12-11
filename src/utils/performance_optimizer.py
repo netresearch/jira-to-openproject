@@ -233,10 +233,7 @@ class BatchProcessor:
             return []
 
         # Split into batches
-        batches = [
-            items[i : i + self.batch_size]
-            for i in range(0, len(items), self.batch_size)
-        ]
+        batches = [items[i : i + self.batch_size] for i in range(0, len(items), self.batch_size)]
 
         logger.info(
             "Processing %d items in %d batches using %d workers",
@@ -390,9 +387,7 @@ class AdaptiveRateLimiter:
         """Get rate limiter statistics."""
         with self._lock:
             total_requests = self._success_count + self._error_count
-            error_rate = (
-                (self._error_count / total_requests) if total_requests > 0 else 0.0
-            )
+            error_rate = (self._error_count / total_requests) if total_requests > 0 else 0.0
             avg_response_time = (
                 sum(self._recent_response_times) / len(self._recent_response_times)
                 if self._recent_response_times
@@ -532,9 +527,9 @@ class PerformanceOptimizer:
 
         return decorator
 
-    def batch_operation(self, batch_size: int | None = None) -> (
-        Callable[[Callable[..., object]], Callable[..., object]]
-    ):
+    def batch_operation(
+        self, batch_size: int | None = None
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
         """Decorate a function for batching operations."""
 
         def decorator(func: Callable) -> Callable:

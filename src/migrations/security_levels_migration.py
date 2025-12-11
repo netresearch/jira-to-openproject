@@ -45,8 +45,8 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
 
         Returns:
             Empty list (transformation-only, no source entities)
+
         """
-        from typing import Any
         return []
 
     def _ensure_security_cf(self) -> int:
@@ -156,5 +156,3 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
                 message=f"Security levels migration failed: {e}",
                 errors=[str(e)],
             )
-
-

@@ -197,8 +197,7 @@ class TimeEntryTransformer:
             time_entry = {
                 "spentOn": spent_on,
                 "hours": final_hours,
-                "comment": description
-                or f"Tempo work log imported from issue {issue_key}",
+                "comment": description or f"Tempo work log imported from issue {issue_key}",
                 "_embedded": {},
                 "_meta": {
                     "tempo_worklog_id": tempo_log.get("tempoWorklogId"),
@@ -207,8 +206,13 @@ class TimeEntryTransformer:
                     "tempo_author": author_username,
                     "import_timestamp": datetime.now(tz=UTC).isoformat(),
                     "jira_worklog_key": (
-                        f"{issue_key}:{tempo_log.get('jiraWorklogId')}" if tempo_log.get("jiraWorklogId") is not None
-                        else (f"tempo:{tempo_log.get('tempoWorklogId')}" if tempo_log.get("tempoWorklogId") is not None else None)
+                        f"{issue_key}:{tempo_log.get('jiraWorklogId')}"
+                        if tempo_log.get("jiraWorklogId") is not None
+                        else (
+                            f"tempo:{tempo_log.get('tempoWorklogId')}"
+                            if tempo_log.get("tempoWorklogId") is not None
+                            else None
+                        )
                     ),
                 },
             }
@@ -568,29 +572,15 @@ class TimeEntryTransformer:
         total_hours = sum(entry.get("hours", 0) for entry in transformed_entries)
 
         # Count entries by source
-        jira_count = sum(
-            1
-            for entry in transformed_entries
-            if entry.get("_meta", {}).get("jira_work_log_id")
-        )
-        tempo_count = sum(
-            1
-            for entry in transformed_entries
-            if entry.get("_meta", {}).get("tempo_worklog_id")
-        )
+        jira_count = sum(1 for entry in transformed_entries if entry.get("_meta", {}).get("jira_work_log_id"))
+        tempo_count = sum(1 for entry in transformed_entries if entry.get("_meta", {}).get("tempo_worklog_id"))
 
         # Count mapped vs unmapped users
-        mapped_users = sum(
-            1
-            for entry in transformed_entries
-            if "_embedded" in entry and "user" in entry["_embedded"]
-        )
+        mapped_users = sum(1 for entry in transformed_entries if "_embedded" in entry and "user" in entry["_embedded"])
 
         # Count mapped vs unmapped work packages
         mapped_work_packages = sum(
-            1
-            for entry in transformed_entries
-            if "_embedded" in entry and "workPackage" in entry["_embedded"]
+            1 for entry in transformed_entries if "_embedded" in entry and "workPackage" in entry["_embedded"]
         )
 
         return {
@@ -603,15 +593,7 @@ class TimeEntryTransformer:
             "mapped_work_packages": mapped_work_packages,
             "unmapped_work_packages": total_entries - mapped_work_packages,
             "mapping_success_rate": {
-                "users": (
-                    round((mapped_users / total_entries * 100), 2)
-                    if total_entries > 0
-                    else 0
-                ),
-                "work_packages": (
-                    round((mapped_work_packages / total_entries * 100), 2)
-                    if total_entries > 0
-                    else 0
-                ),
+                "users": (round((mapped_users / total_entries * 100), 2) if total_entries > 0 else 0),
+                "work_packages": (round((mapped_work_packages / total_entries * 100), 2) if total_entries > 0 else 0),
             },
         }

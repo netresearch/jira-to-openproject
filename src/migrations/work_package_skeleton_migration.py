@@ -25,9 +25,7 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src import config
@@ -146,6 +144,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Yields:
             Individual Jira Issue objects
+
         """
         start_at = 0
         batch_size = config.migration_config.get("batch_size", 100)
@@ -201,6 +200,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Returns:
             List of Jira Issue objects
+
         """
         try:
             # Minimal fields for skeleton creation
@@ -223,6 +223,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Returns:
             OpenProject type ID or None
+
         """
         issue_type_id = str(jira_issue.fields.issuetype.id)
 
@@ -259,6 +260,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Returns:
             OpenProject status ID or None
+
         """
         status_id = str(jira_issue.fields.status.id)
 
@@ -289,6 +291,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Returns:
             OpenProject project ID or None
+
         """
         if jira_project_key in self.project_mapping:
             mapping = self.project_mapping[jira_project_key]
@@ -310,6 +313,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Returns:
             Created work package data or None on failure
+
         """
         type_id = self._get_openproject_type_id(jira_issue)
         status_id = self._get_openproject_status_id(jira_issue)
@@ -348,6 +352,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
         Args:
             wp_id: OpenProject work package ID
             jira_key: Jira issue key
+
         """
         try:
             # Get or create the J2O Origin Key custom field
@@ -378,6 +383,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
         Args:
             jira_issue: The Jira issue
             wp_result: The created work package
+
         """
         jira_id = str(jira_issue.id)
         jira_key = jira_issue.key
@@ -394,6 +400,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Returns:
             Migration results dictionary
+
         """
         results = {
             "total_processed": 0,
@@ -486,6 +493,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Returns:
             ComponentResult with migration status
+
         """
         start_time = datetime.now(tz=UTC)
         try:

@@ -58,4 +58,3 @@ def test_resolution_migration_sets_cf_and_journal():
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated >= 1
-

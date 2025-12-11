@@ -173,9 +173,7 @@ class TestProjectMigration(unittest.TestCase):
         mock_exists.return_value = False
 
         # Mock the config to return force=True
-        mock_migration_config.get.side_effect = lambda key, default=None: (
-            True if key == "force" else default
-        )
+        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
 
         # Create instance and patch the _save_to_json method to avoid serialization issues
         migration = ProjectMigration(mock_jira_instance, mock_op_instance)
@@ -260,9 +258,7 @@ class TestProjectMigration(unittest.TestCase):
             parent = migration.find_parent_company_for_project({"key": "UNKNOWN"})
         assert parent is None
         # Should log a debug about missing account mapping
-        assert any(
-            "No account mapping found for project UNKNOWN" in msg for msg in cm.output
-        )
+        assert any("No account mapping found for project UNKNOWN" in msg for msg in cm.output)
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
@@ -462,9 +458,7 @@ class TestProjectMigration(unittest.TestCase):
             with self.subTest(scenario=type(exception_or_response).__name__):
                 if isinstance(exception_or_response, Exception):
                     # Mock exception being raised
-                    mock_op_instance.execute_query_to_json_file.side_effect = (
-                        exception_or_response
-                    )
+                    mock_op_instance.execute_query_to_json_file.side_effect = exception_or_response
 
                     # Should re-raise the exception
                     with pytest.raises(Exception) as cm:
@@ -473,9 +467,7 @@ class TestProjectMigration(unittest.TestCase):
                     assert "Rails query failed" in str(cm.value)
                 else:
                     # Mock invalid response format
-                    mock_op_instance.execute_query_to_json_file.return_value = (
-                        exception_or_response
-                    )
+                    mock_op_instance.execute_query_to_json_file.return_value = exception_or_response
                     mock_op_instance.execute_query_to_json_file.side_effect = None
 
                     # Should return None for invalid response
@@ -637,9 +629,7 @@ def test_bulk_migrate_projects_security_injection_prevention(
         assert "exit " not in script, "Exit commands should be escaped"
         assert "DROP TABLE" not in script, "SQL injection should be escaped"
         assert "delete_all" not in script, "Rails destructive methods should be escaped"
-        assert (
-            "'; " not in script or script.count("'; ") <= 1
-        ), "SQL-style injections should be escaped"
+        assert "'; " not in script or script.count("'; ") <= 1, "SQL-style injections should be escaped"
 
         # Verify proper escaping is applied - single quotes should be escaped with backslashes
         assert "\\'" in script or "'" not in script, "Single quotes should be escaped"
@@ -691,9 +681,7 @@ def test_bulk_migrate_projects_ruby_escape_function(project_migration) -> None:
         executed_script = script
         return {"id": 123, "name": "Test Project", "identifier": "test"}
 
-    project_migration.op_client.execute_query_to_json_file.side_effect = (
-        mock_execute_query
-    )
+    project_migration.op_client.execute_query_to_json_file.side_effect = mock_execute_query
 
     # Execute the migration
     result = project_migration.bulk_migrate_projects()
@@ -706,9 +694,7 @@ def test_bulk_migrate_projects_ruby_escape_function(project_migration) -> None:
 
     # Check that special characters are properly escaped
     assert "Test\\'s" in executed_script, "Single quotes should be escaped"
-    assert (
-        '"Project"' in executed_script
-    ), "Double quotes are preserved in single-quoted Ruby strings"
+    assert '"Project"' in executed_script, "Double quotes are preserved in single-quoted Ruby strings"
     assert "with\\\\backslash" in executed_script, "Backslashes should be escaped"
     assert "and\\nnewline" in executed_script, "Newlines should be escaped"
     assert "\\rand" in executed_script, "Carriage returns should be escaped"
@@ -742,9 +728,7 @@ def test_bulk_migrate_projects_empty_and_none_values(project_migration) -> None:
         executed_script = script
         return {"id": 123, "name": "Test Project", "identifier": "test"}
 
-    project_migration.op_client.execute_query_to_json_file.side_effect = (
-        mock_execute_query
-    )
+    project_migration.op_client.execute_query_to_json_file.side_effect = mock_execute_query
 
     # Execute the migration
     result = project_migration.bulk_migrate_projects()
@@ -755,9 +739,7 @@ def test_bulk_migrate_projects_empty_and_none_values(project_migration) -> None:
     # Verify the script handles empty values safely
     assert executed_script is not None
     assert "name: ''" in executed_script, "Empty name should be handled"
-    assert (
-        "description: ''" in executed_script
-    ), "None description should become empty string"
+    assert "description: ''" in executed_script, "None description should become empty string"
 
 
 def test_determine_project_modules_tempo_accounts(project_migration) -> None:
@@ -786,9 +768,7 @@ def test_persist_project_metadata_upserts_attributes(project_migration) -> None:
 
     project_migration._persist_project_metadata(42, jira_project)
 
-    called_names = {
-        call.kwargs["name"] for call in project_migration.op_client.upsert_project_attribute.call_args_list
-    }
+    called_names = {call.kwargs["name"] for call in project_migration.op_client.upsert_project_attribute.call_args_list}
 
     assert PROJECT_CATEGORY_CF_NAME in called_names
     assert PROJECT_TYPE_CF_NAME in called_names
@@ -821,6 +801,7 @@ def test_persist_project_metadata_sanitizes_values(project_migration) -> None:
     assert "R'D" in category_val
     assert avatar_val is not None
     assert "avatar" in avatar_val
+
 
 @patch("src.migrations.project_migration.logger")
 def test_assign_project_lead_happy_path(mock_logger: MagicMock) -> None:

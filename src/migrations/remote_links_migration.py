@@ -87,7 +87,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
-        raw: dict[str, list[tuple[str, str]]]= data.get("links", {}) if isinstance(data, dict) else {}
+        raw: dict[str, list[tuple[str, str]]] = data.get("links", {}) if isinstance(data, dict) else {}
         md_by_key: dict[str, str] = {}
         for key, pairs in raw.items():
             seen: set[str] = set()
@@ -166,5 +166,3 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
                 message=f"Remote links migration failed: {e}",
                 errors=[str(e)],
             )
-
-

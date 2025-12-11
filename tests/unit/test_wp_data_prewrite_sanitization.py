@@ -6,4 +6,3 @@ def test_python_sanitizer_function_present() -> None:
     path = project_root / "src" / "migrations" / "work_package_migration.py"
     text = path.read_text()
     assert "def _sanitize_wp_dict" in text
-

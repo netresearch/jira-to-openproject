@@ -141,9 +141,7 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_get_path.return_value = Path("/tmp/test_data")
 
         mock_op_instance = mock_op_client.return_value
-        mock_migration_config.get.side_effect = lambda key, default=None: (
-            True if key == "force" else default
-        )
+        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
 
         # Create instance and call method
         migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
@@ -178,14 +176,10 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Configure the mocks
         mock_jira_instance = mock_jira_client.return_value
         mock_op_instance = mock_op_client.return_value
-        mock_op_instance.get_work_package_types.return_value = (
-            self.op_work_package_types
-        )
+        mock_op_instance.get_work_package_types.return_value = self.op_work_package_types
         mock_get_path.return_value = Path("/tmp/test_data")
 
-        mock_migration_config.get.side_effect = lambda key, default=None: (
-            True if key == "force" else default
-        )
+        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
 
         # Create instance and call method
         migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
@@ -275,7 +269,6 @@ class TestIssueTypeMigration(unittest.TestCase):
                 ),
             ),
         ):
-
             migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
 
             # Setup test data
@@ -323,9 +316,7 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_jira_instance = mock_jira_client.return_value
         mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
-        mock_migration_config.get.side_effect = lambda key, default=None: (
-            True if key == "force" else default
-        )
+        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
 
         # Configure the mock file to return test data
         mock_file.side_effect = self._mock_file_content
@@ -387,9 +378,7 @@ class TestIssueTypeMigration(unittest.TestCase):
             {"id": 2, "name": "Task"},
         ]
         mock_get_path.return_value = Path("/tmp/test_data")
-        mock_migration_config.get.side_effect = lambda key, default=None: (
-            True if key == "force" else default
-        )
+        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
 
         # Configure exists and file mocks
         mock_exists.return_value = True
@@ -435,9 +424,7 @@ class TestIssueTypeMigration(unittest.TestCase):
         # Configure the mocks
         mock_jira_instance = mock_jira_client.return_value
         mock_get_path.return_value = Path("/tmp/test_data")
-        mock_migration_config.get.side_effect = lambda key, default=None: (
-            True if key == "force" else default
-        )
+        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
 
         # Create instance
         migration = IssueTypeMigration(mock_jira_instance, mock_op_client.return_value)

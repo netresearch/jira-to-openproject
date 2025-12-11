@@ -279,6 +279,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             failed = len(container_ops)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+
     def run(self) -> ComponentResult:
         """Execute attachment migration pipeline."""
         self.logger.info("Starting attachment migration")

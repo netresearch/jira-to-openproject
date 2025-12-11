@@ -194,10 +194,7 @@ class TestYoloJsonSerialization:
         # And we should be able to parse it back
         parsed = json.loads(json_string)
         assert parsed["user_mappings"]["user1"]["jira_user"] == "<Mock: jira_user_mock>"
-        assert (
-            parsed["user_mappings"]["user1"]["lastRefreshed"]
-            == "2023-01-15T00:00:00+00:00"
-        )
+        assert parsed["user_mappings"]["user1"]["lastRefreshed"] == "2023-01-15T00:00:00+00:00"
 
     def test_make_json_serializable_depth_limit_protection(
         self,
@@ -401,9 +398,7 @@ class TestYoloExceptionHandling:
         mock_issue.fields.creator = None
         mock_issue.fields.reporter = None
         mock_issue.fields.watches = Mock()
-        mock_issue.fields.watches.watchCount = (
-            2  # Set positive watch count to trigger watchers fetch
-        )
+        mock_issue.fields.watches.watchCount = 2  # Set positive watch count to trigger watchers fetch
 
         # Mock the Jira client to raise ConnectionError when fetching watchers
         migrator_instance.jira_client.get_issue_watchers.side_effect = ConnectionError(

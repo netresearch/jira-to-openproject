@@ -27,9 +27,9 @@ try:  # Optional dependency: tests may run without redis installed
     import redis
     from redis.exceptions import RedisError
 except ImportError:  # pragma: no cover - test environment without redis
+
     class RedisError(Exception):
         """Placeholder when redis is unavailable."""
-
 
     redis = None
 
@@ -59,7 +59,8 @@ class SafeJSONEncoder(json.JSONEncoder):
             except Exception as e:  # noqa: BLE001
                 logger.debug("JSON default encode failed for __dict__: %s", e)
         elif hasattr(obj, "__iter__") and not isinstance(
-            obj, (str, bytes, bytearray),
+            obj,
+            (str, bytes, bytearray),
         ):
             # For iterables, convert to list
             try:

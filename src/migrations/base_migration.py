@@ -1,4 +1,3 @@
-
 """Base migration class providing common functionality for all migrations."""
 
 from __future__ import annotations
@@ -289,9 +288,7 @@ class BaseMigration:
         # Check if clients have enhanced features
         self.has_enhanced_jira = hasattr(self.jira_client, "performance_optimizer")
         self.has_enhanced_openproject = (
-            hasattr(self.op_client, "performance_optimizer")
-            if self.op_client is not None
-            else False
+            hasattr(self.op_client, "performance_optimizer") if self.op_client is not None else False
         )
 
         if self.has_enhanced_jira:
@@ -327,16 +324,12 @@ class BaseMigration:
         Thread-safe implementation with comprehensive logging.
         """
         with self._cache_lock:
-            current_size = sum(
-                len(entities) for entities in self._global_entity_cache.values()
-            )
+            current_size = sum(len(entities) for entities in self._global_entity_cache.values())
             self._cache_stats["total_size"] = current_size
 
             if current_size > self.MAX_TOTAL_CACHE_SIZE * self.CACHE_CLEANUP_THRESHOLD:
                 # Sort cache types by size (largest first) for efficient cleanup
-                cache_sizes = [
-                    (k, len(v)) for k, v in self._global_entity_cache.items()
-                ]
+                cache_sizes = [(k, len(v)) for k, v in self._global_entity_cache.items()]
                 cache_sizes.sort(key=lambda x: x[1], reverse=True)
 
                 target_size = self.MAX_TOTAL_CACHE_SIZE // 2
@@ -392,10 +385,7 @@ class BaseMigration:
 
             # Check global cache with thread safety
             with self._cache_lock:
-                if (
-                    entity_type in self._global_entity_cache
-                    and entity_type not in cache_invalidated
-                ):
+                if entity_type in self._global_entity_cache and entity_type not in cache_invalidated:
                     entities = self._global_entity_cache[entity_type].copy()
                     entity_cache[entity_type] = entities
                     self._cache_stats["hits"] += 1
@@ -502,7 +492,7 @@ class BaseMigration:
         try:
             # Get current entities from Jira for the specific entity type
             self.logger.info(
-                f"Starting change detection for {entity_type} - fetching current entities from Jira"
+                f"Starting change detection for {entity_type} - fetching current entities from Jira",
             )
             if cache_func:
                 current_entities = cache_func(entity_type)
@@ -510,7 +500,7 @@ class BaseMigration:
                 current_entities = self._get_current_entities_for_type(entity_type)
 
             self.logger.info(
-                f"Fetched {len(current_entities)} current entities for {entity_type}"
+                f"Fetched {len(current_entities)} current entities for {entity_type}",
             )
 
             # Detect changes
@@ -526,7 +516,7 @@ class BaseMigration:
                 f"created={summary.get('entities_created', 0)}, "
                 f"updated={summary.get('entities_updated', 0)}, "
                 f"deleted={summary.get('entities_deleted', 0)}, "
-                f"total_changes={change_report.get('total_changes', 0)}"
+                f"total_changes={change_report.get('total_changes', 0)}",
             )
 
             # If no changes detected, migration can be skipped
@@ -830,4 +820,3 @@ class BaseMigration:
             failed_count=0,
             total_count=0,
         )
-

@@ -44,9 +44,7 @@ class TestMemoryPressureScenarios:
                 "id": i,
                 "title": f"Work Package {i}",
                 "description": "A" * 1000,  # Large description
-                "attachments": [
-                    f"file_{j}.pdf" for j in range(10)
-                ],  # Multiple attachments
+                "attachments": [f"file_{j}.pdf" for j in range(10)],  # Multiple attachments
                 "custom_fields": {f"field_{k}": f"value_{k}" * 100 for k in range(20)},
             }
             for i in range(1000)  # 1000 large work packages
@@ -76,18 +74,11 @@ class TestMemoryPressureScenarios:
         memory_constrained_migration.migrate_work_packages(large_dataset)
 
         # Assert: Should process in multiple batches
-        assert (
-            memory_constrained_migration.openproject_client.create_work_package.call_count
-            == 1000
-        )
+        assert memory_constrained_migration.openproject_client.create_work_package.call_count == 1000
 
         # Verify batch processing was used
-        batch_calls = (
-            memory_constrained_migration.openproject_client.create_batch.call_count
-        )
-        assert (
-            batch_calls >= 100
-        )  # At least 100 batches for 1000 items with batch_size=10
+        batch_calls = memory_constrained_migration.openproject_client.create_batch.call_count
+        assert batch_calls >= 100  # At least 100 batches for 1000 items with batch_size=10
 
     def test_memory_pressure_triggers_garbage_collection(
         self,
@@ -137,9 +128,7 @@ class TestMemoryPressureScenarios:
 
         # Assert: Should automatically reduce batch size and retry
         assert memory_constrained_migration.batch_size == 5  # Reduced from 10
-        assert (
-            memory_constrained_migration.openproject_client.create_batch.call_count >= 2
-        )
+        assert memory_constrained_migration.openproject_client.create_batch.call_count >= 2
 
 
 class TestRateLimitingBoundaries:
@@ -234,9 +223,7 @@ class TestRateLimitingBoundaries:
             call_timestamps.append(current_time)
 
             # Check if we're exceeding rate limit
-            recent_calls = [
-                t for t in call_timestamps if current_time - t <= rate_limit_window
-            ]
+            recent_calls = [t for t in call_timestamps if current_time - t <= rate_limit_window]
             if len(recent_calls) > max_calls_per_window:
                 msg = "Too many concurrent calls"
                 raise RateLimitError(msg)
@@ -262,12 +249,7 @@ class TestRateLimitingBoundaries:
             all_results = [future.result() for future in futures]
 
         # Assert: Some calls should be rate limited
-        rate_limited_count = sum(
-            1
-            for results in all_results
-            for result in results
-            if result == "rate_limited"
-        )
+        rate_limited_count = sum(1 for results in all_results for result in results if result == "rate_limited")
         assert rate_limited_count > 0  # Some calls should hit rate limits
 
 

@@ -39,8 +39,7 @@ class TestRailsConsoleClient(unittest.TestCase):
         # Mock successful tmux session check
         self.mock_subprocess.run.return_value.returncode = 0
         self.mock_subprocess.run.return_value.stdout = (
-            "Test tmux output\n--EXEC_START--test_unique_id\n"
-            "Command output\n--EXEC_END--test_unique_id"
+            "Test tmux output\n--EXEC_START--test_unique_id\nCommand output\n--EXEC_END--test_unique_id"
         )
 
         # Make subprocess.SubprocessError available to the code
@@ -68,9 +67,7 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.mock_file_manager_class = self.file_manager_patcher.start()
         self.mock_file_manager = MagicMock()
         self.mock_file_manager.generate_unique_id.return_value = "test_unique_id"
-        self.mock_file_manager.create_debug_session.return_value = (
-            "/path/to/debug/session"
-        )
+        self.mock_file_manager.create_debug_session.return_value = "/path/to/debug/session"
         self.mock_file_manager.join = MagicMock(
             return_value=MagicMock(open=MagicMock()),
         )
@@ -83,8 +80,7 @@ class TestRailsConsoleClient(unittest.TestCase):
         )
         self.mock_send_command = self.send_command_patcher.start()
         self.mock_send_command.return_value = (
-            "Console output\n--EXEC_START--test_unique_id\n"
-            "Command result\n--EXEC_END--test_unique_id\n"
+            "Console output\n--EXEC_START--test_unique_id\nCommand result\n--EXEC_END--test_unique_id\n"
         )
 
         # Initialize RailsConsoleClient after all mocks are set up
@@ -314,6 +310,7 @@ TMUX_CMD_END_123
             # Should not raise; returns output between markers ("1")
             res = self.rails_client.execute("no-op")
             assert res is not None
+
     def test_ruby_error_pattern_detection(self) -> None:
         """Test detection of Ruby error patterns in output."""
         marker_id = "abcd1234"

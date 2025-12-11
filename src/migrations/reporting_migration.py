@@ -43,10 +43,7 @@ class ReportingMigration(BaseMigration):
         """
         # Check if this is the entity type we handle
         if entity_type != "reporting":
-            msg = (
-                f"ReportingMigration does not support entity type: {entity_type}. "
-                f"Supported types: ['reporting']"
-            )
+            msg = f"ReportingMigration does not support entity type: {entity_type}. Supported types: ['reporting']"
             raise ValueError(msg)
 
         # Fetch filters (API call 1)

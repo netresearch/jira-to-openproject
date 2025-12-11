@@ -270,9 +270,7 @@ class TestCustomFieldMigration(unittest.TestCase):
             "name": "Select Field",
             "schema": {"type": "option", "custom": "select"},
         }
-        assert (
-            self.migration.map_jira_field_to_openproject_format(select_field) == "list"
-        )
+        assert self.migration.map_jira_field_to_openproject_format(select_field) == "list"
 
         # Test date field mapping
         date_field = {
@@ -356,7 +354,6 @@ class TestCustomFieldMigration(unittest.TestCase):
             patch("json.load", return_value=result_data),
             patch("pathlib.Path.open", mock_open(read_data=json.dumps(result_data))),
         ):
-
             # Call migrate_custom_fields_via_json directly
             result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
 
@@ -466,7 +463,6 @@ class TestCustomFieldMigration(unittest.TestCase):
             patch("json.dump", json_dump_mock),
             patch("json.load", return_value=result_data),
         ):
-
             # Mock the file transfer and execute methods
             self.mock_op_client.transfer_file_to_container = Mock()
             self.mock_op_client.execute_query = Mock()
@@ -480,7 +476,6 @@ class TestCustomFieldMigration(unittest.TestCase):
                     mock_open(read_data=json.dumps(result_data)),
                 ),
             ):
-
                 # Call migrate_custom_fields_via_json directly
                 result = self.migration.migrate_custom_fields_via_json(
                     fields_to_migrate,
@@ -499,9 +494,7 @@ class TestCustomFieldMigration(unittest.TestCase):
                     # If this is the custom fields data (first arg is a list)
                     if isinstance(args[0], list):
                         # Verify it's the correct structure
-                        assert (
-                            len(args[0]) > 0
-                        ), "Expected at least one field in the data"
+                        assert len(args[0]) > 0, "Expected at least one field in the data"
 
                 # Verify that the new methods were called
                 self.mock_op_client.transfer_file_to_container.assert_called_once()

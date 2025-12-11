@@ -230,6 +230,7 @@ class JiraClient:
                 return importlib.import_module("jira")
             except Exception:  # noqa: BLE001
                 import importlib
+
                 return importlib.import_module("jira")
 
         jira_mod = _import_real_jira_module()
@@ -588,10 +589,7 @@ class JiraClient:
         except Exception as e:
             error_msg = f"Failed to get issue details for {issue_key}: {e!s}"
             logger.exception(error_msg)
-            if (
-                "issue does not exist" in str(e).lower()
-                or "issue not found" in str(e).lower()
-            ):
+            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
                 msg = f"Issue {issue_key} not found"
                 raise JiraResourceNotFoundError(msg) from e
             raise JiraApiError(error_msg) from e
@@ -626,11 +624,7 @@ class JiraClient:
                 avatar_urls = getattr(user, "avatarUrls", None)
                 if avatar_urls:
                     try:
-                        avatar_urls = {
-                            str(k): str(v)
-                            for k, v in dict(avatar_urls).items()
-                            if v
-                        }
+                        avatar_urls = {str(k): str(v) for k, v in dict(avatar_urls).items() if v}
                     except Exception:  # noqa: BLE001
                         avatar_urls = None
                 jira_user = {
@@ -680,11 +674,7 @@ class JiraClient:
                 avatar_urls = getattr(user, "avatarUrls", None)
                 if avatar_urls:
                     try:
-                        avatar_urls = {
-                            str(k): str(v)
-                            for k, v in dict(avatar_urls).items()
-                            if v
-                        }
+                        avatar_urls = {str(k): str(v) for k, v in dict(avatar_urls).items() if v}
                     except Exception:  # noqa: BLE001
                         avatar_urls = None
 
@@ -800,10 +790,7 @@ class JiraClient:
                     },
                 )
                 if response.status_code != HTTP_OK:
-                    msg = (
-                        "Failed to fetch group members"
-                        f" for {group_name}: HTTP {response.status_code}"
-                    )
+                    msg = f"Failed to fetch group members for {group_name}: HTTP {response.status_code}"
                     raise JiraApiError(msg)
 
                 payload = response.json() or {}
@@ -853,10 +840,7 @@ class JiraClient:
                 f"/rest/api/2/project/{project_key}/role",
             )
             if role_map_response.status_code != HTTP_OK:
-                msg = (
-                    "Failed to fetch Jira project roles"
-                    f" for {project_key}: HTTP {role_map_response.status_code}"
-                )
+                msg = f"Failed to fetch Jira project roles for {project_key}: HTTP {role_map_response.status_code}"
                 raise JiraApiError(msg)
 
             role_map = role_map_response.json() or {}
@@ -890,18 +874,9 @@ class JiraClient:
                             "type": actor.get("type"),
                             "name": actor.get("name"),
                             "displayName": actor.get("displayName"),
-                            "accountId": (
-                                (actor.get("actorUser") or {}).get("accountId")
-                                or actor.get("accountId")
-                            ),
-                            "userKey": (
-                                (actor.get("actorUser") or {}).get("key")
-                                or actor.get("userKey")
-                            ),
-                            "groupName": (
-                                (actor.get("actorGroup") or {}).get("name")
-                                or actor.get("groupName")
-                            ),
+                            "accountId": ((actor.get("actorUser") or {}).get("accountId") or actor.get("accountId")),
+                            "userKey": ((actor.get("actorUser") or {}).get("key") or actor.get("userKey")),
+                            "groupName": ((actor.get("actorGroup") or {}).get("name") or actor.get("groupName")),
                         },
                     )
 
@@ -983,10 +958,7 @@ class JiraClient:
         except Exception as e:
             error_msg = f"Failed to get issue count for project {project_key}: {e!s}"
             logger.exception(error_msg)
-            if (
-                "project does not exist" in str(e).lower()
-                or "project not found" in str(e).lower()
-            ):
+            if "project does not exist" in str(e).lower() or "project not found" in str(e).lower():
                 msg = f"Project {project_key} not found"
                 raise JiraResourceNotFoundError(msg) from e
             raise JiraApiError(error_msg) from e
@@ -1030,10 +1002,7 @@ class JiraClient:
         except Exception as e:
             error_msg = f"Failed to get watchers for issue {issue_key}: {e!s}"
             logger.exception(error_msg)
-            if (
-                "issue does not exist" in str(e).lower()
-                or "issue not found" in str(e).lower()
-            ):
+            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
                 msg = f"Issue {issue_key} not found"
                 raise JiraResourceNotFoundError(msg) from e
             raise JiraApiError(error_msg) from e
@@ -1228,9 +1197,7 @@ class JiraClient:
             try:
                 error_json = response.json()
                 if "errorMessages" in error_json:
-                    error_msg = (
-                        f"{error_msg} - {', '.join(error_json['errorMessages'])}"
-                    )
+                    error_msg = f"{error_msg} - {', '.join(error_json['errorMessages'])}"
                 elif "errors" in error_json:
                     error_msg = f"{error_msg} - {error_json['errors']}"
             except Exception:  # noqa: BLE001, S110
@@ -1401,11 +1368,7 @@ class JiraClient:
             response = self.jira.fields()
 
             # Filter for custom fields (custom fields typically start with 'customfield_')
-            custom_fields = [
-                field
-                for field in response
-                if field.get("id", "").startswith("customfield_")
-            ]
+            custom_fields = [field for field in response if field.get("id", "").startswith("customfield_")]
 
             logger.debug("Retrieved %d custom fields from Jira", len(custom_fields))
             return custom_fields  # noqa: TRY300
@@ -1618,9 +1581,7 @@ class JiraClient:
             )
             return []
         except Exception as e:
-            error_msg = (
-                f"Failed to retrieve account links for project {project_id}: {e!s}"
-            )
+            error_msg = f"Failed to retrieve account links for project {project_id}: {e!s}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 
@@ -1717,10 +1678,7 @@ class JiraClient:
         except Exception as e:
             error_msg = f"Failed to get work logs for issue {issue_key}: {e!s}"
             logger.exception(error_msg)
-            if (
-                "issue does not exist" in str(e).lower()
-                or "issue not found" in str(e).lower()
-            ):
+            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
                 msg = f"Issue {issue_key} not found"
                 raise JiraResourceNotFoundError(msg) from e
             raise JiraApiError(error_msg) from e
@@ -1753,9 +1711,7 @@ class JiraClient:
 
                 # Check if issue has work logs in the basic fields first
                 has_work_logs = (
-                    hasattr(issue.fields, "worklog")
-                    and issue.fields.worklog
-                    and issue.fields.worklog.total > 0
+                    hasattr(issue.fields, "worklog") and issue.fields.worklog and issue.fields.worklog.total > 0
                 )
 
                 if has_work_logs or include_empty:
@@ -1785,7 +1741,7 @@ class JiraClient:
                         # Record 404 response
                         self.rate_limiter.record_response(
                             time.time() - request_start,
-                            HTTP_BAD_REQUEST_MIN + 4, # 404
+                            HTTP_BAD_REQUEST_MIN + 4,  # 404
                         )
                         continue
                     except JiraApiError as e:
@@ -1797,13 +1753,12 @@ class JiraClient:
                         # Record error response (assuming 500 for API errors)
                         self.rate_limiter.record_response(
                             time.time() - request_start,
-                            HTTP_BAD_REQUEST_MIN + 5, # 500
+                            HTTP_BAD_REQUEST_MIN + 5,  # 500
                         )
                         continue
 
             logger.info(
-                "Work log extraction complete for project '%s': "
-                "%s issues with work logs, %s total work logs",
+                "Work log extraction complete for project '%s': %s issues with work logs, %s total work logs",
                 project_key,
                 issues_with_logs,
                 total_work_logs,
@@ -1814,10 +1769,7 @@ class JiraClient:
         except Exception as e:
             error_msg = f"Failed to get work logs for project {project_key}: {e!s}"
             logger.exception(error_msg)
-            if (
-                "project does not exist" in str(e).lower()
-                or "project not found" in str(e).lower()
-            ):
+            if "project does not exist" in str(e).lower() or "project not found" in str(e).lower():
                 msg = f"Project {project_key} not found"
                 raise JiraResourceNotFoundError(msg) from e
             raise JiraApiError(error_msg) from e
@@ -1877,9 +1829,7 @@ class JiraClient:
             return work_log_data  # noqa: TRY300
 
         except Exception as e:
-            error_msg = (
-                f"Failed to get work log {work_log_id} for issue {issue_key}: {e!s}"
-            )
+            error_msg = f"Failed to get work log {work_log_id} for issue {issue_key}: {e!s}"
             logger.exception(error_msg)
             if (
                 "issue does not exist" in str(e).lower()
@@ -2323,6 +2273,7 @@ class JiraClient:
         filters: list[dict[str, Any]] = []
 
         try:
+
             def _fetch_favourites() -> list[dict[str, Any]]:
                 fav_resp = self.jira._session.get(  # noqa: SLF001
                     f"{self.base_url}/rest/api/2/filter/favourite",
@@ -2378,7 +2329,9 @@ class JiraClient:
                 if isinstance(exc, exceptions.HTTPError):
                     status = getattr(exc.response, "status_code", None)
                 else:
-                    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+                    status = getattr(exc, "status_code", None) or getattr(
+                        getattr(exc, "response", None), "status_code", None
+                    )
 
                 if status in (404, 405):
                     logger.warning(
@@ -2497,9 +2450,7 @@ class JiraClient:
                 self.rate_limiter.record_response(response_time, response.status_code)
 
                 if response.status_code != HTTP_OK:
-                    msg = (
-                        f"Failed to retrieve Tempo work logs for project {project_key}: HTTP {response.status_code}"
-                    )
+                    msg = f"Failed to retrieve Tempo work logs for project {project_key}: HTTP {response.status_code}"
                     logger.error(msg)
                     raise JiraApiError(msg)  # noqa: TRY301
 
@@ -2582,9 +2533,7 @@ class JiraClient:
                 msg = f"Tempo work log {tempo_worklog_id} not found"
                 raise JiraResourceNotFoundError(msg)  # noqa: TRY301
             if response.status_code != HTTP_OK:
-                msg = (
-                    f"Failed to retrieve Tempo work log {tempo_worklog_id}: HTTP {response.status_code}"
-                )
+                msg = f"Failed to retrieve Tempo work log {tempo_worklog_id}: HTTP {response.status_code}"
                 logger.error(msg)
                 raise JiraApiError(msg)  # noqa: TRY301
 
@@ -2677,9 +2626,7 @@ class JiraClient:
                         # Filter by user if specified
                         if user_key:
                             project_work_logs = [
-                                log
-                                for log in project_work_logs
-                                if log.get("author", {}).get("key") == user_key
+                                log for log in project_work_logs if log.get("author", {}).get("key") == user_key
                             ]
 
                         all_time_entries.extend(project_work_logs)
@@ -2793,11 +2740,7 @@ class JiraClient:
 
         # Get all projects and filter to requested keys
         all_projects = self.get_projects()
-        return {
-            project["key"]: project
-            for project in all_projects
-            if project["key"] in project_keys
-        }
+        return {project["key"]: project for project in all_projects if project["key"] in project_keys}
 
     @rate_limited()
     def stream_all_issues_for_project(
@@ -2827,9 +2770,7 @@ class JiraClient:
 
         # Get all users and filter to requested keys
         all_users = self.get_users()
-        user_dict = {
-            user.get("key", user.get("accountId", "")): user for user in all_users
-        }
+        user_dict = {user.get("key", user.get("accountId", "")): user for user in all_users}
 
         return {key: user_dict[key] for key in user_keys if key in user_dict}
 
@@ -2850,9 +2791,7 @@ class JiraClient:
                     "name": project.name,
                     "description": getattr(project, "description", ""),
                     "lead": (
-                        getattr(project, "lead", {}).get("name", "Unknown")
-                        if hasattr(project, "lead")
-                        else "Unknown"
+                        getattr(project, "lead", {}).get("name", "Unknown") if hasattr(project, "lead") else "Unknown"
                     ),
                     "project_type_key": getattr(project, "projectTypeKey", "software"),
                 },
@@ -2879,8 +2818,6 @@ class JiraClient:
                 ],
             }
         except Exception as e:
-            error_msg = (
-                f"Failed to get enhanced project metadata for {project_key}: {e}"
-            )
+            error_msg = f"Failed to get enhanced project metadata for {project_key}: {e}"
             logger.exception(error_msg)
             raise JiraApiError(error_msg) from e

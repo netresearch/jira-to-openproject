@@ -75,4 +75,3 @@ def test_priority_migration_creates_and_updates(monkeypatch: pytest.MonkeyPatch)
     assert mp.created_types == 1  # High created
     assert any(u["priority_id"] == 2 for u in op.updated)
     assert ld.success is True
-

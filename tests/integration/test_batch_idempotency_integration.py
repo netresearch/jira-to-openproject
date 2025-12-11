@@ -220,12 +220,8 @@ class TestBatchIdempotencyIntegration:
         assert len(results) == 5
 
         # All workers should get the same result (first one wins)
-        unique_results = {
-            json.dumps(result, sort_keys=True) for result in results.values()
-        }
-        assert (
-            len(unique_results) == 1
-        ), "All concurrent calls should return same result"
+        unique_results = {json.dumps(result, sort_keys=True) for result in results.values()}
+        assert len(unique_results) == 1, "All concurrent calls should return same result"
 
     @patch("src.clients.openproject_client.OpenProjectClient.execute_json_query")
     def test_performance_impact_measurement(self, mock_execute) -> None:

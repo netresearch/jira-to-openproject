@@ -21,6 +21,7 @@ from src.utils.markdown_converter import MarkdownConverter
 # Get logger from config
 logger = configure_logging("INFO", None)
 
+
 # Add config attribute for tests and modules expecting src.migrations.tempo_account_migration.config
 def _default_get_path(key: str) -> Path:
     # Default to local ./data for tests unless overridden by patches
@@ -30,10 +31,15 @@ def _default_get_path(key: str) -> Path:
         return Path("data")
     return Path("data")
 
-config = type("Config", (), {
-    "logger": logger,
-    "get_path": staticmethod(_default_get_path),
-})()
+
+config = type(
+    "Config",
+    (),
+    {
+        "logger": logger,
+        "get_path": staticmethod(_default_get_path),
+    },
+)()
 
 
 class AuditEventData(TypedDict):
@@ -170,21 +176,9 @@ class EnhancedAuditTrailMigrator:
                     "id": history.id,
                     "created": history.created,
                     "author": {
-                        "name": (
-                            getattr(history.author, "name", None)
-                            if history.author
-                            else None
-                        ),
-                        "displayName": (
-                            getattr(history.author, "displayName", None)
-                            if history.author
-                            else None
-                        ),
-                        "emailAddress": (
-                            getattr(history.author, "emailAddress", None)
-                            if history.author
-                            else None
-                        ),
+                        "name": (getattr(history.author, "name", None) if history.author else None),
+                        "displayName": (getattr(history.author, "displayName", None) if history.author else None),
+                        "emailAddress": (getattr(history.author, "emailAddress", None) if history.author else None),
                     },
                     "items": [],
                 }
@@ -273,9 +267,7 @@ class EnhancedAuditTrailMigrator:
                 # Convert user mentions in comment body using current mapping
                 raw_comment = c.get("body", "")
                 try:
-                    converted_comment = (
-                        self.converter.convert(raw_comment) if raw_comment else ""
-                    )
+                    converted_comment = self.converter.convert(raw_comment) if raw_comment else ""
                 except Exception:
                     converted_comment = raw_comment
                 events.append(
@@ -644,15 +636,12 @@ class EnhancedAuditTrailMigrator:
                     self.migration_results["comments_processed"] += len(comment_events)
 
             except Exception as e:
-                error_msg = (
-                    f"Failed to process changelog data for Jira ID {jira_id}: {e}"
-                )
+                error_msg = f"Failed to process changelog data for Jira ID {jira_id}: {e}"
                 self.logger.exception(error_msg)
                 self.migration_results["errors"].append(error_msg)
                 self.migration_results["failed_migrations"] += 1
 
         return True
-
 
     def execute_rails_audit_operations(
         self,
@@ -692,6 +681,7 @@ class EnhancedAuditTrailMigrator:
 
         try:
             from src import config as _cfg  # noqa: PLC0415
+
             use_client_exec = bool(_cfg.migration_config.get("audit_use_client", False))
         except Exception:  # noqa: BLE001
             use_client_exec = False
@@ -746,11 +736,17 @@ class EnhancedAuditTrailMigrator:
                 ruby_script = self._generate_audit_creation_script(self.rails_operations)
 
                 import subprocess
-                completed = subprocess.run([
-                    "bash",
-                    "-lc",
-                    ruby_script,
-                ], check=False, capture_output=True, text=True)
+
+                completed = subprocess.run(
+                    [
+                        "bash",
+                        "-lc",
+                        ruby_script,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
                 if completed.returncode == 0:
                     self.logger.success("Successfully executed audit event operations")
                     status = "success"
@@ -783,7 +779,6 @@ class EnhancedAuditTrailMigrator:
             "total": total_ops,
             "errors": errors,
         }
-
 
     def _generate_audit_creation_script(self, operations: list[dict[str, Any]]) -> str:
         """Generate Ruby script for creating audit events.
@@ -1098,6 +1093,7 @@ class EnhancedAuditTrailMigrator:
             # unit tests that expect temp_data_dir/migration_data path
             try:
                 import os
+
                 tmp_root = _Path(tempfile.gettempdir())
                 test_id = os.environ.get("PYTEST_CURRENT_TEST", "")
                 # Extract method name (last part before space)

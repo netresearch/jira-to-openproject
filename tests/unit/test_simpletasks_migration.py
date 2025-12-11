@@ -62,5 +62,3 @@ def test_simpletasks_migration_renders_markdown_and_updates():
     assert any("- [x] A" in md for _, md in op.calls)
     assert any("labels: x, y" in md for _, md in op.calls)
     assert any("due:" in md for _, md in op.calls)
-
-

@@ -231,15 +231,11 @@ class TestEntityTypeRegistryErrorHandling:
             EntityTypeRegistry.register(MockProjectMigration, ["shared_type"])
 
         # Assert
-        assert (
-            "Entity type 'shared_type' is supported by multiple classes" in caplog.text
-        )
+        assert "Entity type 'shared_type' is supported by multiple classes" in caplog.text
         assert "MockUserMigration and MockProjectMigration" in caplog.text
 
         # Last registration wins
-        assert (
-            EntityTypeRegistry.get_class_for_type("shared_type") is MockProjectMigration
-        )
+        assert EntityTypeRegistry.get_class_for_type("shared_type") is MockProjectMigration
 
 
 class TestRegisterEntityTypesDecorator:
@@ -256,10 +252,7 @@ class TestRegisterEntityTypesDecorator:
 
         # Assert: No explicit registration call needed
         assert EntityTypeRegistry.resolve(DecoratedUserMigration) == "decorated_users"
-        assert (
-            EntityTypeRegistry.get_class_for_type("decorated_accounts")
-            is DecoratedUserMigration
-        )
+        assert EntityTypeRegistry.get_class_for_type("decorated_accounts") is DecoratedUserMigration
 
     def test_decorator_with_single_entity_type(self) -> None:
         """Test decorator with single entity type."""
@@ -350,9 +343,7 @@ class TestBaseMigrationIntegration:
 
         # Assert
         assert entity_type is None
-        assert (
-            "MockUserMigration is not registered with EntityTypeRegistry" in caplog.text
-        )
+        assert "MockUserMigration is not registered with EntityTypeRegistry" in caplog.text
         assert "Add @register_entity_types decorator" in caplog.text
 
     def test_auto_detect_preserves_exception_details(self, caplog) -> None:
@@ -400,9 +391,7 @@ class TestEntityTypeRegistryEdgeCases:
 
         # Assert
         assert EntityTypeRegistry.resolve(MockUserMigration) == "user-accounts"
-        assert (
-            EntityTypeRegistry.get_class_for_type("user_profiles") is MockUserMigration
-        )
+        assert EntityTypeRegistry.get_class_for_type("user_profiles") is MockUserMigration
         assert EntityTypeRegistry.get_class_for_type("user.data") is MockUserMigration
 
     def test_entity_type_case_sensitivity(self) -> None:
@@ -567,10 +556,7 @@ class TestEntityTypeRegistryRealWorldScenarios:
         # Test reverse lookup
         assert EntityTypeRegistry.get_class_for_type("user_accounts") is UserMigration
         assert EntityTypeRegistry.get_class_for_type("issues") is WorkPackageMigration
-        assert (
-            EntityTypeRegistry.get_class_for_type("work_package_types")
-            is IssueTypeMigration
-        )
+        assert EntityTypeRegistry.get_class_for_type("work_package_types") is IssueTypeMigration
 
     def test_migration_orchestrator_usage_pattern(self) -> None:
         """Test how migration orchestrator would use the registry."""
@@ -616,9 +602,7 @@ class TestEntityTypeRegistryRealWorldScenarios:
 
         # Act & Assert: Both classes work independently
         assert EntityTypeRegistry.resolve(BaseMigrationImpl) == "base_entities"
-        assert (
-            EntityTypeRegistry.resolve(SpecializedMigration) == "specialized_entities"
-        )
+        assert EntityTypeRegistry.resolve(SpecializedMigration) == "specialized_entities"
 
         # Instances work correctly
         base_instance = BaseMigrationImpl()

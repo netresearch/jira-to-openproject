@@ -103,9 +103,7 @@ class ProjectMigration(BaseMigration):
         if isinstance(filters, str):
             filters = [filters]
         self.project_filters = {
-            str(f).upper()
-            for f in (filters or [])
-            if isinstance(f, (str, bytes)) and str(f).strip()
+            str(f).upper() for f in (filters or []) if isinstance(f, (str, bytes)) and str(f).strip()
         }
 
     def extract_jira_projects(self) -> list[dict[str, Any]]:
@@ -180,6 +178,7 @@ class ProjectMigration(BaseMigration):
                 "Jira Base URL",
             ]
             existing = self.op_client.batch_get_custom_fields_by_names(cf_names)
+
             def _get_cf_id(name: str) -> int | None:
                 rec = existing.get(name)
                 return rec.get("id") if isinstance(rec, dict) else None
@@ -508,9 +507,7 @@ class ProjectMigration(BaseMigration):
         )
         if self.company_mapping:
             company_count = len(self.company_mapping)
-            matched_count = sum(
-                1 for c in self.company_mapping.values() if c.get("openproject_id")
-            )
+            matched_count = sum(1 for c in self.company_mapping.values() if c.get("openproject_id"))
             logger.info(
                 "Loaded company mapping with %s entries, %s matched to OpenProject.",
                 company_count,
@@ -622,9 +619,7 @@ class ProjectMigration(BaseMigration):
 
         # 2) Use only the project's default Tempo account (first entry)
         acct_entry = raw_accts[0] if isinstance(raw_accts, list) else raw_accts
-        acct_id = (
-            acct_entry if isinstance(acct_entry, int | str) else acct_entry.get("id")
-        )
+        acct_id = acct_entry if isinstance(acct_entry, int | str) else acct_entry.get("id")
         if not acct_id:
             logger.warning(
                 "Project %s: default Tempo account entry invalid: %s",
@@ -1158,30 +1153,30 @@ class ProjectMigration(BaseMigration):
                     f"{ensure_cfs}"
                     f"p = Project.find_by(identifier: '{identifier_escaped}');\n"
                     "created = false;\n"
-            "if !p\n"
-            f"  p = Project.new(name: '{name_escaped}', identifier: '{identifier_escaped}', description: '{desc_escaped}', public: false);\n"
-            "  if p.respond_to?(:workspace_type=)\n"
-            "    begin\n"
-            "      p.workspace_type = 'project'\n"
-            "    rescue => e\n"
-            '      Rails.logger.warn("Failed to assign workspace_type: #{e.message}")\n'
-            "    end\n"
-            "  end\n"
-            "  if defined?(Type) && p.respond_to?(:types=)\n"
-            "    begin\n"
-            "      default_types = Type.where.not(id: nil)\n"
-            "      if default_types.empty?\n"
-            "        color = defined?(Color) ? (Color.respond_to?(:active) ? Color.active.first : Color.first) : nil\n"
-            "        color ||= Color.create!(name: 'J2O Blue', hexcode: '#0A84FF') if defined?(Color)\n"
-            "        position = (Type.maximum(:position) || 0) + 1\n"
-            "        default_types = [Type.create!(name: 'Standard', position: position, color_id: color&.id)]\n"
-            "      end\n"
-            "      p.types = default_types if default_types.any?\n"
-            "    rescue => type_error\n"
-            '      Rails.logger.warn("Failed to assign work package types: #{type_error.message}")\n'
-            "    end\n"
-            "  end\n"
-            "  p.save!;\n"
+                    "if !p\n"
+                    f"  p = Project.new(name: '{name_escaped}', identifier: '{identifier_escaped}', description: '{desc_escaped}', public: false);\n"
+                    "  if p.respond_to?(:workspace_type=)\n"
+                    "    begin\n"
+                    "      p.workspace_type = 'project'\n"
+                    "    rescue => e\n"
+                    '      Rails.logger.warn("Failed to assign workspace_type: #{e.message}")\n'
+                    "    end\n"
+                    "  end\n"
+                    "  if defined?(Type) && p.respond_to?(:types=)\n"
+                    "    begin\n"
+                    "      default_types = Type.where.not(id: nil)\n"
+                    "      if default_types.empty?\n"
+                    "        color = defined?(Color) ? (Color.respond_to?(:active) ? Color.active.first : Color.first) : nil\n"
+                    "        color ||= Color.create!(name: 'J2O Blue', hexcode: '#0A84FF') if defined?(Color)\n"
+                    "        position = (Type.maximum(:position) || 0) + 1\n"
+                    "        default_types = [Type.create!(name: 'Standard', position: position, color_id: color&.id)]\n"
+                    "      end\n"
+                    "      p.types = default_types if default_types.any?\n"
+                    "    rescue => type_error\n"
+                    '      Rails.logger.warn("Failed to assign work package types: #{type_error.message}")\n'
+                    "    end\n"
+                    "  end\n"
+                    "  p.save!;\n"
                     "  p.enabled_module_names = ['work_package_tracking', 'wiki'];\n"
                     "  p.save!;\n"
                     "  created = true;\n"
@@ -1364,11 +1359,7 @@ class ProjectMigration(BaseMigration):
                 self._populate_additional_metadata(jira_project)
                 mapping[jira_key] = {
                     "jira_key": jira_key,
-                    "jira_name": (
-                        jira_project.get("name")
-                        if jira_project
-                        else project.get("name")
-                    ),
+                    "jira_name": (jira_project.get("name") if jira_project else project.get("name")),
                     "openproject_id": project.get("openproject_id"),
                     "openproject_identifier": project.get("identifier"),
                     "openproject_name": project.get("name"),
@@ -1396,9 +1387,7 @@ class ProjectMigration(BaseMigration):
                 self._populate_additional_metadata(jira_project)
                 mapping[jira_key] = {
                     "jira_key": jira_key,
-                    "jira_name": (
-                        jira_project.get("name") if jira_project else error.get("name")
-                    ),
+                    "jira_name": (jira_project.get("name") if jira_project else error.get("name")),
                     "openproject_id": None,
                     "openproject_identifier": None,
                     "openproject_name": None,
@@ -1462,33 +1451,18 @@ class ProjectMigration(BaseMigration):
 
         analysis = {
             "total_projects": len(self.project_mapping),
-            "migrated_projects": sum(
-                1
-                for p in self.project_mapping.values()
-                if p.get("openproject_id") is not None
-            ),
-            "new_projects": sum(
-                1 for p in self.project_mapping.values() if p.get("created_new", False)
-            ),
+            "migrated_projects": sum(1 for p in self.project_mapping.values() if p.get("openproject_id") is not None),
+            "new_projects": sum(1 for p in self.project_mapping.values() if p.get("created_new", False)),
             "existing_projects": sum(
                 1
                 for p in self.project_mapping.values()
-                if p.get("openproject_id") is not None
-                and not p.get("created_new", False)
+                if p.get("openproject_id") is not None and not p.get("created_new", False)
             ),
             "projects_with_accounts": sum(
-                1
-                for p in self.project_mapping.values()
-                if p.get("account_name") is not None
+                1 for p in self.project_mapping.values() if p.get("account_name") is not None
             ),
-            "projects_with_parent": sum(
-                1
-                for p in self.project_mapping.values()
-                if p.get("parent_id") is not None
-            ),
-            "failed_projects": sum(
-                1 for p in self.project_mapping.values() if p.get("failed", False)
-            ),
+            "projects_with_parent": sum(1 for p in self.project_mapping.values() if p.get("parent_id") is not None),
+            "failed_projects": sum(1 for p in self.project_mapping.values() if p.get("failed", False)),
             "failed_details": [
                 {"jira_key": p.get("jira_key"), "jira_name": p.get("jira_name")}
                 for p in self.project_mapping.values()
@@ -1498,12 +1472,8 @@ class ProjectMigration(BaseMigration):
 
         total = int(analysis["total_projects"])
         if total > 0:
-            analysis["migration_percentage"] = (
-                int(analysis["migrated_projects"]) / total
-            ) * 100
-            analysis["hierarchical_percentage"] = (
-                int(analysis["projects_with_parent"]) / total
-            ) * 100
+            analysis["migration_percentage"] = (int(analysis["migrated_projects"]) / total) * 100
+            analysis["hierarchical_percentage"] = (int(analysis["projects_with_parent"]) / total) * 100
         else:
             analysis["migration_percentage"] = 0
             analysis["hierarchical_percentage"] = 0
@@ -1545,10 +1515,7 @@ class ProjectMigration(BaseMigration):
         """
         if entity_type == "projects":
             return self.jira_client.get_projects()
-        msg = (
-            f"ProjectMigration does not support entity type: {entity_type}. "
-            f"Supported types: ['projects']"
-        )
+        msg = f"ProjectMigration does not support entity type: {entity_type}. Supported types: ['projects']"
         raise ValueError(
             msg,
         )

@@ -82,10 +82,7 @@ class WatcherMigration(BaseMigration):
 
         # Build Jira keys list from work package mapping
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [
-            (v.get("jira_key", k) if isinstance(v, dict) else k)
-            for k, v in wp_map.items()
-        ]
+        jira_keys = [(v.get("jira_key", k) if isinstance(v, dict) else k) for k, v in wp_map.items()]
         jira_keys = [str(k) for k in jira_keys if k]
         if not jira_keys:
             logger.info("No work package mappings; skipping watcher migration")
@@ -141,5 +138,3 @@ class WatcherMigration(BaseMigration):
         result.message = f"Watchers created={created}, skipped={skipped}, errors={errors}"
         logger.info(result.message)
         return result
-
-

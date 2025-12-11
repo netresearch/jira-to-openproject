@@ -62,8 +62,7 @@ class AdminSchemeMigration(BaseMigration):
         # Check if this is the entity type we handle
         if entity_type != "admin_schemes":
             msg = (
-                f"AdminSchemeMigration does not support entity type: {entity_type}. "
-                f"Supported types: ['admin_schemes']"
+                f"AdminSchemeMigration does not support entity type: {entity_type}. Supported types: ['admin_schemes']"
             )
             raise ValueError(msg)
 
@@ -142,9 +141,7 @@ class AdminSchemeMigration(BaseMigration):
 
         projects: list[dict[str, Any]] = extracted.data.get("projects", [])
         op_roles = self.op_client.get_roles()
-        role_name_to_id = {
-            role.get("name"): int(role.get("id", 0) or 0) for role in op_roles if role.get("name")
-        }
+        role_name_to_id = {role.get("name"): int(role.get("id", 0) or 0) for role in op_roles if role.get("name")}
 
         group_assignments: defaultdict[tuple[str, int], set[int]] = defaultdict(set)
         user_assignments: defaultdict[tuple[int, int], set[int]] = defaultdict(set)
@@ -154,11 +151,7 @@ class AdminSchemeMigration(BaseMigration):
             desired = ROLE_NAME_MAPPING.get(jira_role_name.lower())
             if not desired:
                 return []
-            role_ids = [
-                role_name_to_id.get(name)
-                for name in desired
-                if role_name_to_id.get(name)
-            ]
+            role_ids = [role_name_to_id.get(name) for name in desired if role_name_to_id.get(name)]
             return [rid for rid in role_ids if rid]
 
         def resolve_user_id(actor: dict[str, Any]) -> int | None:

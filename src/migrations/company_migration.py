@@ -195,9 +195,7 @@ class CompanyMigration(BaseMigration):
                 "id": company_id,
                 "key": company.get("key", "").strip(),
                 "name": company.get("name", "").strip(),
-                "lead": (
-                    company.get("lead", {}).get("key") if company.get("lead") else None
-                ),
+                "lead": (company.get("lead", {}).get("key") if company.get("lead") else None),
                 "status": company.get("status", "ACTIVE"),
                 "_raw": company,
             }
@@ -266,21 +264,15 @@ class CompanyMigration(BaseMigration):
             self._extract_openproject_projects()
 
         top_level_projects = [
-            project
-            for project in self.op_projects
-            if project.get("_links", {}).get("parent", {}).get("href") is None
+            project for project in self.op_projects if project.get("_links", {}).get("parent", {}).get("href") is None
         ]
 
-        op_projects_by_name = {
-            project.get("name", "").lower(): project for project in top_level_projects
-        }
+        op_projects_by_name = {project.get("name", "").lower(): project for project in top_level_projects}
 
         mapping = {}
         # Handle both dictionary and list types for tempo_companies
         tempo_companies_list = (
-            self.tempo_companies.values()
-            if isinstance(self.tempo_companies, dict)
-            else self.tempo_companies
+            self.tempo_companies.values() if isinstance(self.tempo_companies, dict) else self.tempo_companies
         )
 
         for tempo_company in tempo_companies_list:
@@ -337,12 +329,8 @@ class CompanyMigration(BaseMigration):
         self._save_to_json(mapping, Mappings.COMPANY_MAPPING_FILE)
 
         total_companies = len(mapping)
-        matched_companies = sum(
-            1 for company in mapping.values() if company["matched_by"] != "none"
-        )
-        match_percentage = (
-            (matched_companies / total_companies) * 100 if total_companies > 0 else 0
-        )
+        matched_companies = sum(1 for company in mapping.values() if company["matched_by"] != "none")
+        match_percentage = (matched_companies / total_companies) * 100 if total_companies > 0 else 0
 
         self.logger.info(
             "Company mapping created for %d companies",
@@ -371,38 +359,22 @@ class CompanyMigration(BaseMigration):
                 with mapping_path.open("r") as f:
                     self.company_mapping = json.load(f)
             else:
-                error_msg = (
-                    "No company mapping found. Run create_company_mapping() first."
-                )
+                error_msg = "No company mapping found. Run create_company_mapping() first."
                 self.logger.error(error_msg)
                 raise MigrationError(error_msg)
 
         analysis: dict[str, str | int | list[dict[str, str]]] = {
             "total_companies": len(self.company_mapping),
-            "matched_companies": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] != "none"
-            ),
-            "matched_by_name": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] == "name"
-            ),
+            "matched_companies": sum(1 for company in self.company_mapping.values() if company["matched_by"] != "none"),
+            "matched_by_name": sum(1 for company in self.company_mapping.values() if company["matched_by"] == "name"),
             "matched_by_creation": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] == "created"
+                1 for company in self.company_mapping.values() if company["matched_by"] == "created"
             ),
             "matched_by_existing": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] == "existing"
+                1 for company in self.company_mapping.values() if company["matched_by"] == "existing"
             ),
             "unmatched_companies": sum(
-                1
-                for company in self.company_mapping.values()
-                if company["matched_by"] == "none"
+                1 for company in self.company_mapping.values() if company["matched_by"] == "none"
             ),
             "actually_created": self._created_companies,
             "unmatched_details": [
@@ -418,11 +390,7 @@ class CompanyMigration(BaseMigration):
 
         total_companies = analysis.get("total_companies", 0)
         matched_companies = analysis.get("matched_companies", 0)
-        if (
-            isinstance(total_companies, int)
-            and isinstance(matched_companies, int)
-            and total_companies > 0
-        ):
+        if isinstance(total_companies, int) and isinstance(matched_companies, int) and total_companies > 0:
             analysis["match_percentage"] = int(
                 (matched_companies / total_companies) * 100,
             )
@@ -1225,8 +1193,7 @@ class CompanyMigration(BaseMigration):
         results["failed"] = len(errors)
         if errors:
             results["errors"] = [
-                f"{e.get('tempo_id', 'Unknown')}: {e.get('error', 'Unknown error')}"
-                for e in errors[:10]
+                f"{e.get('tempo_id', 'Unknown')}: {e.get('error', 'Unknown error')}" for e in errors[:10]
             ]
             if len(errors) > 10:
                 results["errors"].append(f"...and {len(errors) - 10} more errors")

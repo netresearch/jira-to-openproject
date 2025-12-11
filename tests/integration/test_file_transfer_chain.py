@@ -42,8 +42,7 @@ def should_skip_tests() -> bool:
 
     # Check for required SSH environment variables
     return bool(
-        not os.environ.get("J2O_OPENPROJECT_SERVER")
-        or not os.environ.get("J2O_OPENPROJECT_USER"),
+        not os.environ.get("J2O_OPENPROJECT_SERVER") or not os.environ.get("J2O_OPENPROJECT_USER"),
     )
 
 
@@ -240,9 +239,7 @@ class FileTransferChainTest(unittest.TestCase):
                             f"Docker container '{container}' not found",
                         )
                         cls.docker_client = MockDockerClient()
-                        cls.docker_connected = (
-                            cls.docker_client.check_container_exists()
-                        )
+                        cls.docker_connected = cls.docker_client.check_container_exists()
                         if cls.docker_connected:
                             print("Using mock Docker connection")
                 except Exception as e:
@@ -506,11 +503,7 @@ class FileTransferChainTest(unittest.TestCase):
     @classmethod
     def _cleanup_container_directory(cls) -> None:
         """Clean up container directory."""
-        if (
-            cls.container_temp_dir
-            and hasattr(cls, "docker_client")
-            and cls.docker_client
-        ):
+        if cls.container_temp_dir and hasattr(cls, "docker_client") and cls.docker_client:
             try:
                 cls.docker_client.execute_command(f"rm -rf {cls.container_temp_dir}")
                 print(f"Removed container directory: {cls.container_temp_dir}")
@@ -619,21 +612,19 @@ class FileTransferChainTest(unittest.TestCase):
 
             # Check ssh connection
             ssh_result = ssh_future.result()
-            assert (
-                ssh_result == self.__class__.ssh_connected
-            ), "SSH connection status doesn't match expected value"
+            assert ssh_result == self.__class__.ssh_connected, "SSH connection status doesn't match expected value"
 
             # Check docker connection
             docker_result = docker_future.result()
-            assert (
-                docker_result == self.__class__.docker_connected
-            ), "Docker connection status doesn't match expected value"
+            assert docker_result == self.__class__.docker_connected, (
+                "Docker connection status doesn't match expected value"
+            )
 
             # Check rails connection (optional)
             rails_result = rails_future.result()
-            assert (
-                rails_result == self.__class__.rails_connected
-            ), "Rails connection status doesn't match expected value"
+            assert rails_result == self.__class__.rails_connected, (
+                "Rails connection status doesn't match expected value"
+            )
 
     def _test_ssh_connection(self) -> bool:
         """Test SSH connection."""
@@ -664,9 +655,7 @@ class FileTransferChainTest(unittest.TestCase):
             stdout, stderr, rc = self.__class__.docker_client.execute_command(
                 "echo 'Docker command successful'",
             )
-            return (
-                container_exists and rc == 0 and "Docker command successful" in stdout
-            )
+            return container_exists and rc == 0 and "Docker command successful" in stdout
         except Exception as e:
             print(f"Docker connection error: {e!s}")
             return False
@@ -675,9 +664,7 @@ class FileTransferChainTest(unittest.TestCase):
         """Test Rails console connection."""
         print("Testing Rails console connection...")
         try:
-            assert (
-                self.__class__.rails_client is not None
-            ), "Rails client is not initialized"
+            assert self.__class__.rails_client is not None, "Rails client is not initialized"
             result = self.__class__.rails_client.execute("puts 'Rails console test'")
             return "Rails console test" in result
         except Exception as e:
@@ -693,9 +680,7 @@ class FileTransferChainTest(unittest.TestCase):
         print("\n=== Testing Complete File Transfer Chain ===")
 
         # 1. Create test content with timestamp to ensure uniqueness
-        test_content = (
-            f"Test content generated at {time.ctime()} - {random.randint(1000, 9999)}"
-        )
+        test_content = f"Test content generated at {time.ctime()} - {random.randint(1000, 9999)}"
         filename = f"chain_test_{random.randint(1000, 9999)}.txt"
 
         # 2. Create and transfer the file through each step of the chain
@@ -746,8 +731,7 @@ class FileTransferChainTest(unittest.TestCase):
                 content_match = stdout.strip() == expected_content
                 if not content_match:
                     print(
-                        f"Remote file content mismatch. "
-                        f"Expected: '{expected_content}', Got: '{stdout.strip()}'",
+                        f"Remote file content mismatch. Expected: '{expected_content}', Got: '{stdout.strip()}'",
                     )
                 return content_match
             except Exception as e:
@@ -790,8 +774,7 @@ class FileTransferChainTest(unittest.TestCase):
                 content_match = stdout.strip() == expected_content
                 if not content_match:
                     print(
-                        f"Container file content mismatch. "
-                        f"Expected: '{expected_content}', Got: '{stdout.strip()}'",
+                        f"Container file content mismatch. Expected: '{expected_content}', Got: '{stdout.strip()}'",
                     )
                 return content_match
             except Exception as e:
@@ -850,9 +833,7 @@ class FileTransferChainTest(unittest.TestCase):
         # Use the OpenProject client to execute the script directly
         try:
             # Execute the script using the optimized client methods
-            assert (
-                self.__class__.op_client is not None
-            ), "OpenProject client is not initialized"
+            assert self.__class__.op_client is not None, "OpenProject client is not initialized"
             result = self.__class__.op_client.execute(ruby_script)
             print(f"Script execution result: {result}")
 
@@ -860,18 +841,10 @@ class FileTransferChainTest(unittest.TestCase):
             assert result is not None, "Script execution returned None"
 
             # The execute method returns a dict with 'result' key when it can't parse as JSON
-            result_str = (
-                str(result["result"])
-                if isinstance(result, dict) and "result" in result
-                else str(result)
-            )
+            result_str = str(result["result"]) if isinstance(result, dict) and "result" in result else str(result)
 
-            assert (
-                f"test_value: {test_value}" in result_str
-            ), f"Script did not return expected test value: {test_value}"
-            assert (
-                'message: "Script executed successfully"' in result_str
-            ), "Script did not return expected message"
+            assert f"test_value: {test_value}" in result_str, f"Script did not return expected test value: {test_value}"
+            assert 'message: "Script executed successfully"' in result_str, "Script did not return expected message"
 
         except Exception as e:
             self.fail(f"Script execution failed: {e!s}")

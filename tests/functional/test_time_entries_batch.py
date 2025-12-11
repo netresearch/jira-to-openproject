@@ -100,6 +100,3 @@ def test_batch_create_time_entries_file_based(tmp_path: Path) -> None:
     # Verify our runner script included logged_by assignment
     rails = client.rails_client  # type: ignore[attr-defined]
     assert hasattr(rails, "last_script") and "logged_by_id" in rails.last_script
-
-
-

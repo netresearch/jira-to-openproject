@@ -59,7 +59,6 @@ class TestFixtureArchitecture:
             patch.object(EnhancedUserAssociationMigrator, "_load_enhanced_mappings"),
             patch.object(EnhancedUserAssociationMigrator, "_save_enhanced_mappings"),
         ):
-
             # Clean config setup
             mock_config.get_path.return_value = Path("/tmp/test_fixture_arch")
             mock_config.migration_config = {

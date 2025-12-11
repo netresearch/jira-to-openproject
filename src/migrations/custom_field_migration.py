@@ -70,6 +70,7 @@ class CustomFieldMigration(BaseMigration):
         self.op_custom_fields = self._load_from_json(Path("op_custom_fields.json"), [])
         # Load via mapping controller when available to keep in-memory state canonical
         from src import config as _cfg
+
         self.mapping = _cfg.mappings.get_mapping("custom_field") or {}
 
         analysis_data = self._load_from_json(Path("custom_field_analysis.json"), {})
@@ -130,10 +131,7 @@ class CustomFieldMigration(BaseMigration):
 
             # Try to get all field options from ScriptRunner in one call if available
             scriptrunner_data = {}
-            if (
-                self.jira_client.scriptrunner_enabled
-                and self.jira_client.scriptrunner_custom_field_options_endpoint
-            ):
+            if self.jira_client.scriptrunner_enabled and self.jira_client.scriptrunner_custom_field_options_endpoint:
                 self.logger.info(
                     "Fetching all custom field options via ScriptRunner...",
                 )
@@ -176,9 +174,7 @@ class CustomFieldMigration(BaseMigration):
                         if field_id in scriptrunner_data:
                             sr_field = scriptrunner_data[field_id]
                             if sr_field.get("options"):
-                                custom_field_data["allowed_values"] = sr_field[
-                                    "options"
-                                ]
+                                custom_field_data["allowed_values"] = sr_field["options"]
                                 self.logger.debug(
                                     "Using ScriptRunner data for field %s: %d options",
                                     field.get("name"),
@@ -351,10 +347,7 @@ class CustomFieldMigration(BaseMigration):
                 return "list"
             if "date" in jira_custom_type.lower():
                 return "date"
-            if (
-                "number" in jira_custom_type.lower()
-                or "float" in jira_custom_type.lower()
-            ):
+            if "number" in jira_custom_type.lower() or "float" in jira_custom_type.lower():
                 return "float"
             if "integer" in jira_custom_type.lower():
                 return "int"
@@ -398,9 +391,7 @@ class CustomFieldMigration(BaseMigration):
 
         mapping = {}
 
-        op_fields_by_name = {
-            field.get("name", "").lower(): field for field in self.op_custom_fields
-        }
+        op_fields_by_name = {field.get("name", "").lower(): field for field in self.op_custom_fields}
 
         def process_field(
             jira_field: dict[str, Any],
@@ -469,15 +460,12 @@ class CustomFieldMigration(BaseMigration):
 
         # Persist via mapping controller only
         from src import config as _cfg
+
         _cfg.mappings.set_mapping("custom_field", mapping)
 
         total_fields = len(mapping)
-        matched_fields = sum(
-            1 for field in mapping.values() if field["matched_by"] == "name"
-        )
-        created_fields = sum(
-            1 for field in mapping.values() if field["matched_by"] == "created"
-        )
+        matched_fields = sum(1 for field in mapping.values() if field["matched_by"] == "name")
+        created_fields = sum(1 for field in mapping.values() if field["matched_by"] == "created")
 
         self.logger.info(
             "Custom field mapping created for %d fields",
@@ -521,9 +509,7 @@ class CustomFieldMigration(BaseMigration):
                 and isinstance(field_data["possible_values"], list)
             ):
                 values = field_data["possible_values"]
-                escaped_values = [
-                    v.replace('"', '\\"') if isinstance(v, str) else v for v in values
-                ]
+                escaped_values = [v.replace('"', '\\"') if isinstance(v, str) else v for v in values]
                 values_str = ", ".join([f'"{v}"' for v in escaped_values])
                 possible_values_ruby = f"[{values_str}]"
             else:
@@ -599,9 +585,7 @@ class CustomFieldMigration(BaseMigration):
                 error_info,
             )
 
-            if isinstance(result.get("errors"), list) and any(
-                "Possible values" in err for err in result["errors"]
-            ):
+            if isinstance(result.get("errors"), list) and any("Possible values" in err for err in result["errors"]):
                 self.logger.error(
                     "Field '%s' requires possible values for list type fields",
                     field_name,
@@ -653,10 +637,12 @@ class CustomFieldMigration(BaseMigration):
                 attrs["possible_values"] = [str(v).strip() for v in possible_values]
 
             records.append(attrs)
-            meta.append({
-                "jira_id": field.get("jira_id"),
-                "name": jira_name,
-            })
+            meta.append(
+                {
+                    "jira_id": field.get("jira_id"),
+                    "name": jira_name,
+                }
+            )
 
         if not records:
             self.logger.info("No custom fields to create")
@@ -730,18 +716,14 @@ class CustomFieldMigration(BaseMigration):
         )
 
         # Check if we have fields that need to be created
-        fields_to_create = [
-            f for f in self.mapping.values() if f.get("matched_by") == "create"
-        ]
+        fields_to_create = [f for f in self.mapping.values() if f.get("matched_by") == "create"]
 
         if not fields_to_create:
             # If no fields in the mapping need to be created, but we were explicitly provided with
             # fields to create in the mapping, use those directly
             # This is primarily for testing purposes
             if any(f.get("matched_by") == "create" for f in self.mapping.values()):
-                fields_to_create = [
-                    f for f in self.mapping.values() if f.get("matched_by") == "create"
-                ]
+                fields_to_create = [f for f in self.mapping.values() if f.get("matched_by") == "create"]
             else:
                 self.logger.info(
                     "No custom fields need to be created. All mapped or ignored.",
@@ -761,10 +743,7 @@ class CustomFieldMigration(BaseMigration):
 
         """
         # Check if analysis was recently performed to avoid duplicate logging
-        if (
-            hasattr(self, "_last_analysis_time")
-            and time.time() - self._last_analysis_time < 5
-        ):
+        if hasattr(self, "_last_analysis_time") and time.time() - self._last_analysis_time < 5:
             self.logger.debug("Skipping duplicate analysis - was just performed")
             # Make sure the analysis has a status field
             if hasattr(self, "analysis") and self.analysis:
@@ -778,6 +757,7 @@ class CustomFieldMigration(BaseMigration):
 
         if not self.mapping:
             from src import config as _cfg
+
             self.mapping = _cfg.mappings.get_mapping("custom_field") or {}
             if not self.mapping:
                 self.logger.error(
@@ -787,15 +767,9 @@ class CustomFieldMigration(BaseMigration):
 
         # Analyze the mapping
         total_fields = len(self.mapping)
-        matched_fields = sum(
-            1 for field in self.mapping.values() if field["matched_by"] == "name"
-        )
-        created_fields = sum(
-            1 for field in self.mapping.values() if field["matched_by"] == "created"
-        )
-        to_create_fields = sum(
-            1 for field in self.mapping.values() if field["matched_by"] == "create"
-        )
+        matched_fields = sum(1 for field in self.mapping.values() if field["matched_by"] == "name")
+        created_fields = sum(1 for field in self.mapping.values() if field["matched_by"] == "created")
+        to_create_fields = sum(1 for field in self.mapping.values() if field["matched_by"] == "create")
 
         analysis = {
             "status": "success",
@@ -820,9 +794,7 @@ class CustomFieldMigration(BaseMigration):
         if total_fields > 0:
             analysis["match_percentage"] = (matched_fields / total_fields) * 100
             analysis["created_percentage"] = (created_fields / total_fields) * 100
-            analysis["needs_creation_percentage"] = (
-                to_create_fields / total_fields
-            ) * 100
+            analysis["needs_creation_percentage"] = (to_create_fields / total_fields) * 100
         else:
             analysis["match_percentage"] = 0
             analysis["created_percentage"] = 0
@@ -886,10 +858,7 @@ class CustomFieldMigration(BaseMigration):
         """
         if entity_type == "custom_fields":
             return self.jira_client.get_custom_fields()
-        msg = (
-            f"CustomFieldMigration does not support entity type: {entity_type}. "
-            f"Supported types: ['custom_fields']"
-        )
+        msg = f"CustomFieldMigration does not support entity type: {entity_type}. Supported types: ['custom_fields']"
         raise ValueError(
             msg,
         )
@@ -929,8 +898,7 @@ class CustomFieldMigration(BaseMigration):
                 jira_fields_count=len(jira_fields),
                 op_fields_count=len(op_fields),
                 mapped_fields_count=len(mapping),
-                success_count=analysis.get("matched_by_name", 0)
-                + analysis.get("created_directly", 0),
+                success_count=analysis.get("matched_by_name", 0) + analysis.get("created_directly", 0),
                 failed_count=analysis.get("needs_manual_creation_or_script", 0),
                 total_count=len(jira_fields),
                 analysis=analysis,

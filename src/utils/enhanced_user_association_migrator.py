@@ -142,10 +142,7 @@ class CircuitBreaker:
             now = time.time()
 
             # Check if circuit should recover
-            if (
-                self.state == "OPEN"
-                and now - self.last_failure_time > self.recovery_timeout
-            ):
+            if self.state == "OPEN" and now - self.last_failure_time > self.recovery_timeout:
                 self.state = "HALF_OPEN"
 
             # Reject if circuit is open
@@ -247,16 +244,10 @@ class EnhancedUserAssociationMigrator:
     DEFAULT_FALLBACK_STRATEGY = StalenessConfig.DEFAULT_FALLBACK_STRATEGY
 
     # Rate limiting and retry configuration (YOLO FIXED: increased from 3 to 5)
-    ABSOLUTE_MAX_RETRIES = (
-        RetryConfig.ABSOLUTE_MAX_RETRIES
-    )  # Hard limit to prevent resource exhaustion
-    DEFAULT_BASE_DELAY = (
-        RetryConfig.DEFAULT_BASE_DELAY
-    )  # Default delay between retries (seconds)
+    ABSOLUTE_MAX_RETRIES = RetryConfig.ABSOLUTE_MAX_RETRIES  # Hard limit to prevent resource exhaustion
+    DEFAULT_BASE_DELAY = RetryConfig.DEFAULT_BASE_DELAY  # Default delay between retries (seconds)
     DEFAULT_MAX_DELAY = RetryConfig.DEFAULT_MAX_DELAY  # Maximum delay cap (seconds)
-    DEFAULT_REQUEST_TIMEOUT = (
-        RetryConfig.DEFAULT_REQUEST_TIMEOUT
-    )  # Default request timeout (seconds)
+    DEFAULT_REQUEST_TIMEOUT = RetryConfig.DEFAULT_REQUEST_TIMEOUT  # Default request timeout (seconds)
     MAX_CONCURRENT_REFRESHES = (
         RetryConfig.MAX_CONCURRENT_REFRESHES
     )  # Prevent retry storms, increased for better performance
@@ -304,11 +295,7 @@ class EnhancedUserAssociationMigrator:
         # If admin or migration users are not found, set to sensible defaults where available
         if "admin" not in self.fallback_users:
             try:
-                admins = [
-                    u
-                    for u in (self.op_client.get_users() or [])
-                    if u.get("login") == "admin" or u.get("admin")
-                ]
+                admins = [u for u in (self.op_client.get_users() or []) if u.get("login") == "admin" or u.get("admin")]
                 if admins:
                     self.fallback_users["admin"] = admins[0]["id"]
             except Exception:
@@ -461,22 +448,12 @@ class EnhancedUserAssociationMigrator:
 
         if hasattr(obj, "_mock_name"):  # Mock object detection
             return f"<Mock: {getattr(obj, '_mock_name', 'unknown')}>"
-        if (
-            hasattr(obj, "__dict__")
-            and hasattr(obj, "__module__")
-            and "mock" in str(type(obj))
-        ):
+        if hasattr(obj, "__dict__") and hasattr(obj, "__module__") and "mock" in str(type(obj)):
             return f"<Mock: {type(obj).__name__}>"
         if isinstance(obj, dict):
-            return {
-                k: self._make_json_serializable(v, max_depth, current_depth + 1)
-                for k, v in obj.items()
-            }
+            return {k: self._make_json_serializable(v, max_depth, current_depth + 1) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
-            return [
-                self._make_json_serializable(item, max_depth, current_depth + 1)
-                for item in obj
-            ]
+            return [self._make_json_serializable(item, max_depth, current_depth + 1) for item in obj]
         if isinstance(obj, (str, int, float, bool)) or obj is None:
             return obj
         if hasattr(obj, "isoformat"):  # datetime objects
@@ -525,19 +502,13 @@ class EnhancedUserAssociationMigrator:
                 msg,
             )
 
-        if (
-            not isinstance(config["base_delay"], (int, float))
-            or config["base_delay"] <= 0
-        ):
+        if not isinstance(config["base_delay"], (int, float)) or config["base_delay"] <= 0:
             msg = f"base_delay must be a positive number, got: {config['base_delay']}"
             raise ValueError(
                 msg,
             )
 
-        if (
-            not isinstance(config["max_delay"], (int, float))
-            or config["max_delay"] <= 0
-        ):
+        if not isinstance(config["max_delay"], (int, float)) or config["max_delay"] <= 0:
             msg = f"max_delay must be a positive number, got: {config['max_delay']}"
             raise ValueError(
                 msg,
@@ -549,10 +520,7 @@ class EnhancedUserAssociationMigrator:
                 msg,
             )
 
-        if (
-            not isinstance(config["request_timeout"], (int, float))
-            or config["request_timeout"] <= 0
-        ):
+        if not isinstance(config["request_timeout"], (int, float)) or config["request_timeout"] <= 0:
             msg = f"request_timeout must be a positive number, got: {config['request_timeout']}"
             raise ValueError(
                 msg,
@@ -668,39 +636,27 @@ class EnhancedUserAssociationMigrator:
 
         for jira_key, entry in self.user_mapping.items():
             # user_mapping is keyed by Jira user key; entries now also carry J2O provenance data
-            op_user_id = entry if isinstance(entry, int) else (entry.get("openproject_id") if isinstance(entry, dict) else None)
+            op_user_id = (
+                entry if isinstance(entry, int) else (entry.get("openproject_id") if isinstance(entry, dict) else None)
+            )
             jira_username = entry.get("jira_name") if isinstance(entry, dict) else None
             jira_user_info = self._get_jira_user_info(jira_username or jira_key)
-            op_user_info = (
-                self._get_openproject_user_info(op_user_id) if op_user_id else None
-            )
+            op_user_info = self._get_openproject_user_info(op_user_id) if op_user_id else None
 
             mapping = UserAssociationMapping(
                 jira_username=jira_username or jira_key,
-                jira_user_id=(
-                    jira_user_info.get("accountId") if jira_user_info else None
-                ),
-                jira_display_name=(
-                    jira_user_info.get("displayName") if jira_user_info else None
-                ),
-                jira_email=(
-                    jira_user_info.get("emailAddress") if jira_user_info else None
-                ),
+                jira_user_id=(jira_user_info.get("accountId") if jira_user_info else None),
+                jira_display_name=(jira_user_info.get("displayName") if jira_user_info else None),
+                jira_email=(jira_user_info.get("emailAddress") if jira_user_info else None),
                 openproject_user_id=op_user_id,
-                openproject_username=(
-                    op_user_info.get("login") if op_user_info else None
-                ),
+                openproject_username=(op_user_info.get("login") if op_user_info else None),
                 openproject_email=op_user_info.get("mail") if op_user_info else None,
                 mapping_status="mapped" if op_user_id else "unmapped",
                 fallback_user_id=None,
                 metadata={
                     "created_at": self._get_current_timestamp(),
-                    "jira_active": (
-                        bool(jira_user_info.get("active", True)) if jira_user_info else True
-                    ),
-                    "openproject_active": (
-                        (op_user_info.get("status") == 1) if op_user_info else True
-                    ),
+                    "jira_active": (bool(jira_user_info.get("active", True)) if jira_user_info else True),
+                    "openproject_active": ((op_user_info.get("status") == 1) if op_user_info else True),
                 },
                 lastRefreshed=self._get_current_timestamp(),
             )
@@ -908,11 +864,7 @@ class EnhancedUserAssociationMigrator:
 
         # Update status based on warnings
         if result["warnings"]:
-            result["status"] = (
-                "fallback_used"
-                if any("fallback" in w for w in result["warnings"])
-                else "success"
-            )
+            result["status"] = "fallback_used" if any("fallback" in w for w in result["warnings"]) else "success"
 
         return result
 
@@ -990,9 +942,7 @@ class EnhancedUserAssociationMigrator:
                             else:
                                 # For Mock objects from tests, prefer _mock_name; ignore nested Mock name attrs
                                 name_attr = getattr(watcher, "name", None)
-                                name = (
-                                    name_attr if isinstance(name_attr, str) else getattr(watcher, "_mock_name", None)
-                                )
+                                name = name_attr if isinstance(name_attr, str) else getattr(watcher, "_mock_name", None)
                                 account_id = getattr(watcher, "accountId", None)
                                 display_name = getattr(watcher, "displayName", None)
                                 email = getattr(watcher, "emailAddress", None)
@@ -1298,9 +1248,7 @@ class EnhancedUserAssociationMigrator:
 
                 if mapping and mapping.get("openproject_user_id"):
                     # Verify user exists and is active
-                    if mapping["mapping_status"] == "mapped" and mapping[
-                        "metadata"
-                    ].get("openproject_active", True):
+                    if mapping["mapping_status"] == "mapped" and mapping["metadata"].get("openproject_active", True):
                         valid_watcher_ids.append(mapping["openproject_user_id"])
                         self.logger.debug(
                             "Successfully mapped watcher %s to OpenProject user %d",
@@ -1541,11 +1489,7 @@ class EnhancedUserAssociationMigrator:
         stale_mappings = {}
 
         # Determine which usernames to check
-        check_usernames = (
-            usernames
-            if usernames is not None
-            else list(self.enhanced_user_mappings.keys())
-        )
+        check_usernames = usernames if usernames is not None else list(self.enhanced_user_mappings.keys())
 
         # MONITORING: Bulk staleness detection logging
         self.logger.debug(
@@ -1571,9 +1515,7 @@ class EnhancedUserAssociationMigrator:
                                 last_refresh_time = datetime.fromisoformat(
                                     last_refreshed,
                                 )
-                                age_seconds = (
-                                    current_time - last_refresh_time
-                                ).total_seconds()
+                                age_seconds = (current_time - last_refresh_time).total_seconds()
                                 stale_reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
                                 reason_tag = "expired"
                             except ValueError:
@@ -1825,9 +1767,7 @@ class EnhancedUserAssociationMigrator:
             )
 
         # Use provided max_retries or default from config
-        retry_limit = (
-            max_retries if max_retries is not None else self.retry_config["max_retries"]
-        )
+        retry_limit = max_retries if max_retries is not None else self.retry_config["max_retries"]
 
         # Validate retry limit
         if not isinstance(retry_limit, int) or retry_limit < 0:
@@ -1969,6 +1909,7 @@ class EnhancedUserAssociationMigrator:
             patched_internal_helper = False
             try:
                 from unittest.mock import MagicMock  # type: ignore[import-not-found]
+
                 patched_internal_helper = isinstance(self._get_jira_user_info, MagicMock)
             except Exception:  # noqa: BLE001
                 patched_internal_helper = False
@@ -1977,7 +1918,9 @@ class EnhancedUserAssociationMigrator:
             ji_get = getattr(self.jira_client, "get", None)
             ji_get_user_info = getattr(self.jira_client, "get_user_info", None)
             get_side_effect_set = hasattr(ji_get, "side_effect") and ji_get.side_effect is not None
-            get_user_info_side_effect_set = hasattr(ji_get_user_info, "side_effect") and ji_get_user_info.side_effect is not None
+            get_user_info_side_effect_set = (
+                hasattr(ji_get_user_info, "side_effect") and ji_get_user_info.side_effect is not None
+            )
 
             used_retry_path = False
             used_direct_helper = False
@@ -2058,7 +2001,8 @@ class EnhancedUserAssociationMigrator:
 
             # Get current mapping or create new one
             current_mapping: UserAssociationMapping = self.enhanced_user_mappings.get(
-                username, {},
+                username,
+                {},
             )
 
             # Update Jira metadata
@@ -2256,11 +2200,7 @@ class EnhancedUserAssociationMigrator:
         previous_email = current_metadata.get("jira_email")
         current_email = jira_user_data.get("emailAddress")
 
-        if (
-            previous_email
-            and current_email
-            and previous_email.lower() != current_email.lower()
-        ):
+        if previous_email and current_email and previous_email.lower() != current_email.lower():
             return {
                 "is_valid": False,
                 "reason": f"email_mismatch_previous:{previous_email}_current:{current_email}",
@@ -2270,11 +2210,7 @@ class EnhancedUserAssociationMigrator:
         previous_account_id = current_metadata.get("jira_account_id")
         current_account_id = jira_user_data.get("accountId")
 
-        if (
-            previous_account_id
-            and current_account_id
-            and previous_account_id != current_account_id
-        ):
+        if previous_account_id and current_account_id and previous_account_id != current_account_id:
             return {
                 "is_valid": False,
                 "reason": f"account_id_mismatch_previous:{previous_account_id}_current:{current_account_id}",
@@ -2302,7 +2238,8 @@ class EnhancedUserAssociationMigrator:
         """
         strategy = self.fallback_strategy
         current_mapping: UserAssociationMapping = self.enhanced_user_mappings.get(
-            username, {},
+            username,
+            {},
         )
 
         self.logger.info(
@@ -2418,18 +2355,10 @@ class EnhancedUserAssociationMigrator:
                 "fallback_timestamp": datetime.now(tz=UTC).isoformat(),
                 # Maintain backward-compat as some tests expect this exact key
                 "needs_review": True,
-                "jira_active": (
-                    jira_user_data.get("active", False) if jira_user_data else False
-                ),
-                "jira_display_name": (
-                    jira_user_data.get("displayName") if jira_user_data else None
-                ),
-                "jira_email": (
-                    jira_user_data.get("emailAddress") if jira_user_data else None
-                ),
-                "jira_account_id": (
-                    jira_user_data.get("accountId") if jira_user_data else None
-                ),
+                "jira_active": (jira_user_data.get("active", False) if jira_user_data else False),
+                "jira_display_name": (jira_user_data.get("displayName") if jira_user_data else None),
+                "jira_email": (jira_user_data.get("emailAddress") if jira_user_data else None),
+                "jira_account_id": (jira_user_data.get("accountId") if jira_user_data else None),
                 "needs_manual_review": True,
             },
         }
@@ -2489,18 +2418,10 @@ class EnhancedUserAssociationMigrator:
                 "needs_review": True,
                 "needs_manual_review": True,
                 "is_placeholder": True,
-                "jira_active": (
-                    jira_user_data.get("active", False) if jira_user_data else False
-                ),
-                "jira_display_name": (
-                    jira_user_data.get("displayName") if jira_user_data else None
-                ),
-                "jira_email": (
-                    jira_user_data.get("emailAddress") if jira_user_data else None
-                ),
-                "jira_account_id": (
-                    jira_user_data.get("accountId") if jira_user_data else None
-                ),
+                "jira_active": (jira_user_data.get("active", False) if jira_user_data else False),
+                "jira_display_name": (jira_user_data.get("displayName") if jira_user_data else None),
+                "jira_email": (jira_user_data.get("emailAddress") if jira_user_data else None),
+                "jira_account_id": (jira_user_data.get("accountId") if jira_user_data else None),
                 "placeholder_created": datetime.now(tz=UTC).isoformat(),
             },
         }
@@ -2549,12 +2470,10 @@ class EnhancedUserAssociationMigrator:
                             "mapping_status": "mapped",
                             "metadata": {
                                 **mapping.get("metadata", {}),
-                                "openproject_active": openproject_user.get("status")
-                                == "active",
+                                "openproject_active": openproject_user.get("status") == "active",
                                 "openproject_email": openproject_user.get("email"),
                                 "openproject_name": (
-                                    f"{openproject_user.get('firstname', '')} "
-                                    f"{openproject_user.get('lastname', '')}"
+                                    f"{openproject_user.get('firstname', '')} {openproject_user.get('lastname', '')}"
                                 ).strip(),
                                 "mapping_method": "email_refresh",
                             },
@@ -2638,11 +2557,7 @@ class EnhancedUserAssociationMigrator:
 
         """
         current_time = datetime.now(tz=UTC)
-        check_usernames = (
-            usernames
-            if usernames is not None
-            else list(self.enhanced_user_mappings.keys())
-        )
+        check_usernames = usernames if usernames is not None else list(self.enhanced_user_mappings.keys())
 
         validation_results = {
             "total_checked": len(check_usernames),
@@ -2680,26 +2595,18 @@ class EnhancedUserAssociationMigrator:
                             last_refresh_time = datetime.fromisoformat(
                                 last_refreshed,
                             )
-                            age_seconds = (
-                                current_time - last_refresh_time
-                            ).total_seconds()
+                            age_seconds = (current_time - last_refresh_time).total_seconds()
                             reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
                         except ValueError:
                             reason = "Invalid timestamp"
-                            age_seconds = (
-                                self.refresh_interval_seconds * 3
-                            )  # Assume very stale for invalid timestamps
+                            age_seconds = self.refresh_interval_seconds * 3  # Assume very stale for invalid timestamps
 
                     validation_results["recommendations"].append(
                         {
                             "username": username,
                             "action": "refresh",
                             "reason": reason,
-                            "priority": (
-                                "high"
-                                if age_seconds > (self.refresh_interval_seconds * 2)
-                                else "medium"
-                            ),
+                            "priority": ("high" if age_seconds > (self.refresh_interval_seconds * 2) else "medium"),
                         },
                     )
                 else:
@@ -2935,21 +2842,9 @@ class EnhancedUserAssociationMigrator:
     def generate_association_report(self) -> dict[str, Any]:
         """Generate comprehensive report on user association migration."""
         total_users = len(self.enhanced_user_mappings)
-        mapped_users = sum(
-            1
-            for m in self.enhanced_user_mappings.values()
-            if m["mapping_status"] == "mapped"
-        )
-        unmapped_users = sum(
-            1
-            for m in self.enhanced_user_mappings.values()
-            if m["mapping_status"] == "unmapped"
-        )
-        deleted_users = sum(
-            1
-            for m in self.enhanced_user_mappings.values()
-            if m["mapping_status"] == "deleted"
-        )
+        mapped_users = sum(1 for m in self.enhanced_user_mappings.values() if m["mapping_status"] == "mapped")
+        unmapped_users = sum(1 for m in self.enhanced_user_mappings.values() if m["mapping_status"] == "unmapped")
+        deleted_users = sum(1 for m in self.enhanced_user_mappings.values() if m["mapping_status"] == "deleted")
 
         return {
             "summary": {
@@ -2957,9 +2852,7 @@ class EnhancedUserAssociationMigrator:
                 "mapped_users": mapped_users,
                 "unmapped_users": unmapped_users,
                 "deleted_users": deleted_users,
-                "mapping_percentage": (
-                    (mapped_users / total_users * 100) if total_users > 0 else 0
-                ),
+                "mapping_percentage": ((mapped_users / total_users * 100) if total_users > 0 else 0),
             },
             "fallback_users": self.fallback_users,
             "rails_operations_pending": len(self._rails_operations_cache),
@@ -3086,10 +2979,7 @@ class EnhancedUserAssociationMigrator:
         )
 
         if strategy not in valid_strategies:
-            msg = (
-                f"Invalid fallback_strategy: {strategy}. "
-                f"Valid options: {', '.join(valid_strategies)}"
-            )
+            msg = f"Invalid fallback_strategy: {strategy}. Valid options: {', '.join(valid_strategies)}"
             raise ValueError(
                 msg,
             )
