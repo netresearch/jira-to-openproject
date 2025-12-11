@@ -1,4 +1,4 @@
-<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2025-10-10 -->
+<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2025-12-11 -->
 # AGENTS.md — src
 
 ## Overview
@@ -65,6 +65,36 @@
 - Ask for redis/postgres container status via `make status` before debugging client/network errors.
 - Use `uv run --active --no-cache python scripts/data_qa.py --projects <KEY>` to confirm module snapshots and start-date coverage; heed any warnings printed by the script.
 - For full rehearsals, prefer `python scripts/run_rehearsal.py --use-container --collect --stop` so logs, mappings, and checkpoints are archived automatically.
+
+## House Rules (Critical Architectural Requirements)
+
+### Rails Console via Tmux is REQUIRED
+- **Persistent tmux session is MANDATORY** for Rails console operations (50-100x faster than one-off sessions)
+- Pre-migration: `make install-irbrc` then `make start-rails`
+- Verify session: `tmux list-sessions | grep rails_console`
+- No alternatives: One-off sessions or rails runner are NOT architecturally supported
+
+### REST API is NOT Suitable for Bulk Migration
+- **Rails console via ActiveRecord is REQUIRED** for all data import operations
+- REST API cannot handle bulk operations efficiently
+- Direct ActiveRecord access needed for validation bypass, transactions, and features not exposed via REST
+
+### Idempotency is MANDATORY
+- All migration components MUST support re-runs without creating duplicates
+- **Provenance metadata is authoritative**: J2O custom fields (Origin System/ID/Key/URL)
+- Mapping files are CACHE ONLY: can be deleted and rebuilt from provenance
+- Never block migration on missing mapping files—query provenance instead
+
+### Compute Location Principle
+- **Python does computation, Ruby does minimum INSERT only**
+- Pre-compute version numbers, validity periods, field mappings in Python
+- Ruby only reads WP initial state and executes bulk INSERT
+- This leverages Python's ThreadPoolExecutor and reduces SSH/tmux overhead
+
+### Journal Migration (Reference: `claudedocs/ADR_003_journal_migration_complete_journey.md`)
+- Always create operations for ALL changelogs (not just when notes exist)
+- Always log console output with `[RUBY]` prefix
+- Verify attribute access patterns before using `self.config`
 
 ## Decision Log
 - Consolidated build/test commands from `pyproject.toml` and Makefile into per-scope checks.
