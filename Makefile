@@ -206,10 +206,14 @@ dev-test: ## Run tests locally for fast development feedback (recommended for da
 	python -m pytest -n auto $(TEST_OPTS)
 
 container-test: ## Run tests inside the Docker test profile (full dependency stack)
+	@# Create var directories on host (volume mount overwrites container /app)
+	@mkdir -p var/backups var/data var/debug var/exports var/logs var/output var/output_test var/results var/temp var/run
 	docker compose --profile test build test
 	docker compose --profile test run --rm test python -m pytest -m "unit and not slow" $(TEST_OPTS)
 
 container-test-integration: ## Run integration tests inside Docker mocks (slower)
+	@# Create var directories on host (volume mount overwrites container /app)
+	@mkdir -p var/backups var/data var/debug var/exports var/logs var/output var/output_test var/results var/temp var/run
 	docker compose --profile test build test
 	docker compose --profile test run --rm test bash -lc 'python -m pytest -m "integration and not slow" $(TEST_OPTS); status=$$?; if [ $$status -ne 0 ] && [ $$status -ne 5 ]; then exit $$status; fi'
 
