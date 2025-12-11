@@ -29,18 +29,21 @@ class MarkdownConverter:
 
     def __init__(
         self,
-        user_mapping: dict[str, int] | None = None,
+        user_mapping: dict[str, str] | None = None,
         work_package_mapping: dict[str, int] | None = None,
+        account_id_mapping: dict[str, str] | None = None,
     ) -> None:
         """Initialize the markdown converter.
 
         Args:
-            user_mapping: Optional mapping of Jira usernames to OpenProject user IDs
+            user_mapping: Optional mapping of Jira usernames to OpenProject user logins/IDs
             work_package_mapping: Optional mapping of Jira issue keys to OpenProject work package IDs
+            account_id_mapping: Optional mapping of Jira accountIds to OpenProject user logins/IDs
 
         """
         self.user_mapping = user_mapping or {}
         self.work_package_mapping = work_package_mapping or {}
+        self.account_id_mapping = account_id_mapping or {}
 
         # Compile regex patterns for performance
         self._compile_patterns()
@@ -88,7 +91,10 @@ class MarkdownConverter:
         self.issue_ref_pattern = re.compile(r"\b([A-Z][A-Z0-9_]*-\d+)\b")
 
         # User mention patterns
+        # Jira Server format: [~username]
         self.user_mention_pattern = re.compile(r"\[~([^]]+)\]")
+        # Jira Cloud format: [~accountId:xxx]
+        self.account_id_mention_pattern = re.compile(r"\[~accountId:([^\]]+)\]")
 
         # Attachment and embedded content patterns
         self.image_pattern = re.compile(r"!([^!|\s]+)(?:\|([^!]*))?!")
@@ -124,6 +130,32 @@ class MarkdownConverter:
         self.tab_pattern = re.compile(r"\{tab:([^}]+)\}(.*?)(?=\{tab:|$)", re.DOTALL)
         self.color_pattern = re.compile(r"\{color:([^}]+)\}(.*?)\{color\}", re.DOTALL)
 
+        # Jira emoticon mappings (symbol -> UTF-8 emoji/character)
+        self.emoticon_map = {
+            "(y)": "👍",  # thumbs up
+            "(n)": "👎",  # thumbs down
+            "(/)": "✓",   # checkmark
+            "(x)": "✗",   # cross/x
+            "(i)": "ℹ️",  # info
+            "(!)": "⚠️",  # warning
+            "(+)": "➕",  # plus
+            "(-)": "➖",  # minus
+            "(?)": "❓",  # question
+            "(*)": "⭐",  # star
+            "(on)": "💡",  # light bulb on
+            "(off)": "🔌",  # light bulb off
+            "(:)": "😊",  # smile
+            "(sad)": "😢",  # sad face
+            "(wink)": "😉",  # wink
+            "(thumbs up)": "👍",
+            "(thumbs down)": "👎",
+            "(tick)": "✓",
+            "(cross)": "✗",
+            "(info)": "ℹ️",
+            "(warning)": "⚠️",
+            "(flag)": "🚩",  # flag
+        }
+
     def convert(self, jira_markup: str) -> str:
         """Convert Jira wiki markup to OpenProject markdown.
 
@@ -156,6 +188,7 @@ class MarkdownConverter:
         text = self._convert_block_quotes(text)
         text = self._convert_issue_references(text)
         text = self._convert_user_mentions(text)  # Convert user mentions before links
+        text = self._convert_emoticons(text)  # Convert Jira emoticons to UTF-8
         text = self._convert_images(text)
         text = self._convert_links(text)
         text = self._convert_attachments(text)
@@ -280,17 +313,54 @@ class MarkdownConverter:
         return self.issue_ref_pattern.sub(replace_issue_ref, text)
 
     def _convert_user_mentions(self, text: str) -> str:
-        """Convert Jira user mentions to OpenProject user mentions."""
+        """Convert Jira user mentions to OpenProject user mentions.
+
+        Handles both Jira Server format [~username] and Jira Cloud format [~accountId:xxx].
+        """
+
+        def replace_account_id_mention(match: re.Match[str]) -> str:
+            """Replace Jira Cloud [~accountId:xxx] format."""
+            account_id = match.group(1).strip()
+            if self.account_id_mapping and account_id in self.account_id_mapping:
+                user_login = self.account_id_mapping[account_id]
+                return f"@{user_login}"
+            # Return original format if no mapping exists
+            return match.group(0)
 
         def replace_user_mention(match: re.Match[str]) -> str:
+            """Replace Jira Server [~username] format."""
             username = match.group(1).strip()
+            # Skip if this is actually an accountId format (handled separately)
+            if username.startswith("accountId:"):
+                return match.group(0)
             if self.user_mapping and username in self.user_mapping:
-                user_id = self.user_mapping[username]
-                return f"@{user_id}"
+                user_data = self.user_mapping[username]
+                # user_data is a dict with 'op_id' and 'op_login' keys
+                if isinstance(user_data, dict):
+                    op_login = user_data.get("op_login") or user_data.get("login") or username
+                    return f"@{op_login}"
+                # Fallback: if user_data is already a string (legacy format)
+                return f"@{user_data}"
             # Return original format if no mapping exists or user not found
-            return match.group(0)  # Return the original [~username] format
+            return match.group(0)
 
+        # Process accountId format first (more specific)
+        text = self.account_id_mention_pattern.sub(replace_account_id_mention, text)
+        # Then process username format
         return self.user_mention_pattern.sub(replace_user_mention, text)
+
+    def _convert_emoticons(self, text: str) -> str:
+        """Convert Jira emoticons to UTF-8 emoji/symbols.
+
+        Args:
+            text: Text that may contain Jira emoticons like (y), (/), (i), etc.
+
+        Returns:
+            Text with emoticons converted to UTF-8 equivalents
+        """
+        for jira_emoticon, unicode_char in self.emoticon_map.items():
+            text = text.replace(jira_emoticon, unicode_char)
+        return text
 
     def _convert_images(self, text: str) -> str:
         """Convert Jira images to markdown images."""

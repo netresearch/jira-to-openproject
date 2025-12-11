@@ -22,9 +22,11 @@ if input_data && input_data.respond_to?(:each)
   # Cache lookups shared across all WPs (one-time cost)
   workflow_cf = CustomField.find_by(name: "J2O Jira Workflow")
   resolution_cf = CustomField.find_by(name: "J2O Jira Resolution")
-  j2o_cf_ids = [workflow_cf&.id, resolution_cf&.id].compact
+  affects_version_cf = CustomField.find_by(name: "J2O Affects Version")
+  j2o_cf_ids = [workflow_cf&.id, resolution_cf&.id, affects_version_cf&.id].compact
   workflow_cf_id = workflow_cf&.id
   resolution_cf_id = resolution_cf&.id
+  affects_version_cf_id = affects_version_cf&.id
 
   priority_cache = {}
   IssuePriority.all.each { |p| priority_cache[p.name.downcase] = p.id }

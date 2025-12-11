@@ -203,12 +203,25 @@ class WorkPackageMigration(BaseMigration):
 
     def _update_markdown_converter_mappings(self) -> None:
         """Update the markdown converter with current user and work package mappings."""
-        # Create user mapping for markdown converter (Jira username -> OpenProject user ID)
-        user_mapping = {
-            username: str(user_id)
-            for username, user_id in self.user_mapping.items()
-            if user_id
-        }
+        # Create user mapping for markdown converter (Jira username -> OpenProject user login)
+        # self.user_mapping values are dicts with openproject_id and openproject_login
+        user_mapping = {}
+        account_id_mapping = {}  # For Jira Cloud [~accountId:xxx] format
+        for username, user_dict in self.user_mapping.items():
+            if not user_dict:
+                continue
+            # Prefer login for @mention format, fall back to ID
+            op_login = user_dict.get("openproject_login")
+            op_id = user_dict.get("openproject_id")
+            op_user = op_login if op_login else (str(op_id) if op_id else None)
+
+            if op_user:
+                user_mapping[username] = op_user
+
+                # Also map by Jira accountId (for Cloud) and jira_id
+                jira_account_id = user_dict.get("jira_account_id") or user_dict.get("jira_id")
+                if jira_account_id:
+                    account_id_mapping[jira_account_id] = op_user
 
         # For work package mapping, we need to load the existing mapping if available
         work_package_mapping = {}
@@ -223,6 +236,7 @@ class WorkPackageMigration(BaseMigration):
         self.markdown_converter = MarkdownConverter(
             user_mapping=user_mapping,
             work_package_mapping=work_package_mapping,
+            account_id_mapping=account_id_mapping,
         )
 
     def _get_or_create_version(self, version_name: str, project_id: int) -> int | None:
@@ -833,7 +847,15 @@ class WorkPackageMigration(BaseMigration):
 
                 # Build journal notes based on entry type
                 if entry_type == "comment":
-                    journal_notes = entry_data.get("body", "")
+                    raw_body = entry_data.get("body", "")
+                    # Convert Jira wiki markup to OpenProject markdown
+                    if raw_body and hasattr(self, "markdown_converter") and self.markdown_converter:
+                        try:
+                            journal_notes = self.markdown_converter.convert(raw_body)
+                        except Exception:
+                            journal_notes = raw_body
+                    else:
+                        journal_notes = raw_body
                 else:  # changelog
                     # Format changelog items as notes
                     journal_notes = "Jira changelog:\n"
@@ -842,6 +864,12 @@ class WorkPackageMigration(BaseMigration):
                         field = item.get("field", "")
                         from_val = item.get("fromString") or item.get("from", "")
                         to_val = item.get("toString") or item.get("to", "")
+                        # Convert field values through markdown converter (may contain user mentions)
+                        if hasattr(self, "markdown_converter") and self.markdown_converter:
+                            if from_val:
+                                from_val = self.markdown_converter.convert(str(from_val))
+                            if to_val:
+                                to_val = self.markdown_converter.convert(str(to_val))
                         journal_notes += f"- {field}: {from_val} → {to_val}\n"
 
                 comment_body = journal_notes
@@ -1171,6 +1199,9 @@ class WorkPackageMigration(BaseMigration):
                         to_val = item.get("to")
                         to_str = item.get("toString", "")
 
+                        # Track if this field was successfully mapped to field_changes
+                        field_mapped = False
+
                         # Map to OP field name
                         op_field = jira_to_op_field.get(jira_field.lower(), jira_to_op_field.get(jira_field))
 
@@ -1183,29 +1214,36 @@ class WorkPackageMigration(BaseMigration):
                                     mapped_from = self.status_mapping.get(from_val, {}).get("openproject_id") if self.status_mapping and from_val else None
                                     if mapped_to:
                                         field_changes[op_field] = [mapped_from, mapped_to]
+                                        field_mapped = True
                                 elif op_field == "type_id" and to_val:
                                     mapped_to = self.issue_type_mapping.get(to_val, {}).get("openproject_id") if self.issue_type_mapping else None
                                     mapped_from = self.issue_type_mapping.get(from_val, {}).get("openproject_id") if self.issue_type_mapping and from_val else None
                                     if mapped_to:
                                         field_changes[op_field] = [mapped_from, mapped_to]
+                                        field_mapped = True
                                 elif op_field == "assigned_to_id":
                                     # Map user names to IDs
                                     mapped_to = self.user_mapping.get(to_str, {}).get("openproject_id") if self.user_mapping and to_str else None
                                     mapped_from = self.user_mapping.get(from_str, {}).get("openproject_id") if self.user_mapping and from_str else None
                                     field_changes[op_field] = [mapped_from, mapped_to]
+                                    field_mapped = True
                                 elif op_field == "author_id":
                                     mapped_to = self.user_mapping.get(to_str, {}).get("openproject_id") if self.user_mapping and to_str else None
                                     mapped_from = self.user_mapping.get(from_str, {}).get("openproject_id") if self.user_mapping and from_str else None
                                     field_changes[op_field] = [mapped_from, mapped_to]
+                                    field_mapped = True
                                 elif op_field == "priority_id" and to_str:
                                     # Priority uses string names that Ruby will resolve
                                     field_changes[op_field] = [from_str, to_str]
+                                    field_mapped = True
                                 else:
                                     # Generic ID field
                                     field_changes[op_field] = [from_val, to_val]
+                                    field_mapped = True
                             else:
                                 # Non-ID fields use string values
                                 field_changes[op_field] = [from_str, to_str]
+                                field_mapped = True
 
                         # Track J2O Workflow/Resolution for cf_state_snapshot
                         if jira_field.lower() == "workflow" or field_id == "customfield_10500":
@@ -1213,8 +1251,9 @@ class WorkPackageMigration(BaseMigration):
                         elif jira_field.lower() == "resolution":
                             cf_resolution_value = to_str or to_val
 
-                        # Build human-readable notes for unmapped fields
-                        notes_lines.append(f"Jira: {jira_field} changed from '{from_str}' to '{to_str}'")
+                        # Build human-readable notes ONLY for unmapped fields (not already in field_changes)
+                        if not field_mapped and jira_field:
+                            notes_lines.append(f"**{jira_field}**: {from_str or '(none)'} → {to_str or '(none)'}")
 
                     notes = "\n".join(notes_lines) if notes_lines else ""
 
@@ -1988,6 +2027,7 @@ class WorkPackageMigration(BaseMigration):
                 ("J2O Last Update Date", "date", False),
                 ("J2O Jira Workflow", "string", True),
                 ("J2O Jira Resolution", "string", True),
+                ("J2O Affects Version", "string", True),  # Searchable: Jira "Version" field (where bug occurs)
             )
             cf_ids: dict[str, int] = {}
             for name, fmt, searchable in cf_specs:
@@ -2285,7 +2325,15 @@ class WorkPackageMigration(BaseMigration):
                             comment_author_id = 148941
                             attempted_fields = {k: author_data.get(k) for k in ["name", "displayName", "emailAddress"] if k in author_data}
                             self.logger.warning(f"[BUG32] {jira_key}: User not found in mapping for comment (tried: {attempted_fields}), using fallback user {comment_author_id}")
-                        comment_body = entry_data.get("body", "")
+                        raw_comment_body = entry_data.get("body", "")
+                        # Convert Jira wiki markup to OpenProject markdown
+                        if raw_comment_body and hasattr(self, "markdown_converter") and self.markdown_converter:
+                            try:
+                                comment_body = self.markdown_converter.convert(raw_comment_body)
+                            except Exception:
+                                comment_body = raw_comment_body
+                        else:
+                            comment_body = raw_comment_body
                         work_package["_rails_operations"].append({
                             "type": "create_comment",
                             "jira_key": jira_key,
@@ -2325,10 +2373,11 @@ class WorkPackageMigration(BaseMigration):
                         cf_field_changes = {}  # Bug #21: Track CF changes (Workflow/Resolution)
                         unmapped_changes = []  # Bug #16: Track unmapped Jira fields
 
-                        # Get CF IDs for Workflow/Resolution tracking
+                        # Get CF IDs for Workflow/Resolution/Affects Version tracking
                         cf_map = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
                         workflow_cf_id = cf_map.get("J2O Jira Workflow")
                         resolution_cf_id = cf_map.get("J2O Jira Resolution")
+                        affects_version_cf_id = cf_map.get("J2O Affects Version")
 
                         for item in changelog_items:
                             field_change = self._process_changelog_item(item)
@@ -2341,6 +2390,13 @@ class WorkPackageMigration(BaseMigration):
                                 from_val = item.get("fromString") or item.get("from") or ""
                                 to_val = item.get("toString") or item.get("to") or ""
 
+                                # Convert field values through markdown converter (may contain user mentions/emoticons)
+                                if hasattr(self, "markdown_converter") and self.markdown_converter:
+                                    if from_val:
+                                        from_val = self.markdown_converter.convert(str(from_val))
+                                    if to_val:
+                                        to_val = self.markdown_converter.convert(str(to_val))
+
                                 # Bug #21: Track Workflow/Resolution as CF field changes
                                 if field_name == "Workflow" and workflow_cf_id:
                                     cf_field_changes[workflow_cf_id] = [from_val or None, to_val or None]
@@ -2348,6 +2404,10 @@ class WorkPackageMigration(BaseMigration):
                                 elif field_name == "resolution" and resolution_cf_id:
                                     cf_field_changes[resolution_cf_id] = [from_val or None, to_val or None]
                                     self.logger.info(f"[BUG21] {jira_key}: Resolution CF change: '{from_val}' → '{to_val}'")
+                                elif field_name == "Version" and affects_version_cf_id:
+                                    # Jira "Version" = Affects Version (where bug occurs)
+                                    cf_field_changes[affects_version_cf_id] = [from_val or None, to_val or None]
+                                    self.logger.info(f"{jira_key}: Affects Version CF change: '{from_val}' → '{to_val}'")
                                 elif field_name == "Key" and from_val:
                                     # Project move: Key field shows issue key change (e.g., NRTECH-468 → NRS-182)
                                     # Generate compact comment with link to previous project if mapped
@@ -2477,14 +2537,15 @@ class WorkPackageMigration(BaseMigration):
                                 ss = ops[debug_idx].get("state_snapshot", {})
                                 self.logger.info(f"[BUG11] {jira_key}: Op {debug_idx+1} state_snapshot: type_id={ss.get('type_id')}, status_id={ss.get('status_id')}")
 
-                        # BUG #21 FIX: Build CF state snapshots for Workflow/Resolution tracking
+                        # BUG #21 FIX: Build CF state snapshots for Workflow/Resolution/Affects Version tracking
                         # Different from state_snapshot: build FORWARD (oldest to newest), applying changes
                         # This ensures v1 has initial values and vN has final values
                         cf_map = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
                         workflow_cf_id = cf_map.get("J2O Jira Workflow")
                         resolution_cf_id = cf_map.get("J2O Jira Resolution")
+                        affects_version_cf_id = cf_map.get("J2O Affects Version")
 
-                        if workflow_cf_id or resolution_cf_id:
+                        if workflow_cf_id or resolution_cf_id or affects_version_cf_id:
                             # Start with empty CF state - no values before any changes
                             current_cf_state: dict[int, str | None] = {}
 
@@ -2586,6 +2647,7 @@ class WorkPackageMigration(BaseMigration):
                     ("J2O Last Update Date", "date", False),
                     ("J2O Jira Workflow", "string", True),  # Searchable: Current/final Jira workflow scheme
                     ("J2O Jira Resolution", "string", True),  # Searchable: Final Jira resolution (Done, Fixed, etc.)
+                    ("J2O Affects Version", "string", True),  # Searchable: Jira "Version" field (where bug occurs)
                 )
                 cf_ids: dict[str, int] = {}
                 for name, fmt, searchable in cf_specs:
@@ -2631,6 +2693,17 @@ class WorkPackageMigration(BaseMigration):
                         resolution_name = getattr(resolution, "name", None) or str(resolution)
                         if resolution_name:
                             cf_vals.append({"id": cf_map["J2O Jira Resolution"], "value": resolution_name})
+                except Exception:
+                    pass
+            # Extract Affects Version from Jira issue (versions field = where bug occurs)
+            if cf_map.get("J2O Affects Version"):
+                try:
+                    versions = getattr(jira_issue.fields, "versions", None)
+                    if versions and isinstance(versions, list) and len(versions) > 0:
+                        # Join multiple versions with comma if present
+                        version_names = [getattr(v, "name", str(v)) for v in versions if v]
+                        if version_names:
+                            cf_vals.append({"id": cf_map["J2O Affects Version"], "value": ", ".join(version_names)})
                 except Exception:
                     pass
             if cf_vals:
