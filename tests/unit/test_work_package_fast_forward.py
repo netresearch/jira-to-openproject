@@ -43,9 +43,9 @@ def test_build_key_exclusion_clause_limits_payload():
     clause = WorkPackageMigration._build_key_exclusion_clause(raw_keys)
 
     assert clause.startswith("key NOT IN (")
-    # Expect at most 900 comma-separated values inside the clause
+    # Implementation limits to 200 keys to keep JQL URL under 8KB
     values = clause.removeprefix("key NOT IN (").removesuffix(")").split(",")
-    assert len(values) == 900
+    assert len(values) == 200
     assert all(value.startswith("KEY-") for value in values)
 
 

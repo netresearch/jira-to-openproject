@@ -159,64 +159,54 @@ class TestEnhancedAuditTrailMigrator:
         assert migrator.migration_results is not None
         assert "total_changelog_entries" in migrator.migration_results
 
-    @patch("src.utils.data_handler.load")
-    @patch("pathlib.Path.exists")
+    @patch("src.utils.data_handler.load_dict")
     def test_load_user_mapping_success(
         self,
-        mock_exists,
-        mock_load,
+        mock_load_dict,
         migrator_with_mocks,
         sample_user_mapping,
     ) -> None:
         """Test successful loading of user mapping."""
-        # Mock path exists
-        mock_exists.return_value = True
-
-        # Mock data handler load
-        mock_load.return_value = sample_user_mapping
+        # Mock data handler load_dict
+        mock_load_dict.return_value = sample_user_mapping
 
         migrator = migrator_with_mocks
         migrator._load_user_mapping()
 
         assert migrator.user_mapping == sample_user_mapping
-        mock_load.assert_called_once()
+        mock_load_dict.assert_called_once()
 
-    @patch("src.utils.data_handler.load")
-    @patch("pathlib.Path.exists")
+    @patch("src.utils.data_handler.load_dict")
     def test_load_user_mapping_file_not_found(
         self,
-        mock_exists,
-        mock_load,
+        mock_load_dict,
         migrator_with_mocks,
     ) -> None:
         """Test loading user mapping when file doesn't exist."""
-        # Mock path not exists
-        mock_exists.return_value = False
+        # Mock load_dict returning empty dict (default behavior for missing file)
+        mock_load_dict.return_value = {}
 
         migrator = migrator_with_mocks
         migrator._load_user_mapping()
 
-        # Should not call data handler load
-        mock_load.assert_not_called()
+        # Should call load_dict which handles missing file gracefully
+        mock_load_dict.assert_called_once()
 
-    @patch("src.utils.data_handler.load")
-    @patch("pathlib.Path.exists")
+    @patch("src.utils.data_handler.load_dict")
     def test_load_user_mapping_invalid_json(
         self,
-        mock_exists,
-        mock_load,
+        mock_load_dict,
         migrator_with_mocks,
     ) -> None:
         """Test loading user mapping with invalid JSON."""
-        # Mock path exists but data handler raises exception
-        mock_exists.return_value = True
-        mock_load.side_effect = Exception("Invalid JSON")
+        # Mock data handler raises exception
+        mock_load_dict.side_effect = Exception("Invalid JSON")
 
         migrator = migrator_with_mocks
         migrator._load_user_mapping()
 
         # Should handle exception gracefully
-        mock_load.assert_called_once()
+        mock_load_dict.assert_called_once()
 
     def test_extract_changelog_from_issue(
         self,
