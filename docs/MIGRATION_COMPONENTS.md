@@ -1,17 +1,75 @@
 # Migration Components Catalog
 
-**Version**: 1.0
-**Last Updated**: 2025-10-14
+**Version**: 2.0
+**Last Updated**: 2025-12-11
 
 ## Overview
 
 The j2o migration tool consists of 40+ specialized migration components, each handling a specific aspect of data migration from Jira to OpenProject. All components inherit from `BaseMigration` and follow the extract → map → load pipeline pattern.
 
 **Related Documentation**:
+- [Entity Mapping Reference](ENTITY_MAPPING.md) - Detailed Jira→OpenProject field mappings
 - [Client API Reference](CLIENT_API.md)
 - [Architecture Overview](ARCHITECTURE.md)
 - [Developer Guide](DEVELOPER_GUIDE.md)
 - [Workflow & Status Guide](WORKFLOW_STATUS_GUIDE.md)
+
+---
+
+## Module Development State
+
+| Component | CLI Name | Status | Tested | Notes |
+|-----------|----------|--------|--------|-------|
+| **Core Entities** |
+| UserMigration | `users` | Stable | Yes | Foundation - run first |
+| GroupMigration | `groups` | Stable | Yes | Requires users |
+| ProjectMigration | `projects` | Stable | Yes | Hierarchical structure |
+| WorkPackageMigration | `work_packages` | Stable | Yes | Legacy single-phase |
+| WorkPackageSkeletonMigration | `work_packages_skeleton` | Stable | Yes | Phase 1 - mapping |
+| WorkPackageContentMigration | `work_packages_content` | Stable | Yes | Phase 2 - content |
+| **Configuration** |
+| StatusMigration | `status_types` | Stable | Yes | Workflow states |
+| PriorityMigration | `priorities` | Stable | Yes | Issue priority |
+| IssueTypeMigration | `issue_types` | Stable | Yes | Work package types |
+| CustomFieldMigration | `custom_fields` | Stable | Yes | Field definitions |
+| CustomFieldsGenericMigration | `customfields_generic` | Stable | Yes | Field values |
+| ResolutionMigration | `resolutions` | Stable | Yes | Resolution values |
+| LinkTypeMigration | `link_types` | Stable | Yes | Relation types |
+| **Tempo Integration** |
+| CompanyMigration | `companies` | Stable | Yes | Tempo customers |
+| AccountMigration | `accounts` | Stable | Yes | Tempo accounts |
+| TempoAccountMigration | `tempo_accounts` | Stable | Partial | Alternative strategy |
+| TimeEntryMigration | `time_entries` | Stable | Yes | Worklogs |
+| **Attachments & Files** |
+| AttachmentsMigration | `attachments` | Stable | Yes | Binary transfer |
+| AttachmentProvenanceMigration | `attachment_provenance` | Stable | Yes | Metadata |
+| **Relationships** |
+| RelationMigration | `relations` | Stable | Yes | Issue links |
+| WatcherMigration | `watchers` | Stable | Yes | Notifications |
+| **Agile** |
+| SprintEpicMigration | `sprint_epic` | Stable | Yes | Sprints/Epics |
+| AgileBoardMigration | `agile_boards` | Stable | Yes | Board views |
+| VersionsMigration | `versions` | Stable | Yes | Release tracking |
+| AffectsVersionsMigration | `affects_versions` | Stable | Yes | Version links |
+| **Labels & Tags** |
+| LabelsMigration | `labels` | Stable | Yes | Tag migration |
+| NativeTagsMigration | `native_tags` | Stable | Yes | OP native tags |
+| **Supplementary** |
+| ComponentsMigration | `components` | Stable | Yes | Jira components |
+| VotesMigration | `votes_reactions` | Stable | Yes | Vote counts |
+| RemoteLinksMigration | `remote_links` | Stable | Yes | External links |
+| InlineRefsMigration | `inline_refs` | Stable | Yes | Reference updates |
+| EstimatesMigration | `estimates` | Stable | Yes | Time estimates |
+| StoryPointsMigration | `story_points` | Stable | Yes | Agile estimation |
+| SecurityLevelsMigration | `security_levels` | Stable | Yes | Access levels |
+| **Workflow & Admin** |
+| WorkflowMigration | `workflows` | Stable | Yes | Status transitions |
+| AdminSchemeMigration | `admin_schemes` | Stable | Yes | Role memberships |
+| ReportingMigration | `reporting` | Stable | Yes | Filters/dashboards |
+| **Utilities** |
+| CategoryDefaultsMigration | `category_defaults` | Stable | Yes | Default values |
+| SimpleTasksMigration | `simple_tasks` | Experimental | No | Task items |
+| WPDefaults | `wp_defaults` | Utility | N/A | Helper class |
 
 ---
 
@@ -150,11 +208,11 @@ uv run python -m src.main migrate --components projects --no-confirm
 
 ---
 
-### WorkPackageMigration
+### WorkPackageMigration (Legacy Single-Phase)
 
 **Location**: `src/migrations/work_package_migration.py`
 
-Migrates Jira issues to OpenProject work packages with full metadata.
+Migrates Jira issues to OpenProject work packages with full metadata in a single pass.
 
 **Features**:
 - Full issue metadata migration (type, status, priority, assignee, etc.)
@@ -179,6 +237,76 @@ uv run python -m src.main migrate --components work_packages --no-confirm
 ```
 
 **Related**: AttachmentsMigration, RelationMigration, WatcherMigration
+
+---
+
+### Two-Phase Work Package Migration (Recommended)
+
+For migrations with cross-references between issues, use the two-phase approach for correct link resolution. See [ADR-001](adr/ADR-001-two-phase-work-package-migration.md) for architecture decision.
+
+#### WorkPackageSkeletonMigration (Phase 1)
+
+**Location**: `src/migrations/work_package_skeleton_migration.py`
+
+Creates minimal work packages to establish complete Jira-to-OpenProject ID mapping.
+
+**Creates**:
+- Work package with type, status, subject
+- Project assignment
+- J2O Origin Key custom field (for traceability)
+- Outputs `work_package_mapping.json` with all Jira→OP ID mappings
+
+**Does NOT migrate**:
+- Descriptions (requires link resolution)
+- Custom field values
+- Journals/comments
+- Attachments, watchers
+
+**Dependencies**: Same as WorkPackageMigration
+
+**Example Usage**:
+```bash
+# Phase 1: Create skeletons and build mapping
+uv run python -m src.main migrate --components work_packages_skeleton --no-confirm
+```
+
+#### WorkPackageContentMigration (Phase 2)
+
+**Location**: `src/migrations/work_package_content_migration.py`
+
+Populates all content using the complete mapping for link resolution.
+
+**Migrates**:
+- Descriptions with `PROJ-123` → `WP#456` link conversion
+- Custom field values
+- Journals/comments with link conversion
+- User mentions (`@accountId` → `@username`)
+
+**Requires**: `work_package_mapping.json` from Phase 1
+
+**Dependencies**: WorkPackageSkeletonMigration must complete first
+
+**Example Usage**:
+```bash
+# Phase 2: Populate content with resolved links
+uv run python -m src.main migrate --components work_packages_content --no-confirm
+```
+
+#### Two-Phase Workflow
+
+```bash
+# Complete two-phase migration
+uv run python -m src.main migrate --components work_packages_skeleton --no-confirm
+uv run python -m src.main migrate --components work_packages_content --no-confirm
+
+# Or use legacy single-phase (backward compatible)
+uv run python -m src.main migrate --components work_packages --no-confirm
+```
+
+**Benefits**:
+- Correct cross-reference resolution (all links resolve)
+- Incremental re-runs (Phase 2 can be re-run without Phase 1)
+- Minimal API overhead (2 calls per WP vs 4+ for finer granularity)
 
 ---
 
