@@ -40,6 +40,10 @@ RUN uv sync --frozen --no-install-project
 # Copy project files (this layer changes most frequently, so it's last)
 COPY --chown=appuser:appuser . .
 
+# Create var directories with proper ownership for logs/data
+RUN mkdir -p /app/var/logs /app/var/data /app/var/run && \
+    chown -R appuser:appuser /app/var
+
 # Install the project and test extras
 RUN uv pip install --system . && \
     uv pip install --system '.[dev,test]'
