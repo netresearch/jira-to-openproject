@@ -110,14 +110,12 @@ reports/
 results/
 test_reports/
 
-# AI Tools - keep configurations but ignore dynamic content
-.cursor/rules/*.mdc
-!.cursor/rules/taskmaster/
-!.cursor/rules/example.mdc
-.taskmaster/reports/
-.taskmaster/docs/research/
-.claude-composer/sessions/
+# AI Tools - ignore all IDE-specific directories
+.cursor/
+.taskmaster/
+.claude-composer/
 .repomix/
+claudedocs/
 
 # Backup files
 *.bak
