@@ -322,6 +322,41 @@ def test_full_migration():
     pass
 ```
 
+## Compute Location Principle
+
+**Python does computation, Ruby does minimum INSERT only.**
+
+### Rationale
+- Python has better parallelism (ThreadPoolExecutor, asyncio)
+- Python debugging/logging is superior
+- Ruby/Rails console has SSH/tmux overhead per call
+- ActiveRecord is slow compared to raw SQL
+
+### Application
+```
+❌ WRONG: Send minimal data → Ruby computes versions, ranges, snapshots
+✅ RIGHT: Python pre-computes everything → Ruby just does INSERT
+
+# Python should compute:
+- Journal version numbers (1, 2, 3...)
+- validity_period ranges (pre-calculated, non-overlapping)
+- state_snapshot (full WP attribute dict)
+- cf_state_snapshot (custom field values)
+- field_changes (mapped to OP field names)
+
+# Ruby should ONLY:
+- Receive complete rows
+- Execute bulk INSERT (raw SQL preferred over ActiveRecord)
+- Return IDs/status
+```
+
+### Performance Impact
+- Moves computation to Python's parallel threads
+- Reduces Ruby iteration from O(journals) to O(1) per WP
+- Amortizes SSH/tmux overhead across more data per call
+
+---
+
 ## Key Design Principles
 
 ### SOLID Principles Applied

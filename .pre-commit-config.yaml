@@ -1,11 +1,11 @@
 repos:
   - repo: https://github.com/psf/black
-    rev: 25.1.0
+    rev: 25.12.0
     hooks:
       - id: black
 
   - repo: https://github.com/pycqa/isort
-    rev: 6.0.1
+    rev: 7.0.0
     hooks:
       - id: isort
 
@@ -21,7 +21,7 @@ repos:
   #     - id: mypy
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: end-of-file-fixer
       - id: trailing-whitespace
@@ -29,10 +29,10 @@ repos:
       - id: check-yaml
 
   - repo: https://github.com/asottile/pyupgrade
-    rev: v3.20.0
+    rev: v3.21.2
     hooks:
       - id: pyupgrade
-        args: [--py312-plus]
+        args: [--py313-plus]
 
   # Test-related hooks for improved developer experience
   - repo: local
@@ -63,4 +63,4 @@ repos:
         entry: python -c "import json; f=open('.taskmaster/tasks/tasks.json'); json.load(f)"
         language: python
         files: ^\.taskmaster/tasks/tasks\.json$
-        stages: [commit]
+        stages: [pre-commit]

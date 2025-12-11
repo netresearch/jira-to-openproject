@@ -1,226 +1,161 @@
-# Repository Structure
+# Repository Structure Index
 
-## Root Directory Structure
+## Project Root
 ```
 j2o/
-├── src/                         # Main Python package (core application)
-├── tests/                       # Test suite (unit, integration, end-to-end)
-├── scripts/                     # Operational helpers and utilities
-├── docs/                        # Documentation and guides
-├── config/                      # Configuration files and schemas
-├── contrib/                     # Contributed files (e.g., openproject.irbrc)
-├── examples/                    # Example configurations and scripts
-├── var/                         # Runtime data (logs, results, data, backups)
-├── .github/                     # GitHub workflows and actions
-├── .devcontainer/              # Dev container configuration
-├── api-specs/                   # API specifications
-├── test-specs/                  # Test specifications
-├── .serena/                     # Serena MCP project configuration
-├── .beads/                      # bd work tracking data
-├── Makefile                     # Build automation and dev commands
-├── pyproject.toml              # Project metadata and dependencies
-├── uv.lock                      # Locked dependency versions
-├── compose.yml                  # Docker Compose configuration
-├── .env.example                # Environment variable template
-└── AGENTS.md                    # Root agent configuration
+├── src/                    # Main source code
+├── tests/                  # Test suite (unit, integration, e2e)
+├── docs/                   # Documentation
+├── config/                 # Configuration files
+├── scripts/                # Utility scripts
+├── var/                    # Runtime data (logs, cache, checkpoints)
+├── contrib/                # Contributed scripts and tools
+├── examples/               # Example configurations
+├── api-specs/              # API specifications
+└── .serena/                # Serena MCP memories
 ```
 
-## src/ Directory (Core Application)
+## Source Code Structure (`src/`)
+
+### Entry Points
+- `src/main.py` - CLI entry point (`j2o` command)
+- `src/migration.py` - Migration orchestration (Migration class, run_migration)
+
+### Client Layer (`src/clients/`)
 ```
-src/
-├── main.py                      # CLI entry point (j2o command)
-├── migration.py                 # Migration orchestration
-├── config_loader.py            # Configuration loading
-├── display.py                   # CLI display utilities
-├── type_definitions.py         # Shared type definitions
-├── clients/                     # Client layer
-│   ├── jira_client.py          # Jira API client
-│   ├── enhanced_jira_client.py # Enhanced Jira client
-│   ├── openproject_client.py   # OpenProject orchestration
-│   ├── enhanced_openproject_client.py
-│   ├── ssh_client.py           # SSH foundation layer
-│   ├── docker_client.py        # Docker operations
-│   ├── rails_console_client.py # Rails console interaction
-│   └── exceptions.py           # Client exceptions
-├── migrations/                  # Migration components (40+ modules)
-│   ├── base_migration.py       # Base class for migrations
-│   ├── user_migration.py       # User migration
-│   ├── group_migration.py      # Group migration
-│   ├── project_migration.py    # Project migration
-│   ├── work_package_migration.py # Work package migration
-│   ├── attachments_migration.py
-│   ├── time_entry_migration.py
-│   ├── workflow_migration.py
-│   ├── agile_board_migration.py
-│   ├── admin_scheme_migration.py
-│   └── ... (30+ other migration modules)
-├── mappings/                    # Data transformation logic
-│   └── mappings.py
-├── models/                      # Pydantic data models
-├── utils/                       # Utility functions
-│   ├── enhanced_audit_trail_migrator.py
-│   ├── enhanced_timestamp_migrator.py
-│   ├── enhanced_user_association_migrator.py
-│   └── ... (other utilities)
-├── config/                      # Configuration utilities
-├── performance/                 # Performance monitoring
-├── dashboard/                   # FastAPI web dashboard (optional)
-│   └── AGENTS.md               # Dashboard-specific rules
-└── AGENTS.md                    # src-specific agent rules
+SSHClient (Foundation)
+    ↓
+DockerClient (Container Operations)
+    ↓
+RailsConsoleClient (Console Interaction)
+    ↓
+OpenProjectClient (Orchestration)
 ```
 
-## tests/ Directory
-```
-tests/
-├── unit/                        # Fast, isolated unit tests
-│   ├── migrations/             # Migration unit tests
-│   ├── clients/                # Client unit tests
-│   └── ... (component tests)
-├── integration/                 # External service tests (mocked)
-│   ├── debug/                  # Debug helpers
-│   └── ... (integration tests)
-├── end_to_end/                 # Complete workflow tests
-├── utils/                       # Shared test utilities
-├── test_data/                  # Test fixtures
-├── conftest.py                 # Pytest configuration
-└── AGENTS.md                    # Test-specific agent rules
-```
+| Client | File | Purpose |
+|--------|------|---------|
+| SSHClient | `ssh_client.py` | SSH connections, remote commands |
+| DockerClient | `docker_client.py` | Container lifecycle, file transfers |
+| RailsConsoleClient | `rails_console_client.py` | tmux + Rails console management |
+| OpenProjectClient | `openproject_client.py` | High-level OP operations |
+| EnhancedJiraClient | `enhanced_jira_client.py` | Jira API with pagination |
+| JiraClient | `jira_client.py` | Basic Jira operations |
 
-## scripts/ Directory
-```
-scripts/
-├── run_rehearsal.py            # Orchestrate mock-stack rehearsals
-├── run_mock_migration.py       # Run mock migration
-├── data_qa.py                  # Post-migration data validation
-├── start_rails_tmux.py        # Start Rails console tmux session
-├── migrate-start-fast-forward.sh
-├── migrate-stop.sh
-├── migrate-status.sh
-└── AGENTS.md                    # Scripts-specific agent rules
-```
+### Migration Components (`src/migrations/`)
 
-## docs/ Directory
-```
-docs/
-├── DEVELOPER_GUIDE.md          # Development standards and patterns
-├── ARCHITECTURE.md             # System architecture
-├── SECURITY.md                 # Security documentation
-├── WORKFLOW_STATUS_GUIDE.md    # Status and workflow migration
-├── configuration.md            # Configuration guide
-├── decisions/                  # Architecture decision records
-│   ├── 2025-10-02-project-issue-metadata.md
-│   ├── 2025-10-03-project-issue-validation.md
-│   ├── 2025-10-04-start-date-from-history.md
-│   └── 2025-10-05-fast-forward-and-groups.md
-└── plans/                      # Planning documents
-```
+#### Base Class
+- `base_migration.py` - `BaseMigration` abstract class (extract→map→load pattern)
 
-## config/ Directory
-```
-config/
-├── config.yaml                 # Default configuration
-└── schemas/                    # Configuration schemas
-    ├── base.py
-    └── settings.py
-```
+#### Core Migrations
+| Component | File | Description |
+|-----------|------|-------------|
+| Users | `user_migration.py` | Jira users → OP users |
+| Groups | `group_migration.py` | Jira groups → OP groups |
+| Projects | `project_migration.py` | Jira projects → OP projects |
+| Work Packages | `work_package_migration.py` | Issues → Work packages |
+| WP Skeleton | `work_package_skeleton_migration.py` | Phase 1: WP structure |
+| WP Content | `work_package_content_migration.py` | Phase 2: WP content |
 
-## var/ Directory (Runtime Data)
-```
-var/
-├── data/                       # Migration data files
-├── logs/                       # Log files
-├── results/                    # Migration results
-├── backups/                    # Backup files
-└── rehearsal/                  # Rehearsal artifacts (timestamped)
-```
+#### Metadata Migrations
+| Component | File | Description |
+|-----------|------|-------------|
+| Issue Types | `issue_type_migration.py` | Issue types → WP types |
+| Statuses | `status_migration.py` | Jira statuses → OP statuses |
+| Priorities | `priority_migration.py` | Priorities mapping |
+| Workflows | `workflow_migration.py` | Workflow configuration |
+| Custom Fields | `custom_field_migration.py` | Custom field definitions |
+| Resolutions | `resolution_migration.py` | Resolution mapping |
 
-## Key Configuration Files
+#### Content Migrations
+| Component | File | Description |
+|-----------|------|-------------|
+| Attachments | `attachments_migration.py` | File attachments |
+| Time Entries | `time_entry_migration.py` | Tempo worklogs |
+| Relations | `relation_migration.py` | Issue links |
+| Watchers | `watcher_migration.py` | Issue watchers |
+| Labels | `labels_migration.py` | Issue labels |
+| Versions | `versions_migration.py` | Fix versions |
+| Components | `components_migration.py` | Jira components |
 
-### Root Level
-- **AGENTS.md**: Root agent configuration, global rules
-- **Makefile**: Build automation, all dev commands
-- **pyproject.toml**: Project metadata, dependencies, tool configs
-- **uv.lock**: Locked dependency versions
-- **compose.yml**: Docker Compose services
-- **.env.example**: Environment variable template
-- **.env**: Actual environment (git-ignored)
-- **.env.local**: Developer-specific overrides (git-ignored)
-- **pytest.ini**: Pytest configuration
-- **.pre-commit-config.yaml**: Pre-commit hooks
+#### Specialized Migrations
+| Component | File | Description |
+|-----------|------|-------------|
+| Agile Boards | `agile_board_migration.py` | Boards → Saved queries |
+| Sprint/Epic | `sprint_epic_migration.py` | Sprint and epic data |
+| Story Points | `story_points_migration.py` | Estimation data |
+| Admin Schemes | `admin_scheme_migration.py` | Role memberships |
+| Reporting | `reporting_migration.py` | Filters → Queries |
+| Remote Links | `remote_links_migration.py` | External links |
+| Inline Refs | `inline_refs_migration.py` | Description links |
 
-### Scoped AGENTS.md Files
-- **AGENTS.md** (root): Global rules, precedence hierarchy
-- **src/AGENTS.md**: Core package conventions
-- **src/dashboard/AGENTS.md**: Dashboard-specific rules
-- **tests/AGENTS.md**: Test patterns and markers
-- **scripts/AGENTS.md**: Script-specific guidance
+### Utilities (`src/utils/`)
 
-## Important Git-Ignored Paths
-```
-.env                            # Environment secrets
-.env.local                      # Developer overrides
-var/                            # Runtime data
-.venv/                          # Virtual environment
-__pycache__/                    # Python bytecode
-.pytest_cache/                  # Pytest cache
-.mypy_cache/                    # Mypy cache
-.ruff_cache/                    # Ruff cache
-*.egg-info/                     # Package info
-.migration_checkpoints.db       # SQLite checkpoint database
-```
+#### Core Utilities
+| Utility | File | Purpose |
+|---------|------|---------|
+| Checkpoint Manager | `checkpoint_manager.py` | Migration state persistence |
+| Batch Processor | `batch_processor.py` | Batch operation handling |
+| Rate Limiter | `rate_limiter.py` | API rate limiting |
+| Retry Manager | `retry_manager.py` | Retry with backoff |
+| Error Recovery | `error_recovery.py` | Error handling patterns |
 
-## Navigation Tips
+#### Data Utilities
+| Utility | File | Purpose |
+|---------|------|---------|
+| Data Handler | `data_handler.py` | JSON/data manipulation |
+| File Manager | `file_manager.py` | File I/O operations |
+| Validators | `validators.py` | Input validation |
+| Markdown Converter | `markdown_converter.py` | Jira→Markdown conversion |
+| Timezone | `timezone.py` | Timezone handling |
 
-### Find Migration Modules
-```bash
-ls src/migrations/*_migration.py          # List all migration modules
-```
+#### Migration Utilities
+| Utility | File | Purpose |
+|---------|------|---------|
+| Enhanced Audit Trail | `enhanced_audit_trail_migrator.py` | Journal migration |
+| Enhanced User Association | `enhanced_user_association_migrator.py` | User mapping |
+| Enhanced Timestamp | `enhanced_timestamp_migrator.py` | Timestamp handling |
+| Time Entry Transformer | `time_entry_transformer.py` | Worklog conversion |
+| Change Detector | `change_detector.py` | Delta detection |
+| Staleness Manager | `staleness_manager.py` | Cache invalidation |
+| Idempotency | `idempotency_manager.py` | Idempotent operations |
 
-### Find Tests for Component
-```bash
-# Unit tests
-find tests/unit -name "test_*migration*.py"
+### Models (`src/models/`)
+| Model | File | Purpose |
+|-------|------|---------|
+| Migration Results | `migration_results.py` | Result containers |
+| Migration Error | `migration_error.py` | Error types |
+| Component Results | `component_results.py` | Component status |
+| Mapping | `mapping.py` | ID mapping models |
 
-# Integration tests
-find tests/integration -name "test_*.py"
-```
+### Configuration (`src/config/`)
+| File | Purpose |
+|------|---------|
+| `__init__.py` | Config exports |
+| `error_recovery_config.py` | Error recovery settings |
 
-### Find Documentation
-```bash
-ls docs/*.md                              # Core documentation
-ls docs/decisions/*.md                    # Architecture decisions
-```
+### Mappings (`src/mappings/`)
+| File | Purpose |
+|------|---------|
+| `mappings.py` | Data transformation maps |
 
-### Find Configuration
-```bash
-cat .env.example                          # Environment template
-cat config/config.yaml                    # YAML configuration
-```
+### Dashboard (`src/dashboard/`)
+| File | Purpose |
+|------|---------|
+| `app.py` | FastAPI dashboard |
+| `templates/` | Jinja2 templates |
+| `static/` | CSS/JS assets |
 
-## Entry Points
+## Documentation
 
-### CLI Entry
-- `src/main.py`: Main CLI entry point
-- Command: `uv run python -m src.main` or `j2o`
-
-### Migration Orchestration
-- `src/migration.py`: Pipeline coordination
-
-### Dashboard (Optional)
-- `src/dashboard/`: FastAPI web interface
-
-### Testing
-- `pytest` from root directory
-- Makefile targets: `make dev-test`, `make container-test`
-
-## Precedence Rules
-
-### AGENTS.md Hierarchy
-Closest file wins: `src/migrations/AGENTS.md` > `src/AGENTS.md` > root `AGENTS.md`
-
-### Configuration Precedence
-1. Environment variables (highest)
-2. `.env.local`
-3. `.env`
-4. `config/config.yaml`
-5. Code defaults (lowest)
+### Core Documentation Files
+- `docs/ENTITY_MAPPING.md` - Comprehensive Jira→OpenProject entity mapping reference (NEW)
+- `docs/MIGRATION_COMPONENTS.md` - Module catalog with development state (UPDATED v2.0)
+- `docs/ARCHITECTURE.md` - System architecture with client layer hierarchy
+- `docs/CLIENT_API.md` - Client API reference
+- `docs/DEVELOPER_GUIDE.md` - Development standards and testing
+- `docs/WORKFLOW_STATUS_GUIDE.md` - Workflow configuration
+- `docs/SECURITY.md` - Security measures
+- `docs/QUICK_START.md` - Getting started guide
+- `docs/configuration.md` - Configuration options
+- `docs/adr/README.md` - ADR index (NEW)
+- `docs/adr/ADR-001-two-phase-work-package-migration.md` - Two-phase WP migration architecture
