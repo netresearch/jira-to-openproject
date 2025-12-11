@@ -59,7 +59,9 @@ from src.migrations.user_migration import UserMigration
 from src.migrations.versions_migration import VersionsMigration
 from src.migrations.votes_migration import VotesMigration
 from src.migrations.watcher_migration import WatcherMigration
+from src.migrations.work_package_content_migration import WorkPackageContentMigration
 from src.migrations.work_package_migration import WorkPackageMigration
+from src.migrations.work_package_skeleton_migration import WorkPackageSkeletonMigration
 from src.migrations.workflow_migration import WorkflowMigration
 from src.models import ComponentResult, MigrationResult
 from src.type_definitions import BackupDir, ComponentName
@@ -302,6 +304,8 @@ def _build_component_factories(
         "issue_types": lambda: IssueTypeMigration(jira_client=jira_client, op_client=op_client),
         "status_types": lambda: StatusMigration(jira_client=jira_client, op_client=op_client),
         "work_packages": lambda: WorkPackageMigration(jira_client=jira_client, op_client=op_client),
+        "work_packages_skeleton": lambda: WorkPackageSkeletonMigration(jira_client=jira_client, op_client=op_client),
+        "work_packages_content": lambda: WorkPackageContentMigration(jira_client=jira_client, op_client=op_client),
         "time_entries": lambda: TimeEntryMigration(jira_client=jira_client, op_client=op_client),
         "watchers": lambda: WatcherMigration(jira_client=jira_client, op_client=op_client),
         "relations": lambda: RelationMigration(jira_client=jira_client, op_client=op_client),
