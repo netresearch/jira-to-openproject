@@ -17,6 +17,9 @@ services:
       context: .
       dockerfile: Dockerfile
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    profiles:
+      - app
+      - dev
     env_file:
       - .env
     volumes:
@@ -25,7 +28,8 @@ services:
       # host user's UID/GID (`id -u`/`id -g`) to avoid permission issues
       - .:/app
       # Forward host SSH agent into container for remote operations (no secrets stored in image)
-      - ${SSH_AUTH_SOCK}:/ssh-agent
+      # Use /dev/null as fallback when SSH_AUTH_SOCK is not set (e.g., in CI)
+      - ${SSH_AUTH_SOCK:-/dev/null}:/ssh-agent
       # SECURITY: Docker socket mount removed to prevent container escape
       # This migration tool uses SSH-based remote Docker client - no local Docker daemon access needed
       # See src/clients/docker_client.py for SSH-based Docker operations
