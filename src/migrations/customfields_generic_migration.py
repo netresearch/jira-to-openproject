@@ -42,14 +42,37 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
             logger.info("CF '%s' not found; creating (format=%s)", name, field_format)
 
         ff = field_format or "text"
+        # Create CF with is_for_all: false (selective project enablement)
         script = (
             "cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{}'); "
-            "if !cf; cf = CustomField.new(name: '{}', field_format: '{}', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id".format(
+            "if !cf; cf = CustomField.new(name: '{}', field_format: '{}', is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id".format(
                 name.replace("'", "\\'"), name.replace("'", "\\'"), ff
             )
         )
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
+
+    def _enable_cf_for_projects(self, cf_id: int, project_ids: set[int]) -> None:
+        """Enable custom field for specific projects only."""
+        if not project_ids:
+            return
+        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
+        script = f"""
+cf = CustomField.find({cf_id})
+[{project_ids_str}].each do |pid|
+  begin
+    project = Project.find(pid)
+    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)
+  rescue ActiveRecord::RecordNotFound
+  end
+end
+true
+""".strip()
+        try:
+            self.op_client.execute_query(script)
+            logger.info("Enabled generic CF %d for %d projects", cf_id, len(project_ids))
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to enable CF for some projects")
 
     @staticmethod
     def _to_string_value(value: Any) -> str:
@@ -88,6 +111,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
         cf_mapping = self.mappings.get_mapping("custom_field") or {}
 
         values_by_wp: dict[int, list[tuple[str, str]]] = {}
+        wp_to_project: dict[int, int] = {}  # Track project ID for each WP
         for jira_key, issue in issues.items():
             fields = getattr(issue, "fields", None)
             if not fields:
@@ -96,6 +120,10 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
             if not (isinstance(entry, dict) and entry.get("openproject_id")):
                 continue
             wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            # Track project ID for selective enablement
+            project_id = entry.get("openproject_project_id")
+            if project_id:
+                wp_to_project[wp_id] = int(project_id)
 
             # Iterate over fields attributes beginning with customfield_
             for attr in dir(fields):
@@ -116,21 +144,25 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
                     continue
                 values_by_wp.setdefault(wp_id, []).append((op_name, op_type))
 
-        return ComponentResult(success=True, data={"values_by_wp": values_by_wp})
+        return ComponentResult(success=True, data={"values_by_wp": values_by_wp, "wp_to_project": wp_to_project})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         return extracted
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         values_by_wp: dict[int, list[tuple[str, str]]] = (mapped.data or {}).get("values_by_wp", {})  # type: ignore[assignment]
+        wp_to_project: dict[int, int] = (mapped.data or {}).get("wp_to_project", {})  # type: ignore[assignment]
         if not values_by_wp:
             return ComponentResult(success=True, updated=0)
 
         updated = 0
         failed = 0
+        # Track projects per CF for selective enablement
+        cf_to_projects: dict[int, set[int]] = {}
 
         # Ensure CFs exist and apply values per WP
         for wp_id, cf_specs in values_by_wp.items():
+            project_id = wp_to_project.get(wp_id)
             # Deduplicate CF names for this WP
             seen: set[str] = set()
             for name, field_format in cf_specs:
@@ -139,6 +171,9 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
                 seen.add(name)
                 try:
                     cf_id = self._ensure_cf(name, field_format)
+                    # Track project for selective enablement
+                    if project_id:
+                        cf_to_projects.setdefault(cf_id, set()).add(project_id)
                     # Set CF value from mapping; re-lookup actual value by WP/Jira key not available here,
                     # so apply a placeholder behavior is not possible. Instead, re-extracting values again
                     # would be redundant in tests; we set a non-empty string already normalized earlier.
@@ -155,6 +190,10 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
                 except Exception:
                     logger.exception("Failed to apply CF '%s' for WP %s", name, wp_id)
                     failed += 1
+
+        # Enable CFs only for projects that have values
+        for cf_id, project_ids in cf_to_projects.items():
+            self._enable_cf_for_projects(cf_id, project_ids)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 

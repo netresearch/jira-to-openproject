@@ -62,9 +62,10 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
         except Exception:  # noqa: BLE001
             logger.info("Sprint CF not found; will create")
 
+        # Create CF with is_for_all: false (selective project enablement)
         script = (
             f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{SPRINT_CF_NAME}'); "
-            f"if !cf; cf = CustomField.new(name: '{SPRINT_CF_NAME}', field_format: 'text', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; {{ id: cf.id }}.to_json"
+            f"if !cf; cf = CustomField.new(name: '{SPRINT_CF_NAME}', field_format: 'text', is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; {{ id: cf.id }}.to_json"
         )
         result = self.op_client.execute_query_to_json_file(script)
         if isinstance(result, dict) and result.get("id"):
@@ -76,6 +77,28 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
         except Exception:  # noqa: BLE001
             logger.debug("Unable to parse Sprint CF ID from result %r", result)
             return 0
+
+    def _enable_cf_for_projects(self, cf_id: int, project_ids: set[int]) -> None:
+        """Enable custom field for specific projects only."""
+        if not project_ids:
+            return
+        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
+        script = f"""
+cf = CustomField.find({cf_id})
+[{project_ids_str}].each do |pid|
+  begin
+    project = Project.find(pid)
+    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)
+  rescue ActiveRecord::RecordNotFound
+  end
+end
+true
+""".strip()
+        try:
+            self.op_client.execute_query(script)
+            logger.info("Enabled %s CF for %d projects", SPRINT_CF_NAME, len(project_ids))
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to enable CF for some projects")
 
     @staticmethod
     def _coerce_sprint_names(sprint_field_value: Any) -> list[str]:
@@ -309,11 +332,16 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                 },
             )
 
+        projects_with_values: set[int] = set()
         for jira_key, text in sprint_text.items():
             entry = wp_map.get(jira_key)
             if not (isinstance(entry, dict) and entry.get("openproject_id")):
                 continue
             wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            # Track project for selective enablement
+            project_id = entry.get("openproject_project_id")
+            if project_id:
+                projects_with_values.add(int(project_id))
             try:
                 val = str(text).replace("'", "\\'")
                 script = (
@@ -329,6 +357,10 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
             except Exception:
                 logger.exception("Failed to set Sprint CF for %s", jira_key)
                 failed += 1
+
+        # Enable CF only for projects that have values
+        if projects_with_values:
+            self._enable_cf_for_projects(cf_id, projects_with_values)
 
         message = "Sprint and epic metadata synchronised"
         return ComponentResult(

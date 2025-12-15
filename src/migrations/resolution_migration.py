@@ -1,9 +1,12 @@
-"""Migrate Jira resolutions into OpenProject via CF + audit note strategy.
+"""Migrate Jira resolutions into OpenProject via custom field strategy.
 
 Approach:
-- Ensure WorkPackage CF "Resolution" exists (string or list).
+- Ensure WorkPackage CF "Resolution" exists (string field).
 - Map Jira resolution names to CF values; set on WPs for resolved issues.
-- Append audit journal entry noting resolution for traceability.
+
+Note: Resolution change history is captured by the audit trail migration from
+the Jira changelog. This migration only sets the current CF value to avoid
+duplicate journal entries.
 """
 
 from __future__ import annotations
@@ -61,13 +64,43 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
         except Exception:  # noqa: BLE001
             logger.info("Resolution CF not found; will create")
 
-        # Create CF via execute_query (string field, global)
+        # Create CF with is_for_all: false (selective project enablement)
+        # Projects are enabled individually as values are set
         script = (
             f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{RESOLUTION_CF_NAME}'); "
-            f"if !cf; cf = CustomField.new(name: '{RESOLUTION_CF_NAME}', field_format: 'string', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
+            f"if !cf; cf = CustomField.new(name: '{RESOLUTION_CF_NAME}', field_format: 'string', is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
         )
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
+
+    def _enable_cf_for_projects(self, cf_id: int, project_ids: set[int]) -> None:
+        """Enable custom field for specific projects only.
+
+        Args:
+            cf_id: Custom field ID
+            project_ids: Set of project IDs to enable the field for
+
+        """
+        if not project_ids:
+            return
+
+        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
+        script = f"""
+cf = CustomField.find({cf_id})
+[{project_ids_str}].each do |pid|
+  begin
+    project = Project.find(pid)
+    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)
+  rescue ActiveRecord::RecordNotFound
+  end
+end
+true
+""".strip()
+        try:
+            self.op_client.execute_query(script)
+            logger.info("Enabled %s CF for %d projects", RESOLUTION_CF_NAME, len(project_ids))
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to enable CF for some projects")
 
     def _extract(self) -> ComponentResult:
         """Extract Jira resolution per migrated issue (via work_package mapping)."""
@@ -96,37 +129,47 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=False, failed=1)
 
         wp_map = self.mappings.get_mapping("work_package") or {}
+        project_map = self.mappings.get_mapping("project") or {}
         reso_by_key: dict[str, str] = (mapped.data or {}).get("resolution", {})  # type: ignore[assignment]
 
         updated = 0
         failed = 0
-        # Batch updates: set CF and append audit note as Journal
+        projects_with_values: set[int] = set()
+
+        # Set CF value only - audit trail migration handles resolution history
         for jira_key, res_name in reso_by_key.items():
             entry = wp_map.get(jira_key)
             if not (isinstance(entry, dict) and entry.get("openproject_id")):
                 continue
             wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+
+            # Track project ID for selective CF enablement
+            project_id = entry.get("openproject_project_id")
+            if project_id:
+                projects_with_values.add(int(project_id))
+
             try:
-                # Set CF
+                # Set CF value - do NOT create separate journal entry
+                # Resolution changes are captured by audit trail migration from
+                # the Jira changelog (creates "resolution: X → Y" entries)
                 set_script = (
                     "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
+                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; wp.project_id"
                     % (wp_id, cf_id, res_name.replace("'", "\\'"), res_name.replace("'", "\\'"))
                 )
-                ok = self.op_client.execute_query(set_script)
-                if ok:
+                result = self.op_client.execute_query(set_script)
+                if result:
                     updated += 1
-                # Add audit note
-                note = f"Resolution: {res_name} (migrated from Jira)"
-                note_esc = note.replace("'", "\\'")
-                journal_script = (
-                    "wp = WorkPackage.find(%d); Journal::WorkPackageJournal.create!(journaled_id: wp.id, notes: '%s', user_id: wp.author_id); true"
-                    % (wp_id, note_esc)
-                )
-                self.op_client.execute_query(journal_script)
+                    # Also track project from WP response if not in mapping
+                    if isinstance(result, int) and result > 0:
+                        projects_with_values.add(result)
             except Exception:
                 logger.exception("Failed to apply resolution for %s", jira_key)
                 failed += 1
+
+        # Enable CF for projects that have resolution values
+        if projects_with_values:
+            self._enable_cf_for_projects(cf_id, projects_with_values)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 

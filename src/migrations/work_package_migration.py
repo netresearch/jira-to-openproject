@@ -101,6 +101,13 @@ class WorkPackageMigration(BaseMigration):
         self.issue_type_mapping: dict[str, Any] = {}
         self.status_mapping: dict[str, Any] = {}
 
+        # Track mentioned users per project for membership assignment
+        # Key: OpenProject project ID, Value: set of OpenProject user IDs
+        self._mentioned_users_by_project: dict[int, set[int]] = {}
+
+        # Default role ID for mentioned users (Member role, typically ID 4)
+        self._mention_role_id: int = 4
+
         # Initialize markdown converter (will be updated with mappings when available)
         self.markdown_converter = MarkdownConverter()
 
@@ -204,25 +211,26 @@ class WorkPackageMigration(BaseMigration):
 
     def _update_markdown_converter_mappings(self) -> None:
         """Update the markdown converter with current user and work package mappings."""
-        # Create user mapping for markdown converter (Jira username -> OpenProject user login)
+        # Create user mapping for markdown converter (Jira username -> OpenProject user info)
         # self.user_mapping values are dicts with openproject_id and openproject_login
+        # MarkdownConverter expects dicts with 'op_id' and 'op_login' keys for proper HTML mentions
         user_mapping = {}
         account_id_mapping = {}  # For Jira Cloud [~accountId:xxx] format
         for username, user_dict in self.user_mapping.items():
             if not user_dict:
                 continue
-            # Prefer login for @mention format, fall back to ID
             op_login = user_dict.get("openproject_login")
             op_id = user_dict.get("openproject_id")
-            op_user = op_login if op_login else (str(op_id) if op_id else None)
 
-            if op_user:
-                user_mapping[username] = op_user
+            if op_login or op_id:
+                # Pass dict with both op_id and op_login for proper HTML mention generation
+                user_info = {"op_id": op_id, "op_login": op_login or str(op_id)}
+                user_mapping[username] = user_info
 
                 # Also map by Jira accountId (for Cloud) and jira_id
                 jira_account_id = user_dict.get("jira_account_id") or user_dict.get("jira_id")
                 if jira_account_id:
-                    account_id_mapping[jira_account_id] = op_user
+                    account_id_mapping[jira_account_id] = user_info
 
         # For work package mapping, we need to load the existing mapping if available
         work_package_mapping = {}
@@ -239,6 +247,84 @@ class WorkPackageMigration(BaseMigration):
             work_package_mapping=work_package_mapping,
             account_id_mapping=account_id_mapping,
         )
+
+    def _track_mentioned_users(self, text: str | None, project_id: int) -> None:
+        """Extract mentioned user IDs from text and track them for membership assignment.
+
+        Args:
+            text: Jira markup text that may contain user mentions
+            project_id: OpenProject project ID where mentions were found
+
+        """
+        if not text or not project_id:
+            return
+
+        if not hasattr(self, "markdown_converter") or not self.markdown_converter:
+            return
+
+        try:
+            mentioned_ids = self.markdown_converter.extract_mentioned_user_ids(text)
+            if mentioned_ids:
+                if project_id not in self._mentioned_users_by_project:
+                    self._mentioned_users_by_project[project_id] = set()
+                self._mentioned_users_by_project[project_id].update(mentioned_ids)
+        except Exception as e:
+            self.logger.debug(f"Error extracting mentioned users: {e}")
+
+    def _assign_memberships_for_mentioned_users(self, project_id: int) -> dict[str, Any]:
+        """Assign project membership to users who were mentioned in the project.
+
+        This ensures that @mentions render as clickable links in OpenProject.
+        Users must be project members for mentions to work properly.
+
+        Args:
+            project_id: OpenProject project ID
+
+        Returns:
+            Summary dict with counts of memberships assigned
+
+        """
+        result = {"project_id": project_id, "users_added": 0, "users_skipped": 0, "errors": []}
+
+        mentioned_user_ids = self._mentioned_users_by_project.get(project_id, set())
+        if not mentioned_user_ids:
+            return result
+
+        self.logger.info(
+            f"Assigning memberships for {len(mentioned_user_ids)} mentioned users in project {project_id}"
+        )
+
+        for user_id in mentioned_user_ids:
+            try:
+                assign_result = self.op_client.assign_user_roles(
+                    project_id=project_id,
+                    user_id=user_id,
+                    role_ids=[self._mention_role_id],
+                )
+                if assign_result.get("success"):
+                    if assign_result.get("changed"):
+                        result["users_added"] += 1
+                        self.logger.debug(f"Added user {user_id} to project {project_id}")
+                    else:
+                        result["users_skipped"] += 1
+                        self.logger.debug(f"User {user_id} already member of project {project_id}")
+                else:
+                    error_msg = assign_result.get("error", "Unknown error")
+                    result["errors"].append(f"User {user_id}: {error_msg}")
+                    self.logger.warning(
+                        f"Failed to add user {user_id} to project {project_id}: {error_msg}"
+                    )
+            except Exception as e:
+                result["errors"].append(f"User {user_id}: {e}")
+                self.logger.warning(f"Exception adding user {user_id} to project {project_id}: {e}")
+
+        if result["users_added"] > 0:
+            self.logger.info(
+                f"Added {result['users_added']} mentioned users to project {project_id} "
+                f"(skipped {result['users_skipped']} existing members)"
+            )
+
+        return result
 
     def _get_or_create_version(self, version_name: str, project_id: int) -> int | None:
         """Get or create an OpenProject version on-the-fly.
@@ -3296,6 +3382,10 @@ class WorkPackageMigration(BaseMigration):
             jira_key = jira_issue.get("key", "")
             description = jira_issue.get("description", "")
 
+            # Track mentioned users before conversion (must use original Jira markup)
+            if description:
+                self._track_mentioned_users(description, project_id)
+
             # Convert Jira wiki markup to OpenProject markdown
             if description:
                 description = self.markdown_converter.convert(description)
@@ -4222,6 +4312,17 @@ class WorkPackageMigration(BaseMigration):
 
             except Exception as e:
                 self.logger.exception("Failed migrating project %s: %s", project_key, e)
+
+            # Assign project membership for mentioned users (so @mentions render as clickable links)
+            if op_project_id:
+                try:
+                    membership_result = self._assign_memberships_for_mentioned_users(int(op_project_id))
+                    if membership_result.get("users_added", 0) > 0:
+                        self.logger.info(
+                            f"Added {membership_result['users_added']} mentioned users as members of {project_key}"
+                        )
+                except Exception as e:
+                    self.logger.warning(f"Failed to assign memberships for mentioned users in {project_key}: {e}")
 
             results["projects"].append({"project_key": project_key, "created": created_count, "issues": issues_seen})
             results["total_created"] += created_count

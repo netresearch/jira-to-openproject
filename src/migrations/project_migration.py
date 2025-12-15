@@ -851,17 +851,10 @@ class ProjectMigration(BaseMigration):
             parent_company = self.find_parent_company_for_project(jira_project)
             parent_id = parent_company.get("openproject_id") if parent_company else None
 
-            # Check if we should fail when parent company is missing
-            if parent_company is None and config.migration_config.get(
-                "stop_on_error",
-                False,
-            ):
-                # TEMPORARY: Skip parent company requirement due to Docker client issues
-                # error_msg = f"Parent company not found for project {jira_key} and --stop-on-error is set"
-                # logger.error(error_msg)
-                # raise Exception(error_msg)
+            # Log warning if parent company is missing (project will be created at root level)
+            if parent_company is None:
                 logger.warning(
-                    f"Parent company not found for project {jira_key} - proceeding without hierarchy (TEMPORARY)",
+                    f"Parent company not found for project {jira_key} - creating at root level (no parent hierarchy)",
                 )
 
             # Get account ID if available
@@ -1131,6 +1124,9 @@ class ProjectMigration(BaseMigration):
                 # SECURITY FIX: Escape identifier to prevent injection
                 identifier_escaped = ruby_escape(project_data["identifier"])
                 desc_escaped = ruby_escape(project_data.get("description", ""))
+                # Parent ID for project hierarchy (Tempo Customer → Jira Project)
+                parent_id_value = project_data.get("parent_id")
+                parent_id_ruby = str(parent_id_value) if parent_id_value else "nil"
 
                 # Use a Rails command with proper exception handling that returns JSON in all cases
                 # SECURITY: All dynamic fields are now properly escaped to prevent command injection
@@ -1154,7 +1150,7 @@ class ProjectMigration(BaseMigration):
                     f"p = Project.find_by(identifier: '{identifier_escaped}');\n"
                     "created = false;\n"
                     "if !p\n"
-                    f"  p = Project.new(name: '{name_escaped}', identifier: '{identifier_escaped}', description: '{desc_escaped}', public: false);\n"
+                    f"  p = Project.new(name: '{name_escaped}', identifier: '{identifier_escaped}', description: '{desc_escaped}', public: false, parent_id: {parent_id_ruby});\n"
                     "  if p.respond_to?(:workspace_type=)\n"
                     "    begin\n"
                     "      p.workspace_type = 'project'\n"

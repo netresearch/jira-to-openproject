@@ -631,23 +631,38 @@ class EnhancedUserAssociationMigrator:
             self._create_enhanced_mappings()
 
     def _create_enhanced_mappings(self) -> None:
-        """Create enhanced user mappings from basic user mapping."""
+        """Create enhanced user mappings from basic user mapping.
+        
+        Uses existing data from user_mapping.json instead of making live Jira API calls,
+        since the mapping file already contains all required user information.
+        """
         self.logger.info("Creating enhanced user mappings from basic mapping")
 
         for jira_key, entry in self.user_mapping.items():
             # user_mapping is keyed by Jira user key; entries now also carry J2O provenance data
-            op_user_id = (
-                entry if isinstance(entry, int) else (entry.get("openproject_id") if isinstance(entry, dict) else None)
-            )
-            jira_username = entry.get("jira_name") if isinstance(entry, dict) else None
-            jira_user_info = self._get_jira_user_info(jira_username or jira_key)
+            if isinstance(entry, int):
+                # Legacy format: just the OpenProject ID
+                op_user_id = entry
+                jira_username = jira_key
+                jira_display_name = None
+                jira_email = None
+            elif isinstance(entry, dict):
+                # Modern format: full user data from migration
+                op_user_id = entry.get("openproject_id")
+                jira_username = entry.get("jira_name") or jira_key
+                jira_display_name = entry.get("jira_display_name")
+                jira_email = entry.get("jira_email")
+            else:
+                continue
+
+            # Only fetch OpenProject info if needed (this is local, not Jira API)
             op_user_info = self._get_openproject_user_info(op_user_id) if op_user_id else None
 
             mapping = UserAssociationMapping(
-                jira_username=jira_username or jira_key,
-                jira_user_id=(jira_user_info.get("accountId") if jira_user_info else None),
-                jira_display_name=(jira_user_info.get("displayName") if jira_user_info else None),
-                jira_email=(jira_user_info.get("emailAddress") if jira_user_info else None),
+                jira_username=jira_username,
+                jira_user_id=jira_key,  # Use jira_key as user ID
+                jira_display_name=jira_display_name,
+                jira_email=jira_email,
                 openproject_user_id=op_user_id,
                 openproject_username=(op_user_info.get("login") if op_user_info else None),
                 openproject_email=op_user_info.get("mail") if op_user_info else None,
@@ -655,7 +670,7 @@ class EnhancedUserAssociationMigrator:
                 fallback_user_id=None,
                 metadata={
                     "created_at": self._get_current_timestamp(),
-                    "jira_active": (bool(jira_user_info.get("active", True)) if jira_user_info else True),
+                    "jira_active": True,  # Assume active since we have mapping data
                     "openproject_active": ((op_user_info.get("status") == 1) if op_user_info else True),
                 },
                 lastRefreshed=self._get_current_timestamp(),
@@ -663,7 +678,7 @@ class EnhancedUserAssociationMigrator:
 
             # Index by both Jira key and Jira username for robust lookups
             self.enhanced_user_mappings[jira_key] = mapping
-            if jira_username:
+            if jira_username and jira_username != jira_key:
                 self.enhanced_user_mappings[jira_username] = mapping
 
     def _get_current_timestamp(self) -> str:

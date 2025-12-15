@@ -312,15 +312,33 @@ if input_data && input_data.respond_to?(:each)
           journal_result.each { |row| version_to_id[row['version']] = row['id'] }
 
           # Bulk INSERT customizable_journals for v2+ (J2O custom fields)
+          # NOOP FIX: Only insert entries when CF value actually CHANGED
           if j2o_cf_ids.any?
             cf_journal_values = []
+            # Start with v1's CF state as the baseline for comparison
+            prev_cf_snapshot = v1_cf_snapshot.is_a?(Hash) ? v1_cf_snapshot.dup : {}
+
             bulk_journals.each do |j|
               journal_id = version_to_id[j[:version]]
-              next unless journal_id && j[:cf_snapshot].is_a?(Hash)
-              j[:cf_snapshot].each do |cf_id, cf_value|
+              next unless journal_id
+
+              curr_cf_snapshot = j[:cf_snapshot].is_a?(Hash) ? j[:cf_snapshot] : {}
+
+              # Only insert entries for CF values that actually CHANGED from previous version
+              curr_cf_snapshot.each do |cf_id, cf_value|
                 next if cf_id.nil? || cf_value.nil?
-                cf_journal_values << "(#{journal_id}, #{cf_id.to_i}, #{conn.quote(cf_value.to_s)})"
+                prev_value = prev_cf_snapshot[cf_id]
+
+                # Check if value actually changed (handle nil vs empty string)
+                value_changed = prev_value.to_s != cf_value.to_s
+
+                if value_changed
+                  cf_journal_values << "(#{journal_id}, #{cf_id.to_i}, #{conn.quote(cf_value.to_s)})"
+                end
               end
+
+              # Update prev_cf_snapshot for next iteration
+              prev_cf_snapshot = curr_cf_snapshot.dup
             end
             if cf_journal_values.any?
               conn.execute("INSERT INTO customizable_journals (journal_id, custom_field_id, value) VALUES #{cf_journal_values.join(', ')}")

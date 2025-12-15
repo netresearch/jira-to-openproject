@@ -1240,7 +1240,7 @@ class CompanyMigration(BaseMigration):
 
             # Update mappings in global configuration
             if hasattr(config, "mappings") and config.mappings:
-                config.mappings.set_mapping("companies", self.company_mapping)
+                config.mappings.set_mapping("company", self.company_mapping)
 
             return ComponentResult(
                 success=True,

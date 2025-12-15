@@ -312,18 +312,78 @@ class MarkdownConverter:
 
         return self.issue_ref_pattern.sub(replace_issue_ref, text)
 
+    def extract_mentioned_user_ids(self, jira_markup: str) -> set[int]:
+        """Extract OpenProject user IDs from Jira markup text.
+
+        Scans for Jira mention patterns and returns the corresponding OpenProject
+        user IDs. This is useful for collecting mentioned users to ensure they
+        have project membership (required for mentions to render as clickable links).
+
+        Args:
+            jira_markup: The Jira wiki markup text to scan
+
+        Returns:
+            Set of OpenProject user IDs mentioned in the text
+
+        """
+        if not jira_markup or not isinstance(jira_markup, str):
+            return set()
+
+        mentioned_ids: set[int] = set()
+
+        # Check Jira Cloud [~accountId:xxx] format
+        for match in self.account_id_mention_pattern.finditer(jira_markup):
+            account_id = match.group(1).strip()
+            if self.account_id_mapping and account_id in self.account_id_mapping:
+                user_data = self.account_id_mapping[account_id]
+                if isinstance(user_data, dict):
+                    op_id = user_data.get("op_id")
+                    if op_id:
+                        mentioned_ids.add(int(op_id))
+
+        # Check Jira Server [~username] format
+        for match in self.user_mention_pattern.finditer(jira_markup):
+            username = match.group(1).strip()
+            if username.startswith("accountId:"):
+                continue  # Skip, handled above
+            if self.user_mapping and username in self.user_mapping:
+                user_data = self.user_mapping[username]
+                if isinstance(user_data, dict):
+                    op_id = user_data.get("op_id")
+                    if op_id:
+                        mentioned_ids.add(int(op_id))
+
+        return mentioned_ids
+
     def _convert_user_mentions(self, text: str) -> str:
         """Convert Jira user mentions to OpenProject user mentions.
 
         Handles both Jira Server format [~username] and Jira Cloud format [~accountId:xxx].
+        Generates proper OpenProject HTML mention format for clickable user links.
         """
+
+        def _format_op_mention(op_id: int | str | None, op_login: str) -> str:
+            """Format a proper OpenProject HTML mention if we have the user ID."""
+            if op_id:
+                # OpenProject expects HTML mention format for clickable links
+                return (
+                    f'<mention class="mention" data-id="{op_id}" '
+                    f'data-type="user" data-text="@{op_login}">@{op_login}</mention>'
+                )
+            # Fallback to plain @mention if no ID available
+            return f"@{op_login}"
 
         def replace_account_id_mention(match: re.Match[str]) -> str:
             """Replace Jira Cloud [~accountId:xxx] format."""
             account_id = match.group(1).strip()
             if self.account_id_mapping and account_id in self.account_id_mapping:
-                user_login = self.account_id_mapping[account_id]
-                return f"@{user_login}"
+                user_data = self.account_id_mapping[account_id]
+                if isinstance(user_data, dict):
+                    op_id = user_data.get("op_id")
+                    op_login = user_data.get("op_login") or user_data.get("login") or account_id
+                    return _format_op_mention(op_id, op_login)
+                # Legacy format: user_data is just the login string
+                return f"@{user_data}"
             # Return original format if no mapping exists
             return match.group(0)
 
@@ -337,8 +397,9 @@ class MarkdownConverter:
                 user_data = self.user_mapping[username]
                 # user_data is a dict with 'op_id' and 'op_login' keys
                 if isinstance(user_data, dict):
+                    op_id = user_data.get("op_id")
                     op_login = user_data.get("op_login") or user_data.get("login") or username
-                    return f"@{op_login}"
+                    return _format_op_mention(op_id, op_login)
                 # Fallback: if user_data is already a string (legacy format)
                 return f"@{user_data}"
             # Return original format if no mapping exists or user not found

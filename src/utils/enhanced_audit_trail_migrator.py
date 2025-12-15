@@ -403,17 +403,61 @@ class EnhancedAuditTrailMigrator:
         from_value = change_item.get("from") or change_item.get("fromString")
         to_value = change_item.get("to") or change_item.get("toString")
 
+        # Filter out no-change entries to prevent phantom journals
+        # "The changes were retracted" appears when journals have no actual changes
+        if self._is_no_change(from_value, to_value):
+            return None
+
         # Special handling for certain fields
         if field in ["assignee", "reporter"]:
             # Map user names to IDs
             from_id = self.user_mapping.get(from_value) if from_value else None
             to_id = self.user_mapping.get(to_value) if to_value else None
+            # Filter out no-change after ID mapping
+            if from_id == to_id:
+                return None
             return {op_field: [from_id, to_id]}
         if field in ["status", "priority", "issuetype"]:
             # These need ID mapping which we'll handle during insertion
             return {op_field: [from_value, to_value]}
         # Generic field change
         return {op_field: [from_value, to_value]}
+
+    def _is_no_change(self, from_value: Any, to_value: Any) -> bool:
+        """Check if a change entry represents no actual change.
+
+        Returns True if from_value equals to_value (including null-to-null),
+        which would create phantom journals appearing as "The changes were retracted."
+
+        Args:
+            from_value: The original value
+            to_value: The new value
+
+        Returns:
+            True if this represents no change and should be skipped
+
+        """
+        # Normalize None and empty strings for comparison
+        def normalize(val: Any) -> Any:
+            if val is None:
+                return None
+            if isinstance(val, str):
+                stripped = val.strip()
+                return None if stripped == "" else stripped
+            return val
+
+        normalized_from = normalize(from_value)
+        normalized_to = normalize(to_value)
+
+        # Skip if both are None/empty (null-to-null change)
+        if normalized_from is None and normalized_to is None:
+            return True
+
+        # Skip if values are identical (no actual change)
+        if normalized_from == normalized_to:
+            return True
+
+        return False
 
     def _generate_audit_comment(self, change_item: dict[str, Any]) -> str:
         """Generate a descriptive comment for the audit event.
@@ -866,6 +910,14 @@ class EnhancedAuditTrailMigrator:
               # Find or create user
               user_id = event_data['user_id'] || 1  # Fallback to admin
               user = User.find_by(id: user_id) || User.where(admin: true).first
+
+              # Prevent phantom journals ("The changes were retracted" appears when
+              # journals have no actual notes or field changes)
+              notes = (event_data['comment'] || event_data['notes']).to_s.strip
+              changes = event_data['changes'] || []
+              if notes.empty? && changes.empty?
+                next  # Skip - no actual content to record
+              end
 
               # Calculate next version number
               current_version = wp.journals.maximum(:version) || 0

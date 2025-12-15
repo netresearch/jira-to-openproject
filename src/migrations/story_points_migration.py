@@ -65,13 +65,35 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         except Exception:  # noqa: BLE001
             logger.info("Story Points CF not found; will create")
 
-        # Create CF via execute_query (float field, global)
+        # Create CF with is_for_all: false (selective project enablement)
         script = (
             f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{STORY_POINTS_CF_NAME}'); "
-            f"if !cf; cf = CustomField.new(name: '{STORY_POINTS_CF_NAME}', field_format: 'float', is_required: false, is_for_all: true, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
+            f"if !cf; cf = CustomField.new(name: '{STORY_POINTS_CF_NAME}', field_format: 'float', is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
         )
         cf_id = self.op_client.execute_query(script)
         return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
+
+    def _enable_cf_for_projects(self, cf_id: int, project_ids: set[int]) -> None:
+        """Enable custom field for specific projects only."""
+        if not project_ids:
+            return
+        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
+        script = f"""
+cf = CustomField.find({cf_id})
+[{project_ids_str}].each do |pid|
+  begin
+    project = Project.find(pid)
+    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)
+  rescue ActiveRecord::RecordNotFound
+  end
+end
+true
+""".strip()
+        try:
+            self.op_client.execute_query(script)
+            logger.info("Enabled %s CF for %d projects", STORY_POINTS_CF_NAME, len(project_ids))
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to enable CF for some projects")
 
     @staticmethod
     def _coerce_number(value: Any) -> float | None:
@@ -145,14 +167,19 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
 
         updated = 0
         failed = 0
+        projects_with_values: set[int] = set()
 
         for jira_key, text in text_by_key.items():
-            if text is None:
+            if text is None or text == "0":
                 continue
             entry = wp_map.get(jira_key)
             if not (isinstance(entry, dict) and entry.get("openproject_id")):
                 continue
             wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            # Track project for selective enablement
+            project_id = entry.get("openproject_project_id")
+            if project_id:
+                projects_with_values.add(int(project_id))
             try:
                 val = str(text).replace("'", "\\'")
                 set_script = (
@@ -168,6 +195,10 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
             except Exception:
                 logger.exception("Failed to apply Story Points for %s", jira_key)
                 failed += 1
+
+        # Enable CF only for projects that have values
+        if projects_with_values:
+            self._enable_cf_for_projects(cf_id, projects_with_values)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
