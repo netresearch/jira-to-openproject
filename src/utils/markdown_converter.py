@@ -32,6 +32,7 @@ class MarkdownConverter:
         user_mapping: dict[str, str] | None = None,
         work_package_mapping: dict[str, int] | None = None,
         account_id_mapping: dict[str, str] | None = None,
+        attachment_mapping: dict[str, dict[str, int]] | None = None,
     ) -> None:
         """Initialize the markdown converter.
 
@@ -39,11 +40,17 @@ class MarkdownConverter:
             user_mapping: Optional mapping of Jira usernames to OpenProject user logins/IDs
             work_package_mapping: Optional mapping of Jira issue keys to OpenProject work package IDs
             account_id_mapping: Optional mapping of Jira accountIds to OpenProject user logins/IDs
+            attachment_mapping: Optional mapping of (jira_key -> {filename -> openproject_attachment_id})
+                              Used to convert attachment references to OpenProject API URLs
 
         """
         self.user_mapping = user_mapping or {}
         self.work_package_mapping = work_package_mapping or {}
         self.account_id_mapping = account_id_mapping or {}
+        self.attachment_mapping = attachment_mapping or {}
+
+        # Current Jira issue key context for attachment resolution
+        self._current_jira_key: str | None = None
 
         # Compile regex patterns for performance
         self._compile_patterns()
@@ -84,8 +91,9 @@ class MarkdownConverter:
         )
         self.noformat_pattern = re.compile(r"\{noformat\}(.*?)\{noformat\}", re.DOTALL)
 
-        # Link patterns - avoid matching markdown images and user mentions
-        self.link_pattern = re.compile(r"(?<!\!)\[([^|\]~][^|\]]*)\|?([^\]]*)\]")
+        # Link patterns - avoid matching markdown images, user mentions, and already-converted markdown links
+        # Negative lookahead (?!\() ensures we don't match [text] if immediately followed by (url)
+        self.link_pattern = re.compile(r"(?<!\!)\[([^|\]~][^|\]]*)\|?([^\]]*)\](?!\()")
 
         # Issue reference patterns
         self.issue_ref_pattern = re.compile(r"\b([A-Z][A-Z0-9_]*-\d+)\b")
@@ -98,9 +106,15 @@ class MarkdownConverter:
 
         # Attachment and embedded content patterns
         self.image_pattern = re.compile(r"!([^!|\s]+)(?:\|([^!]*))?!")
+        # Pattern for [title|filename.ext] format
         self.attachment_pattern = re.compile(
             r"\[([^\|\]]+)\|([^\]]*\."
             r"(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip|rar|7z))\]",
+            re.IGNORECASE,
+        )
+        # Pattern for [^filename.ext] format (Jira attachment reference)
+        self.attachment_ref_pattern = re.compile(
+            r"\[\^([^\]]+\.(?:pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip|rar|7z))\]",
             re.IGNORECASE,
         )
 
@@ -156,11 +170,13 @@ class MarkdownConverter:
             "(flag)": "🚩",  # flag
         }
 
-    def convert(self, jira_markup: str) -> str:
+    def convert(self, jira_markup: str, jira_key: str | None = None) -> str:
         """Convert Jira wiki markup to OpenProject markdown.
 
         Args:
             jira_markup: The Jira wiki markup text to convert
+            jira_key: Optional Jira issue key for resolving attachment references.
+                     Required for proper OpenProject attachment URL conversion.
 
         Returns:
             Converted OpenProject markdown text
@@ -168,6 +184,9 @@ class MarkdownConverter:
         """
         if not jira_markup or not isinstance(jira_markup, str):
             return ""
+
+        # Set the current Jira key context for attachment resolution
+        self._current_jira_key = jira_key
 
         logger.debug("Converting Jira markup to OpenProject markdown")
 
@@ -190,8 +209,8 @@ class MarkdownConverter:
         text = self._convert_user_mentions(text)  # Convert user mentions before links
         text = self._convert_emoticons(text)  # Convert Jira emoticons to UTF-8
         text = self._convert_images(text)
+        text = self._convert_attachments(text)  # Must be before _convert_links to handle [^file] pattern
         text = self._convert_links(text)
-        text = self._convert_attachments(text)
         text = self._convert_horizontal_rules(text)
         text = self._convert_text_formatting(text)
         text = self._cleanup_whitespace(text)
@@ -425,24 +444,105 @@ class MarkdownConverter:
         return text
 
     def _convert_images(self, text: str) -> str:
-        """Convert Jira images to markdown images."""
+        """Convert Jira images to markdown images with OpenProject attachment URLs.
+
+        If an attachment mapping is available and the current Jira key is set,
+        image references are converted to OpenProject API attachment URLs:
+        - `!image.png!` → `![image.png](/api/v3/attachments/{id}/content)`
+
+        Without mapping, falls back to filename-only (may not render correctly):
+        - `!image.png!` → `![](image.png)`
+        """
 
         def replace_image(match: re.Match[str]) -> str:
-            image_url = match.group(1).strip()
-            alt_text = match.group(2).strip() if match.group(2) else ""
-            return f"![{alt_text}]({image_url})"
+            filename = match.group(1).strip()
+            alt_text = match.group(2).strip() if match.group(2) else filename
+
+            # Try to resolve to OpenProject attachment URL
+            if self._current_jira_key and self.attachment_mapping:
+                issue_attachments = self.attachment_mapping.get(self._current_jira_key, {})
+                attachment_id = issue_attachments.get(filename)
+                if attachment_id:
+                    return f"![{alt_text}](/api/v3/attachments/{attachment_id}/content)"
+                # Try case-insensitive lookup
+                for att_filename, att_id in issue_attachments.items():
+                    if att_filename.lower() == filename.lower():
+                        return f"![{alt_text}](/api/v3/attachments/{att_id}/content)"
+
+            # Fallback: use filename only (OpenProject may not resolve this)
+            logger.debug(
+                "No attachment mapping for %s in %s, using filename",
+                filename,
+                self._current_jira_key or "unknown",
+            )
+            return f"![{alt_text}]({filename})"
 
         return self.image_pattern.sub(replace_image, text)
 
     def _convert_attachments(self, text: str) -> str:
-        """Convert Jira attachments to markdown links."""
+        """Convert Jira attachments to markdown links with OpenProject attachment URLs.
+
+        If an attachment mapping is available and the current Jira key is set,
+        attachment references are converted to OpenProject API attachment URLs:
+        - `[doc|file.pdf]` → `[doc](/api/v3/attachments/{id}/content)`
+        - `[^file.pdf]` → `[file.pdf](/api/v3/attachments/{id}/content)`
+
+        Without mapping, falls back to filename-only (may not work):
+        - `[doc|file.pdf]` → `[doc](file.pdf)`
+        - `[^file.pdf]` → `[file.pdf](file.pdf)`
+        """
 
         def replace_attachment(match: re.Match[str]) -> str:
+            """Handle [title|filename] pattern."""
             title = match.group(1).strip()
             filename = match.group(2).strip()
+
+            # Try to resolve to OpenProject attachment URL
+            if self._current_jira_key and self.attachment_mapping:
+                issue_attachments = self.attachment_mapping.get(self._current_jira_key, {})
+                attachment_id = issue_attachments.get(filename)
+                if attachment_id:
+                    return f"[{title}](/api/v3/attachments/{attachment_id}/content)"
+                # Try case-insensitive lookup
+                for att_filename, att_id in issue_attachments.items():
+                    if att_filename.lower() == filename.lower():
+                        return f"[{title}](/api/v3/attachments/{att_id}/content)"
+
+            # Fallback: use filename only
+            logger.debug(
+                "No attachment mapping for %s in %s, using filename",
+                filename,
+                self._current_jira_key or "unknown",
+            )
             return f"[{title}]({filename})"
 
-        return self.attachment_pattern.sub(replace_attachment, text)
+        def replace_attachment_ref(match: re.Match[str]) -> str:
+            """Handle [^filename] pattern."""
+            filename = match.group(1).strip()
+
+            # Try to resolve to OpenProject attachment URL
+            if self._current_jira_key and self.attachment_mapping:
+                issue_attachments = self.attachment_mapping.get(self._current_jira_key, {})
+                attachment_id = issue_attachments.get(filename)
+                if attachment_id:
+                    return f"[{filename}](/api/v3/attachments/{attachment_id}/content)"
+                # Try case-insensitive lookup
+                for att_filename, att_id in issue_attachments.items():
+                    if att_filename.lower() == filename.lower():
+                        return f"[{filename}](/api/v3/attachments/{att_id}/content)"
+
+            # Fallback: use filename only
+            logger.debug(
+                "No attachment mapping for %s in %s, using filename",
+                filename,
+                self._current_jira_key or "unknown",
+            )
+            return f"[{filename}]({filename})"
+
+        # Apply both patterns
+        text = self.attachment_pattern.sub(replace_attachment, text)
+        text = self.attachment_ref_pattern.sub(replace_attachment_ref, text)
+        return text
 
     def _convert_horizontal_rules(self, text: str) -> str:
         """Convert Jira horizontal rules to markdown horizontal rules."""

@@ -512,10 +512,10 @@ Content for option B with _italic_ text.
         """Test image conversion from Jira to markdown format."""
         converter = MarkdownConverter()
 
-        # Test basic image
+        # Test basic image (uses filename as alt text for accessibility)
         text = "Here is an image: !screenshot.png!"
         result = converter.convert(text)
-        expected = "Here is an image: ![](screenshot.png)"
+        expected = "Here is an image: ![screenshot.png](screenshot.png)"
         assert result == expected
 
         # Test image with alt text
@@ -524,10 +524,10 @@ Content for option B with _italic_ text.
         expected = "Check this: ![This is a diagram](diagram.jpg)"
         assert result == expected
 
-        # Test multiple images
+        # Test multiple images (uses filename as alt text when not specified)
         text = "See !before.png! and !after.png|After image!"
         result = converter.convert(text)
-        expected = "See ![](before.png) and ![After image](after.png)"
+        expected = "See ![before.png](before.png) and ![After image](after.png)"
         assert result == expected
 
     def test_convert_attachments(self) -> None:
@@ -551,3 +551,163 @@ Content for option B with _italic_ text.
         result = converter.convert(text)
         expected = "Download [Source Code](source.zip)"
         assert result == expected
+
+    def test_init_with_attachment_mapping(self) -> None:
+        """Test initialization with attachment mapping."""
+        attachment_mapping = {
+            "PROJ-1": {"screenshot.png": 100, "diagram.jpg": 101},
+            "PROJ-2": {"report.pdf": 200},
+        }
+
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+        assert converter.attachment_mapping == attachment_mapping
+
+    def test_convert_images_with_attachment_mapping(self) -> None:
+        """Test image conversion using OpenProject attachment URLs."""
+        attachment_mapping = {
+            "PROJ-1": {"screenshot.png": 100, "diagram.jpg": 101},
+        }
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+
+        # Test image with attachment mapping - should use OpenProject URL
+        text = "Here is an image: !screenshot.png!"
+        result = converter.convert(text, jira_key="PROJ-1")
+        expected = "Here is an image: ![screenshot.png](/api/v3/attachments/100/content)"
+        assert result == expected
+
+        # Test image with alt text and attachment mapping
+        text = "Check this: !diagram.jpg|Flow diagram!"
+        result = converter.convert(text, jira_key="PROJ-1")
+        expected = "Check this: ![Flow diagram](/api/v3/attachments/101/content)"
+        assert result == expected
+
+    def test_convert_images_case_insensitive_lookup(self) -> None:
+        """Test that image attachment lookup is case-insensitive."""
+        attachment_mapping = {
+            "PROJ-1": {"Screenshot.PNG": 100},  # Note: mixed case
+        }
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+
+        # Test with different case - should still find the mapping
+        text = "!screenshot.png!"
+        result = converter.convert(text, jira_key="PROJ-1")
+        expected = "![screenshot.png](/api/v3/attachments/100/content)"
+        assert result == expected
+
+    def test_convert_images_without_jira_key(self) -> None:
+        """Test image conversion without jira_key falls back to filename."""
+        attachment_mapping = {
+            "PROJ-1": {"screenshot.png": 100},
+        }
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+
+        # Without jira_key, should use filename fallback
+        text = "!screenshot.png!"
+        result = converter.convert(text)  # No jira_key
+        expected = "![screenshot.png](screenshot.png)"
+        assert result == expected
+
+    def test_convert_images_missing_attachment_mapping(self) -> None:
+        """Test image conversion when attachment not in mapping."""
+        attachment_mapping = {
+            "PROJ-1": {"other.png": 100},  # Different file
+        }
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+
+        # Attachment not in mapping - should use filename fallback
+        text = "!missing.png!"
+        result = converter.convert(text, jira_key="PROJ-1")
+        expected = "![missing.png](missing.png)"
+        assert result == expected
+
+    def test_convert_images_different_jira_key(self) -> None:
+        """Test image conversion with different jira_key has separate mappings."""
+        attachment_mapping = {
+            "PROJ-1": {"screenshot.png": 100},
+            "PROJ-2": {"screenshot.png": 200},  # Same filename, different ID
+        }
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+
+        # PROJ-1 should get ID 100
+        result1 = converter.convert("!screenshot.png!", jira_key="PROJ-1")
+        assert "/api/v3/attachments/100/content" in result1
+
+        # PROJ-2 should get ID 200
+        result2 = converter.convert("!screenshot.png!", jira_key="PROJ-2")
+        assert "/api/v3/attachments/200/content" in result2
+
+    def test_convert_attachment_links_with_mapping(self) -> None:
+        """Test attachment link conversion using OpenProject URLs."""
+        attachment_mapping = {
+            "PROJ-1": {"report.pdf": 150, "data.xlsx": 151},
+        }
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+
+        # Test PDF attachment link with mapping
+        text = "Please review [^report.pdf]"
+        result = converter.convert(text, jira_key="PROJ-1")
+        expected = "Please review [report.pdf](/api/v3/attachments/150/content)"
+        assert result == expected
+
+        # Test Excel attachment link with mapping
+        text = "Data is in [^data.xlsx]"
+        result = converter.convert(text, jira_key="PROJ-1")
+        expected = "Data is in [data.xlsx](/api/v3/attachments/151/content)"
+        assert result == expected
+
+    def test_convert_multiple_images_in_same_text(self) -> None:
+        """Test multiple images in same text are all converted."""
+        attachment_mapping = {
+            "PROJ-1": {"before.png": 100, "after.png": 101, "diff.png": 102},
+        }
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+
+        text = "Compare !before.png! with !after.png! showing !diff.png|The difference!"
+        result = converter.convert(text, jira_key="PROJ-1")
+
+        assert "/api/v3/attachments/100/content" in result
+        assert "/api/v3/attachments/101/content" in result
+        assert "/api/v3/attachments/102/content" in result
+        assert "![The difference]" in result
+
+    def test_convert_mixed_content_with_attachment_mapping(self) -> None:
+        """Test complex content with images, links, and other markup."""
+        user_mapping = {"developer": 123}
+        wp_mapping = {"PROJ-456": 789}
+        attachment_mapping = {
+            "PROJ-123": {"screenshot.png": 500, "doc.pdf": 501},
+        }
+        converter = MarkdownConverter(
+            user_mapping=user_mapping,
+            work_package_mapping=wp_mapping,
+            attachment_mapping=attachment_mapping,
+        )
+
+        text = """h2. Issue Report
+
+See !screenshot.png! for the error.
+
+*Steps to reproduce:*
+# Open the app
+# Click button
+
+Documented in [^doc.pdf]. Also see PROJ-456.
+
+Contact [~developer] for help."""
+
+        result = converter.convert(text, jira_key="PROJ-123")
+
+        # Check heading
+        assert "## Issue Report" in result
+
+        # Check image with OpenProject URL
+        assert "![screenshot.png](/api/v3/attachments/500/content)" in result
+
+        # Check attachment link with OpenProject URL
+        assert "[doc.pdf](/api/v3/attachments/501/content)" in result
+
+        # Check work package reference
+        assert "#789" in result
+
+        # Check user mention
+        assert "@123" in result

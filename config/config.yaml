@@ -8,8 +8,7 @@ jira:
   username: ""  # Set via J2O_JIRA_USERNAME
   api_token: ""  # Set via J2O_JIRA_API_TOKEN
   # Projects to migrate (leave empty to migrate all)
-  projects:
-    - "NRS"
+  projects: []
   # API request settings
   batch_size: 100
   # Fields to retrieve from Jira
@@ -32,17 +31,33 @@ openproject:
 # Migration process settings
 migration:
   # Component migration order
+  #
+  # IMPORTANT: Two-Phase Migration for Proper Attachment URL Conversion
+  # ====================================================================
+  # For attachment references (!image.png!) in descriptions and comments to
+  # properly resolve to OpenProject API URLs (/api/v3/attachments/{id}/content),
+  # use the two-phase migration approach:
+  #
+  # 1. work_packages_skeleton - Creates basic work packages (no content)
+  # 2. attachments - Migrates attachments and saves attachment_mapping.json
+  # 3. work_packages_content - Populates descriptions/comments with resolved attachment URLs
+  #
+  # The default order below uses single-phase 'issues' for backward compatibility.
+  # For proper attachment conversion, use this order instead:
+  #   - work_packages_skeleton  # Phase 1: Create WP skeletons
+  #   - attachments             # Migrate attachments, create mapping
+  #   - work_packages_content   # Phase 2: Populate content with attachment URLs
+  #
   component_order:
     - users
     - groups
     - custom_fields
     - projects
     - versions
-    - issues
+    - issues  # Use 'work_packages_skeleton' + 'work_packages_content' for proper attachment URLs
     - relations
     - worklogs
     - attachments
-    - comments
     - workflows
     - agile_boards
     - sprint_epic

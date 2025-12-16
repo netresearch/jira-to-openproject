@@ -10,6 +10,7 @@ Flow:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -197,7 +198,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         ops: list[dict[str, Any]] = (mapped.data or {}).get("ops", []) if mapped.data else []
         if not ops:
-            return ComponentResult(success=True, updated=0)
+            return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
         # Copy files to container and build data payload for Rails script
         container_ops: list[dict[str, Any]] = []
@@ -207,6 +208,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 if not local_path.exists():
                     continue
                 wp_id = int(op["work_package_id"])  # type: ignore[arg-type]
+                jira_key = str(op["jira_key"])
                 filename = str(op["filename"])
                 digest = str(op["digest"])
                 # Place in /tmp with digest prefix to avoid collisions
@@ -219,6 +221,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 container_ops.append(
                     {
                         "work_package_id": wp_id,
+                        "jira_key": jira_key,
                         "filename": filename,
                         "container_path": container_path,
                     },
@@ -227,23 +230,26 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 continue
 
         if not container_ops:
-            return ComponentResult(success=True, updated=0)
+            return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
-        # Minimal Rails runner script: idempotent on filename per work package
+        # Rails script returns attachment IDs for mapping content migration
         ruby_runner = (
             "require 'json'\n"
             "begin\n"
             "  ops = input_data\n"
-            "  updated = 0\n"
+            "  results = []\n"
             "  errors = []\n"
             "  ops.each do |op|\n"
             "    begin\n"
             "      wp = WorkPackage.find_by(id: op['work_package_id'])\n"
             "      next unless wp\n"
+            "      jira_key = op['jira_key']\n"
             "      fname = op['filename']\n"
-            "      # Skip if an attachment with same name already exists\n"
+            "      # Check if an attachment with same name already exists\n"
             "      existing = wp.attachments.where('LOWER(filename) = ?', fname.to_s.downcase).first\n"
             "      if existing\n"
+            "        # Return existing attachment ID for mapping\n"
+            "        results << { jira_key: jira_key, filename: fname, attachment_id: existing.id, existed: true }\n"
             "        next\n"
             "      end\n"
             "      path = op['container_path']\n"
@@ -256,29 +262,74 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             "      end\n"
             "      att.filename = fname if att.respond_to?(:filename=)\n"
             "      att.save!\n"
-            "      updated += 1\n"
+            "      results << { jira_key: jira_key, filename: fname, attachment_id: att.id, existed: false }\n"
             "    rescue => e\n"
-            "      errors << e.message\n"
+            "      errors << { jira_key: op['jira_key'], filename: op['filename'], error: e.message }\n"
             "    end\n"
             "  end\n"
-            "  { updated: updated, failed: errors.length, errors: errors }\n"
+            "  { results: results, errors: errors }\n"
             "rescue => e\n"
-            "  { updated: 0, failed: 1, errors: [e.message] }\n"
+            "  { results: [], errors: [{ error: e.message }] }\n"
             "end\n"
         )
 
         updated = 0
         failed = 0
+        attachment_mapping: dict[str, dict[str, int]] = {}
         try:
             res = self.op_client.execute_script_with_data(ruby_runner, container_ops)
             if isinstance(res, dict):
-                updated = int(res.get("updated", 0)) if res.get("updated") is not None else 0
-                failed = int(res.get("failed", 0)) if res.get("failed") is not None else 0
+                results = res.get("results", [])
+                errors = res.get("errors", [])
+                # Build attachment mapping: {jira_key: {filename: attachment_id}}
+                for r in results:
+                    jira_key = r.get("jira_key")
+                    filename = r.get("filename")
+                    att_id = r.get("attachment_id")
+                    if jira_key and filename and att_id:
+                        if jira_key not in attachment_mapping:
+                            attachment_mapping[jira_key] = {}
+                        attachment_mapping[jira_key][filename] = int(att_id)
+                        if not r.get("existed"):
+                            updated += 1
+                failed = len(errors)
         except Exception:
             logger.exception("Rails attach operation failed")
             failed = len(container_ops)
 
-        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+        return ComponentResult(
+            success=failed == 0,
+            updated=updated,
+            failed=failed,
+            data={"attachment_mapping": attachment_mapping},
+        )
+
+    def _save_attachment_mapping(self, mapping: dict[str, dict[str, int]]) -> None:
+        """Save attachment mapping to file for content migration phase.
+
+        Args:
+            mapping: {jira_key: {filename: openproject_attachment_id}}
+        """
+        mapping_file = Path(self.data_dir) / "attachment_mapping.json"
+        try:
+            # Load existing mapping if present (for incremental migrations)
+            existing: dict[str, dict[str, int]] = {}
+            if mapping_file.exists():
+                with mapping_file.open("r") as f:
+                    existing = json.load(f)
+
+            # Merge new mapping into existing
+            for jira_key, attachments in mapping.items():
+                if jira_key not in existing:
+                    existing[jira_key] = {}
+                existing[jira_key].update(attachments)
+
+            # Save merged mapping
+            with mapping_file.open("w") as f:
+                json.dump(existing, f, indent=2)
+            self.logger.info("Saved attachment mapping for %d issues to %s", len(existing), mapping_file)
+        except Exception:
+            self.logger.exception("Failed to save attachment mapping")
 
     def run(self) -> ComponentResult:
         """Execute attachment migration pipeline."""
@@ -295,6 +346,11 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             return mapped
 
         loaded = self._load(mapped)
+
+        # Save attachment mapping for content migration phase
+        if loaded.data and "attachment_mapping" in loaded.data:
+            self._save_attachment_mapping(loaded.data["attachment_mapping"])
+
         if loaded.success:
             self.logger.info("Attachment migration completed (updated=%s, failed=%s)", loaded.updated, loaded.failed)
         else:

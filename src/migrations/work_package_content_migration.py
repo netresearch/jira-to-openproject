@@ -46,9 +46,14 @@ class WorkPackageContentMigration(BaseMigration):
 
     This migration requires the complete work_package_mapping.json from Phase 1
     to resolve all Jira issue references to OpenProject work package links.
+
+    Additionally, if attachment_mapping.json exists (from attachments migration),
+    attachment references in descriptions and comments will be converted to
+    OpenProject API URLs (/api/v3/attachments/{id}/content).
     """
 
     WORK_PACKAGE_MAPPING_FILE = "work_package_mapping.json"
+    ATTACHMENT_MAPPING_FILE = "attachment_mapping.json"
 
     def __init__(
         self,
@@ -60,10 +65,12 @@ class WorkPackageContentMigration(BaseMigration):
 
         # File paths
         self.work_package_mapping_file = self.data_dir / self.WORK_PACKAGE_MAPPING_FILE
+        self.attachment_mapping_file = self.data_dir / self.ATTACHMENT_MAPPING_FILE
 
         # Data storage
         self.work_package_mapping: dict[str, dict[str, Any]] = {}
         self.jira_key_to_wp_id: dict[str, int] = {}  # For quick link resolution
+        self.attachment_mapping: dict[str, dict[str, int]] = {}  # {jira_key: {filename: op_attachment_id}}
 
         # Load mappings
         self._load_mappings()
@@ -74,12 +81,16 @@ class WorkPackageContentMigration(BaseMigration):
                 "Work package mapping not found. Run work_packages_skeleton first!",
             )
 
+        # Load attachment mapping if available (from attachments migration)
+        self._load_attachment_mapping()
+
         # Initialize markdown converter with complete mapping
         self._init_markdown_converter()
 
         self.logger.debug(
-            "WorkPackageContentMigration initialized with %d mappings",
+            "WorkPackageContentMigration initialized with %d work package mappings, %d attachment mappings",
             len(self.work_package_mapping),
+            len(self.attachment_mapping),
         )
 
     def _load_mappings(self) -> None:
@@ -130,8 +141,41 @@ class WorkPackageContentMigration(BaseMigration):
             self.logger.error("Failed to load mapping: %s", e)
             return False
 
+    def _load_attachment_mapping(self) -> bool:
+        """Load the attachment mapping from attachments migration.
+
+        The attachment mapping enables proper conversion of Jira attachment
+        references to OpenProject API URLs in descriptions and comments.
+
+        Returns:
+            True if mapping was loaded successfully
+
+        """
+        if not self.attachment_mapping_file.exists():
+            self.logger.info(
+                "Attachment mapping file not found: %s (attachments may not have been migrated yet)",
+                self.attachment_mapping_file,
+            )
+            return False
+
+        try:
+            with self.attachment_mapping_file.open("r") as f:
+                self.attachment_mapping = json.load(f)
+
+            total_attachments = sum(len(v) for v in self.attachment_mapping.values())
+            self.logger.info(
+                "Loaded attachment mapping: %d issues with %d attachments",
+                len(self.attachment_mapping),
+                total_attachments,
+            )
+            return True
+
+        except Exception as e:
+            self.logger.warning("Failed to load attachment mapping: %s", e)
+            return False
+
     def _init_markdown_converter(self) -> None:
-        """Initialize markdown converter with user and WP mappings."""
+        """Initialize markdown converter with user, WP, and attachment mappings."""
         # Build user mapping for @mentions
         user_mapping = {}
         account_id_mapping = {}
@@ -151,6 +195,7 @@ class WorkPackageContentMigration(BaseMigration):
             user_mapping=user_mapping,
             work_package_mapping=self.jira_key_to_wp_id,
             account_id_mapping=account_id_mapping,
+            attachment_mapping=self.attachment_mapping,
         )
 
     def _get_projects_to_migrate(self) -> list[dict[str, Any]]:
@@ -234,16 +279,18 @@ class WorkPackageContentMigration(BaseMigration):
             self.logger.error("Failed to fetch issues: %s", e)
             return []
 
-    def _convert_jira_links(self, text: str | None) -> str:
+    def _convert_jira_links(self, text: str | None, jira_key: str | None = None) -> str:
         """Convert Jira issue references to OpenProject WP links.
 
         Patterns converted:
         - PROJ-123 → WP#456 or [WP#456](../work_packages/456)
         - [PROJ-123] → [WP#456]
         - {PROJ-123} → WP#456
+        - !image.png! → ![](/api/v3/attachments/{id}/content)
 
         Args:
             text: Text containing Jira references
+            jira_key: Jira issue key for attachment resolution context
 
         Returns:
             Text with converted references
@@ -252,8 +299,8 @@ class WorkPackageContentMigration(BaseMigration):
         if not text:
             return ""
 
-        # Use markdown converter for comprehensive conversion
-        converted = self.markdown_converter.convert(text)
+        # Use markdown converter for comprehensive conversion (including attachments)
+        converted = self.markdown_converter.convert(text, jira_key=jira_key)
 
         # Additional pattern: bare Jira keys not caught by converter
         # Pattern: PROJECT-123 where PROJECT is uppercase letters
@@ -312,8 +359,8 @@ class WorkPackageContentMigration(BaseMigration):
         if not description:
             return True  # Nothing to do
 
-        # Convert description with link resolution
-        converted_description = self._convert_jira_links(description)
+        # Convert description with link resolution and attachment URLs
+        converted_description = self._convert_jira_links(description, jira_key=jira_issue.key)
 
         try:
             self.op_client.update_work_package(
@@ -355,9 +402,9 @@ class WorkPackageContentMigration(BaseMigration):
                 mapping = self.custom_field_mapping[jira_field_id]
                 op_cf_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
                 if op_cf_id:
-                    # Convert value if it's text (may contain links)
+                    # Convert value if it's text (may contain links or attachments)
                     if isinstance(value, str):
-                        value = self._convert_jira_links(value)
+                        value = self._convert_jira_links(value, jira_key=jira_issue.key)
                     updates[f"customField{op_cf_id}"] = value
 
         if updates:
@@ -399,8 +446,8 @@ class WorkPackageContentMigration(BaseMigration):
             if not body:
                 continue
 
-            # Convert comment body with link resolution
-            converted_body = self._convert_jira_links(body)
+            # Convert comment body with link resolution and attachment URLs
+            converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
 
             try:
                 # Create activity/journal in OpenProject
