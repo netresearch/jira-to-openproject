@@ -67,6 +67,39 @@ class WorkPackageMigration(BaseMigration):
 
     # Define mapping file pattern constant
     WORK_PACKAGE_MAPPING_FILE_PATTERN = "work_package_mapping_{}.json"
+    ATTACHMENT_MAPPING_FILE = "attachment_mapping.json"
+
+    # Fields that should NOT create journal notes (internal Jira fields handled elsewhere)
+    # BUG #60: These fields create noise in journals but have no meaningful migration value
+    IGNORED_CHANGELOG_FIELDS = frozenset({
+        # Work log related (worklogs migrated separately)
+        "WorklogId",
+        "timespent",
+        "timeoriginalestimate",  # Also in field_mappings, but sometimes shows as unmapped
+        # Issue links and relations (migrated separately)
+        "RemoteIssueLink",
+        "Link",
+        "IssueParentAssociation",
+        "Parent",
+        "Epic Link",
+        "Epic Child",
+        # Attachments (migrated separately)
+        "Attachment",
+        "attachment",
+        # Sprint/agile (migrated separately)
+        "Sprint",
+        "Story Points",
+        "Rank",
+        "Global Rank",
+        # Internal Jira fields with no migration value
+        "RemoteIssueLinkGlobalId",
+        "duedate",  # Due date handled in main WP fields
+        "security",  # Jira security level - no OP equivalent
+        "environment",  # Rarely used, clutters journals
+        "watches",  # Watchers not migrated
+        "votes",  # Votes not migrated
+        "Flagged",  # Jira flag indicator
+    })
 
     def __init__(
         self,
@@ -86,11 +119,13 @@ class WorkPackageMigration(BaseMigration):
         self.jira_issues_file = self.data_dir / "jira_issues.json"
         self.op_work_packages_file = self.data_dir / "op_work_packages.json"
         self.work_package_mapping_file = self.data_dir / "work_package_mapping.json"
+        self.attachment_mapping_file = self.data_dir / self.ATTACHMENT_MAPPING_FILE
 
         # Data storage
         self.jira_issues: dict[str, Any] = {}
         self.op_work_packages: dict[str, Any] = {}
         self.work_package_mapping: dict[str, Any] = {}
+        self.attachment_mapping: dict[str, dict[str, int]] = {}  # {jira_key: {filename: op_attachment_id}}
         # Some refactored tests expect an attribute named issue_mapping used by
         # time entry migration helpers; initialize defensively.
         self.issue_mapping: dict[str, Any] = {}
@@ -209,8 +244,44 @@ class WorkPackageMigration(BaseMigration):
         # Augment user mapping with secondary indices for lookup by name, displayName, email
         self._augment_user_mapping_indices()
 
+        # Load attachment mapping if available (from attachments migration)
+        self._load_attachment_mapping()
+
         # Update markdown converter with loaded mappings
         self._update_markdown_converter_mappings()
+
+    def _load_attachment_mapping(self) -> bool:
+        """Load attachment mapping from attachments migration.
+
+        The attachment mapping enables proper conversion of Jira attachment
+        references to OpenProject API URLs in descriptions and comments.
+
+        Returns:
+            True if mapping was loaded successfully
+
+        """
+        if not self.attachment_mapping_file.exists():
+            logger.debug(
+                "Attachment mapping file not found: %s (attachments may not have been migrated yet)",
+                self.attachment_mapping_file,
+            )
+            return False
+
+        try:
+            with self.attachment_mapping_file.open("r") as f:
+                self.attachment_mapping = json.load(f)
+
+            total_attachments = sum(len(v) for v in self.attachment_mapping.values())
+            logger.info(
+                "Loaded attachment mapping: %d issues with %d attachments",
+                len(self.attachment_mapping),
+                total_attachments,
+            )
+            return True
+
+        except Exception as e:
+            logger.warning("Failed to load attachment mapping: %s", e)
+            return False
 
     def _augment_user_mapping_indices(self) -> None:
         """Augment user_mapping with secondary indices for lookup by jira_name, displayName, and email.
@@ -291,11 +362,12 @@ class WorkPackageMigration(BaseMigration):
                 if entry.get("jira_key") and entry.get("openproject_id")
             }
 
-        # Update the markdown converter with new mappings
+        # Update the markdown converter with new mappings (including attachment mapping)
         self.markdown_converter = MarkdownConverter(
             user_mapping=user_mapping,
             work_package_mapping=work_package_mapping,
             account_id_mapping=account_id_mapping,
+            attachment_mapping=self.attachment_mapping,
         )
 
     def _track_mentioned_users(self, text: str | None, project_id: int) -> None:
@@ -2606,6 +2678,25 @@ class WorkPackageMigration(BaseMigration):
                         resolution_cf_id = cf_map.get("J2O Jira Resolution")
                         affects_version_cf_id = cf_map.get("J2O Affects Version")
 
+                        # BUG #60 FIX: Load custom field mapping for proper CF journal tracking
+                        # This allows custom fields like Account, Matrix Webhook URL, etc.
+                        # to be tracked as structured CF changes instead of text notes
+                        cf_name_to_op_id: dict[str, int] = {}
+                        cf_id_to_op_id: dict[str, int] = {}
+                        try:
+                            cf_mapping = self._load_custom_field_mapping()
+                            for jira_cf_id, cf_info in cf_mapping.items():
+                                op_cf_id = cf_info.get("openproject_id")
+                                if op_cf_id:
+                                    # Map by Jira field ID (e.g., "customfield_10001")
+                                    cf_id_to_op_id[jira_cf_id] = int(op_cf_id)
+                                    # Map by Jira field name (e.g., "Account")
+                                    jira_name = cf_info.get("jira_name", "")
+                                    if jira_name:
+                                        cf_name_to_op_id[jira_name] = int(op_cf_id)
+                        except Exception:
+                            pass  # Continue without CF mapping if unavailable
+
                         for item in changelog_items:
                             field_change = self._process_changelog_item(item)
                             if field_change:
@@ -2641,47 +2732,65 @@ class WorkPackageMigration(BaseMigration):
                                     self.logger.info(
                                         f"{jira_key}: Affects Version CF change: '{from_val}' → '{to_val}'"
                                     )
-                                elif field_name == "Key" and from_val:
-                                    # Project move: Key field shows issue key change (e.g., NRTECH-468 → NRS-182)
-                                    # Generate compact comment with link to previous project if mapped
-                                    from_project_key = from_val.rsplit("-", 1)[0] if "-" in from_val else None
-                                    proj_map = getattr(self, "project_mapping", {}) or {}
-                                    if from_project_key and from_project_key in proj_map:
-                                        op_identifier = (
-                                            proj_map[from_project_key].get("openproject_identifier", "").lower()
+                                else:
+                                    # BUG #60 FIX: Check if this is a custom field with OpenProject mapping
+                                    # Look up by fieldId (e.g., "customfield_10001") or field name (e.g., "Account")
+                                    field_id = item.get("fieldId", "")
+                                    op_cf_id = cf_id_to_op_id.get(field_id) or cf_name_to_op_id.get(field_name)
+
+                                    if op_cf_id:
+                                        # Track as structured CF change instead of text note
+                                        cf_field_changes[op_cf_id] = [from_val or None, to_val or None]
+                                        self.logger.info(
+                                            f"[BUG60] {jira_key}: CF '{field_name}' change tracked: '{from_val}' → '{to_val}'"
                                         )
-                                        if op_identifier:
-                                            unmapped_changes.append(
-                                                f"Moved from [{from_val}](/projects/{op_identifier}/work_packages)"
+                                    elif field_name == "Key" and from_val:
+                                        # Project move: Key field shows issue key change (e.g., NRTECH-468 → NRS-182)
+                                        # Generate compact comment with link to previous project if mapped
+                                        from_project_key = from_val.rsplit("-", 1)[0] if "-" in from_val else None
+                                        proj_map = getattr(self, "project_mapping", {}) or {}
+                                        if from_project_key and from_project_key in proj_map:
+                                            op_identifier = (
+                                                proj_map[from_project_key].get("openproject_identifier", "").lower()
                                             )
+                                            if op_identifier:
+                                                unmapped_changes.append(
+                                                    f"Moved from [{from_val}](/projects/{op_identifier}/work_packages)"
+                                                )
+                                            else:
+                                                unmapped_changes.append(f"Moved from {from_val}")
                                         else:
                                             unmapped_changes.append(f"Moved from {from_val}")
-                                    else:
-                                        unmapped_changes.append(f"Moved from {from_val}")
-                                elif field_name == "project" and from_val:
-                                    # Project move: project field shows project name change
-                                    # Generate compact comment with link to previous project if mapped
-                                    proj_map = getattr(self, "project_mapping", {}) or {}
-                                    from_project_mapping = None
-                                    for key, info in proj_map.items():
-                                        if info.get("jira_name") == from_val or key == from_val:
-                                            from_project_mapping = info
-                                            break
-                                    if from_project_mapping:
-                                        op_identifier = from_project_mapping.get("openproject_identifier", "").lower()
-                                        if op_identifier:
-                                            unmapped_changes.append(
-                                                f"Moved from project [{from_val}](/projects/{op_identifier})"
-                                            )
+                                    elif field_name == "project" and from_val:
+                                        # Project move: project field shows project name change
+                                        # Generate compact comment with link to previous project if mapped
+                                        proj_map = getattr(self, "project_mapping", {}) or {}
+                                        from_project_mapping = None
+                                        for key, info in proj_map.items():
+                                            if info.get("jira_name") == from_val or key == from_val:
+                                                from_project_mapping = info
+                                                break
+                                        if from_project_mapping:
+                                            op_identifier = from_project_mapping.get("openproject_identifier", "").lower()
+                                            if op_identifier:
+                                                unmapped_changes.append(
+                                                    f"Moved from project [{from_val}](/projects/{op_identifier})"
+                                                )
+                                            else:
+                                                unmapped_changes.append(f"Moved from project '{from_val}'")
                                         else:
                                             unmapped_changes.append(f"Moved from project '{from_val}'")
-                                    else:
-                                        unmapped_changes.append(f"Moved from project '{from_val}'")
-                                elif from_val or to_val:
-                                    # Other unmapped fields still go to notes
-                                    unmapped_changes.append(
-                                        f"Jira: {field_name} changed from '{from_val}' to '{to_val}'"
-                                    )
+                                    elif from_val or to_val:
+                                        # BUG #60 FIX: Skip fields that should not create journal notes
+                                        if field_name in self.IGNORED_CHANGELOG_FIELDS:
+                                            self.logger.debug(
+                                                f"[BUG60] {jira_key}: Ignoring changelog field '{field_name}' (internal Jira field)"
+                                            )
+                                        else:
+                                            # Other unmapped fields still go to notes
+                                            unmapped_changes.append(
+                                                f"Jira: {field_name} changed from '{from_val}' to '{to_val}'"
+                                            )
 
                         # Bug #16 fix: Generate notes for unmapped field changes
                         changelog_notes = "\n".join(unmapped_changes) if unmapped_changes else ""
@@ -2715,6 +2824,18 @@ class WorkPackageMigration(BaseMigration):
                             self.logger.info(
                                 f"[BUG16] {jira_key}: Captured {len(unmapped_changes)} unmapped field changes as notes"
                             )
+
+                        # BUG #60 FIX: Skip creating empty journal operations
+                        # (happens when all changelog items were in IGNORED_CHANGELOG_FIELDS)
+                        # This prevents "The changes were retracted" phantom entries
+                        has_meaningful_content = (
+                            field_changes or cf_field_changes or changelog_notes.strip()
+                        )
+                        if not has_meaningful_content:
+                            self.logger.debug(
+                                f"[BUG60] {jira_key}: Skipping empty changelog entry (all fields ignored)"
+                            )
+                            continue
 
                         work_package["_rails_operations"].append(operation)
                         self.logger.info(
