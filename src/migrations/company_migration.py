@@ -608,6 +608,7 @@ class CompanyMigration(BaseMigration):
                         "identifier": c.get("identifier"),
                         "description": c.get("description"),
                         "public": False,
+                        "workspace_type": "project",
                     },
                 )
 
@@ -1212,6 +1213,329 @@ class CompanyMigration(BaseMigration):
 
         return results
 
+
+    def _build_account_mapping(self) -> dict[str, Any]:
+        """Build account_mapping from tempo_accounts.json.
+
+        This ensures the mapping between Tempo accounts and their parent companies
+        is available for project parent relationship updates.
+
+        The tempo_accounts.json is a LIST containing entries like:
+        {
+            "id": 6,
+            "key": "KLAU",
+            "name": "Klauke",
+            "customer": {"id": 4, "key": "KLAU", "name": "Gustav Klauke GmbH"},
+            ...
+        }
+
+        This method creates account_mapping.json with:
+        {
+            "<account_id>": {
+                "account_id": <account_id>,
+                "company_id": <customer.id>,
+                "account_name": "<name>",
+                "account_key": "<key>"
+            }
+        }
+
+        Returns:
+            Dictionary with build results including count of mappings created.
+        """
+        results: dict[str, Any] = {
+            "accounts_processed": 0,
+            "mappings_created": 0,
+            "accounts_without_customer": 0,
+        }
+
+        # Load tempo_accounts.json (it's a list, not a dict)
+        tempo_accounts = self._load_from_json(Mappings.TEMPO_ACCOUNTS_FILE) or []
+
+        if not tempo_accounts:
+            self.logger.info("No tempo accounts found - skipping account mapping build")
+            return results
+
+        # Build the mapping
+        account_mapping: dict[str, dict[str, Any]] = {}
+
+        # Handle both list and dict formats for robustness
+        if isinstance(tempo_accounts, list):
+            account_list = tempo_accounts
+        elif isinstance(tempo_accounts, dict):
+            account_list = list(tempo_accounts.values())
+        else:
+            self.logger.warning("Unexpected tempo_accounts format: %s", type(tempo_accounts))
+            return results
+
+        for account_data in account_list:
+            results["accounts_processed"] += 1
+
+            if not isinstance(account_data, dict):
+                continue
+
+            # Get account ID
+            account_id = account_data.get("id")
+            if not account_id:
+                continue
+            account_id_str = str(account_id)
+
+            # Get customer info (contains company_id)
+            customer = account_data.get("customer")
+            if not customer or not isinstance(customer, dict):
+                results["accounts_without_customer"] += 1
+                continue
+
+            company_id = customer.get("id")
+            if not company_id:
+                results["accounts_without_customer"] += 1
+                continue
+
+            # Create the mapping entry
+            account_mapping[account_id_str] = {
+                "account_id": account_id,
+                "company_id": company_id,
+                "account_name": account_data.get("name", ""),
+                "account_key": account_data.get("key", ""),
+                "company_name": customer.get("name", ""),
+                "company_key": customer.get("key", ""),
+            }
+            results["mappings_created"] += 1
+
+        # Save the mapping
+        if account_mapping:
+            self._save_to_json(account_mapping, Mappings.ACCOUNT_MAPPING_FILE)
+            self.logger.info(
+                "Built account mapping: %d accounts → company mappings created",
+                results["mappings_created"],
+            )
+        else:
+            self.logger.warning("No account mappings could be created from tempo accounts")
+
+        return results
+
+    def _update_project_parent_relationships(self) -> dict[str, Any]:
+        """Update existing projects to set their parent_id to the appropriate company project.
+
+        This method ensures that when running the companies migration after projects
+        have already been created, the project hierarchy is properly established.
+
+        Returns:
+            Dictionary with update results including updated count, skipped, and errors.
+        """
+        results: dict[str, Any] = {
+            "updated": 0,
+            "skipped": 0,
+            "already_correct": 0,
+            "no_parent_found": 0,
+            "errors": [],
+        }
+
+        # Load required mappings
+        project_mapping = self._load_from_json(Mappings.PROJECT_MAPPING_FILE) or {}
+        project_account_mapping = self._load_from_json("project_account_mapping.json") or {}
+        account_mapping = self._load_from_json(Mappings.ACCOUNT_MAPPING_FILE) or {}
+
+        if not project_mapping:
+            self.logger.info("No project mapping found - skipping parent relationship update")
+            return results
+
+        self.logger.info(
+            "Updating parent relationships for %d existing projects...",
+            len(project_mapping),
+        )
+
+        # Build list of project updates: (child_op_id, parent_op_id)
+        updates: list[tuple[int, int]] = []
+
+        for jira_key, project_info in project_mapping.items():
+            child_op_id = project_info.get("openproject_id")
+            if not child_op_id:
+                results["skipped"] += 1
+                continue
+
+            # Find parent company using the same logic as find_parent_company_for_project
+            # 1) Get account for this project
+            raw_accts = project_account_mapping.get(jira_key)
+            if not raw_accts:
+                results["no_parent_found"] += 1
+                continue
+
+            # 2) Use the project's default Tempo account (first entry)
+            acct_entry = raw_accts[0] if isinstance(raw_accts, list) else raw_accts
+            acct_id = acct_entry if isinstance(acct_entry, int | str) else acct_entry.get("id")
+            if not acct_id:
+                results["no_parent_found"] += 1
+                continue
+            acct_id_str = str(acct_id)
+
+            # 3) Map account to company_id
+            acct_map = account_mapping.get(acct_id_str)
+            if not acct_map:
+                results["no_parent_found"] += 1
+                continue
+            company_id = acct_map.get("company_id")
+            if not company_id:
+                results["no_parent_found"] += 1
+                continue
+
+            # 4) Map company_id to OpenProject project ID
+            company = self.company_mapping.get(str(company_id))
+            if not company or not company.get("openproject_id"):
+                results["no_parent_found"] += 1
+                continue
+
+            parent_op_id = company.get("openproject_id")
+            updates.append((int(child_op_id), int(parent_op_id)))
+
+        if not updates:
+            self.logger.info("No projects need parent relationship updates")
+            return results
+
+        self.logger.info("Found %d projects to update parent relationships", len(updates))
+
+        # Generate Ruby script to update parent_ids
+        updates_json = json.dumps(updates)
+        script = f"""
+require 'json'
+updates = JSON.parse('{updates_json}')
+results = {{ 'updated' => 0, 'already_correct' => 0, 'errors' => [] }}
+
+updates.each do |child_id, parent_id|
+  begin
+    child = Project.find_by(id: child_id)
+    parent = Project.find_by(id: parent_id)
+
+    if child.nil?
+      results['errors'] << "Child project #{{child_id}} not found"
+      next
+    end
+
+    if parent.nil?
+      results['errors'] << "Parent project #{{parent_id}} not found"
+      next
+    end
+
+    if child.parent_id == parent_id
+      results['already_correct'] += 1
+      next
+    end
+
+    # Update parent relationship
+    child.parent = parent
+    child.save!
+    results['updated'] += 1
+  rescue => e
+    results['errors'] << "Failed to update #{{child_id}}: #{{e.message}}"
+  end
+end
+
+puts results.to_json
+"""
+
+        try:
+            result = self.op_client.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                results["updated"] = result.get("updated", 0)
+                results["already_correct"] = result.get("already_correct", 0)
+                if result.get("errors"):
+                    results["errors"].extend(result["errors"][:10])
+            elif isinstance(result, str):
+                import json as json_mod
+                parsed = json_mod.loads(result)
+                results["updated"] = parsed.get("updated", 0)
+                results["already_correct"] = parsed.get("already_correct", 0)
+                if parsed.get("errors"):
+                    results["errors"].extend(parsed["errors"][:10])
+
+            if results["updated"] > 0:
+                self.logger.success(
+                    "Updated parent relationships for %d projects (%d already correct)",
+                    results["updated"],
+                    results["already_correct"],
+                )
+            else:
+                self.logger.info(
+                    "No parent updates needed (%d already correct)",
+                    results["already_correct"],
+                )
+
+        except Exception as e:
+            self.logger.exception("Failed to update project parent relationships: %s", e)
+            results["errors"].append(str(e))
+
+        return results
+
+    def should_skip_migration(
+        self,
+        entity_type: str,
+        cache_func: Any | None = None,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Override change detection to force migration when company mapping is incomplete.
+
+        This ensures the companies component is self-healing: if companies exist in Jira
+        but haven't been created in OpenProject (matched_by: "none" without openproject_id),
+        the migration will run even if no changes are detected in the source data.
+
+        Also forces migration if account_mapping is missing/empty (needed for parent relationships).
+
+        Args:
+            entity_type: Type of entities to check for changes
+            cache_func: Optional function for cached entity retrieval
+
+        Returns:
+            Tuple of (should_skip, change_report)
+
+        """
+        # First, run normal change detection
+        should_skip, change_report = super().should_skip_migration(entity_type, cache_func)
+
+        # If parent says skip, check if migration is actually complete
+        if should_skip:
+            # Load company_mapping to check if companies were created in OpenProject
+            company_mapping = self._load_from_json(Mappings.COMPANY_MAPPING_FILE) or {}
+
+            # Check for companies that still need to be created:
+            # - matched_by: "none" means no existing OpenProject project matched
+            # - openproject_id: null/None means no project was created yet
+            companies_needing_creation = [
+                entry
+                for entry in company_mapping.values()
+                if isinstance(entry, dict)
+                and entry.get("matched_by") == "none"
+                and not entry.get("openproject_id")
+            ]
+
+            if companies_needing_creation:
+                self.logger.info(
+                    "Company mapping has %d companies with matched_by='none' and no openproject_id - "
+                    "forcing migration to create company projects",
+                    len(companies_needing_creation),
+                )
+                return False, change_report
+
+            # Also check if company_mapping is empty but we have tempo_companies
+            tempo_companies = self._load_from_json(Mappings.TEMPO_COMPANIES_FILE) or {}
+            if not company_mapping and tempo_companies:
+                self.logger.info(
+                    "Tempo companies exist (%d) but company_mapping is empty - "
+                    "forcing migration to create company projects",
+                    len(tempo_companies),
+                )
+                return False, change_report
+
+            # Check if account_mapping is missing or empty (needed for parent relationships)
+            account_mapping = self._load_from_json(Mappings.ACCOUNT_MAPPING_FILE) or {}
+            tempo_accounts = self._load_from_json(Mappings.TEMPO_ACCOUNTS_FILE) or {}
+            if not account_mapping and tempo_accounts:
+                self.logger.info(
+                    "Tempo accounts exist (%d) but account_mapping is empty - "
+                    "forcing migration to build account mapping for parent relationships",
+                    len(tempo_accounts),
+                )
+                return False, change_report
+
+        return should_skip, change_report
+
     def run(self) -> ComponentResult:
         """Run the company migration process.
 
@@ -1232,6 +1556,15 @@ class CompanyMigration(BaseMigration):
             # Migrate companies
             if not config.migration_config.get("dry_run", False):
                 self.migrate_companies_bulk()
+                # Build account mapping from tempo_accounts for parent relationship resolution
+                self._build_account_mapping()
+                # Update existing projects to set their parent_id (for idempotent re-runs)
+                parent_update_results = self._update_project_parent_relationships()
+                if parent_update_results.get("updated", 0) > 0:
+                    self.logger.info(
+                        "Project hierarchy updated: %d projects now have parent company",
+                        parent_update_results["updated"],
+                    )
             else:
                 self.logger.warning("Dry run mode - not creating companies")
 
