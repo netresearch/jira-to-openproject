@@ -206,8 +206,58 @@ class WorkPackageMigration(BaseMigration):
                 default={},
             )
 
+        # Augment user mapping with secondary indices for lookup by name, displayName, email
+        self._augment_user_mapping_indices()
+
         # Update markdown converter with loaded mappings
         self._update_markdown_converter_mappings()
+
+    def _augment_user_mapping_indices(self) -> None:
+        """Augment user_mapping with secondary indices for lookup by jira_name, displayName, and email.
+
+        The user_mapping.json is keyed by Jira user keys (e.g., 'JIRAUSER14306'), but changelog
+        entries contain 'name' (e.g., 'caroline.kuhn'). This method adds secondary indices so
+        lookups by name, displayName, or email will find the correct user entry.
+
+        This fixes the BUG32 user fallback issue where 155K+ lookups failed because the mapping
+        was only indexed by jira_key, not by the fields actually present in changelog data.
+        """
+        if not self.user_mapping:
+            return
+
+        # Build secondary indices
+        secondary_entries: dict[str, dict[str, Any]] = {}
+        for _primary_key, user_dict in self.user_mapping.items():
+            if not isinstance(user_dict, dict):
+                continue
+
+            # Add index by jira_name (e.g., 'caroline.kuhn')
+            jira_name = user_dict.get("jira_name")
+            if jira_name and jira_name not in self.user_mapping:
+                secondary_entries[jira_name] = user_dict
+
+            # Add index by jira_display_name (e.g., 'Caroline Kindervater')
+            display_name = user_dict.get("jira_display_name")
+            if display_name and display_name not in self.user_mapping:
+                secondary_entries[display_name] = user_dict
+
+            # Add index by jira_email (e.g., 'caroline.kindervater@netresearch.de')
+            email = user_dict.get("jira_email")
+            if email and email not in self.user_mapping:
+                secondary_entries[email] = user_dict
+
+            # Add index by openproject_login (usually same as jira_name)
+            op_login = user_dict.get("openproject_login")
+            if op_login and op_login not in self.user_mapping:
+                secondary_entries[op_login] = user_dict
+
+        # Merge secondary indices into user_mapping
+        if secondary_entries:
+            self.user_mapping.update(secondary_entries)
+            self.logger.debug(
+                f"Augmented user_mapping with {len(secondary_entries)} secondary indices "
+                f"(total keys: {len(self.user_mapping)})"
+            )
 
     def _update_markdown_converter_mappings(self) -> None:
         """Update the markdown converter with current user and work package mappings."""
@@ -2180,7 +2230,7 @@ class WorkPackageMigration(BaseMigration):
                 except Exception:
                     continue
             self._j2o_wp_cf_ids_full = cf_ids
-            self.logger.info(f"[BUG21] Loaded J2O CF IDs: {cf_ids}")
+            self.logger.debug(f"[BUG21] Loaded J2O CF IDs: {cf_ids}")
 
         # Extract the necessary fields from the Jira Issue object
         issue_type_id = jira_issue.fields.issuetype.id
@@ -2339,10 +2389,10 @@ class WorkPackageMigration(BaseMigration):
         # Store Rails operations for immutable timestamp setting (executed after save)
         # Bug #23 debug: Track timestamp operations
         ts_ops = timestamp_result.get("rails_operations", [])
-        self.logger.info(f"[BUG23] {jira_key}: timestamp_result has {len(ts_ops)} rails_operations")
+        self.logger.debug(f"[BUG23] {jira_key}: timestamp_result has {len(ts_ops)} rails_operations")
         if ts_ops:
             work_package["_rails_operations"] = ts_ops
-            self.logger.info(f"[BUG23] {jira_key}: Set _rails_operations from timestamp_result")
+            self.logger.debug(f"[BUG23] {jira_key}: Set _rails_operations from timestamp_result")
 
         # Extract and migrate comments AND changelog (Fix Attempt #5 for NEW work packages)
         try:
@@ -2448,10 +2498,10 @@ class WorkPackageMigration(BaseMigration):
                 # Now create Rails operations for all journal entries with unique timestamps
                 # Bug #23 debug: Track operation array initialization
                 if "_rails_operations" not in work_package:
-                    self.logger.info(f"[BUG23] {jira_key}: Initializing _rails_operations (not in work_package)")
+                    self.logger.debug(f"[BUG23] {jira_key}: Initializing _rails_operations (not in work_package)")
                     work_package["_rails_operations"] = []
                 else:
-                    self.logger.info(
+                    self.logger.debug(
                         f"[BUG23] {jira_key}: _rails_operations already exists, has {len(work_package['_rails_operations'])} items"
                     )
 
@@ -2508,7 +2558,7 @@ class WorkPackageMigration(BaseMigration):
                                 "created_at": entry_timestamp,
                             }
                         )
-                        self.logger.info(
+                        self.logger.debug(
                             f"[BUG23] {jira_key}: Added comment operation, total operations: {len(work_package['_rails_operations'])}"
                         )
                     elif entry_type == "changelog":
@@ -2650,7 +2700,7 @@ class WorkPackageMigration(BaseMigration):
                         # Add field_changes if any were processed
                         if field_changes:
                             # BUG #32 DEBUG: Log field_changes keys to identify invalid fields
-                            self.logger.info(f"[BUG32] {jira_key}: field_changes keys: {list(field_changes.keys())}")
+                            self.logger.debug(f"[BUG32] {jira_key}: field_changes keys: {list(field_changes.keys())}")
                             operation["field_changes"] = field_changes
 
                         # Bug #21: Add CF field changes (Workflow/Resolution)
@@ -2754,7 +2804,7 @@ class WorkPackageMigration(BaseMigration):
                             # Start with empty CF state - no values before any changes
                             current_cf_state: dict[int, str | None] = {}
 
-                            self.logger.info(f"[BUG21] {jira_key}: Starting CF state build (FORWARD order)")
+                            self.logger.debug(f"[BUG21] {jira_key}: Starting CF state build (FORWARD order)")
 
                             # Process operations in FORWARD order (oldest to newest)
                             # For each operation, first apply any CF changes, then store the resulting state
