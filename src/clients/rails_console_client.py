@@ -791,9 +791,13 @@ class RailsConsoleClient:
                     logger.error("Fatal console error detected while waiting for marker")
                     return False, current_output
 
-                if marker is not None and marker in current_output:
-                    logger.debug("Marker found after %.2fs", time.time() - start_time)
-                    return True, current_output
+                if marker is not None:
+                    # Normalize output by removing newlines to handle markers split
+                    # by terminal width wrapping in tmux pane capture
+                    normalized_output = current_output.replace('\n', '').replace('\r', '')
+                    if marker in normalized_output:
+                        logger.debug("Marker found after %.2fs", time.time() - start_time)
+                        return True, current_output
 
                 console_state = self._get_console_state(current_output)
                 if console_state["ready"] and time.time() - start_time > 3:  # noqa: PLR2004

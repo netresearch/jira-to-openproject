@@ -589,16 +589,27 @@ class OpenProjectClient:
                     )
                     output = cap.stdout
 
-                    # Check for our unique end marker AT START OF LINE (preceded by newline)
-                    # This avoids matching the command echo like => "JSON_OUTPUT_END_xxx"
-                    if f"\n{unique_start_marker}" in output and unique_end_marker in output:
-                        # Verify both markers appear in the right order (script output, not echo)
-                        start_pos = output.rfind(f"\n{unique_start_marker}")
+                    # Normalize output by removing newlines to handle markers split
+                    # by terminal width wrapping in tmux pane capture
+                    normalized = output.replace('\n', '').replace('\r', '')
+
+                    # Check for markers in normalized output (handles line wrapping)
+                    # Use rfind to find LAST occurrence (actual JSON output, not command echo)
+                    # The command echo contains markers inside quotes which we must skip
+                    if unique_start_marker in normalized and unique_end_marker in normalized:
+                        # Find the LAST occurrence of start marker followed by JSON content
+                        start_pos = normalized.rfind(unique_start_marker)
                         if start_pos != -1:
-                            end_pos = output.find(unique_end_marker, start_pos)
-                            if end_pos != -1 and end_pos > start_pos:
-                                found_markers = True
-                                break
+                            # Verify this is actual JSON output (followed by [ or {), not command echo (followed by ')
+                            next_char_pos = start_pos + len(unique_start_marker)
+                            if next_char_pos < len(normalized):
+                                next_char = normalized[next_char_pos]
+                                if next_char in '[{':  # Actual JSON content
+                                    end_pos = normalized.find(unique_end_marker, next_char_pos)
+                                    if end_pos != -1 and end_pos > start_pos:
+                                        found_markers = True
+                                        output = normalized  # Use normalized for extraction
+                                        break
 
                     time.sleep(0.2)  # Poll every 200ms
 
@@ -643,14 +654,21 @@ class OpenProjectClient:
                     raise
 
             # Extract JSON payload between unique markers (JSON_OUTPUT_START_{exec_id} / JSON_OUTPUT_END_{exec_id})
-            # Look for start marker preceded by newline (actual script output, not command echo)
-            newline_start = f"\n{unique_start_marker}"
-            start_idx = output.rfind(newline_start)
+            # Normalize output by removing newlines to handle markers split by terminal width wrapping
+            # This is safe because JSON from Rails is output on a single line
+            normalized_output = output.replace('\n', '').replace('\r', '')
+
+            # Find markers in normalized output - use rfind to get the LAST occurrence
+            # (the first occurrence is in the command echo: $j2o_start_marker = '...')
+            # The actual JSON output marker comes after the command echo
+            start_idx = normalized_output.rfind(unique_start_marker)
             if start_idx != -1:
-                start_idx += 1  # Skip the newline, point to marker start
-                end_idx = output.find(unique_end_marker, start_idx + len(unique_start_marker))
+                end_idx = normalized_output.find(unique_end_marker, start_idx + len(unique_start_marker))
             else:
                 end_idx = -1
+
+            # Use normalized output for extraction since JSON has no real newlines
+            output = normalized_output
 
             # DEBUG: Log marker positions
             logger.debug(
