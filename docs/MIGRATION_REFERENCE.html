@@ -1,0 +1,2698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>J2O Migration Reference | Netresearch • Jira → OpenProject</title>
+    <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@400;500;600;700&family=Open+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            /* Netresearch Brand Colors */
+            --turquoise: #2F99A4;
+            --orange: #FF4D00;
+            --anthracite: #585961;
+            --light-grey: #CCCDCC;
+            --white: #FFFFFF;
+
+            /* Semantic mappings */
+            --primary: #2F99A4;
+            --accent: #FF4D00;
+            --text-dark: #585961;
+            --text-muted: #7a7a82;
+            --border-subtle: #CCCDCC;
+            --light-bg: #FAFAFA;
+            --light-gray: #F5F5F5;
+
+            /* Extended palette */
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+            --info: #2F99A4;
+            --card-shadow: rgba(47, 153, 164, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Open Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--white);
+            color: var(--anthracite);
+            line-height: 1.6;
+            font-size: 16px;
+        }
+
+        /* Typography - Netresearch: Raleway for headlines, Open Sans for body */
+        h1, h2, h3, h4, h5, h6 {
+            font-family: 'Raleway', Arial, sans-serif;
+            font-weight: 600;
+            line-height: 1.3;
+            color: var(--anthracite);
+        }
+
+        code, pre, .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Layout */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        /* Header - Netresearch turquoise */
+        header {
+            background: var(--turquoise);
+            border-bottom: none;
+            padding: 3rem 0;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(47, 153, 164, 0.3);
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.08) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: white;
+        }
+
+        .logo-text h1 {
+            font-size: 1.75rem;
+            color: white;
+            letter-spacing: -0.5px;
+        }
+
+        .logo-text span {
+            font-size: 0.875rem;
+            color: rgba(255, 255, 255, 0.8);
+            font-family: 'Lora', serif;
+        }
+
+        /* Search */
+        .search-box {
+            position: relative;
+            width: 320px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 0.75rem 1rem 0.75rem 2.75rem;
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            color: white;
+            font-family: 'Lora', serif;
+            font-size: 0.9375rem;
+            transition: all 0.2s;
+        }
+
+        .search-box input:focus {
+            outline: none;
+            border-color: var(--orange);
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        /* Links - Netresearch: turquoise default, orange hover */
+        a {
+            color: var(--turquoise);
+            text-decoration: none;
+            transition: color 0.15s;
+        }
+
+        a:hover {
+            color: var(--orange);
+        }
+
+        .search-box input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .search-box::before {
+            content: '🔍';
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.9rem;
+        }
+
+        /* Main layout */
+        main {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 3rem;
+            padding: 3rem 0;
+            min-height: calc(100vh - 200px);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            position: sticky;
+            top: 2rem;
+            height: fit-content;
+            max-height: calc(100vh - 4rem);
+            overflow-y: auto;
+        }
+
+        .sidebar::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .sidebar::-webkit-scrollbar-thumb {
+            background: var(--turquoise);
+            border-radius: 2px;
+            opacity: 0.5;
+        }
+
+        .nav-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .nav-section-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+            padding-left: 0.75rem;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.625rem 0.75rem;
+            color: var(--mid-gray);
+            text-decoration: none;
+            border-radius: 6px;
+            font-size: 0.9375rem;
+            transition: all 0.15s;
+        }
+
+        .nav-link:hover {
+            background: var(--light-gray);
+            color: var(--text-dark);
+        }
+
+        .nav-link.active {
+            background: var(--turquoise);
+            color: white;
+        }
+
+        .nav-icon {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+        }
+
+        /* Content area */
+        .content {
+            max-width: 900px;
+        }
+
+        /* Section styling */
+        section {
+            margin-bottom: 4rem;
+            scroll-margin-top: 2rem;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .section-number {
+            width: 40px;
+            height: 40px;
+            background: var(--turquoise);
+            color: white;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Raleway', sans-serif;
+            font-weight: 700;
+            font-size: 1.125rem;
+        }
+
+        .section-title h2 {
+            font-size: 1.5rem;
+            color: var(--anthracite);
+        }
+
+        .section-title span {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        /* Cards */
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: white;
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.2s;
+            box-shadow: 0 2px 8px var(--card-shadow);
+        }
+
+        .card:hover {
+            border-color: var(--turquoise);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px var(--card-shadow);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .card-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.125rem;
+        }
+
+        .card-icon.orange { background: rgba(255, 77, 0, 0.1); color: var(--orange); }
+        .card-icon.blue { background: rgba(47, 153, 164, 0.1); color: var(--turquoise); }
+        .card-icon.green { background: rgba(40, 167, 69, 0.1); color: var(--success); }
+
+        .card h3 {
+            font-size: 1rem;
+            color: var(--anthracite);
+        }
+
+        .card p {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+        }
+
+        .card-meta {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.75rem;
+            color: var(--mid-gray);
+        }
+
+        .card-meta span {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        /* Mapping Arrow */
+        .mapping-arrow {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1.5rem;
+            background: white;
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 8px var(--card-shadow);
+        }
+
+        .mapping-side {
+            flex: 1;
+            text-align: center;
+            padding: 1rem;
+        }
+
+        .mapping-side.jira {
+            background: rgba(47, 153, 164, 0.1);
+            border-radius: 8px;
+        }
+
+        .mapping-side.op {
+            background: rgba(255, 77, 0, 0.08);
+            border-radius: 8px;
+        }
+
+        .mapping-side h4 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .mapping-side .entity {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-dark);
+        }
+
+        .arrow-icon {
+            font-size: 1.5rem;
+            color: var(--success);
+        }
+
+        /* Accordion */
+        .accordion {
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+            background: white;
+            box-shadow: 0 2px 8px var(--card-shadow);
+        }
+
+        .accordion-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem 1.25rem;
+            background: var(--light-bg);
+            cursor: pointer;
+            transition: all 0.15s;
+            user-select: none;
+        }
+
+        .accordion-header:hover {
+            background: var(--light-gray);
+        }
+
+        .accordion-header.active {
+            border-bottom: 1px solid var(--border-subtle);
+            background: white;
+        }
+
+        .accordion-toggle {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            background: var(--light-gray);
+            color: var(--mid-gray);
+            font-size: 0.75rem;
+            transition: transform 0.2s;
+        }
+
+        .accordion-header.active .accordion-toggle {
+            transform: rotate(90deg);
+            background: var(--turquoise);
+            color: white;
+        }
+
+        .accordion-title {
+            flex: 1;
+        }
+
+        .accordion-title h4 {
+            font-family: 'Raleway', sans-serif;
+            font-size: 1rem;
+            color: var(--anthracite);
+        }
+
+        .accordion-title span {
+            font-size: 0.8125rem;
+            color: var(--text-muted);
+        }
+
+        .accordion-badge {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            background: var(--light-gray);
+            color: var(--mid-gray);
+        }
+
+        .accordion-content {
+            display: none;
+            padding: 1.25rem;
+            background: white;
+        }
+
+        .accordion-content.active {
+            display: block;
+        }
+
+        /* Tables */
+        .table-wrapper {
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+
+        thead {
+            background: var(--light-bg);
+        }
+
+        th {
+            text-align: left;
+            padding: 0.75rem 1rem;
+            font-family: 'Raleway', sans-serif;
+            font-weight: 600;
+            color: var(--anthracite);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-subtle);
+            vertical-align: top;
+        }
+
+        tr:hover td {
+            background: var(--light-gray);
+        }
+
+        .jira-col {
+            color: var(--turquoise);
+            font-weight: 500;
+        }
+
+        .op-col {
+            color: var(--orange);
+            font-weight: 500;
+        }
+
+        .type-badge {
+            display: inline-block;
+            font-size: 0.6875rem;
+            padding: 0.125rem 0.375rem;
+            border-radius: 3px;
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--light-gray);
+            color: var(--text-muted);
+        }
+
+        .type-badge.string { background: rgba(47, 153, 164, 0.12); color: var(--turquoise); }
+        .type-badge.int { background: rgba(40, 167, 69, 0.12); color: #198754; }
+        .type-badge.date { background: rgba(255, 77, 0, 0.1); color: var(--orange); }
+        .type-badge.user { background: rgba(88, 89, 97, 0.12); color: var(--anthracite); }
+        .type-badge.list { background: rgba(255, 193, 7, 0.15); color: #cc9a06; }
+        .type-badge.bool { background: rgba(47, 153, 164, 0.12); color: var(--turquoise); }
+
+        /* Code blocks */
+        code {
+            font-size: 0.8125rem;
+            padding: 0.125rem 0.375rem;
+            background: rgba(47, 153, 164, 0.1);
+            border-radius: 3px;
+            color: var(--turquoise);
+        }
+
+        pre {
+            background: var(--dark);
+            border-radius: 8px;
+            padding: 1rem;
+            overflow-x: auto;
+            font-size: 0.8125rem;
+            line-height: 1.6;
+            border: 1px solid var(--border-subtle);
+            color: #f8f9fa;
+        }
+
+        pre code {
+            background: transparent;
+            padding: 0;
+            color: inherit;
+        }
+
+        /* Phase indicator */
+        .phase-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin: 2rem 0;
+            position: relative;
+        }
+
+        .phase-step {
+            flex: 1;
+            text-align: center;
+            position: relative;
+        }
+
+        .phase-step::after {
+            content: '';
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            width: 100%;
+            height: 2px;
+            background: var(--border-subtle);
+        }
+
+        .phase-step:last-child::after {
+            display: none;
+        }
+
+        .phase-number {
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 0.75rem;
+            background: white;
+            border: 2px solid var(--border-subtle);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Raleway', sans-serif;
+            font-weight: 600;
+            color: var(--anthracite);
+            position: relative;
+            z-index: 1;
+        }
+
+        .phase-step.active .phase-number {
+            background: var(--turquoise);
+            border-color: var(--turquoise);
+            color: white;
+        }
+
+        .phase-step h5 {
+            font-size: 0.875rem;
+            color: var(--text-dark);
+            margin-bottom: 0.25rem;
+        }
+
+        .phase-step p {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Quick reference box */
+        .quick-ref {
+            background: rgba(47, 153, 164, 0.05);
+            border: 1px solid rgba(47, 153, 164, 0.2);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        .quick-ref h4 {
+            font-size: 0.875rem;
+            color: var(--turquoise);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .quick-ref ul {
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 0.5rem;
+        }
+
+        .quick-ref li {
+            font-size: 0.875rem;
+            color: var(--text-dark);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .quick-ref li::before {
+            content: '→';
+            color: var(--success);
+        }
+
+        /* Footer */
+        footer {
+            border-top: 1px solid var(--border-subtle);
+            padding: 2rem 0;
+            margin-top: 4rem;
+        }
+
+        .footer-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        /* Mobile responsiveness */
+        @media (max-width: 1024px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                position: static;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+                max-height: none;
+            }
+
+            .nav-section {
+                display: contents;
+            }
+
+            .nav-section-title {
+                display: none;
+            }
+
+            .nav-link {
+                padding: 0.5rem 0.75rem;
+                font-size: 0.8125rem;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .header-content {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .search-box {
+                width: 100%;
+            }
+
+            .card-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .mapping-arrow {
+                flex-direction: column;
+            }
+
+            .arrow-icon {
+                transform: rotate(90deg);
+            }
+        }
+
+        /* Utility classes */
+        .hidden { display: none !important; }
+        .highlight { background: rgba(47, 153, 164, 0.15); }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <div class="logo-icon">J2O</div>
+                    <div class="logo-text">
+                        <h1>Migration Reference</h1>
+                        <span>Netresearch • Jira to OpenProject Field Mapping</span>
+                    </div>
+                </div>
+                <div class="search-box">
+                    <input type="text" id="search" placeholder="Search fields, entities...">
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <main>
+            <nav class="sidebar">
+                <div class="nav-section">
+                    <div class="nav-section-title">Overview</div>
+                    <a href="#overview" class="nav-link active">
+                        <span class="nav-icon">◉</span>
+                        Quick Reference
+                    </a>
+                    <a href="#terminology" class="nav-link">
+                        <span class="nav-icon">⇄</span>
+                        Terminology
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Foundation</div>
+                    <a href="#users" class="nav-link">
+                        <span class="nav-icon">👤</span>
+                        Users
+                    </a>
+                    <a href="#groups" class="nav-link">
+                        <span class="nav-icon">👥</span>
+                        Groups
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Organization</div>
+                    <a href="#companies" class="nav-link">
+                        <span class="nav-icon">🏢</span>
+                        Companies (Tempo)
+                    </a>
+                    <a href="#accounts" class="nav-link">
+                        <span class="nav-icon">💰</span>
+                        Accounts (Tempo)
+                    </a>
+                    <a href="#projects" class="nav-link">
+                        <span class="nav-icon">📁</span>
+                        Projects
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Configuration</div>
+                    <a href="#custom-fields" class="nav-link">
+                        <span class="nav-icon">⚙</span>
+                        Custom Fields
+                    </a>
+                    <a href="#issue-types" class="nav-link">
+                        <span class="nav-icon">🏷</span>
+                        Issue Types
+                    </a>
+                    <a href="#statuses" class="nav-link">
+                        <span class="nav-icon">◐</span>
+                        Statuses
+                    </a>
+                    <a href="#priorities" class="nav-link">
+                        <span class="nav-icon">⚡</span>
+                        Priorities
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Core Content</div>
+                    <a href="#work-packages" class="nav-link">
+                        <span class="nav-icon">📋</span>
+                        Work Packages
+                    </a>
+                    <a href="#attachments" class="nav-link">
+                        <span class="nav-icon">📎</span>
+                        Attachments
+                    </a>
+                    <a href="#comments" class="nav-link">
+                        <span class="nav-icon">💬</span>
+                        Comments/Journals
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Relationships</div>
+                    <a href="#relations" class="nav-link">
+                        <span class="nav-icon">🔗</span>
+                        Issue Links
+                    </a>
+                    <a href="#time-entries" class="nav-link">
+                        <span class="nav-icon">⏱</span>
+                        Time Entries
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Agile</div>
+                    <a href="#sprints" class="nav-link">
+                        <span class="nav-icon">🔄</span>
+                        Sprints
+                    </a>
+                    <a href="#epics" class="nav-link">
+                        <span class="nav-icon">📊</span>
+                        Epics
+                    </a>
+                </div>
+            </nav>
+
+            <div class="content">
+                <!-- Overview Section -->
+                <section id="overview">
+                    <div class="section-header">
+                        <div class="section-number">1</div>
+                        <div class="section-title">
+                            <h2>Quick Reference</h2>
+                            <span>Entity mapping overview at a glance</span>
+                        </div>
+                    </div>
+
+                    <div class="quick-ref">
+                        <h4>⚡ Key Terminology Translations</h4>
+                        <ul>
+                            <li><strong>Issue</strong> → Work Package</li>
+                            <li><strong>Issue Type</strong> → Type</li>
+                            <li><strong>Tempo Customer</strong> → Top-Level Project</li>
+                            <li><strong>Tempo Account</strong> → Custom Field</li>
+                            <li><strong>Component</strong> → Category</li>
+                            <li><strong>Sprint</strong> → Version (Sprint type)</li>
+                            <li><strong>Epic Link</strong> → Parent Work Package</li>
+                            <li><strong>Worklog</strong> → Time Entry</li>
+                            <li><strong>Issue Link</strong> → Relation</li>
+                            <li><strong>Label</strong> → Tag / Custom Field</li>
+                            <li><strong>Resolution</strong> → Custom Field</li>
+                            <li><strong>Watcher</strong> → Watcher</li>
+                        </ul>
+                    </div>
+
+                    <div class="card-grid">
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-icon orange">👤</div>
+                                <h3>Users & Groups</h3>
+                            </div>
+                            <p>User accounts, display names, avatars, and group memberships with provenance tracking.</p>
+                            <div class="card-meta">
+                                <span>📄 2 components</span>
+                                <span>🔗 Foundation</span>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-icon blue">🏢</div>
+                                <h3>Tempo → Projects</h3>
+                            </div>
+                            <p>Tempo Customers become top-level projects; Accounts become custom field values.</p>
+                            <div class="card-meta">
+                                <span>📄 3 components</span>
+                                <span>🔗 Organization</span>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-icon green">📋</div>
+                                <h3>Work Packages</h3>
+                            </div>
+                            <p>Two-phase migration for proper attachment URL conversion and cross-reference resolution.</p>
+                            <div class="card-meta">
+                                <span>📄 3 phases</span>
+                                <span>🔗 Core Content</span>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-icon orange">⚙</div>
+                                <h3>Configuration</h3>
+                            </div>
+                            <p>Custom fields, issue types, statuses, priorities, and resolutions with type mapping.</p>
+                            <div class="card-meta">
+                                <span>📄 6 components</span>
+                                <span>🔗 Metadata</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Two-Phase Migration -->
+                    <h3 style="margin: 2rem 0 1rem; color: var(--light);">Two-Phase Work Package Migration</h3>
+                    <div class="phase-indicator">
+                        <div class="phase-step active">
+                            <div class="phase-number">1</div>
+                            <h5>Skeleton</h5>
+                            <p>Create WP structure</p>
+                        </div>
+                        <div class="phase-step active">
+                            <div class="phase-number">2</div>
+                            <h5>Attachments</h5>
+                            <p>Upload files, create mapping</p>
+                        </div>
+                        <div class="phase-step active">
+                            <div class="phase-number">3</div>
+                            <h5>Content</h5>
+                            <p>Populate with resolved URLs</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Terminology Section -->
+                <section id="terminology">
+                    <div class="section-header">
+                        <div class="section-number">2</div>
+                        <div class="section-title">
+                            <h2>Terminology Mapping</h2>
+                            <span>Jira concepts translated to OpenProject</span>
+                        </div>
+                    </div>
+
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Jira Term</th>
+                                    <th>OpenProject Term</th>
+                                    <th>Component</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="jira-col"><strong>Issue</strong></td>
+                                    <td class="op-col"><strong>Work Package</strong></td>
+                                    <td><code>work_packages</code></td>
+                                    <td>Core entity containing task data</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Issue Type</strong></td>
+                                    <td class="op-col"><strong>Type</strong></td>
+                                    <td><code>issue_types</code></td>
+                                    <td>Bug, Task, Story, Epic, etc.</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Tempo Customer</strong></td>
+                                    <td class="op-col"><strong>Top-Level Project</strong></td>
+                                    <td><code>companies</code></td>
+                                    <td>Becomes hierarchy root</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Tempo Account</strong></td>
+                                    <td class="op-col"><strong>Custom Field</strong></td>
+                                    <td><code>accounts</code></td>
+                                    <td>WorkPackageCustomField dropdown</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Project</strong></td>
+                                    <td class="op-col"><strong>Sub-Project</strong></td>
+                                    <td><code>projects</code></td>
+                                    <td>Under customer hierarchy</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Component</strong></td>
+                                    <td class="op-col"><strong>Category</strong></td>
+                                    <td><code>components</code></td>
+                                    <td>Project-level categorization</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Version/Fix Version</strong></td>
+                                    <td class="op-col"><strong>Version</strong></td>
+                                    <td><code>versions</code></td>
+                                    <td>Release tracking</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Sprint</strong></td>
+                                    <td class="op-col"><strong>Version (Sprint type)</strong></td>
+                                    <td><code>sprint_epic</code></td>
+                                    <td>Agile iteration container</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Epic</strong></td>
+                                    <td class="op-col"><strong>Work Package (Epic type)</strong></td>
+                                    <td><code>sprint_epic</code></td>
+                                    <td>Parent via parent_id</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Epic Link</strong></td>
+                                    <td class="op-col"><strong>Parent Relation</strong></td>
+                                    <td><code>sprint_epic</code></td>
+                                    <td>WP.parent_id = Epic WP ID</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Label</strong></td>
+                                    <td class="op-col"><strong>Tag / Custom Field</strong></td>
+                                    <td><code>labels</code></td>
+                                    <td>Native tags or text CF</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Resolution</strong></td>
+                                    <td class="op-col"><strong>Custom Field</strong></td>
+                                    <td><code>resolutions</code></td>
+                                    <td>String CF "Resolution"</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Worklog</strong></td>
+                                    <td class="op-col"><strong>Time Entry</strong></td>
+                                    <td><code>time_entries</code></td>
+                                    <td>Hours tracked per WP</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Issue Link</strong></td>
+                                    <td class="op-col"><strong>Relation</strong></td>
+                                    <td><code>relations</code></td>
+                                    <td>blocks, relates, duplicates</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Comment</strong></td>
+                                    <td class="op-col"><strong>Journal Entry</strong></td>
+                                    <td><code>work_packages</code></td>
+                                    <td>Activity history notes</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Board</strong></td>
+                                    <td class="op-col"><strong>Saved Query</strong></td>
+                                    <td><code>agile_boards</code></td>
+                                    <td>Kanban/Scrum view</td>
+                                </tr>
+                                <tr>
+                                    <td class="jira-col"><strong>Filter</strong></td>
+                                    <td class="op-col"><strong>Saved Query</strong></td>
+                                    <td><code>reporting</code></td>
+                                    <td>Search configuration</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Users Section -->
+                <section id="users">
+                    <div class="section-header">
+                        <div class="section-number">3</div>
+                        <div class="section-title">
+                            <h2>Users</h2>
+                            <span>User → Principal mapping with provenance</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">User</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Principal (User)</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Core user attributes and transformations</span>
+                            </div>
+                            <span class="accordion-badge">12 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>accountId</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "J2O User ID"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Direct mapping for provenance</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "J2O User Key"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Jira Server legacy key</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>login</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Username for login</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>displayName</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>firstname</code> + <code>lastname</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Split on first space</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>emailAddress</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>mail</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Fallback generated if empty</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>locale</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>language</code> (pref)</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Normalized (en_US → en)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>timeZone</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>time_zone</code> (pref)</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Direct mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>avatarUrls</code></td>
+                                            <td><span class="type-badge string">object</span></td>
+                                            <td class="op-col">Avatar attachment</td>
+                                            <td><span class="type-badge string">file</span></td>
+                                            <td>Best quality selected (128x128 first)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">—</td>
+                                            <td>—</td>
+                                            <td class="op-col">CF: "J2O Origin System"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Set to "jira"</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">—</td>
+                                            <td>—</td>
+                                            <td class="op-col">CF: "J2O External URL"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Constructed Jira profile URL</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Matching Strategy</h4>
+                                <span>Priority order for existing user matching</span>
+                            </div>
+                            <span class="accordion-badge">4 methods</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ol style="padding-left: 1.25rem; color: var(--mid-gray);">
+                                <li style="margin-bottom: 0.5rem;"><strong style="color: var(--orange);">Provenance Key Match</strong> — <code>j2o_user_key</code> custom field (strongest)</li>
+                                <li style="margin-bottom: 0.5rem;"><strong style="color: var(--blue);">Provenance ID Match</strong> — <code>j2o_user_id</code> custom field (accountId)</li>
+                                <li style="margin-bottom: 0.5rem;"><strong style="color: var(--green);">Username Match</strong> — OP <code>login</code> matches Jira <code>name</code></li>
+                                <li><strong style="color: var(--mid-gray);">Email Match</strong> — OP <code>mail</code> matches Jira <code>emailAddress</code></li>
+                            </ol>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Companies Section -->
+                <section id="companies">
+                    <div class="section-header">
+                        <div class="section-number">4</div>
+                        <div class="section-title">
+                            <h2>Companies (Tempo)</h2>
+                            <span>Tempo Customer → Top-Level Project</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Tempo (Jira)</h4>
+                            <div class="entity">Customer</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Top-Level Project</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Customer to project transformation</span>
+                            </div>
+                            <span class="accordion-badge">6 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Tempo Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>customer.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>project.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Direct mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>customer.key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>project.identifier</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Slugified, prefixed "customer_"</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>customer.id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col">CF: "Tempo Customer ID"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Provenance tracking</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">—</td>
+                                            <td>—</td>
+                                            <td class="op-col"><code>project.parent_id</code></td>
+                                            <td><span class="type-badge int">null</span></td>
+                                            <td>null (top-level)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>customer.contact</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "Customer Contact"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>If available</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>customer.address</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "Customer Address"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>If available</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Accounts Section -->
+                <section id="accounts">
+                    <div class="section-header">
+                        <div class="section-number">5</div>
+                        <div class="section-title">
+                            <h2>Accounts (Tempo)</h2>
+                            <span>Tempo Account → Custom Field</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Tempo (Jira)</h4>
+                            <div class="entity">Account</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">WorkPackageCustomField</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Account to custom field transformation</span>
+                            </div>
+                            <span class="accordion-badge">8 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Tempo Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>account.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF "Tempo Account" value</td>
+                                            <td><span class="type-badge list">list</span></td>
+                                            <td>Dropdown option</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>account.key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">Stored in mapping</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Lookup key</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>account.id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col">Mapping key</td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Primary identifier</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>account.category</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>tempo_category</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Classification</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>account.status</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>tempo_status</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>ACTIVE/CLOSED</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>account.lead</code></td>
+                                            <td><span class="type-badge user">user</span></td>
+                                            <td class="op-col"><code>tempo_lead</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Username reference</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>account.customer.id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col"><code>company_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Parent company link</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p style="margin-top: 1rem; font-size: 0.875rem; color: var(--text-muted);">
+                                <strong>Custom Field Configuration:</strong> Name: "Tempo Account", Format: string (list),
+                                is_for_all: true, Searchable: true, Filterable: true
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Projects Section -->
+                <section id="projects">
+                    <div class="section-header">
+                        <div class="section-number">6</div>
+                        <div class="section-title">
+                            <h2>Projects</h2>
+                            <span>Jira Project → OpenProject Sub-Project</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Project</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Sub-Project</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Project attributes and custom fields</span>
+                            </div>
+                            <span class="accordion-badge">11 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>project.key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>identifier</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Lowercased</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>project.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Direct mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>project.description</code></td>
+                                            <td><span class="type-badge string">html</span></td>
+                                            <td class="op-col"><code>description</code></td>
+                                            <td><span class="type-badge string">markdown</span></td>
+                                            <td>HTML → Markdown converted</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>project.lead.accountId</code></td>
+                                            <td><span class="type-badge user">user</span></td>
+                                            <td class="op-col">Membership (Project admin)</td>
+                                            <td><span class="type-badge user">role</span></td>
+                                            <td>Role assignment</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>project.projectCategory</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "Jira Project Category"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Provenance</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>project.projectTypeKey</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "Jira Project Type"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>software/business</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>project.key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "Jira Project Key"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Original key</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>project.id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col">CF: "Jira Project ID"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Numeric Jira ID</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">—</td>
+                                            <td>—</td>
+                                            <td class="op-col">CF: "Jira Project URL"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Link to original</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>project.avatarUrls</code></td>
+                                            <td><span class="type-badge string">url</span></td>
+                                            <td class="op-col">CF: "Jira Project Avatar URL"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Image link</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">via account mapping</td>
+                                            <td>—</td>
+                                            <td class="op-col"><code>parent_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Company project ID</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Module Enablement</h4>
+                                <span>OpenProject modules enabled based on project characteristics</span>
+                            </div>
+                            <span class="accordion-badge">adaptive</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Module</th>
+                                            <th>Condition</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="op-col"><code>work_package_tracking</code></td>
+                                            <td>Always enabled</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="op-col"><code>wiki</code></td>
+                                            <td>Always enabled</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="op-col"><code>time_tracking</code></td>
+                                            <td>When Tempo-linked</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="op-col"><code>costs</code></td>
+                                            <td>When Tempo-linked</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="op-col"><code>calendar</code></td>
+                                            <td>When categories present</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="op-col"><code>news</code></td>
+                                            <td>When categories present</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Custom Fields Section -->
+                <section id="custom-fields">
+                    <div class="section-header">
+                        <div class="section-number">7</div>
+                        <div class="section-title">
+                            <h2>Custom Fields</h2>
+                            <span>Field type mappings and transformations</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Type Conversion Table</h4>
+                                <span>Jira schema type → OpenProject format</span>
+                            </div>
+                            <span class="accordion-badge">26 types</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Schema Type</th>
+                                            <th>Jira Custom Type</th>
+                                            <th>OP Format</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>string</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge string">text</span></td>
+                                            <td>Generic text</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>text</code>, <code>textarea</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge string">text</span></td>
+                                            <td>Multi-line text</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>url</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge string">text</span></td>
+                                            <td>URL as text</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>option</code>, <code>select</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge list">list</span></td>
+                                            <td>Single select</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>multiselect</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge list">list</span></td>
+                                            <td>Multi-select</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>radiobuttons</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge list">list</span></td>
+                                            <td>Radio group</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>checkboxes</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge list">list</span></td>
+                                            <td>Checkbox array</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>cascadingselect</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge list">list</span></td>
+                                            <td>Flattened to list</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>date</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge date">date</span></td>
+                                            <td>Date only</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>datetime</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge date">date</span></td>
+                                            <td>Date portion kept</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>number</code>, <code>integer</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge int">int</span></td>
+                                            <td>Integer value</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>float</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge int">float</span></td>
+                                            <td>Decimal value</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>user</code>, <code>userpicker</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge user">user</span></td>
+                                            <td>Single user</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>users</code>, <code>multiuserpicker</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge user">user</span></td>
+                                            <td>Multi-user</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>boolean</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge bool">bool</span></td>
+                                            <td>True/false</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>array</code></td>
+                                            <td>string</td>
+                                            <td class="op-col"><span class="type-badge list">list</span></td>
+                                            <td>Array of strings</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>version</code>, <code>multiversion</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge list">list</span></td>
+                                            <td>Version references</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>labels</code></td>
+                                            <td>—</td>
+                                            <td class="op-col"><span class="type-badge list">list</span></td>
+                                            <td>Label array</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p style="margin-top: 1rem; font-size: 0.875rem; color: var(--text-muted);">
+                                <strong>Fallback:</strong> If no type match found, defaults to <span class="type-badge string">text</span>
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Issue Types Section -->
+                <section id="issue-types">
+                    <div class="section-header">
+                        <div class="section-number">8</div>
+                        <div class="section-title">
+                            <h2>Issue Types</h2>
+                            <span>Issue Type → Work Package Type mapping</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Default Type Mappings</h4>
+                                <span>Predefined Jira → OpenProject type translations</span>
+                            </div>
+                            <span class="accordion-badge">16 types</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Issue Type</th>
+                                            <th>OpenProject Type</th>
+                                            <th>Color</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><strong>Bug</strong></td>
+                                            <td class="op-col">Bug</td>
+                                            <td><span style="color: #D35400;">■</span> #D35400</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Task</strong></td>
+                                            <td class="op-col">Task</td>
+                                            <td><span style="color: #1A67A3;">■</span> #1A67A3</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>User Story</strong></td>
+                                            <td class="op-col">User Story</td>
+                                            <td><span style="color: #27AE60;">■</span> #27AE60</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Story</strong></td>
+                                            <td class="op-col">User Story</td>
+                                            <td><span style="color: #27AE60;">■</span> #27AE60</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Epic</strong></td>
+                                            <td class="op-col">Epic</td>
+                                            <td><span style="color: #9B59B6;">■</span> #9B59B6</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Feature</strong></td>
+                                            <td class="op-col">Feature</td>
+                                            <td><span style="color: #2788C8;">■</span> #2788C8</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Improvement</strong></td>
+                                            <td class="op-col">Feature</td>
+                                            <td><span style="color: #2788C8;">■</span> #2788C8</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>New Feature</strong></td>
+                                            <td class="op-col">Feature</td>
+                                            <td><span style="color: #2788C8;">■</span> #2788C8</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Change Request</strong></td>
+                                            <td class="op-col">Task</td>
+                                            <td><span style="color: #1A67A3;">■</span> #1A67A3</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Sub-task</strong></td>
+                                            <td class="op-col">Task</td>
+                                            <td><span style="color: #1A67A3;">■</span> #1A67A3</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Technical Task</strong></td>
+                                            <td class="op-col">Task</td>
+                                            <td><span style="color: #1A67A3;">■</span> #1A67A3</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Support Request</strong></td>
+                                            <td class="op-col">Support</td>
+                                            <td><span style="color: #4A148C;">■</span> #4A148C</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Documentation</strong></td>
+                                            <td class="op-col">Documentation</td>
+                                            <td><span style="color: #1F618D;">■</span> #1F618D</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Milestone</strong></td>
+                                            <td class="op-col">Milestone</td>
+                                            <td><span style="color: #E73E97;">■</span> #E73E97</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Phase</strong></td>
+                                            <td class="op-col">Phase</td>
+                                            <td><span style="color: #5C3566;">■</span> #5C3566</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Requirement</strong></td>
+                                            <td class="op-col">Requirement</td>
+                                            <td><span style="color: #8F4B2D;">■</span> #8F4B2D</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p style="margin-top: 1rem; font-size: 0.875rem; color: var(--text-muted);">
+                                <strong>Matching strategy:</strong> 1) Exact name match → 2) Default mapping table → 3) Create new type with same name
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Statuses Section -->
+                <section id="statuses">
+                    <div class="section-header">
+                        <div class="section-number">9</div>
+                        <div class="section-title">
+                            <h2>Statuses</h2>
+                            <span>Status → Status with category mapping</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Status Category Mapping</h4>
+                                <span>Jira category → OpenProject is_closed flag</span>
+                            </div>
+                            <span class="accordion-badge">3 categories</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Category</th>
+                                            <th>Category Key</th>
+                                            <th>OP is_closed</th>
+                                            <th>Color</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><strong>To Do</strong></td>
+                                            <td><code>new</code></td>
+                                            <td class="op-col"><span class="type-badge bool">false</span></td>
+                                            <td><span style="color: #4a6785;">■</span> blue-gray</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>In Progress</strong></td>
+                                            <td><code>indeterminate</code></td>
+                                            <td class="op-col"><span class="type-badge bool">false</span></td>
+                                            <td><span style="color: #f6c342;">■</span> yellow</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Done</strong></td>
+                                            <td><code>done</code></td>
+                                            <td class="op-col"><span class="type-badge bool">true</span></td>
+                                            <td><span style="color: #14892c;">■</span> green</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Work Packages Section -->
+                <section id="work-packages">
+                    <div class="section-header">
+                        <div class="section-number">10</div>
+                        <div class="section-title">
+                            <h2>Work Packages</h2>
+                            <span>Issue → Work Package with two-phase migration</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Issue</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Work Package</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Core Field Mappings</h4>
+                                <span>Issue attributes to work package fields</span>
+                            </div>
+                            <span class="accordion-badge">16 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>issue.key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "J2O Origin Key"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>e.g., "PROJ-123"</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>issue.id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col">CF: "Jira Issue ID"</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Numeric Jira ID</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.summary</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>subject</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Title</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.description</code></td>
+                                            <td><span class="type-badge string">ADF/Wiki</span></td>
+                                            <td class="op-col"><code>description</code></td>
+                                            <td><span class="type-badge string">markdown</span></td>
+                                            <td>ADF → Markdown + link conversion</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.issuetype.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>type_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via issue_type_mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.status.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>status_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via status_mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.priority.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>priority_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via priority_mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.assignee</code></td>
+                                            <td><span class="type-badge user">user</span></td>
+                                            <td class="op-col"><code>assigned_to_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via user_mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.reporter</code></td>
+                                            <td><span class="type-badge user">user</span></td>
+                                            <td class="op-col"><code>author_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via user_mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.created</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td class="op-col"><code>created_at</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td>Preserved via Rails</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.updated</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td class="op-col"><code>updated_at</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td>Preserved via Rails</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.duedate</code></td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td class="op-col"><code>due_date</code></td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td>Direct mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>customfield_*</code> (start)</td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td class="op-col"><code>start_date</code></td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td>Start date derivation*</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.project.key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>project_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via project_mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>fields.parent.key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>parent_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via work_package_mapping</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p style="margin-top: 1rem; font-size: 0.875rem; color: var(--text-muted);">
+                                <strong>*Start Date Derivation Precedence:</strong><br>
+                                1) customfield_18690 → 2) customfield_12590 → 3) customfield_11490 → 4) customfield_15082 → 5) First "In Progress" transition
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Content Transformations</h4>
+                                <span>Description and comment formatting changes</span>
+                            </div>
+                            <span class="accordion-badge">4 transforms</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Format</th>
+                                            <th>OpenProject Format</th>
+                                            <th>Example</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Issue Reference</td>
+                                            <td class="op-col">WP Reference</td>
+                                            <td><code>PROJ-123</code> → <code>WP#456</code></td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">User Mention</td>
+                                            <td class="op-col">User Mention</td>
+                                            <td><code>@accountId</code> → <code>@username</code></td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Wiki Link</td>
+                                            <td class="op-col">Markdown Link</td>
+                                            <td><code>[text|url]</code> → <code>[text](url)</code></td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Attachment Reference</td>
+                                            <td class="op-col">API URL</td>
+                                            <td><code>!image.png!</code> → <code>/api/v3/attachments/{id}/content</code></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Relations Section -->
+                <section id="relations">
+                    <div class="section-header">
+                        <div class="section-number">11</div>
+                        <div class="section-title">
+                            <h2>Issue Links → Relations</h2>
+                            <span>Link type mapping with direction handling</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Link Type Mappings</h4>
+                                <span>Jira link types to OpenProject relation types</span>
+                            </div>
+                            <span class="accordion-badge">7 types</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Link Type</th>
+                                            <th>Direction</th>
+                                            <th>OP Relation</th>
+                                            <th>Swap</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><strong>Relates</strong></td>
+                                            <td>outward/inward</td>
+                                            <td class="op-col">relates</td>
+                                            <td>No</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Duplicates</strong></td>
+                                            <td>outward</td>
+                                            <td class="op-col">duplicates</td>
+                                            <td>No</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Is duplicated by</strong></td>
+                                            <td>inward</td>
+                                            <td class="op-col">duplicates</td>
+                                            <td>Yes (swap from/to)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Blocks</strong></td>
+                                            <td>outward</td>
+                                            <td class="op-col">blocks</td>
+                                            <td>No</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Is blocked by</strong></td>
+                                            <td>inward</td>
+                                            <td class="op-col">blocks</td>
+                                            <td>Yes (swap from/to)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Precedes</strong></td>
+                                            <td>outward</td>
+                                            <td class="op-col">precedes</td>
+                                            <td>No</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Follows</strong></td>
+                                            <td>inward</td>
+                                            <td class="op-col">follows</td>
+                                            <td>Yes</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Time Entries Section -->
+                <section id="time-entries">
+                    <div class="section-header">
+                        <div class="section-number">12</div>
+                        <div class="section-title">
+                            <h2>Time Entries</h2>
+                            <span>Worklog → Time Entry mapping</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira / Tempo</h4>
+                            <div class="entity">Worklog</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Time Entry</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Worklog to time entry transformation</span>
+                            </div>
+                            <span class="accordion-badge">7 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>timeSpentSeconds</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col"><code>hours</code></td>
+                                            <td><span class="type-badge int">float</span></td>
+                                            <td>Seconds ÷ 3600</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>author.accountId</code></td>
+                                            <td><span class="type-badge user">user</span></td>
+                                            <td class="op-col"><code>user_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via user_mapping + Rails</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>started</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td class="op-col"><code>spent_on</code></td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td>Date portion</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>comment</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>comments</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Description</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>issue.key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>work_package_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via work_package_mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Tempo: <code>billableSeconds</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col">CF: "Billable Hours"</td>
+                                            <td><span class="type-badge int">float</span></td>
+                                            <td>Optional Tempo field</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Sprints Section -->
+                <section id="sprints">
+                    <div class="section-header">
+                        <div class="section-number">13</div>
+                        <div class="section-title">
+                            <h2>Sprints</h2>
+                            <span>Sprint → Version (Sprint type) mapping</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira Agile</h4>
+                            <div class="entity">Sprint</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Version</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Sprint to version transformation</span>
+                            </div>
+                            <span class="accordion-badge">6 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>sprint.id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col">mapping key</td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Mapping reference</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>sprint.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>version.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Direct mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>sprint.goal</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>version.description</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Sprint goal text</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>sprint.state</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>version.status</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>"closed" → closed, else open</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>sprint.startDate</code></td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td class="op-col"><code>version.start_date</code></td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td>ISO format preserved</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>sprint.endDate</code></td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td class="op-col"><code>version.due_date</code></td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td>ISO format preserved</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Epics Section -->
+                <section id="epics">
+                    <div class="section-header">
+                        <div class="section-number">14</div>
+                        <div class="section-title">
+                            <h2>Epics</h2>
+                            <span>Epic Link → Parent Work Package relation</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Epic Link</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">parent_id</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Epic Link Detection</h4>
+                                <span>Field search priority for epic relationship</span>
+                            </div>
+                            <span class="accordion-badge">4 methods</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ol style="padding-left: 1.25rem; color: var(--mid-gray);">
+                                <li style="margin-bottom: 0.5rem;"><code style="color: var(--orange);">fields.epicLink</code> — Primary field</li>
+                                <li style="margin-bottom: 0.5rem;"><code style="color: var(--blue);">fields.customfield_10008</code> — Jira default custom field</li>
+                                <li style="margin-bottom: 0.5rem;"><code style="color: var(--green);">fields.Epic Link</code> — Named field</li>
+                                <li><code style="color: var(--mid-gray);">Case-insensitive scan</code> — "epic_link" / "epicLink"</li>
+                            </ol>
+                            <p style="margin-top: 1rem; font-size: 0.875rem; color: var(--text-muted);">
+                                <strong>Result:</strong> Child WP <code>parent_id</code> = Epic WP <code>id</code> (resolved via work_package_mapping)
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Attachments Section -->
+                <section id="attachments">
+                    <div class="section-header">
+                        <div class="section-number">15</div>
+                        <div class="section-title">
+                            <h2>Attachments</h2>
+                            <span>Binary file transfer with provenance</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Attachment metadata preservation</span>
+                            </div>
+                            <span class="accordion-badge">7 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>filename</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>file.filename</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Direct mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>content</code> (URL)</td>
+                                            <td><span class="type-badge string">url</span></td>
+                                            <td class="op-col"><code>file</code></td>
+                                            <td><span class="type-badge string">binary</span></td>
+                                            <td>Downloaded + uploaded</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>author.accountId</code></td>
+                                            <td><span class="type-badge user">user</span></td>
+                                            <td class="op-col"><code>author_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via Rails metadata</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>created</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td class="op-col"><code>created_at</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td>Via Rails metadata</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>size</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col"><code>filesize</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Byte count</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>mimeType</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>content_type</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>MIME type</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col">CF on attachment</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Provenance</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Comments Section -->
+                <section id="comments">
+                    <div class="section-header">
+                        <div class="section-number">16</div>
+                        <div class="section-title">
+                            <h2>Comments / Journals</h2>
+                            <span>Comment → Journal Entry with content conversion</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Comment</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Journal Entry</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Comment to journal transformation</span>
+                            </div>
+                            <span class="accordion-badge">4 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>comment.body</code></td>
+                                            <td><span class="type-badge string">ADF/Wiki</span></td>
+                                            <td class="op-col"><code>journal.notes</code></td>
+                                            <td><span class="type-badge string">markdown</span></td>
+                                            <td>ADF → Markdown + link conversion</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>comment.author</code></td>
+                                            <td><span class="type-badge user">user</span></td>
+                                            <td class="op-col"><code>journal.user_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Via user_mapping + Rails</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>comment.created</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td class="op-col"><code>journal.created_at</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td>Preserved via Rails</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>comment.updated</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td class="op-col"><code>journal.updated_at</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td>If comment was edited</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <span>J2O Migration Tool • Netresearch DTT GmbH</span>
+                <span>Jira to OpenProject Migration Reference</span>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Accordion toggle
+        function toggleAccordion(header) {
+            const content = header.nextElementSibling;
+            header.classList.toggle('active');
+            content.classList.toggle('active');
+        }
+
+        // Search functionality
+        const searchInput = document.getElementById('search');
+        searchInput.addEventListener('input', function(e) {
+            const query = e.target.value.toLowerCase();
+            const sections = document.querySelectorAll('section');
+
+            sections.forEach(section => {
+                const text = section.textContent.toLowerCase();
+                if (query === '' || text.includes(query)) {
+                    section.style.display = 'block';
+                    // Highlight matches
+                    if (query && text.includes(query)) {
+                        section.classList.add('highlight');
+                    } else {
+                        section.classList.remove('highlight');
+                    }
+                } else {
+                    section.style.display = 'none';
+                }
+            });
+        });
+
+        // Navigation active state
+        const navLinks = document.querySelectorAll('.nav-link');
+        const observerOptions = {
+            rootMargin: '-20% 0px -80% 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    navLinks.forEach(link => link.classList.remove('active'));
+                    const activeLink = document.querySelector(`.nav-link[href="#${entry.target.id}"]`);
+                    if (activeLink) activeLink.classList.add('active');
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('section').forEach(section => {
+            observer.observe(section);
+        });
+
+        // Smooth scroll for nav links
+        navLinks.forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const targetId = link.getAttribute('href').slice(1);
+                const target = document.getElementById(targetId);
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>
