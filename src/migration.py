@@ -71,40 +71,64 @@ if TYPE_CHECKING:
 
 console = Console()
 
+# Two-Phase Migration Sequence for Proper Attachment URL Conversion
+# ==================================================================
+# Phase 1 (work_packages_skeleton): Creates WP structure without content
+# Phase 2 (attachments): Uploads files and creates attachment_mapping.json
+# Phase 3 (work_packages_content): Populates descriptions/comments with resolved attachment URLs
+#
+# This ensures !image.png! references in Jira convert to proper OP API URLs:
+# /api/v3/attachments/{id}/content
+#
 DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
+    # === Foundation: Users & Groups ===
     "users",
     "groups",
+    # === Metadata: Field Definitions ===
     "custom_fields",
-    "companies",
-    "accounts",
-    "projects",
     "priorities",
     "link_types",
     "issue_types",
     "status_types",
+    "resolutions",
+    # === Organization: Companies & Accounts (Tempo) ===
+    "companies",
+    "accounts",
+    # === Structure: Projects ===
+    "projects",
+    # === Agile: Workflows, Boards, Sprints ===
     "workflows",
     "agile_boards",
     "sprint_epic",
-    "work_packages",
+    # === Phase 1: Work Package Skeletons (no content) ===
+    "work_packages_skeleton",
+    # === Phase 2: Attachments (creates mapping for URL conversion) ===
+    "attachments",
+    "attachment_provenance",
+    # === Phase 3: Work Package Content (with resolved attachment URLs) ===
+    "work_packages_content",
+    # === Post-WP Data: Versions, Components, Labels ===
     "versions",
     "components",
     "labels",
-    "resolutions",
+    "native_tags",
+    # === WP Metadata: Estimates, Story Points, Security ===
     "story_points",
     "estimates",
     "security_levels",
-    "votes_reactions",
-    "remote_links",
-    "relations",
-    "watchers",
-    "attachments",
-    "attachment_provenance",
-    "native_tags",
-    "inline_refs",
-    "category_defaults",
     "affects_versions",
     "customfields_generic",
+    # === WP Relationships ===
+    "relations",
+    "remote_links",
+    "inline_refs",
+    # === WP Engagement: Watchers, Votes ===
+    "watchers",
+    "votes_reactions",
+    # === Time Tracking ===
     "time_entries",
+    # === Finalization ===
+    "category_defaults",
     "admin_schemes",
     "reporting",
 ]

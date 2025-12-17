@@ -31,38 +31,20 @@ openproject:
 # Migration process settings
 migration:
   # Component migration order
+  # ==========================
+  # When no --components or --profile is specified, the migration uses
+  # DEFAULT_COMPONENT_SEQUENCE from src/migration.py which implements
+  # proper two-phase migration for attachment URL conversion:
   #
-  # IMPORTANT: Two-Phase Migration for Proper Attachment URL Conversion
-  # ====================================================================
-  # For attachment references (!image.png!) in descriptions and comments to
-  # properly resolve to OpenProject API URLs (/api/v3/attachments/{id}/content),
-  # use the two-phase migration approach:
+  # Phase 1: work_packages_skeleton - Creates WP structure (no content)
+  # Phase 2: attachments - Uploads files, creates attachment_mapping.json
+  # Phase 3: work_packages_content - Populates content with resolved attachment URLs
   #
-  # 1. work_packages_skeleton - Creates basic work packages (no content)
-  # 2. attachments - Migrates attachments and saves attachment_mapping.json
-  # 3. work_packages_content - Populates descriptions/comments with resolved attachment URLs
+  # This ensures Jira !image.png! references convert to:
+  # /api/v3/attachments/{id}/content
   #
-  # The default order below uses single-phase 'issues' for backward compatibility.
-  # For proper attachment conversion, use this order instead:
-  #   - work_packages_skeleton  # Phase 1: Create WP skeletons
-  #   - attachments             # Migrate attachments, create mapping
-  #   - work_packages_content   # Phase 2: Populate content with attachment URLs
-  #
-  component_order:
-    - users
-    - groups
-    - custom_fields
-    - projects
-    - versions
-    - issues  # Use 'work_packages_skeleton' + 'work_packages_content' for proper attachment URLs
-    - relations
-    - worklogs
-    - attachments
-    - workflows
-    - agile_boards
-    - sprint_epic
-    - admin_schemes
-    - reporting
+  # To run specific components, use: --components users projects work_packages_skeleton
+  # To run a profile, use: --profile full (or metadata_refresh, etc.)
 
   # Data storage
   mapping_file: "data/id_mapping.json"
