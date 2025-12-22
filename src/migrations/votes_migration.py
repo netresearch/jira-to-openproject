@@ -119,8 +119,8 @@ true
         wp_map = self.mappings.get_mapping("work_package") or {}
         votes_by_key: dict[str, int] = (mapped.data or {}).get("votes", {})  # type: ignore[assignment]
 
-        updated = 0
-        failed = 0
+        # Collect all CF values for bulk update
+        cf_values_to_set: list[dict] = []
         projects_with_values: set[int] = set()
 
         for jira_key, count in votes_by_key.items():
@@ -135,19 +135,21 @@ true
             project_id = entry.get("openproject_project_id")
             if project_id:
                 projects_with_values.add(int(project_id))
-            try:
-                # Set CF value (store integer as string per OP conventions)
-                set_script = (
-                    "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
-                    % (wp_id, cf_id, str(count), str(count))
-                )
-                ok = self.op_client.execute_query(set_script)
-                if ok:
-                    updated += 1
-            except Exception:
-                logger.exception("Failed to apply votes for %s", jira_key)
-                failed += 1
+            cf_values_to_set.append({
+                "work_package_id": wp_id,
+                "custom_field_id": cf_id,
+                "value": str(count),
+            })
+
+        # Bulk set all CF values in single Rails call
+        updated = 0
+        failed = 0
+        if cf_values_to_set:
+            logger.info("Bulk setting %d votes values...", len(cf_values_to_set))
+            bulk_result = self.op_client.bulk_set_wp_custom_field_values(cf_values_to_set)
+            updated = bulk_result.get("updated", 0)
+            failed = bulk_result.get("failed", 0)
+            logger.info("Bulk votes: updated=%d, failed=%d", updated, failed)
 
         # Enable CF only for projects that have values
         if projects_with_values:

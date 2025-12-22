@@ -4984,6 +4984,295 @@ result.to_json
             msg = "Failed to add watcher."
             raise QueryExecutionError(msg) from e
 
+    def bulk_add_watchers(
+        self,
+        watchers: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Add multiple watchers in a single Rails call.
+
+        Args:
+            watchers: List of dicts with keys:
+                - work_package_id: int
+                - user_id: int
+
+        Returns:
+            Dict with 'success': bool, 'created': int, 'skipped': int, 'failed': int
+        """
+        if not watchers:
+            return {"success": True, "created": 0, "skipped": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for w in watchers:
+            data.append({
+                "wp_id": int(w["work_package_id"]),
+                "user_id": int(w["user_id"]),
+            })
+
+        data_json = json.dumps(data)
+        script = f"""
+          require 'json'
+          data = JSON.parse('{data_json.replace("'", "\\'")}')
+
+          results = {{ created: 0, skipped: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              wp_id = item['wp_id']
+              user_id = item['user_id']
+
+              # Check if already exists
+              if Watcher.exists?(watchable_type: 'WorkPackage', watchable_id: wp_id, user_id: user_id)
+                results[:skipped] += 1
+              else
+                wp = WorkPackage.find_by(id: wp_id)
+                u = User.find_by(id: user_id)
+                if wp && u
+                  w = Watcher.new(user: u, watchable: wp)
+                  if w.save
+                    results[:created] += 1
+                  else
+                    results[:failed] += 1
+                    results[:errors] << {{ wp_id: wp_id, user_id: user_id, error: w.errors.full_messages.join(', ') }}
+                  end
+                else
+                  results[:failed] += 1
+                  results[:errors] << {{ wp_id: wp_id, user_id: user_id, error: 'WorkPackage or User not found' }}
+                end
+              end
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ wp_id: item['wp_id'], user_id: item['user_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "created": 0, "skipped": 0, "failed": len(watchers), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk add watchers failed: %s", e)
+            return {"success": False, "created": 0, "skipped": 0, "failed": len(watchers), "error": str(e)}
+
+    def bulk_set_wp_custom_field_values(
+        self,
+        cf_values: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Set custom field values for multiple work packages in a single Rails call.
+
+        Args:
+            cf_values: List of dicts with keys:
+                - work_package_id: int
+                - custom_field_id: int
+                - value: str
+
+        Returns:
+            Dict with 'success': bool, 'updated': int, 'failed': int
+        """
+        if not cf_values:
+            return {"success": True, "updated": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for cv in cf_values:
+            data.append({
+                "wp_id": int(cv["work_package_id"]),
+                "cf_id": int(cv["custom_field_id"]),
+                "value": str(cv["value"]),
+            })
+
+        data_json = json.dumps(data)
+        script = f"""
+          require 'json'
+          data = JSON.parse('{data_json.replace("'", "\\'")}')
+
+          results = {{ updated: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              wp_id = item['wp_id']
+              cf_id = item['cf_id']
+              val = item['value']
+
+              wp = WorkPackage.find_by(id: wp_id)
+              cf = CustomField.find_by(id: cf_id)
+              if wp && cf
+                cv = wp.custom_value_for(cf)
+                if cv
+                  cv.value = val
+                  cv.save
+                else
+                  wp.custom_field_values = {{ cf.id => val }}
+                end
+                wp.save!
+                results[:updated] += 1
+              else
+                results[:failed] += 1
+                results[:errors] << {{ wp_id: wp_id, cf_id: cf_id, error: 'WorkPackage or CustomField not found' }}
+              end
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ wp_id: item['wp_id'], cf_id: item['cf_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk set WP CF values failed: %s", e)
+            return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(e)}
+
+    def upsert_work_package_description_section(
+        self,
+        work_package_id: int,
+        section_marker: str,
+        content: str,
+    ) -> bool:
+        """Upsert a section in a work package's description.
+
+        Args:
+            work_package_id: The work package ID
+            section_marker: The section title/marker (e.g., "Remote Links")
+            content: The markdown content for the section
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Escape content for Ruby
+        safe_content = content.replace("'", "\\'").replace("\n", "\\n")
+        safe_marker = section_marker.replace("'", "\\'")
+
+        script = f"""
+          wp = WorkPackage.find_by(id: {work_package_id})
+          if !wp
+            {{ success: false, error: 'WorkPackage not found' }}.to_json
+          else
+            desc = wp.description || ''
+            marker = '## {safe_marker}'
+            content = '{safe_content}'
+
+            # Find existing section
+            section_regex = /\\n?## {safe_marker}\\n[\\s\\S]*?(?=\\n## |\\z)/
+            if desc.match?(section_regex)
+              # Replace existing section
+              new_section = "\\n" + marker + "\\n" + content
+              desc = desc.gsub(section_regex, new_section)
+            else
+              # Append new section
+              desc = desc.strip + "\\n\\n" + marker + "\\n" + content
+            end
+
+            wp.description = desc.strip
+            if wp.save
+              {{ success: true }}.to_json
+            else
+              {{ success: false, error: wp.errors.full_messages.join(', ') }}.to_json
+            end
+          end
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result.get("success", False)
+            return False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to upsert WP description section: %s", e)
+            return False
+
+    def bulk_upsert_wp_description_sections(
+        self,
+        sections: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Upsert description sections for multiple work packages in a single Rails call.
+
+        Args:
+            sections: List of dicts with keys:
+                - work_package_id: int
+                - section_marker: str
+                - content: str
+
+        Returns:
+            Dict with 'success': bool, 'updated': int, 'failed': int
+        """
+        if not sections:
+            return {"success": True, "updated": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for s in sections:
+            data.append({
+                "wp_id": int(s["work_package_id"]),
+                "marker": str(s["section_marker"]),
+                "content": str(s["content"]),
+            })
+
+        data_json = json.dumps(data)
+        script = f"""
+          require 'json'
+          data = JSON.parse('{data_json.replace("'", "\\'")}')
+
+          results = {{ updated: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              wp_id = item['wp_id']
+              marker_text = item['marker']
+              content = item['content']
+
+              wp = WorkPackage.find_by(id: wp_id)
+              if !wp
+                results[:failed] += 1
+                results[:errors] << {{ wp_id: wp_id, error: 'WorkPackage not found' }}
+                next
+              end
+
+              desc = wp.description || ''
+              marker = '## ' + marker_text
+
+              # Find existing section using regex
+              section_regex = Regexp.new("\\n?" + Regexp.escape(marker) + "\\n[\\s\\S]*?(?=\\n## |\\z)")
+              if desc.match?(section_regex)
+                new_section = "\\n" + marker + "\\n" + content
+                desc = desc.gsub(section_regex, new_section)
+              else
+                desc = desc.strip + "\\n\\n" + marker + "\\n" + content
+              end
+
+              wp.description = desc.strip
+              if wp.save
+                results[:updated] += 1
+              else
+                results[:failed] += 1
+                results[:errors] << {{ wp_id: wp_id, error: wp.errors.full_messages.join(', ') }}
+              end
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ wp_id: item['wp_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "updated": 0, "failed": len(sections), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk upsert WP description sections failed: %s", e)
+            return {"success": False, "updated": 0, "failed": len(sections), "error": str(e)}
+
     def find_relation(
         self,
         from_work_package_id: int,
@@ -5054,6 +5343,86 @@ result.to_json
         except Exception as e:
             msg = f"Failed to create relation: {e}"
             raise QueryExecutionError(msg) from e
+
+    def bulk_create_relations(
+        self,
+        relations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Create multiple relations in a single Rails call.
+
+        Args:
+            relations: List of dicts with keys:
+                - from_id: int (from work package ID)
+                - to_id: int (to work package ID)
+                - relation_type: str (relates, duplicates, blocks, precedes, follows)
+
+        Returns:
+            Dict with 'success': bool, 'created': int, 'skipped': int, 'failed': int
+        """
+        if not relations:
+            return {"success": True, "created": 0, "skipped": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for rel in relations:
+            data.append({
+                "from_id": int(rel["from_id"]),
+                "to_id": int(rel["to_id"]),
+                "type": str(rel["relation_type"]),
+            })
+
+        data_json = json.dumps(data)
+        script = f"""
+          require 'json'
+          data = JSON.parse('{data_json.replace("'", "\\'")}')
+
+          results = {{ created: 0, skipped: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              from_id = item['from_id']
+              to_id = item['to_id']
+              rel_type = item['type']
+
+              # Check if relation already exists (either direction for symmetric types)
+              existing = Relation.where(from_id: from_id, to_id: to_id).first
+              existing ||= Relation.where(from_id: to_id, to_id: from_id).first if ['relates'].include?(rel_type)
+
+              if existing
+                results[:skipped] += 1
+              else
+                from_wp = WorkPackage.find_by(id: from_id)
+                to_wp = WorkPackage.find_by(id: to_id)
+                if from_wp && to_wp
+                  rel = Relation.new(from: from_wp, to: to_wp, relation_type: rel_type)
+                  if rel.save
+                    results[:created] += 1
+                  else
+                    results[:failed] += 1
+                    results[:errors] << {{ from: from_id, to: to_id, error: rel.errors.full_messages.join(', ') }}
+                  end
+                else
+                  results[:failed] += 1
+                  results[:errors] << {{ from: from_id, to: to_id, error: 'WorkPackage not found' }}
+                end
+              end
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ from: item['from_id'], to: item['to_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "created": 0, "skipped": 0, "failed": len(relations), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk create relations failed: %s", e)
+            return {"success": False, "created": 0, "skipped": 0, "failed": len(relations), "error": str(e)}
 
     def batch_create_time_entries(  # noqa: C901
         self,

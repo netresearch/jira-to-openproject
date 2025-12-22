@@ -108,26 +108,28 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
         md_by_key: dict[str, str] = data.get("markdown", {}) if isinstance(data, dict) else {}
         wp_map = self.mappings.get_mapping("work_package") or {}
 
-        updated = 0
-        failed = 0
+        # Collect all sections for bulk update
+        sections_to_upsert: list[dict] = []
         for jira_key, md in md_by_key.items():
             entry = wp_map.get(jira_key)
             if not (isinstance(entry, dict) and entry.get("openproject_id")):
                 continue
             wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
-            try:
-                ok = self.op_client.upsert_work_package_description_section(
-                    work_package_id=wp_id,
-                    section_marker=SECTION_TITLE,
-                    content=md,
-                )
-                if ok:
-                    updated += 1
-                else:
-                    failed += 1
-            except Exception:
-                logger.exception("Failed to upsert Remote Links for %s", jira_key)
-                failed += 1
+            sections_to_upsert.append({
+                "work_package_id": wp_id,
+                "section_marker": SECTION_TITLE,
+                "content": md,
+            })
+
+        # Bulk upsert all sections in single Rails call
+        updated = 0
+        failed = 0
+        if sections_to_upsert:
+            logger.info("Bulk upserting %d remote link sections...", len(sections_to_upsert))
+            bulk_result = self.op_client.bulk_upsert_wp_description_sections(sections_to_upsert)
+            updated = bulk_result.get("updated", 0)
+            failed = bulk_result.get("failed", 0)
+            logger.info("Bulk remote links: updated=%d, failed=%d", updated, failed)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
