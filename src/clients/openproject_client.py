@@ -5273,6 +5273,131 @@ result.to_json
             logger.warning("Bulk upsert WP description sections failed: %s", e)
             return {"success": False, "updated": 0, "failed": len(sections), "error": str(e)}
 
+    def create_work_package_activity(
+        self,
+        work_package_id: int,
+        activity_data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Create a journal/activity (comment) on a work package.
+
+        Args:
+            work_package_id: The work package ID
+            activity_data: Dict with 'comment' key containing {'raw': 'comment text'}
+
+        Returns:
+            Created journal data or None on failure
+        """
+        comment = activity_data.get("comment", {})
+        if isinstance(comment, dict):
+            comment_text = comment.get("raw", "")
+        else:
+            comment_text = str(comment)
+
+        if not comment_text:
+            return None
+
+        # Escape single quotes for Ruby
+        escaped_comment = comment_text.replace("\\", "\\\\").replace("'", "\\'")
+
+        script = f"""
+        begin
+          wp = WorkPackage.find({work_package_id})
+          user = User.current || User.find_by(admin: true)
+          journal = wp.journals.create!(
+            user: user,
+            notes: '{escaped_comment}'
+          )
+          {{ id: journal.id, status: 'created' }}
+        rescue => e
+          {{ error: e.message }}
+        end
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict) and not result.get("error"):
+                return result
+            logger.debug("Failed to create activity: %s", result)
+            return None
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Failed to create activity for WP#%d: %s", work_package_id, e)
+            return None
+
+    def bulk_create_work_package_activities(
+        self,
+        activities: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Create multiple journal/activity entries (comments) in a single Rails call.
+
+        Args:
+            activities: List of dicts with keys:
+                - work_package_id: int
+                - comment: str (the comment text)
+                - user_id: int (optional, defaults to admin user)
+
+        Returns:
+            Dict with 'success': bool, 'created': int, 'failed': int
+        """
+        if not activities:
+            return {"success": True, "created": 0, "failed": 0}
+
+        # Build JSON data for Ruby - escape properly
+        data = []
+        for act in activities:
+            comment = act.get("comment", "")
+            if isinstance(comment, dict):
+                comment = comment.get("raw", "")
+            data.append({
+                "work_package_id": int(act["work_package_id"]),
+                "comment": str(comment),
+                "user_id": act.get("user_id"),
+            })
+
+        data_json = json.dumps(data)
+        script = f"""
+          require 'json'
+          data = JSON.parse('{data_json.replace("'", "\\'")}')
+
+          results = {{ created: 0, failed: 0, errors: [] }}
+          default_user = User.current || User.find_by(admin: true)
+
+          data.each do |item|
+            begin
+              wp = WorkPackage.find_by(id: item['work_package_id'])
+              unless wp
+                results[:failed] += 1
+                results[:errors] << {{ wp_id: item['work_package_id'], error: 'WorkPackage not found' }}
+                next
+              end
+
+              user = item['user_id'] ? User.find_by(id: item['user_id']) : default_user
+              user ||= default_user
+
+              comment_text = item['comment'].to_s
+              next if comment_text.empty?
+
+              journal = wp.journals.create!(
+                user: user,
+                notes: comment_text
+              )
+              results[:created] += 1
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ wp_id: item['work_package_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "created": 0, "failed": len(activities), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk create WP activities failed: %s", e)
+            return {"success": False, "created": 0, "failed": len(activities), "error": str(e)}
+
     def find_relation(
         self,
         from_work_package_id: int,

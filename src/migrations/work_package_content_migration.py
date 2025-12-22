@@ -501,12 +501,169 @@ class WorkPackageContentMigration(BaseMigration):
 
         return added
 
+    def _collect_content_for_issue(
+        self,
+        jira_issue: Issue,
+        wp_id: int,
+    ) -> dict[str, Any]:
+        """Collect all content updates for a work package without executing.
+
+        Args:
+            jira_issue: The Jira issue
+            wp_id: OpenProject work package ID
+
+        Returns:
+            Dict with collected data for bulk operations
+        """
+        collected: dict[str, Any] = {
+            "wp_id": wp_id,
+            "jira_key": jira_issue.key,
+            "description_update": None,
+            "custom_field_updates": {},
+            "comments": [],
+            "watchers": [],
+        }
+
+        # Collect description
+        description = getattr(jira_issue.fields, "description", None)
+        if description:
+            converted_description = self._convert_jira_links(description, jira_key=jira_issue.key)
+            collected["description_update"] = {"raw": converted_description}
+
+        # Collect custom field updates
+        raw_fields = getattr(jira_issue, "raw", {}).get("fields", {})
+        for jira_field_id, value in raw_fields.items():
+            if not jira_field_id.startswith("customfield_"):
+                continue
+            if value is None:
+                continue
+            if jira_field_id in self.custom_field_mapping:
+                mapping = self.custom_field_mapping[jira_field_id]
+                op_cf_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
+                if op_cf_id:
+                    if isinstance(value, str):
+                        value = self._convert_jira_links(value, jira_key=jira_issue.key)
+                    collected["custom_field_updates"][f"customField{op_cf_id}"] = value
+
+        # Collect comments
+        try:
+            comments = self.jira_client.jira.comments(jira_issue.key)
+            for comment in comments:
+                body = getattr(comment, "body", None)
+                if body:
+                    converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
+                    collected["comments"].append(converted_body)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Collect watchers
+        try:
+            watchers = self.jira_client.get_issue_watchers(jira_issue.key)
+            for watcher in watchers:
+                jira_username = watcher.get("name") or watcher.get("accountId")
+                if jira_username and jira_username in self.user_mapping:
+                    op_user_id = self.user_mapping[jira_username].get("openproject_id")
+                    if op_user_id:
+                        collected["watchers"].append(op_user_id)
+        except Exception:  # noqa: BLE001
+            pass
+
+        return collected
+
+    def _bulk_process_collected_content(
+        self,
+        collected_items: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        """Process collected content using bulk operations.
+
+        Args:
+            collected_items: List of collected content from _collect_content_for_issue
+
+        Returns:
+            Dict with counts: descriptions_updated, custom_fields_updated, comments_migrated, watchers_added
+        """
+        results = {
+            "descriptions_updated": 0,
+            "custom_fields_updated": 0,
+            "comments_migrated": 0,
+            "watchers_added": 0,
+        }
+
+        if not collected_items:
+            return results
+
+        # Batch 1: Descriptions (using batch_update_work_packages)
+        description_updates = []
+        for item in collected_items:
+            if item["description_update"]:
+                description_updates.append({
+                    "id": item["wp_id"],
+                    "description": item["description_update"],
+                })
+
+        if description_updates:
+            try:
+                result = self.op_client.batch_update_work_packages(description_updates)
+                results["descriptions_updated"] = result.get("updated", 0)
+            except Exception as e:  # noqa: BLE001
+                self.logger.debug("Bulk description update failed: %s", e)
+
+        # Batch 2: Custom fields (using batch_update_work_packages)
+        cf_updates = []
+        for item in collected_items:
+            if item["custom_field_updates"]:
+                cf_updates.append({
+                    "id": item["wp_id"],
+                    **item["custom_field_updates"],
+                })
+
+        if cf_updates:
+            try:
+                result = self.op_client.batch_update_work_packages(cf_updates)
+                results["custom_fields_updated"] = result.get("updated", 0)
+            except Exception as e:  # noqa: BLE001
+                self.logger.debug("Bulk custom field update failed: %s", e)
+
+        # Batch 3: Comments (using bulk_create_work_package_activities)
+        all_comments = []
+        for item in collected_items:
+            for comment_text in item["comments"]:
+                all_comments.append({
+                    "work_package_id": item["wp_id"],
+                    "comment": comment_text,
+                })
+
+        if all_comments:
+            try:
+                result = self.op_client.bulk_create_work_package_activities(all_comments)
+                results["comments_migrated"] = result.get("created", 0)
+            except Exception as e:  # noqa: BLE001
+                self.logger.debug("Bulk comment creation failed: %s", e)
+
+        # Batch 4: Watchers (using bulk_add_watchers)
+        all_watchers = []
+        for item in collected_items:
+            for user_id in item["watchers"]:
+                all_watchers.append({
+                    "work_package_id": item["wp_id"],
+                    "user_id": user_id,
+                })
+
+        if all_watchers:
+            try:
+                result = self.op_client.bulk_add_watchers(all_watchers)
+                results["watchers_added"] = result.get("created", 0)
+            except Exception as e:  # noqa: BLE001
+                self.logger.debug("Bulk watcher addition failed: %s", e)
+
+        return results
+
     def _populate_content(
         self,
         jira_issue: Issue,
         wp_id: int,
     ) -> dict[str, Any]:
-        """Populate all content for a work package.
+        """Populate all content for a work package (legacy single-issue method).
 
         Args:
             jira_issue: The Jira issue
@@ -531,7 +688,10 @@ class WorkPackageContentMigration(BaseMigration):
         return results
 
     def _migrate_content(self) -> dict[str, Any]:
-        """Migrate content for all work packages.
+        """Migrate content for all work packages using bulk operations.
+
+        Collects content updates in batches and executes bulk operations
+        to minimize SSH/Rails overhead.
 
         Returns:
             Migration results dictionary
@@ -557,7 +717,9 @@ class WorkPackageContentMigration(BaseMigration):
         }
 
         projects = self._get_projects_to_migrate()
-        self.logger.info("Migrating content for %d projects", len(projects))
+        self.logger.info("Migrating content for %d projects (bulk mode)", len(projects))
+
+        batch_size = config.migration_config.get("batch_size", 100)
 
         for project in projects:
             project_key = project.get("key")
@@ -569,6 +731,9 @@ class WorkPackageContentMigration(BaseMigration):
             }
 
             self.logger.info("Processing content for project %s", project_key)
+
+            # Collect content in batches
+            collected_batch: list[dict[str, Any]] = []
 
             for issue in self.iter_project_issues(project_key):
                 project_results["processed"] += 1
@@ -582,26 +747,41 @@ class WorkPackageContentMigration(BaseMigration):
                     )
                     continue
 
-                # Populate content
-                content_results = self._populate_content(issue, wp_id)
+                # Collect content for bulk processing
+                collected = self._collect_content_for_issue(issue, wp_id)
+                collected_batch.append(collected)
 
-                if content_results["description"] or content_results["custom_fields"]:
-                    project_results["updated"] += 1
-                    if content_results["description"]:
-                        results["descriptions_updated"] += 1
-                    if content_results["custom_fields"]:
-                        results["custom_fields_updated"] += 1
-                    results["comments_migrated"] += content_results["comments_migrated"]
-                    results["watchers_added"] += content_results["watchers_added"]
-                else:
-                    project_results["failed"] += 1
+                # Process batch when full
+                if len(collected_batch) >= batch_size:
+                    batch_results = self._bulk_process_collected_content(collected_batch)
+                    project_results["updated"] += len(collected_batch)
+                    results["descriptions_updated"] += batch_results["descriptions_updated"]
+                    results["custom_fields_updated"] += batch_results["custom_fields_updated"]
+                    results["comments_migrated"] += batch_results["comments_migrated"]
+                    results["watchers_added"] += batch_results["watchers_added"]
 
-                if project_results["updated"] % 100 == 0 and project_results["updated"] > 0:
                     self.logger.info(
-                        "  Updated %d work packages for %s",
-                        project_results["updated"],
+                        "  Bulk processed %d work packages for %s (total: %d)",
+                        len(collected_batch),
                         project_key,
+                        project_results["updated"],
                     )
+                    collected_batch = []
+
+            # Process remaining items in batch
+            if collected_batch:
+                batch_results = self._bulk_process_collected_content(collected_batch)
+                project_results["updated"] += len(collected_batch)
+                results["descriptions_updated"] += batch_results["descriptions_updated"]
+                results["custom_fields_updated"] += batch_results["custom_fields_updated"]
+                results["comments_migrated"] += batch_results["comments_migrated"]
+                results["watchers_added"] += batch_results["watchers_added"]
+
+                self.logger.info(
+                    "  Bulk processed %d work packages for %s (final batch)",
+                    len(collected_batch),
+                    project_key,
+                )
 
             # Aggregate
             results["projects"][project_key] = project_results
