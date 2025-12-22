@@ -70,6 +70,15 @@ class WorkPackageSkeletonMigration(BaseMigration):
         # Load existing work package mapping if available (for incremental runs)
         self._load_existing_mapping()
 
+        # Cache for OpenProject types, statuses, priorities (lazy loaded)
+        self._cached_types: list[dict[str, Any]] | None = None
+        self._cached_statuses: list[dict[str, Any]] | None = None
+        self._cached_priorities: list[dict[str, Any]] | None = None
+        self._j2o_origin_key_cf_id: int | None = None
+
+        # Batch processing configuration
+        self.batch_size = config.migration_config.get("skeleton_batch_size", 50)
+
         self.logger.debug(
             "WorkPackageSkeletonMigration initialized with data dir: %s",
             self.data_dir,
@@ -243,13 +252,15 @@ class WorkPackageSkeletonMigration(BaseMigration):
         return self._get_default_type_id()
 
     def _get_default_type_id(self) -> int:
-        """Get default OpenProject type ID."""
-        try:
-            types = self.op_client.get_types()
-            if types:
-                return types[0].get("id", 1)
-        except Exception:
-            pass
+        """Get default OpenProject type ID (cached)."""
+        if self._cached_types is None:
+            try:
+                self._cached_types = self.op_client.get_work_package_types()
+                self.logger.info("Cached %d work package types", len(self._cached_types or []))
+            except Exception:
+                self._cached_types = []
+        if self._cached_types:
+            return self._cached_types[0].get("id", 1)
         return 1
 
     def _get_openproject_status_id(self, jira_issue: Issue) -> int | None:
@@ -274,14 +285,58 @@ class WorkPackageSkeletonMigration(BaseMigration):
         return self._get_default_status_id()
 
     def _get_default_status_id(self) -> int:
-        """Get default OpenProject status ID."""
-        try:
-            statuses = self.op_client.get_statuses()
-            if statuses:
-                return statuses[0].get("id", 1)
-        except Exception:
-            pass
+        """Get default OpenProject status ID (cached)."""
+        if self._cached_statuses is None:
+            try:
+                self._cached_statuses = self.op_client.get_statuses()
+                self.logger.info("Cached %d statuses", len(self._cached_statuses or []))
+            except Exception:
+                self._cached_statuses = []
+        if self._cached_statuses:
+            return self._cached_statuses[0].get("id", 1)
         return 1
+
+    def _get_default_priority_id(self) -> int:
+        """Get default OpenProject priority ID (Normal priority, cached)."""
+        if self._cached_priorities is None:
+            try:
+                self._cached_priorities = self.op_client.get_issue_priorities()
+                self.logger.info("Cached %d priorities", len(self._cached_priorities or []))
+            except Exception:
+                self._cached_priorities = []
+        if self._cached_priorities:
+            # Try to find "Normal" priority, otherwise use first
+            for p in self._cached_priorities:
+                if p.get("name", "").lower() == "normal":
+                    return p.get("id", 1)
+            return self._cached_priorities[0].get("id", 1)
+        return 1
+
+    def _get_default_author_id(self) -> int:
+        """Get default author ID (admin user)."""
+        # Use admin user (ID 1) as default author for skeleton creation
+        return 1
+
+    def _get_j2o_origin_key_cf_id(self) -> int | None:
+        """Get or create the J2O Origin Key custom field ID (cached)."""
+        if self._j2o_origin_key_cf_id is not None:
+            return self._j2o_origin_key_cf_id
+
+        try:
+            cf_name = "J2O Origin Key"
+            cf = self.op_client.ensure_custom_field(
+                name=cf_name,
+                field_format="string",
+                type_ids=[],  # All types
+                is_for_all=True,
+            )
+            if cf and cf.get("id"):
+                self._j2o_origin_key_cf_id = cf["id"]
+                self.logger.info("J2O Origin Key custom field ID: %d", self._j2o_origin_key_cf_id)
+        except Exception as e:
+            self.logger.warning("Failed to get/create J2O Origin Key custom field: %s", e)
+
+        return self._j2o_origin_key_cf_id
 
     def _get_openproject_project_id(self, jira_project_key: str) -> int | None:
         """Get OpenProject project ID for a Jira project.
@@ -300,19 +355,21 @@ class WorkPackageSkeletonMigration(BaseMigration):
             return mapping
         return None
 
-    def _create_skeleton(
+    def _build_skeleton_payload(
         self,
         jira_issue: Issue,
         project_id: int,
+        j2o_cf_id: int | None,
     ) -> dict[str, Any] | None:
-        """Create a minimal work package skeleton.
+        """Build a skeleton payload for batch creation.
 
         Args:
             jira_issue: The Jira issue
             project_id: OpenProject project ID
+            j2o_cf_id: J2O Origin Key custom field ID
 
         Returns:
-            Created work package data or None on failure
+            Payload dict or None if missing mappings
 
         """
         type_id = self._get_openproject_type_id(jira_issue)
@@ -326,52 +383,74 @@ class WorkPackageSkeletonMigration(BaseMigration):
             return None
 
         # Build minimal work package payload
-        payload = {
+        payload: dict[str, Any] = {
             "subject": jira_issue.fields.summary[:255],  # Truncate if needed
-            "_links": {
-                "type": {"href": f"/api/v3/types/{type_id}"},
-                "status": {"href": f"/api/v3/statuses/{status_id}"},
-                "project": {"href": f"/api/v3/projects/{project_id}"},
-            },
+            "project_id": project_id,
+            "type_id": type_id,
+            "status_id": status_id,
+            "priority_id": self._get_default_priority_id(),
+            "author_id": self._get_default_author_id(),
+            # Include jira_key for result matching
+            "_jira_key": jira_issue.key,
+            "_jira_id": str(jira_issue.id),
         }
 
-        try:
-            result = self.op_client.create_work_package(payload)
-            if result and result.get("id"):
-                # Set J2O Origin Key custom field
-                self._set_j2o_origin_key(result["id"], jira_issue.key)
-                return result
-        except Exception as e:
-            self.logger.error("Failed to create skeleton for %s: %s", jira_issue.key, e)
+        # Add J2O Origin Key custom field
+        if j2o_cf_id:
+            payload["custom_fields"] = [{"id": j2o_cf_id, "value": jira_issue.key}]
 
-        return None
+        return payload
 
-    def _set_j2o_origin_key(self, wp_id: int, jira_key: str) -> None:
-        """Set the J2O Origin Key custom field on a work package.
+    def _create_skeletons_batch(
+        self,
+        payloads: list[dict[str, Any]],
+        project_key: str,
+    ) -> tuple[int, int, list[tuple[str, str, int]]]:
+        """Create a batch of work package skeletons.
 
         Args:
-            wp_id: OpenProject work package ID
-            jira_key: Jira issue key
+            payloads: List of skeleton payloads
+            project_key: Project key for logging
+
+        Returns:
+            Tuple of (created_count, failed_count, list of (jira_id, jira_key, wp_id))
 
         """
+        if not payloads:
+            return 0, 0, []
+
+        # Extract jira info before sending to batch (we remove _ prefixed keys)
+        jira_info = [(p["_jira_id"], p["_jira_key"]) for p in payloads]
+        clean_payloads = [
+            {k: v for k, v in p.items() if not k.startswith("_")}
+            for p in payloads
+        ]
+
         try:
-            # Get or create the J2O Origin Key custom field
-            cf_name = "J2O Origin Key"
-            cf = self.op_client.ensure_custom_field(
-                name=cf_name,
-                field_format="string",
-                type_ids=[],  # All types
-                is_for_all=True,
+            # Call _create_work_packages_batch directly (returns dict, not list)
+            result = self.op_client._create_work_packages_batch(clean_payloads)
+            created = result.get("created", 0)
+            failed = result.get("failed", 0)
+            results_list = result.get("results", [])
+
+            # Match results back to Jira issues by index
+            mappings: list[tuple[str, str, int]] = []
+            for i, res in enumerate(results_list):
+                if res.get("status") == "created" and res.get("id"):
+                    jira_id, jira_key = jira_info[i]
+                    mappings.append((jira_id, jira_key, res["id"]))
+
+            self.logger.info(
+                "  Batch result: %d created, %d failed in %s",
+                created,
+                failed,
+                project_key,
             )
-            if cf and cf.get("id"):
-                cf_id = cf["id"]
-                # Update the work package with the custom field value
-                self.op_client.update_work_package(
-                    wp_id,
-                    {f"customField{cf_id}": jira_key},
-                )
+            return created, failed, mappings
+
         except Exception as e:
-            self.logger.debug("Failed to set J2O Origin Key for WP#%d: %s", wp_id, e)
+            self.logger.error("Batch creation failed for %s: %s", project_key, e)
+            return 0, len(payloads), []
 
     def _update_mapping(
         self,
@@ -396,7 +475,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
         }
 
     def _migrate_skeletons(self) -> dict[str, Any]:
-        """Migrate work package skeletons for all projects.
+        """Migrate work package skeletons for all projects using batch processing.
 
         Returns:
             Migration results dictionary
@@ -410,8 +489,15 @@ class WorkPackageSkeletonMigration(BaseMigration):
             "projects": {},
         }
 
+        # Get J2O Origin Key custom field ID once upfront
+        j2o_cf_id = self._get_j2o_origin_key_cf_id()
+
         projects = self._get_projects_to_migrate()
-        self.logger.info("Migrating skeletons for %d projects", len(projects))
+        self.logger.info(
+            "Migrating skeletons for %d projects (batch_size=%d)",
+            len(projects),
+            self.batch_size,
+        )
 
         for project in projects:
             project_key = project.get("key")
@@ -433,6 +519,10 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
             self.logger.info("Processing project %s", project_key)
 
+            # Collect issues into batches
+            batch_payloads: list[dict[str, Any]] = []
+            batch_issues: list[Issue] = []
+
             for issue in self.iter_project_issues(project_key):
                 project_results["processed"] += 1
                 jira_id = str(issue.id)
@@ -442,23 +532,58 @@ class WorkPackageSkeletonMigration(BaseMigration):
                     project_results["skipped"] += 1
                     continue
 
-                # Create skeleton
-                wp_result = self._create_skeleton(issue, project_id)
-
-                if wp_result:
-                    self._update_mapping(issue, wp_result)
-                    project_results["created"] += 1
-
-                    if project_results["created"] % 100 == 0:
-                        self.logger.info(
-                            "  Created %d skeletons for %s",
-                            project_results["created"],
-                            project_key,
-                        )
-                        # Periodic save
-                        self._save_mapping()
+                # Build payload for batch
+                payload = self._build_skeleton_payload(issue, project_id, j2o_cf_id)
+                if payload:
+                    batch_payloads.append(payload)
+                    batch_issues.append(issue)
                 else:
                     project_results["failed"] += 1
+
+                # Process batch when full
+                if len(batch_payloads) >= self.batch_size:
+                    created, failed, mappings = self._create_skeletons_batch(
+                        batch_payloads, project_key
+                    )
+                    project_results["created"] += created
+                    project_results["failed"] += failed
+
+                    # Update mappings
+                    for jira_id, jira_key, wp_id in mappings:
+                        pkey = issue.fields.project.key if hasattr(issue.fields, "project") else project_key
+                        self.work_package_mapping[jira_id] = {
+                            "jira_key": jira_key,
+                            "openproject_id": wp_id,
+                            "project_key": pkey,
+                        }
+
+                    self.logger.info(
+                        "  Created %d skeletons for %s (batch)",
+                        project_results["created"],
+                        project_key,
+                    )
+                    self._save_mapping()
+
+                    # Reset batch
+                    batch_payloads = []
+                    batch_issues = []
+
+            # Process remaining items in last batch
+            if batch_payloads:
+                created, failed, mappings = self._create_skeletons_batch(
+                    batch_payloads, project_key
+                )
+                project_results["created"] += created
+                project_results["failed"] += failed
+
+                # Update mappings
+                for jira_id, jira_key, wp_id in mappings:
+                    self.work_package_mapping[jira_id] = {
+                        "jira_key": jira_key,
+                        "openproject_id": wp_id,
+                        "project_key": project_key,
+                    }
+                self._save_mapping()
 
             # Aggregate results
             results["projects"][project_key] = project_results
