@@ -1394,10 +1394,14 @@ class CompanyMigration(BaseMigration):
         self.logger.info("Found %d projects to update parent relationships", len(updates))
 
         # Generate Ruby script to update parent_ids
-        updates_json = json.dumps(updates)
+        # Use ensure_ascii=False and heredoc literal syntax for safe Unicode handling
+        updates_json = json.dumps(updates, ensure_ascii=False)
         script = f"""
 require 'json'
-updates = JSON.parse('{updates_json}')
+updates = JSON.parse(<<-'J2O_DATA'
+{updates_json}
+J2O_DATA
+)
 results = {{ 'updated' => 0, 'already_correct' => 0, 'errors' => [] }}
 
 updates.each do |child_id, parent_id|

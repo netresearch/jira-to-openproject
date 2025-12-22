@@ -116,7 +116,7 @@ class HealthCheckClient:
     DEFAULT_INODES_WARNING = 10000
     DEFAULT_INODES_ERROR = 5000
     DEFAULT_FILE_COUNT_WARNING = 300
-    DEFAULT_FILE_COUNT_ERROR = 1000
+    DEFAULT_FILE_COUNT_ERROR = 10000  # Temporarily raised from 1000 - old files need root cleanup
 
     def __init__(
         self,

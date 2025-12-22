@@ -2480,9 +2480,13 @@ JSON_DATA
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
         ruby = f"""
           require 'json'
-          data = JSON.parse('{data_json.replace("'", "\\'")}')
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
 
           # Ensure section exists once
           section = nil
@@ -5021,9 +5025,13 @@ result.to_json
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         # that Ruby misinterprets as invalid Unicode escape sequences
         data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
         script = f"""
           require 'json'
-          data = JSON.parse('{data_json.replace("'", "\\'")}')
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
 
           results = {{ created: 0, skipped: 0, failed: 0, errors: [] }}
 
@@ -5098,9 +5106,13 @@ result.to_json
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
         script = f"""
           require 'json'
-          data = JSON.parse('{data_json.replace("'", "\\'")}')
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
 
           results = {{ updated: 0, failed: 0, errors: [] }}
 
@@ -5230,9 +5242,13 @@ result.to_json
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
         script = f"""
           require 'json'
-          data = JSON.parse('{data_json.replace("'", "\\'")}')
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
 
           results = {{ updated: 0, failed: 0, errors: [] }}
 
@@ -5367,9 +5383,13 @@ result.to_json
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
         script = f"""
           require 'json'
-          data = JSON.parse('{data_json.replace("'", "\\'")}')
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
 
           results = {{ created: 0, failed: 0, errors: [] }}
           default_user = User.current || User.find_by(admin: true)
@@ -5512,9 +5532,13 @@ result.to_json
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
         script = f"""
           require 'json'
-          data = JSON.parse('{data_json.replace("'", "\\'")}')
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
 
           results = {{ created: 0, skipped: 0, failed: 0, errors: [] }}
 
@@ -6035,9 +6059,13 @@ result.to_json
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
         script = f"""
           require 'json'
-          data = JSON.parse('{data_json.replace("'", "\\'")}')
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
 
           results = {{ processed: 0, failed: 0, errors: [] }}
 
