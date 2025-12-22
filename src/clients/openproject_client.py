@@ -531,6 +531,7 @@ class OpenProjectClient:
 
         local_script_path: Path | None = None
         container_script_path: Path | None = None
+        operation_succeeded = False  # Track success for debug file preservation
         try:
             # Create local script file and transfer both script and data
             local_script_path = self._create_script_file(full_script)
@@ -762,6 +763,7 @@ class OpenProjectClient:
                             raise QueryExecutionError(q_msg) from e
 
                 # Return a structured success response
+                operation_succeeded = True
                 return {
                     "status": "success",
                     "message": "Script executed successfully",
@@ -770,6 +772,8 @@ class OpenProjectClient:
                 }
 
             # No JSON markers found - return an error envelope for callers
+            # Note: Still mark as "succeeded" since execution completed (just no JSON found)
+            operation_succeeded = True
             return {
                 "status": "error",
                 "message": "JSON markers not found in Rails output",
@@ -777,12 +781,44 @@ class OpenProjectClient:
             }
 
         finally:
-            # Best-effort cleanup of local + remote files
-            with suppress(Exception):
-                if local_script_path is not None and container_script_path is not None:
-                    self._cleanup_script_files(local_script_path, container_script_path)
-            with suppress(Exception):
-                self._cleanup_script_files(local_data_path, container_data_path)
+            # Cleanup logic: preserve debug files on errors if configured
+            preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
+            should_cleanup = operation_succeeded or not preserve_on_error
+
+            if not should_cleanup:
+                # Preserve files for debugging - log their locations
+                logger.warning(
+                    "Preserving debug files due to error (set preserve_debug_files_on_error=false to auto-cleanup):\n"
+                    "  Local script: %s\n"
+                    "  Container script: %s\n"
+                    "  Local data: %s\n"
+                    "  Container data: %s",
+                    local_script_path,
+                    container_script_path,
+                    local_data_path,
+                    container_data_path,
+                )
+            else:
+                # Best-effort cleanup of local + remote files
+                try:
+                    if local_script_path is not None and container_script_path is not None:
+                        self._cleanup_script_files(local_script_path, container_script_path)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Failed to cleanup script files (local=%s, container=%s): %s",
+                        local_script_path,
+                        container_script_path,
+                        cleanup_err,
+                    )
+                try:
+                    self._cleanup_script_files(local_data_path, container_data_path)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Failed to cleanup data files (local=%s, container=%s): %s",
+                        local_data_path,
+                        container_data_path,
+                        cleanup_err,
+                    )
 
     def transfer_file_to_container(
         self,
@@ -1003,7 +1039,10 @@ class OpenProjectClient:
             self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
 
             # Decide load mode: default to console `load` to avoid tmux pastes but keep low startup cost
+            # Force runner mode if J2O_FORCE_RAILS_RUNNER is set
             mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or "console").lower()
+            if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
+                mode = "runner"
             if mode == "console":
                 try:
                     _console_output = self.rails_client.execute(
@@ -3946,6 +3985,10 @@ JSON_DATA
             )
 
             try:
+                # Skip console attempt entirely if forced runner mode
+                if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
+                    from src.clients.rails_console_client import ConsoleNotReadyError  # noqa: PLC0415
+                    raise ConsoleNotReadyError("Forced runner mode via J2O_FORCE_RAILS_RUNNER")
                 output = self.rails_client.execute(write_query, suppress_output=True)
                 self._check_console_output_for_errors(output or "", context="get_statuses")
                 logger.debug("Successfully executed statuses write command")
@@ -3983,6 +4026,7 @@ JSON_DATA
                 else:
                     raise
 
+            operation_succeeded = False  # Track success for debug file preservation
             try:
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
                 stdout = ""
@@ -4012,12 +4056,27 @@ JSON_DATA
                     raise QueryExecutionError(_emsg)
                 parsed = json.loads(stdout)
                 logger.info("Successfully loaded %d statuses from container file", len(parsed))
+                operation_succeeded = True
                 return parsed if isinstance(parsed, list) else []
             finally:
-                with suppress(Exception):
-                    self.ssh_client.execute_command(
-                        f"docker exec {self.container_name} rm -f {file_path}",
+                preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
+                should_cleanup = operation_succeeded or not preserve_on_error
+                if not should_cleanup:
+                    logger.warning(
+                        "Preserving debug file due to error: %s (set preserve_debug_files_on_error=false to auto-cleanup)",
+                        file_path,
                     )
+                else:
+                    try:
+                        self.ssh_client.execute_command(
+                            f"docker exec {self.container_name} rm -f {file_path}",
+                        )
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "Failed to cleanup container temp file %s: %s",
+                            file_path,
+                            cleanup_err,
+                        )
         except Exception as e:
             msg = "Failed to get statuses."
             raise QueryExecutionError(msg) from e
@@ -4045,6 +4104,10 @@ JSON_DATA
             )
 
             try:
+                # Skip console attempt entirely if forced runner mode
+                if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
+                    from src.clients.rails_console_client import ConsoleNotReadyError  # noqa: PLC0415
+                    raise ConsoleNotReadyError("Forced runner mode via J2O_FORCE_RAILS_RUNNER")
                 self.rails_client.execute(write_query, suppress_output=True)
                 logger.debug("Successfully executed work package types write command")
             except Exception as e:
@@ -4080,6 +4143,7 @@ JSON_DATA
                 else:
                     raise
 
+            operation_succeeded = False  # Track success for debug file preservation
             try:
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
                 stdout = ""
@@ -4109,12 +4173,27 @@ JSON_DATA
                     "Successfully loaded %d work package types from container file",
                     len(parsed) if isinstance(parsed, list) else 0,
                 )
+                operation_succeeded = True
                 return parsed if isinstance(parsed, list) else []
             finally:
-                with suppress(Exception):
-                    self.ssh_client.execute_command(
-                        f"docker exec {self.container_name} rm -f {file_path}",
+                preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
+                should_cleanup = operation_succeeded or not preserve_on_error
+                if not should_cleanup:
+                    logger.warning(
+                        "Preserving debug file due to error: %s (set preserve_debug_files_on_error=false to auto-cleanup)",
+                        file_path,
                     )
+                else:
+                    try:
+                        self.ssh_client.execute_command(
+                            f"docker exec {self.container_name} rm -f {file_path}",
+                        )
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "Failed to cleanup container temp file %s: %s",
+                            file_path,
+                            cleanup_err,
+                        )
         except Exception as e:
             msg = "Failed to get work package types."
             raise QueryExecutionError(msg) from e
@@ -5078,10 +5157,30 @@ result.to_json
         if not work_packages:
             return {"created": 0, "failed": 0, "results": []}
 
-        # Build batch work package creation script
-        work_packages_json = json.dumps(work_packages)
+        # Write JSON to a temp file in container to avoid escaping issues
+        import tempfile
+        import uuid
+
+        batch_id = uuid.uuid4().hex[:8]
+        container_json_path = f"/tmp/j2o_batch_{batch_id}.json"
+
+        # Write JSON to local temp file, then transfer to container
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(work_packages, f)
+            local_json_path = f.name
+
+        try:
+            from pathlib import Path
+
+            self.docker_client.transfer_file_to_container(Path(local_json_path), Path(container_json_path))
+        finally:
+            import os
+
+            os.unlink(local_json_path)
+
+        # Build batch work package creation script - read JSON from file
         script = f"""
-        work_packages_data = {work_packages_json}
+        work_packages_data = JSON.parse(File.read('{container_json_path}'))
         created_count = 0
         failed_count = 0
         results = []
@@ -5131,7 +5230,7 @@ result.to_json
               wp.assigned_to = User.find(wp_data['assigned_to_id'])
             end
 
-            # Assign provenance custom fields if provided as [{id, value}]
+            # Assign provenance custom fields if provided as [{{id, value}}]
             begin
               cf_items = wp_data['custom_fields']
               if cf_items && cf_items.respond_to?(:each)
@@ -5184,12 +5283,32 @@ result.to_json
         }}
         """
 
+        operation_succeeded = False  # Track success for debug file preservation
         try:
             result = self.execute_json_query(script)
+            operation_succeeded = True
             return result if isinstance(result, dict) else {"created": 0, "failed": len(work_packages), "results": []}
         except Exception as e:
             msg = f"Failed to batch create work packages: {e}"
             raise QueryExecutionError(msg) from e
+        finally:
+            # Clean up container JSON file - preserve on error for debugging
+            preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
+            should_cleanup = operation_succeeded or not preserve_on_error
+            if not should_cleanup:
+                self.logger.warning(
+                    "Preserving debug file due to error: %s (set preserve_debug_files_on_error=false to auto-cleanup)",
+                    container_json_path,
+                )
+            else:
+                try:
+                    self.docker_client.execute_command(f"rm -f {container_json_path}")
+                except Exception as cleanup_err:
+                    self.logger.warning(
+                        "Failed to cleanup container temp file %s: %s",
+                        container_json_path,
+                        cleanup_err,
+                    )
 
     def get_project_enhanced(self, project_id: int) -> dict[str, Any]:
         """Get comprehensive project information with caching."""
@@ -5362,6 +5481,86 @@ result.to_json
         except Exception as e:
             msg = f"Failed to batch update work packages: {e}"
             raise QueryExecutionError(msg) from e
+
+    def create_work_package(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Create a single work package.
+
+        Args:
+            payload: Work package data. Can be in API format (with _links)
+                     or direct format (with project_id, type_id, etc.)
+
+        Returns:
+            Created work package data or None on failure
+
+        """
+        # Convert API-style payload to batch format if needed
+        wp_data: dict[str, Any] = {}
+
+        # Handle API-style _links format
+        if "_links" in payload:
+            links = payload["_links"]
+
+            # Extract project ID from href
+            if "project" in links and "href" in links["project"]:
+                href = links["project"]["href"]
+                if match := re.search(r"/projects/(\d+)", href):
+                    wp_data["project_id"] = int(match.group(1))
+
+            # Extract type ID from href
+            if "type" in links and "href" in links["type"]:
+                href = links["type"]["href"]
+                if match := re.search(r"/types/(\d+)", href):
+                    wp_data["type_id"] = int(match.group(1))
+
+            # Extract status ID from href
+            if "status" in links and "href" in links["status"]:
+                href = links["status"]["href"]
+                if match := re.search(r"/statuses/(\d+)", href):
+                    wp_data["status_id"] = int(match.group(1))
+        else:
+            # Direct format - copy relevant fields
+            for key in ["project_id", "type_id", "status_id", "priority_id", "author_id", "assigned_to_id"]:
+                if key in payload:
+                    wp_data[key] = payload[key]
+
+        # Copy subject and description
+        if "subject" in payload:
+            wp_data["subject"] = payload["subject"]
+        if "description" in payload:
+            wp_data["description"] = payload["description"]
+
+        # Call the internal batch method directly for single item
+        # to avoid process_batches wrapper which may alter return format
+        try:
+            result = self._create_work_packages_batch([wp_data])
+            if isinstance(result, dict) and result.get("results"):
+                results = result["results"]
+                if results and len(results) > 0:
+                    return results[0] if isinstance(results[0], dict) else {"id": results[0]}
+        except Exception as e:
+            logger.error("Failed to create work package: %s", e)
+        return None
+
+    def update_work_package(
+        self,
+        wp_id: int,
+        updates: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Update a single work package.
+
+        Args:
+            wp_id: Work package ID
+            updates: Fields to update
+
+        Returns:
+            Updated work package data or None on failure
+
+        """
+        update_data = {"id": wp_id, **updates}
+        result = self.batch_update_work_packages([update_data])
+        if result and result.get("results"):
+            return result["results"][0]
+        return None
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for user email lookups
     def batch_get_users_by_emails(  # noqa: C901
