@@ -1653,10 +1653,11 @@ class OpenProjectClient:
 
     def remove_custom_field(self, name: str, *, cf_type: str | None = None) -> dict[str, int]:
         """Remove CustomField records matching the provided name/type."""
-        name_literal = json.dumps(name)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        name_literal = json.dumps(name, ensure_ascii=False)
         type_filter = ""
         if cf_type:
-            type_literal = json.dumps(cf_type)
+            type_literal = json.dumps(cf_type, ensure_ascii=False)
             type_filter = f"scope = scope.where(type: {type_literal})\n"
 
         ruby = (
@@ -2085,7 +2086,8 @@ end
             "sharing": sharing or "none",
         }
 
-        payload_json = json.dumps(payload)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        payload_json = json.dumps(payload, ensure_ascii=False)
         script = f"""
         require 'json'
         input = JSON.parse(<<'JSON_DATA')
@@ -2144,7 +2146,8 @@ JSON_DATA
             "options": options or {},
         }
 
-        payload_json = json.dumps(payload)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        payload_json = json.dumps(payload, ensure_ascii=False)
         script = f"""
         require 'json'
         input = JSON.parse(<<'JSON_DATA')
@@ -2228,7 +2231,8 @@ JSON_DATA
             "title": title,
             "content": content,
         }
-        payload_json = json.dumps(payload)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        payload_json = json.dumps(payload, ensure_ascii=False)
 
         script = f"""
         require 'json'
@@ -2474,7 +2478,8 @@ JSON_DATA
                 "fmt": str(attr.get("field_format", "string")),
             })
 
-        data_json = json.dumps(data)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
         ruby = f"""
           require 'json'
           data = JSON.parse('{data_json.replace("'", "\\'")}')
@@ -3464,7 +3469,8 @@ JSON_DATA
 
         """
         # Convert Python dict to Ruby hash format
-        ruby_hash = json.dumps(attributes).replace('"', "'")
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        ruby_hash = json.dumps(attributes, ensure_ascii=False).replace('"', "'")
 
         # Build Rails command for creating a record
         # Use a simple, single-line approach that works well with tmux console
@@ -3579,7 +3585,8 @@ JSON_DATA
 
         """
         # Convert Python dict to Ruby hash format
-        ruby_hash = json.dumps(attributes).replace('"', "'")
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        ruby_hash = json.dumps(attributes, ensure_ascii=False).replace('"', "'")
 
         # Build command to update the record
         command = f"""
@@ -4862,7 +4869,8 @@ JSON_DATA
             return []
 
     def find_issue_priority_by_name(self, name: str) -> dict[str, Any] | None:
-        script = f"p = IssuePriority.find_by(name: {json.dumps(name)}); p && {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}"
+        # Use ensure_ascii=False to output UTF-8 directly
+        script = f"p = IssuePriority.find_by(name: {json.dumps(name, ensure_ascii=False)}); p && {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}"
         try:
             result = self.execute_json_query(script)
             return result if isinstance(result, dict) else None
@@ -4872,8 +4880,9 @@ JSON_DATA
 
     def create_issue_priority(self, name: str, position: int | None = None, is_default: bool = False) -> dict[str, Any]:
         pos_expr = "nil" if position is None else str(int(position))
+        # Use ensure_ascii=False to output UTF-8 directly
         script = f"""
-        p = IssuePriority.create!(name: {json.dumps(name)}, position: {pos_expr}, is_default: {str(is_default).lower()}, active: true)
+        p = IssuePriority.create!(name: {json.dumps(name, ensure_ascii=False)}, position: {pos_expr}, is_default: {str(is_default).lower()}, active: true)
         {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}
         """
         try:
@@ -5009,7 +5018,9 @@ result.to_json
                 "user_id": int(w["user_id"]),
             })
 
-        data_json = json.dumps(data)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        # that Ruby misinterprets as invalid Unicode escape sequences
+        data_json = json.dumps(data, ensure_ascii=False)
         script = f"""
           require 'json'
           data = JSON.parse('{data_json.replace("'", "\\'")}')
@@ -5085,7 +5096,8 @@ result.to_json
                 "value": str(cv["value"]),
             })
 
-        data_json = json.dumps(data)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
         script = f"""
           require 'json'
           data = JSON.parse('{data_json.replace("'", "\\'")}')
@@ -5216,7 +5228,8 @@ result.to_json
                 "content": str(s["content"]),
             })
 
-        data_json = json.dumps(data)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
         script = f"""
           require 'json'
           data = JSON.parse('{data_json.replace("'", "\\'")}')
@@ -5352,7 +5365,8 @@ result.to_json
                 "user_id": act.get("user_id"),
             })
 
-        data_json = json.dumps(data)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
         script = f"""
           require 'json'
           data = JSON.parse('{data_json.replace("'", "\\'")}')
@@ -5496,7 +5510,8 @@ result.to_json
                 "type": str(rel["relation_type"]),
             })
 
-        data_json = json.dumps(data)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
         script = f"""
           require 'json'
           data = JSON.parse('{data_json.replace("'", "\\'")}')
@@ -6018,7 +6033,8 @@ result.to_json
         if not data:
             return {"success": True, "processed": 0, "failed": 0}
 
-        data_json = json.dumps(data)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
         script = f"""
           require 'json'
           data = JSON.parse('{data_json.replace("'", "\\'")}')
@@ -6116,7 +6132,9 @@ result.to_json
             return {"updated": 0, "failed": 0, "results": []}
 
         # Build batch update script
-        updates_json = json.dumps(updates)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        # that Ruby misinterprets as invalid Unicode escape sequences
+        updates_json = json.dumps(updates, ensure_ascii=False)
         script = f"""
         updates = {updates_json}
         updated_count = 0
@@ -6567,7 +6585,8 @@ result.to_json
 
         # Use ActiveRecord's built-in parameterization instead of string building
         # This approach delegates sanitization to Rails rather than DIY
-        values_json = json.dumps(values)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        values_json = json.dumps(values, ensure_ascii=False)
 
         # Add payload byte cap to prevent memory exhaustion (Zen's recommendation)
         payload_bytes = len(values_json.encode("utf-8"))
