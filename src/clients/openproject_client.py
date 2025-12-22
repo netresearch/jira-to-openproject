@@ -2445,6 +2445,111 @@ JSON_DATA
             self.logger.warning("Failed to upsert project attribute %s for %s: %s", name, project_id, e)
             return False
 
+    def bulk_upsert_project_attributes(
+        self,
+        attributes: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Bulk upsert project attributes in a single Rails call.
+
+        Args:
+            attributes: List of dicts with keys:
+                - project_id: int
+                - name: str
+                - value: str
+                - field_format: str (default 'string')
+
+        Returns:
+            Dict with 'success': bool, 'processed': int, 'failed': int
+        """
+        if not attributes:
+            return {"success": True, "processed": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for attr in attributes:
+            data.append({
+                "pid": int(attr["project_id"]),
+                "name": str(attr["name"]),
+                "value": str(attr.get("value", "")),
+                "fmt": str(attr.get("field_format", "string")),
+            })
+
+        data_json = json.dumps(data)
+        ruby = f"""
+          require 'json'
+          data = JSON.parse('{data_json.replace("'", "\\'")}')
+
+          # Ensure section exists once
+          section = nil
+          begin
+            section = CustomFieldSection.find_or_create_by!(type: 'ProjectCustomFieldSection', name: 'J2O Origin')
+          rescue => e
+          end
+
+          # Cache custom fields by name
+          cf_cache = {{}}
+
+          results = {{ processed: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              pid = item['pid']
+              name = item['name']
+              fmt = item['fmt']
+              val = item['value']
+
+              # Get or create custom field
+              cf = cf_cache[name]
+              if !cf
+                cf = ProjectCustomField.find_by(name: name)
+                if !cf
+                  cf = ProjectCustomField.new(
+                    name: name,
+                    field_format: fmt,
+                    is_required: false,
+                    is_filter: false,
+                    searchable: true,
+                    editable: true,
+                    admin_only: false
+                  )
+                  cf.custom_field_section_id = section.id if section && cf.respond_to?(:custom_field_section_id=) rescue nil
+                  cf.is_for_all = false if cf.respond_to?(:is_for_all=) rescue nil
+                  cf.save!
+                end
+                # Attach section if needed
+                if section && (!cf.custom_field_section_id || cf.custom_field_section_id.nil?)
+                  cf.update!(custom_field_section_id: section.id) rescue nil
+                end
+                cf_cache[name] = cf
+              end
+
+              # Ensure mapping for project
+              ProjectCustomFieldProjectMapping.find_or_create_by!(project_id: pid, custom_field_id: cf.id)
+
+              # Upsert value
+              cv = CustomValue.find_or_initialize_by(customized_type: 'Project', customized_id: pid, custom_field_id: cf.id)
+              cv.value = val
+              cv.save!
+
+              results[:processed] += 1
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ pid: item['pid'], name: item['name'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(ruby)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "processed": 0, "failed": len(attributes), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Bulk upsert project attributes failed: %s", e)
+            return {"success": False, "processed": 0, "failed": len(attributes), "error": str(e)}
+
     def rename_project_attribute(self, *, old_name: str, new_name: str) -> bool:
         """Rename a Project attribute (ProjectCustomField) if it exists.
 
@@ -5389,6 +5494,77 @@ result.to_json
         except Exception as e:  # noqa: BLE001
             logger.warning("Exception enabling modules on project %s: %s", project_id, e)
             return False
+
+    def bulk_enable_project_modules(
+        self,
+        project_modules: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Enable modules for multiple projects in a single Rails call.
+
+        Args:
+            project_modules: List of dicts with keys:
+                - project_id: int
+                - modules: list[str]
+
+        Returns:
+            Dict with 'success': bool, 'processed': int, 'failed': int
+        """
+        if not project_modules:
+            return {"success": True, "processed": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for pm in project_modules:
+            if pm.get("modules"):
+                data.append({
+                    "pid": int(pm["project_id"]),
+                    "modules": [str(m) for m in pm["modules"]],
+                })
+
+        if not data:
+            return {"success": True, "processed": 0, "failed": 0}
+
+        data_json = json.dumps(data)
+        script = f"""
+          require 'json'
+          data = JSON.parse('{data_json.replace("'", "\\'")}')
+
+          results = {{ processed: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              p = Project.find(item['pid'])
+              names = p.enabled_module_names.map(&:to_s)
+              desired = item['modules']
+              added = false
+              desired.each do |m|
+                unless names.include?(m)
+                  names << m
+                  added = true
+                end
+              end
+              if added
+                p.enabled_module_names = names
+                p.save!
+              end
+              results[:processed] += 1
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ pid: item['pid'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_json_query(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "processed": 0, "failed": len(data), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk enable project modules failed: %s", e)
+            return {"success": False, "processed": 0, "failed": len(data), "error": str(e)}
 
     def batch_get_users_by_ids(self, user_ids: list[int]) -> dict[int, dict]:
         """Retrieve multiple users in batches."""
