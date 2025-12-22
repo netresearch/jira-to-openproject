@@ -75,11 +75,14 @@ class RailsConsoleClient:
         self.file_manager = FileManager()
         self._rails_command = "bundle exec rails console"
 
-        if not self._session_exists():
+        # Skip tmux session check if forced runner mode (tmux not needed)
+        if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
+            logger.info("Skipping tmux session check (J2O_FORCE_RAILS_RUNNER=1)")
+        elif not self._session_exists():
             msg = f"tmux session '{self.tmux_session_name}' does not exist"
             raise TmuxSessionError(msg)
-
-        logger.success("Connected to tmux session '%s'", self.tmux_session_name)
+        else:
+            logger.success("Connected to tmux session '%s'", self.tmux_session_name)
 
         try:
             self._configure_irb_settings()
