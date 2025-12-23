@@ -688,11 +688,123 @@ class CustomFieldMigration(BaseMigration):
                 for e in unresolved_errors[:10]:
                     self.logger.error("Error at index %s: %s", e.get("index"), e.get("errors"))
 
+            # Update mapping with created/existing openproject_ids
+            self._update_mapping_with_op_ids(created, existing, meta)
+
+            # Record provenance for created/matched custom fields
+            self._record_custom_field_provenance()
+
             # Success if at least one created or found existing, and no unresolved errors
             return (len(created) + len(existing) > 0) and not unresolved_errors
         except Exception as e:
             self.logger.exception("Error during bulk custom field creation: %s", e)
             return False
+
+    def _update_mapping_with_op_ids(
+        self,
+        created: list[dict[str, Any]],
+        existing: list[dict[str, Any]],
+        meta: list[dict[str, Any]],
+    ) -> None:
+        """Update mapping with OpenProject IDs after creation.
+
+        Args:
+            created: List of created custom field records with id/name
+            existing: List of existing custom field records with id/name
+            meta: List of metadata with jira_id/name mapping
+
+        """
+        # Build name→op_id lookup from created and existing
+        name_to_op_id: dict[str, int] = {}
+        for rec in created:
+            if rec.get("id") and rec.get("name"):
+                name_to_op_id[rec["name"]] = int(rec["id"])
+        for rec in existing:
+            if rec.get("id") and rec.get("name"):
+                name_to_op_id[rec["name"]] = int(rec["id"])
+
+        # Update mapping entries
+        updated_count = 0
+        for jira_id, entry in self.mapping.items():
+            jira_name = entry.get("jira_name")
+            if jira_name and jira_name in name_to_op_id:
+                op_id = name_to_op_id[jira_name]
+                if entry.get("openproject_id") != op_id:
+                    entry["openproject_id"] = op_id
+                    entry["matched_by"] = "created"
+                    updated_count += 1
+
+        if updated_count:
+            # Persist updated mapping
+            from src import config as _cfg
+            _cfg.mappings.set_mapping("custom_field", self.mapping)
+            self.logger.info("Updated %d custom field mappings with OP IDs", updated_count)
+
+    def _record_custom_field_provenance(self) -> None:
+        """Record provenance for custom fields in J2O Migration project."""
+        provenance_mappings = []
+        for jira_id, entry in self.mapping.items():
+            op_id = entry.get("openproject_id")
+            if op_id:
+                provenance_mappings.append({
+                    "jira_key": jira_id,
+                    "jira_name": entry.get("jira_name"),
+                    "op_entity_id": op_id,
+                })
+
+        if provenance_mappings:
+            try:
+                result = self.op_client.bulk_record_entity_provenance(
+                    "custom_field", provenance_mappings
+                )
+                self.logger.info(
+                    "Recorded custom field provenance: %d success, %d failed",
+                    result.get("success", 0),
+                    result.get("failed", 0),
+                )
+            except Exception as prov_err:
+                self.logger.warning("Failed to record custom field provenance: %s", prov_err)
+
+    def restore_mapping_from_openproject(self) -> dict[str, Any]:
+        """Restore custom field mapping from OpenProject provenance data alone.
+
+        This method rebuilds the custom field mapping by querying the J2O Migration
+        provenance project for custom field mapping work packages. It does NOT require
+        Jira data, making it suitable for recovery scenarios where local mapping
+        files are missing but OP contains provenance data from previous migrations.
+
+        Returns:
+            Dictionary keyed by Jira custom field ID with OpenProject mapping data
+
+        """
+        self.logger.info("Restoring custom field mapping from OpenProject provenance data...")
+
+        # Query provenance registry for custom field mappings
+        provenance_mappings = self.op_client.restore_entity_mappings_from_provenance("custom_field")
+
+        if not provenance_mappings:
+            self.logger.info("No custom field provenance data found in OpenProject")
+            return {}
+
+        # Convert provenance format to standard mapping format
+        mapping: dict[str, Any] = {}
+        for jira_id, prov_data in provenance_mappings.items():
+            mapping[jira_id] = {
+                "jira_id": jira_id,
+                "jira_name": prov_data.get("jira_name"),
+                "openproject_id": prov_data.get("openproject_id"),
+                "matched_by": "j2o_provenance",
+                "restored_from_op": True,
+                "provenance_wp_id": prov_data.get("provenance_wp_id"),
+            }
+
+        # Persist mapping via controller
+        from src import config as _cfg
+        self.mapping = mapping
+        _cfg.mappings.set_mapping("custom_field", mapping)
+
+        self.logger.info("Restored %d custom field mappings from OpenProject provenance", len(mapping))
+        return mapping
 
     def migrate_custom_fields(self) -> bool:
         """Migrate custom fields from Jira to OpenProject.

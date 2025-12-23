@@ -1751,7 +1751,11 @@ class OpenProjectClient:
 
     # Entity types tracked in provenance registry (those without direct CF support)
     # Note: company and account also create OP Projects but from Tempo sources
-    J2O_PROVENANCE_ENTITY_TYPES = ("project", "group", "type", "status", "company", "account")
+    # custom_field and link_type track CF creation for Jira→OP field mapping
+    J2O_PROVENANCE_ENTITY_TYPES = (
+        "project", "group", "type", "status", "company", "account",
+        "custom_field", "link_type",
+    )
 
     def ensure_j2o_migration_project(self) -> int:
         """Ensure the J2O Migration Provenance project exists.
@@ -1834,7 +1838,9 @@ class OpenProjectClient:
             ("J2O OP Status ID", "int"),
             ("J2O OP Company ID", "int"),  # Tempo Company → OP Project ID
             ("J2O OP Account ID", "int"),  # Tempo Account → OP Project ID
-            ("J2O Entity Type", "string"),  # 'project', 'group', 'type', 'status', 'company', 'account'
+            ("J2O OP Custom_field ID", "int"),  # Jira CF ID → OP CustomField ID
+            ("J2O OP Link_type ID", "int"),  # Jira Link Type ID → OP CustomField ID
+            ("J2O Entity Type", "string"),  # Entity type for filtering
         ]
 
         for name, fmt in cf_specs:
