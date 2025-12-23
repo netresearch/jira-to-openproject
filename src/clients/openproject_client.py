@@ -1750,7 +1750,8 @@ class OpenProjectClient:
     J2O_MIGRATION_PROJECT_NAME = "J2O Migration Provenance"
 
     # Entity types tracked in provenance registry (those without direct CF support)
-    J2O_PROVENANCE_ENTITY_TYPES = ("project", "group", "type", "status")
+    # Note: company and account also create OP Projects but from Tempo sources
+    J2O_PROVENANCE_ENTITY_TYPES = ("project", "group", "type", "status", "company", "account")
 
     def ensure_j2o_migration_project(self) -> int:
         """Ensure the J2O Migration Provenance project exists.
@@ -1831,7 +1832,9 @@ class OpenProjectClient:
             ("J2O OP Group ID", "int"),
             ("J2O OP Type ID", "int"),
             ("J2O OP Status ID", "int"),
-            ("J2O Entity Type", "string"),  # 'project', 'group', 'type', 'status'
+            ("J2O OP Company ID", "int"),  # Tempo Company → OP Project ID
+            ("J2O OP Account ID", "int"),  # Tempo Account → OP Project ID
+            ("J2O Entity Type", "string"),  # 'project', 'group', 'type', 'status', 'company', 'account'
         ]
 
         for name, fmt in cf_specs:

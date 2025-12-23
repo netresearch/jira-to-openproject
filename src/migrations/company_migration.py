@@ -1540,6 +1540,48 @@ puts results.to_json
 
         return should_skip, change_report
 
+    def restore_mapping_from_openproject(self) -> dict[str, Any]:
+        """Restore company mapping from OpenProject provenance data alone.
+
+        This method rebuilds the company mapping by querying the J2O Migration
+        provenance project for company mapping work packages. It does NOT require
+        Tempo/Jira data, making it suitable for recovery scenarios where local
+        mapping files are missing but OP contains provenance data from previous migrations.
+
+        Returns:
+            Dictionary keyed by Tempo company ID with OpenProject mapping data
+
+        """
+        self.logger.info("Restoring company mapping from OpenProject provenance data...")
+
+        # Query provenance registry for company mappings
+        provenance_mappings = self.op_client.restore_entity_mappings_from_provenance("company")
+
+        if not provenance_mappings:
+            self.logger.info("No company provenance data found in OpenProject")
+            return {}
+
+        # Convert provenance format to standard mapping format
+        mapping: dict[str, Any] = {}
+        for tempo_id, prov_data in provenance_mappings.items():
+            mapping[tempo_id] = {
+                "tempo_id": tempo_id,
+                "tempo_name": prov_data.get("jira_name"),
+                "openproject_id": prov_data.get("openproject_id"),
+                "matched_by": "j2o_provenance",
+                "restored_from_op": True,
+                "provenance_wp_id": prov_data.get("provenance_wp_id"),
+            }
+
+        # Persist mapping
+        self.company_mapping = mapping
+        if hasattr(config, "mappings") and config.mappings:
+            config.mappings.set_mapping("company", mapping)
+        self._save_to_json(mapping, Mappings.COMPANY_MAPPING_FILE)
+
+        self.logger.info("Restored %d company mappings from OpenProject provenance", len(mapping))
+        return mapping
+
     def run(self) -> ComponentResult:
         """Run the company migration process.
 
@@ -1578,6 +1620,28 @@ puts results.to_json
             # Update mappings in global configuration
             if hasattr(config, "mappings") and config.mappings:
                 config.mappings.set_mapping("company", self.company_mapping)
+
+            # Record provenance for all successfully migrated companies
+            # This enables restoration of mappings from OP alone without local files
+            provenance_mappings = [
+                {
+                    "jira_key": str(m.get("tempo_id", "")),  # Use Tempo company ID as key
+                    "jira_name": m.get("tempo_name"),
+                    "op_entity_id": m["openproject_id"],
+                }
+                for m in self.company_mapping.values()
+                if m.get("openproject_id")
+            ]
+            if provenance_mappings:
+                try:
+                    result = self.op_client.bulk_record_entity_provenance("company", provenance_mappings)
+                    self.logger.info(
+                        "Recorded company provenance: %d success, %d failed",
+                        result.get("success", 0),
+                        result.get("failed", 0),
+                    )
+                except Exception as prov_err:
+                    self.logger.warning("Failed to record company provenance: %s", prov_err)
 
             return ComponentResult(
                 success=True,
