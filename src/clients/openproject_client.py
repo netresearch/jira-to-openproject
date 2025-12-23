@@ -1901,6 +1901,7 @@ class OpenProjectClient:
             f"  wp_type = Type.find({type_id})\n"
             f"  subject = {repr(subject)}\n"
             "  status = Status.default || Status.first\n"
+            "  priority = IssuePriority.default || IssuePriority.first\n"
             "  # Find existing or create new\n"
             f"  wp = project.work_packages.where(type_id: {type_id}).find_by(subject: subject)\n"
             "  created = false\n"
@@ -1910,6 +1911,7 @@ class OpenProjectClient:
             "      type: wp_type,\n"
             "      subject: subject,\n"
             "      status: status,\n"
+            "      priority: priority,\n"
             "      author: User.admin.first || User.first\n"
             "    )\n"
             "    created = true\n"
@@ -2097,6 +2099,7 @@ class OpenProjectClient:
             f"  project = Project.find({project_id})\n"
             f"  wp_type = Type.find({type_id})\n"
             "  status = Status.default || Status.first\n"
+            "  priority = IssuePriority.default || IssuePriority.first\n"
             "  author = User.admin.first || User.first\n"
             f"  cf_op_id = {cf_op_id or 'nil'}\n"
             f"  cf_entity_type_id = {cf_entity_type_id or 'nil'}\n"
@@ -2113,6 +2116,7 @@ class OpenProjectClient:
             "          type: wp_type,\n"
             "          subject: m[:subject],\n"
             "          status: status,\n"
+            "          priority: priority,\n"
             "          author: author\n"
             "        )\n"
             "      end\n"
@@ -4915,10 +4919,10 @@ J2O_DATA
         except Exception as e:
             msg = "Failed to get project."
             raise QueryExecutionError(msg) from e
-            if project is None:
-                msg = f"Project with identifier '{identifier}' not found"
-                raise RecordNotFoundError(msg)
-            return project
+        if project is None:
+            msg = f"Project with identifier '{identifier}' not found"
+            raise RecordNotFoundError(msg)
+        return project
 
     def delete_all_work_packages(self) -> int:
         """Delete all work packages in bulk.
