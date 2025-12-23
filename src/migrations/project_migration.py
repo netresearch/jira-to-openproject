@@ -1537,6 +1537,28 @@ class ProjectMigration(BaseMigration):
         self.project_mapping = mapping
         config.mappings.set_mapping("project", mapping)
 
+        # Record provenance for all successfully migrated projects
+        # This enables restoration of mappings from OP alone without local files
+        provenance_mappings = [
+            {
+                "jira_key": m["jira_key"],
+                "jira_name": m.get("jira_name"),
+                "op_entity_id": m["openproject_id"],
+            }
+            for m in mapping.values()
+            if m.get("openproject_id") and not m.get("failed")
+        ]
+        if provenance_mappings:
+            try:
+                result = self.op_client.bulk_record_entity_provenance("project", provenance_mappings)
+                logger.info(
+                    "Recorded project provenance: %d success, %d failed",
+                    result.get("success", 0),
+                    result.get("failed", 0),
+                )
+            except Exception as prov_err:
+                logger.warning("Failed to record project provenance: %s", prov_err)
+
         logger.info(
             "Bulk project migration completed: %s created, %s errors",
             len(created_projects),
@@ -1620,6 +1642,46 @@ class ProjectMigration(BaseMigration):
         logger.info("Failed projects: %s", analysis["failed_projects"])
 
         return analysis
+
+    def restore_mapping_from_openproject(self) -> dict[str, Any]:
+        """Restore project mapping from OpenProject provenance data alone.
+
+        This method rebuilds the project mapping by querying the J2O Migration
+        provenance project for project mapping work packages. It does NOT require
+        Jira data, making it suitable for recovery scenarios where local mapping
+        files are missing but OP contains provenance data from previous migrations.
+
+        Returns:
+            Dictionary keyed by Jira project key with OpenProject mapping data
+
+        """
+        logger.info("Restoring project mapping from OpenProject provenance data...")
+
+        # Query provenance registry for project mappings
+        provenance_mappings = self.op_client.restore_entity_mappings_from_provenance("project")
+
+        if not provenance_mappings:
+            logger.info("No project provenance data found in OpenProject")
+            return {}
+
+        # Convert provenance format to standard mapping format
+        mapping: dict[str, Any] = {}
+        for jira_key, prov_data in provenance_mappings.items():
+            mapping[jira_key] = {
+                "jira_key": jira_key,
+                "jira_name": prov_data.get("jira_name"),
+                "openproject_id": prov_data.get("openproject_id"),
+                "matched_by": "j2o_provenance",
+                "restored_from_op": True,
+                "provenance_wp_id": prov_data.get("provenance_wp_id"),
+            }
+
+        # Persist mapping via controller
+        self.project_mapping = mapping
+        config.mappings.set_mapping("project", mapping)
+
+        logger.info("Restored %d project mappings from OpenProject provenance", len(mapping))
+        return mapping
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities from Jira for a specific type.

@@ -1737,6 +1737,407 @@ class OpenProjectClient:
 
         return ensured
 
+    # =========================================================================
+    # J2O Provenance Registry
+    # =========================================================================
+    # For entities that cannot have custom fields directly (Groups, Types,
+    # Statuses), we use a special "J2O Migration" project to store provenance
+    # data as work packages. This allows restoration of ALL mappings from OP
+    # alone without requiring local mapping files.
+    # =========================================================================
+
+    J2O_MIGRATION_PROJECT_IDENTIFIER = "j2o-migration-provenance"
+    J2O_MIGRATION_PROJECT_NAME = "J2O Migration Provenance"
+
+    # Entity types tracked in provenance registry (those without direct CF support)
+    J2O_PROVENANCE_ENTITY_TYPES = ("project", "group", "type", "status")
+
+    def ensure_j2o_migration_project(self) -> int:
+        """Ensure the J2O Migration Provenance project exists.
+
+        This project stores provenance data for entities that cannot have
+        custom fields attached directly (groups, types, statuses, projects).
+
+        Returns:
+            OpenProject project ID for the J2O Migration project
+
+        """
+        return self.ensure_reporting_project(
+            identifier=self.J2O_MIGRATION_PROJECT_IDENTIFIER,
+            name=self.J2O_MIGRATION_PROJECT_NAME,
+        )
+
+    def ensure_j2o_provenance_types(self, project_id: int) -> dict[str, int]:
+        """Ensure work package types exist for each provenance entity type.
+
+        Creates types like 'J2O Project Mapping', 'J2O Group Mapping', etc.
+
+        Args:
+            project_id: The J2O Migration project ID
+
+        Returns:
+            Dict mapping entity type to OP type ID
+
+        """
+        type_ids: dict[str, int] = {}
+
+        for entity_type in self.J2O_PROVENANCE_ENTITY_TYPES:
+            type_name = f"J2O {entity_type.title()} Mapping"
+
+            script = (
+                "begin\n"
+                f"  type_name = '{type_name}'\n"
+                f"  project_id = {project_id}\n"
+                "  wp_type = Type.find_by(name: type_name)\n"
+                "  unless wp_type\n"
+                "    wp_type = Type.create!(name: type_name, is_default: false, is_milestone: false)\n"
+                "  end\n"
+                "  project = Project.find(project_id)\n"
+                "  unless project.types.include?(wp_type)\n"
+                "    project.types << wp_type\n"
+                "  end\n"
+                "  { id: wp_type.id, name: wp_type.name }\n"
+                "rescue => e\n"
+                "  { error: e.message }\n"
+                "end\n"
+            )
+
+            try:
+                result = self.execute_json_query(script)
+                if isinstance(result, dict) and result.get("id"):
+                    type_ids[entity_type] = int(result["id"])
+                    self.logger.debug("Ensured J2O type '%s' with ID %d", type_name, type_ids[entity_type])
+                elif isinstance(result, dict) and result.get("error"):
+                    self.logger.warning("Failed to ensure J2O type '%s': %s", type_name, result["error"])
+            except Exception as e:
+                self.logger.warning("Error ensuring J2O type '%s': %s", type_name, e)
+
+        return type_ids
+
+    def ensure_j2o_provenance_custom_fields(self) -> dict[str, int]:
+        """Ensure custom fields for OP entity ID mapping exist.
+
+        Creates fields like 'J2O OP Project ID', 'J2O OP Group ID', etc.
+
+        Returns:
+            Dict mapping field name to CF ID
+
+        """
+        cf_ids: dict[str, int] = {}
+
+        # Fields for mapping to OP entity IDs
+        cf_specs = [
+            ("J2O OP Project ID", "int"),
+            ("J2O OP Group ID", "int"),
+            ("J2O OP Type ID", "int"),
+            ("J2O OP Status ID", "int"),
+            ("J2O Entity Type", "string"),  # 'project', 'group', 'type', 'status'
+        ]
+
+        for name, fmt in cf_specs:
+            try:
+                result = self.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField")
+                if isinstance(result, dict) and result.get("id"):
+                    cf_ids[name] = int(result["id"])
+            except Exception as e:
+                self.logger.warning("Failed ensuring provenance CF '%s': %s", name, e)
+
+        return cf_ids
+
+    def record_entity_provenance(
+        self,
+        *,
+        entity_type: str,
+        jira_key: str,
+        jira_id: str | None = None,
+        op_entity_id: int,
+        jira_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Record provenance for an entity that cannot have custom fields.
+
+        Creates or updates a work package in the J2O Migration project that
+        stores the Jira→OP mapping for entities like projects, groups, types,
+        and statuses.
+
+        Args:
+            entity_type: One of 'project', 'group', 'type', 'status'
+            jira_key: The Jira entity key/identifier
+            jira_id: The Jira entity ID (optional)
+            op_entity_id: The OpenProject entity ID
+            jira_name: The Jira entity name (optional)
+
+        Returns:
+            Dict with created/updated work package info
+
+        """
+        if entity_type not in self.J2O_PROVENANCE_ENTITY_TYPES:
+            raise ValueError(f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}")
+
+        # Ensure infrastructure exists
+        project_id = self.ensure_j2o_migration_project()
+        type_ids = self.ensure_j2o_provenance_types(project_id)
+        cf_ids = self.ensure_j2o_provenance_custom_fields()
+
+        type_id = type_ids.get(entity_type)
+        if not type_id:
+            raise QueryExecutionError(f"Failed to get type ID for {entity_type}")
+
+        # Build work package subject (unique identifier for this mapping)
+        subject = f"{entity_type.upper()}: {jira_key}"
+        if jira_name:
+            subject = f"{subject} ({jira_name})"
+
+        # Get CF IDs for the mapping fields
+        cf_op_id_field = f"J2O OP {entity_type.title()} ID"
+        cf_op_id = cf_ids.get(cf_op_id_field)
+        cf_entity_type_id = cf_ids.get("J2O Entity Type")
+
+        script = (
+            "begin\n"
+            f"  project = Project.find({project_id})\n"
+            f"  wp_type = Type.find({type_id})\n"
+            f"  subject = {repr(subject)}\n"
+            "  status = Status.default || Status.first\n"
+            "  # Find existing or create new\n"
+            f"  wp = project.work_packages.where(type_id: {type_id}).find_by(subject: subject)\n"
+            "  created = false\n"
+            "  if wp.nil?\n"
+            "    wp = WorkPackage.new(\n"
+            "      project: project,\n"
+            "      type: wp_type,\n"
+            "      subject: subject,\n"
+            "      status: status,\n"
+            "      author: User.admin.first || User.first\n"
+            "    )\n"
+            "    created = true\n"
+            "  end\n"
+            "  # Set custom field values\n"
+            "  cf_values = {}\n"
+            f"  cf_values[{cf_op_id}] = {op_entity_id} if {cf_op_id}\n" if cf_op_id else ""
+            f"  cf_values[{cf_entity_type_id}] = '{entity_type}' if {cf_entity_type_id}\n" if cf_entity_type_id else ""
+            "  wp.custom_field_values = cf_values if cf_values.any?\n"
+            "  wp.save!\n"
+            "  { success: true, id: wp.id, subject: wp.subject, created: created }\n"
+            "rescue => e\n"
+            "  { success: false, error: e.message, backtrace: e.backtrace.first(3) }\n"
+            "end\n"
+        )
+
+        try:
+            result = self.execute_json_query(script)
+            if isinstance(result, dict):
+                if result.get("success"):
+                    action = "Created" if result.get("created") else "Updated"
+                    self.logger.debug("%s provenance WP for %s '%s' → OP ID %d", action, entity_type, jira_key, op_entity_id)
+                return result
+            return {"success": False, "error": f"Unexpected result: {result}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def restore_entity_mappings_from_provenance(self, entity_type: str) -> dict[str, dict[str, Any]]:
+        """Restore entity mappings from provenance work packages.
+
+        Queries the J2O Migration project for work packages of the specified
+        entity type and reconstructs the Jira→OP mapping.
+
+        Args:
+            entity_type: One of 'project', 'group', 'type', 'status'
+
+        Returns:
+            Dict mapping Jira key to mapping data
+
+        """
+        if entity_type not in self.J2O_PROVENANCE_ENTITY_TYPES:
+            raise ValueError(f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}")
+
+        # Get the project and type IDs (may not exist if never recorded)
+        try:
+            project_result = self.get_project_by_identifier(self.J2O_MIGRATION_PROJECT_IDENTIFIER)
+            if not project_result or not project_result.get("id"):
+                self.logger.info("J2O Migration project not found - no provenance data available")
+                return {}
+            project_id = int(project_result["id"])
+        except Exception:
+            self.logger.debug("J2O Migration project not found")
+            return {}
+
+        # Find the type for this entity
+        type_name = f"J2O {entity_type.title()} Mapping"
+        cf_op_id_field = f"J2O OP {entity_type.title()} ID"
+
+        script = (
+            "begin\n"
+            f"  project = Project.find({project_id})\n"
+            f"  wp_type = Type.find_by(name: '{type_name}')\n"
+            "  return [].to_json unless wp_type\n"
+            f"  cf_op_id = CustomField.find_by(name: '{cf_op_id_field}', type: 'WorkPackageCustomField')\n"
+            "  cf_entity_type = CustomField.find_by(name: 'J2O Entity Type', type: 'WorkPackageCustomField')\n"
+            "  # Also get J2O Origin fields for full provenance\n"
+            "  cf_origin_key = CustomField.find_by(name: 'J2O Origin Key', type: 'WorkPackageCustomField')\n"
+            "  cf_origin_id = CustomField.find_by(name: 'J2O Origin ID', type: 'WorkPackageCustomField')\n"
+            "  cf_origin_system = CustomField.find_by(name: 'J2O Origin System', type: 'WorkPackageCustomField')\n"
+            f"  wps = project.work_packages.where(type_id: wp_type.id)\n"
+            "  wps.map do |wp|\n"
+            "    {\n"
+            "      id: wp.id,\n"
+            "      subject: wp.subject,\n"
+            "      op_entity_id: (cf_op_id ? wp.custom_value_for(cf_op_id)&.value&.to_i : nil),\n"
+            "      entity_type: (cf_entity_type ? wp.custom_value_for(cf_entity_type)&.value : nil),\n"
+            "      j2o_origin_key: (cf_origin_key ? wp.custom_value_for(cf_origin_key)&.value : nil),\n"
+            "      j2o_origin_id: (cf_origin_id ? wp.custom_value_for(cf_origin_id)&.value : nil),\n"
+            "      j2o_origin_system: (cf_origin_system ? wp.custom_value_for(cf_origin_system)&.value : nil)\n"
+            "    }\n"
+            "  end\n"
+            "rescue => e\n"
+            "  { error: e.message }\n"
+            "end\n"
+        )
+
+        try:
+            result = self.execute_json_query(script)
+            if isinstance(result, dict) and result.get("error"):
+                self.logger.warning("Error restoring %s mappings: %s", entity_type, result["error"])
+                return {}
+
+            if not isinstance(result, list):
+                return {}
+
+            # Build mapping from subject parsing and CF values
+            mappings: dict[str, dict[str, Any]] = {}
+            for wp in result:
+                # Parse subject to extract Jira key: "TYPE: jira-key (name)" or "TYPE: jira-key"
+                subject = wp.get("subject", "")
+                prefix = f"{entity_type.upper()}: "
+                if subject.startswith(prefix):
+                    rest = subject[len(prefix):]
+                    # Handle "(name)" suffix
+                    if " (" in rest and rest.endswith(")"):
+                        jira_key = rest.split(" (")[0]
+                        jira_name = rest.split(" (")[1].rstrip(")")
+                    else:
+                        jira_key = rest
+                        jira_name = None
+
+                    mappings[jira_key] = {
+                        "jira_key": jira_key,
+                        "jira_name": jira_name,
+                        "openproject_id": wp.get("op_entity_id"),
+                        "matched_by": "j2o_provenance",
+                        "j2o_origin_key": wp.get("j2o_origin_key"),
+                        "j2o_origin_id": wp.get("j2o_origin_id"),
+                        "j2o_origin_system": wp.get("j2o_origin_system"),
+                        "restored_from_op": True,
+                        "provenance_wp_id": wp.get("id"),
+                    }
+
+            self.logger.info("Restored %d %s mappings from provenance", len(mappings), entity_type)
+            return mappings
+
+        except Exception as e:
+            self.logger.warning("Failed to restore %s mappings from provenance: %s", entity_type, e)
+            return {}
+
+    def bulk_record_entity_provenance(
+        self,
+        entity_type: str,
+        mappings: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Bulk record provenance for multiple entities.
+
+        Args:
+            entity_type: One of 'project', 'group', 'type', 'status'
+            mappings: List of dicts with keys: jira_key, jira_id (optional),
+                     op_entity_id, jira_name (optional)
+
+        Returns:
+            Dict with success count, failed count, errors
+
+        """
+        if entity_type not in self.J2O_PROVENANCE_ENTITY_TYPES:
+            raise ValueError(f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}")
+
+        if not mappings:
+            return {"success": 0, "failed": 0, "errors": []}
+
+        # Ensure infrastructure exists (once for all)
+        project_id = self.ensure_j2o_migration_project()
+        type_ids = self.ensure_j2o_provenance_types(project_id)
+        cf_ids = self.ensure_j2o_provenance_custom_fields()
+
+        type_id = type_ids.get(entity_type)
+        if not type_id:
+            return {"success": 0, "failed": len(mappings), "errors": [f"No type ID for {entity_type}"]}
+
+        cf_op_id_field = f"J2O OP {entity_type.title()} ID"
+        cf_op_id = cf_ids.get(cf_op_id_field)
+        cf_entity_type_id = cf_ids.get("J2O Entity Type")
+
+        # Build Ruby array of mappings
+        ruby_mappings = []
+        for m in mappings:
+            jira_key = m.get("jira_key", "")
+            jira_name = m.get("jira_name", "")
+            op_entity_id = m.get("op_entity_id") or m.get("openproject_id")
+            if jira_key and op_entity_id:
+                subject = f"{entity_type.upper()}: {jira_key}"
+                if jira_name:
+                    subject = f"{subject} ({jira_name})"
+                ruby_mappings.append(
+                    f"  {{ subject: {repr(subject)}, op_entity_id: {op_entity_id} }}"
+                )
+
+        if not ruby_mappings:
+            return {"success": 0, "failed": 0, "errors": []}
+
+        script = (
+            "begin\n"
+            f"  project = Project.find({project_id})\n"
+            f"  wp_type = Type.find({type_id})\n"
+            "  status = Status.default || Status.first\n"
+            "  author = User.admin.first || User.first\n"
+            f"  cf_op_id = {cf_op_id or 'nil'}\n"
+            f"  cf_entity_type_id = {cf_entity_type_id or 'nil'}\n"
+            "  mappings = [\n" + ",\n".join(ruby_mappings) + "\n  ]\n"
+            "  success = 0\n"
+            "  failed = 0\n"
+            "  errors = []\n"
+            "  mappings.each do |m|\n"
+            "    begin\n"
+            "      wp = project.work_packages.where(type_id: wp_type.id).find_by(subject: m[:subject])\n"
+            "      if wp.nil?\n"
+            "        wp = WorkPackage.new(\n"
+            "          project: project,\n"
+            "          type: wp_type,\n"
+            "          subject: m[:subject],\n"
+            "          status: status,\n"
+            "          author: author\n"
+            "        )\n"
+            "      end\n"
+            "      cf_values = {}\n"
+            "      cf_values[cf_op_id] = m[:op_entity_id] if cf_op_id\n"
+            f"      cf_values[cf_entity_type_id] = '{entity_type}' if cf_entity_type_id\n"
+            "      wp.custom_field_values = cf_values if cf_values.any?\n"
+            "      wp.save!\n"
+            "      success += 1\n"
+            "    rescue => e\n"
+            "      failed += 1\n"
+            "      errors << \"#{m[:subject]}: #{e.message}\"\n"
+            "    end\n"
+            "  end\n"
+            "  { success: success, failed: failed, errors: errors.first(10) }\n"
+            "rescue => e\n"
+            "  { success: 0, failed: mappings.size, errors: [e.message] }\n"
+            "end\n"
+        )
+
+        try:
+            result = self.execute_json_query(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": 0, "failed": len(mappings), "errors": [f"Unexpected result: {result}"]}
+        except Exception as e:
+            return {"success": 0, "failed": len(mappings), "errors": [str(e)]}
+
     def get_roles(self) -> list[dict[str, Any]]:
         """Return OpenProject roles (id, name, builtin flag)."""
         ruby = "Role.all.map { |r| r.as_json(only: [:id, :name, :builtin]) }"
