@@ -80,6 +80,12 @@ class UserMigration(BaseMigration):
 
         self.user_mapping = _cfg.mappings.get_mapping("user") or {}
 
+        # If mapping is empty but OP might have provenance data, try to restore
+        if not self.user_mapping:
+            self.logger.info(
+                "User mapping is empty - will attempt restoration from OP on first use"
+            )
+
         # Caches for provenance helpers
         self._origin_cf_id_map: dict[str, int] | None = None
         self._origin_system_label_cache: str | None = None
@@ -321,6 +327,124 @@ class UserMigration(BaseMigration):
             if isinstance(user, dict):
                 user.pop("jira_user_key", None)
         self._save_to_json(self.op_users, Path("op_users.json"))
+
+        return mapping
+
+    def ensure_j2o_custom_fields(self) -> dict[str, int]:
+        """Ensure J2O user provenance custom fields exist in OpenProject.
+
+        Creates the following UserCustomField entries if they don't exist:
+        - J2O Origin System: Source system identifier
+        - J2O User ID: Original Jira user ID/accountId
+        - J2O User Key: Original Jira user key
+        - J2O External URL: Link back to Jira user profile
+
+        Returns:
+            Dictionary mapping field names to their OP custom field IDs
+
+        """
+        return self._get_user_origin_cf_ids()
+
+    def restore_mapping_from_openproject(self) -> dict[str, Any]:
+        """Restore user mapping from OpenProject provenance data alone.
+
+        This method rebuilds the user mapping by querying OP for users that have
+        J2O provenance custom fields populated. It does NOT require Jira data,
+        making it suitable for recovery scenarios where local mapping files are
+        missing but OP contains provenance data from previous migrations.
+
+        Prioritizes J2O provenance fields, falls back to username/email matching
+        if provenance data is not available.
+
+        Returns:
+            Dictionary keyed by Jira user key with OpenProject mapping data
+
+        """
+        self.logger.info("Restoring user mapping from OpenProject provenance data...")
+
+        # Ensure J2O custom fields exist (creates them if missing)
+        cf_ids = self.ensure_j2o_custom_fields()
+        if cf_ids:
+            self.logger.info("J2O user custom fields available: %s", list(cf_ids.keys()))
+
+        # Extract fresh OP users (force refresh to get latest provenance data)
+        self.op_users = self.op_client.get_users()
+        if not self.op_users:
+            self.logger.warning("No users found in OpenProject")
+            return {}
+
+        self.logger.info("Found %d users in OpenProject", len(self.op_users))
+
+        mapping: dict[str, Any] = {}
+        restored_from_provenance = 0
+        restored_from_username = 0
+
+        for op_user in self.op_users:
+            if not isinstance(op_user, dict):
+                continue
+
+            op_id = op_user.get("id")
+            op_login = op_user.get("login", "")
+            op_email = op_user.get("mail") or op_user.get("email") or ""
+
+            # Try to get J2O provenance data from the user
+            j2o_user_key = op_user.get("j2o_user_key") or ""
+            j2o_user_id = op_user.get("j2o_user_id") or ""
+            j2o_origin_system = op_user.get("j2o_origin_system") or ""
+            j2o_external_url = op_user.get("j2o_external_url") or ""
+
+            # If provenance data exists, use it as the mapping key
+            if j2o_user_key:
+                mapping[j2o_user_key] = {
+                    "jira_key": j2o_user_key,
+                    "jira_name": op_login,  # Best guess from OP data
+                    "jira_email": op_email,  # Best guess from OP data
+                    "jira_display_name": f"{op_user.get('firstname', '')} {op_user.get('lastname', '')}".strip(),
+                    "openproject_id": op_id,
+                    "openproject_login": op_login,
+                    "openproject_email": op_email,
+                    "matched_by": "j2o_provenance",
+                    "j2o_origin_system": j2o_origin_system,
+                    "j2o_user_id": j2o_user_id,
+                    "j2o_user_key": j2o_user_key,
+                    "j2o_external_url": j2o_external_url,
+                    "restored_from_op": True,
+                }
+                restored_from_provenance += 1
+            elif op_login:
+                # Fall back to using OP login as key (assumes login matches Jira username)
+                # This handles users that existed in OP before J2O custom fields were created
+                mapping[op_login] = {
+                    "jira_key": op_login,  # Best guess
+                    "jira_name": op_login,
+                    "jira_email": op_email,
+                    "jira_display_name": f"{op_user.get('firstname', '')} {op_user.get('lastname', '')}".strip(),
+                    "openproject_id": op_id,
+                    "openproject_login": op_login,
+                    "openproject_email": op_email,
+                    "matched_by": "username_fallback",
+                    "j2o_origin_system": j2o_origin_system or "unknown",
+                    "j2o_user_id": j2o_user_id,
+                    "j2o_user_key": j2o_user_key,
+                    "j2o_external_url": j2o_external_url,
+                    "restored_from_op": True,
+                }
+                restored_from_username += 1
+
+        self.logger.info(
+            "Restored %d users from OP: %d from J2O provenance, %d from username fallback",
+            len(mapping),
+            restored_from_provenance,
+            restored_from_username,
+        )
+
+        # Persist the restored mapping
+        if mapping:
+            from src import config as _cfg
+
+            _cfg.mappings.set_mapping("user", mapping)
+            self.user_mapping = mapping
+            self._save_to_json(self.op_users, Path("op_users.json"))
 
         return mapping
 
