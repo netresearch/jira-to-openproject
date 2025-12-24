@@ -2,6 +2,14 @@
 
 const { createApp, ref, reactive, onMounted, onUnmounted, computed, watch } = Vue;
 
+// Sanitize values for safe logging to prevent log injection attacks
+const sanitizeForLog = (value) => {
+    if (value === null || value === undefined) return String(value);
+    const str = String(value);
+    // Remove control characters and limit length to prevent log flooding
+    return str.replace(/[\x00-\x1F\x7F]/g, '').substring(0, 200);
+};
+
 const dashboardApp = createApp({
     setup() {
         // Reactive data
@@ -148,7 +156,7 @@ const dashboardApp = createApp({
         const handleWebSocketMessage = (data) => {
             switch (data.type) {
                 case 'connection_established':
-                    console.log('Connection established:', data.client_id);
+                    console.log('Connection established:', sanitizeForLog(data.client_id));
                     break;
 
                 case 'progress_update':
@@ -182,7 +190,7 @@ const dashboardApp = createApp({
                     break;
 
                 default:
-                    console.log('Unknown message type:', data.type);
+                    console.log('Unknown message type:', sanitizeForLog(data.type));
             }
         };
 
