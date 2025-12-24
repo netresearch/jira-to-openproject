@@ -79,5 +79,10 @@ migration:
   # Files are named j2o_* and can be examined via: docker exec <container> ls /tmp/j2o_*
   preserve_debug_files_on_error: true
 
+  # Time entry bulk creation mode
+  # When false, enables batch file-based creation for speed
+  # When true, uses per-entry API calls (slower, for testing)
+  unit_test_mode: false
+
   # Logging
   log_level: "INFO"

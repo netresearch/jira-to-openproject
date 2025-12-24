@@ -102,6 +102,10 @@ class TimeEntryTransformer:
                 # Rich text format - extract plain text
                 comment = self._extract_text_from_jira_content(comment)
 
+            # Truncate comment to OpenProject's 1000 char limit
+            if comment and len(comment) > 1000:
+                comment = comment[:997] + "..."
+
             # Build OpenProject time entry
             time_entry = {
                 "spentOn": spent_on,
@@ -192,6 +196,10 @@ class TimeEntryTransformer:
 
             # Extract description/comment
             description = tempo_log.get("description", "")
+
+            # Truncate description to OpenProject's 1000 char limit
+            if description and len(description) > 1000:
+                description = description[:997] + "..."
 
             # Build OpenProject time entry
             time_entry = {

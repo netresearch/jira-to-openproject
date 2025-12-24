@@ -6,6 +6,7 @@ migration:
   log_level: "INFO"
   batch_size: 200  # Larger batches for production
   ssl_verify: true
+  unit_test_mode: false  # Enable bulk time entry creation (not per-entry API calls)
 
 # Production database settings
 database:
