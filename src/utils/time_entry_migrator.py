@@ -548,34 +548,49 @@ class TimeEntryMigrator:
             use_batch = False
         if use_batch:
             # Process in chunks to avoid timeout (batch_size entries per Rails execution)
+            # Adaptive chunk sizing: increase if fast, decrease if slow
             chunk_size = batch_size
             total_entries = len(entries_to_migrate)
             batch_success = True
             processed_count = 0
+            chunk_num = 0
+
+            # Adaptive sizing configuration (timeout is 120s in batch_create_time_entries)
+            batch_timeout = 120.0
+            min_chunk_size = 100
+            max_chunk_size = 2000
+            # Thresholds for adaptive sizing (fraction of timeout)
+            fast_threshold = 0.25  # < 30s: increase chunk size
+            slow_threshold = 0.60  # > 72s: decrease chunk size
 
             self.logger.info(
-                "Using batch mode with chunk_size=%d for %d entries (%d chunks)",
+                "Using adaptive batch mode: initial chunk_size=%d, range=[%d-%d], entries=%d",
                 chunk_size,
+                min_chunk_size,
+                max_chunk_size,
                 total_entries,
-                (total_entries + chunk_size - 1) // chunk_size,
             )
 
-            for chunk_start in range(0, total_entries, chunk_size):
+            chunk_start = 0
+            while chunk_start < total_entries:
                 chunk_end = min(chunk_start + chunk_size, total_entries)
                 chunk = entries_to_migrate[chunk_start:chunk_end]
-                chunk_num = chunk_start // chunk_size + 1
-                total_chunks = (total_entries + chunk_size - 1) // chunk_size
+                chunk_num += 1
+                remaining = total_entries - chunk_start
+                est_chunks_left = (remaining + chunk_size - 1) // chunk_size
 
                 try:
                     self.logger.info(
-                        "Processing batch chunk %d/%d (%d entries, %d-%d)",
+                        "Processing chunk %d (%d entries, size=%d, ~%d chunks remaining)",
                         chunk_num,
-                        total_chunks,
                         len(chunk),
-                        chunk_start,
-                        chunk_end - 1,
+                        chunk_size,
+                        est_chunks_left,
                     )
+                    chunk_start_time = time.time()
                     batch_result = self.op_client.batch_create_time_entries(chunk)
+                    chunk_elapsed = time.time() - chunk_start_time
+
                     created = int(batch_result.get("created", 0))
                     failed = int(batch_result.get("failed", 0))
                     migration_summary["successful_migrations"] += created
@@ -584,15 +599,35 @@ class TimeEntryMigrator:
                     migration_summary["created_time_entry_ids"].extend(ids)
                     processed_count += len(chunk)
 
+                    # Adaptive chunk sizing based on elapsed time
+                    old_chunk_size = chunk_size
+                    time_ratio = chunk_elapsed / batch_timeout
+                    if time_ratio < fast_threshold and chunk_size < max_chunk_size:
+                        # Fast execution: increase chunk size (up to 2x, capped at max)
+                        chunk_size = min(chunk_size * 2, max_chunk_size)
+                    elif time_ratio > slow_threshold and chunk_size > min_chunk_size:
+                        # Slow execution: decrease chunk size (down to 0.5x, capped at min)
+                        chunk_size = max(chunk_size // 2, min_chunk_size)
+
+                    size_change = ""
+                    if chunk_size != old_chunk_size:
+                        size_change = f" [chunk_size: {old_chunk_size}→{chunk_size}]"
+
                     self.logger.info(
-                        "Batch chunk %d/%d completed: %d created, %d failed (total: %d/%d)",
+                        "Chunk %d done: %d ok, %d fail in %.1fs (%.0f%% timeout) - %d/%d total%s",
                         chunk_num,
-                        total_chunks,
                         created,
                         failed,
+                        chunk_elapsed,
+                        time_ratio * 100,
                         processed_count,
                         total_entries,
+                        size_change,
                     )
+
+                    # Move to next chunk
+                    chunk_start = chunk_end
+
                 except Exception as e:  # noqa: BLE001
                     self.logger.warning("Batch chunk %d failed: %s - falling back to per-entry", chunk_num, e)
                     migration_summary["errors"].append(f"Batch chunk {chunk_num} failed: {e}")
