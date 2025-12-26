@@ -547,31 +547,61 @@ class TimeEntryMigrator:
         if config.migration_config.get("unit_test_mode", True):
             use_batch = False
         if use_batch:
-            try:
-                # Start a lightweight heartbeat while batch runs
-                _hb_stop = threading.Event()
-                _batch_start = time.time()
+            # Process in chunks to avoid timeout (batch_size entries per Rails execution)
+            chunk_size = batch_size
+            total_entries = len(entries_to_migrate)
+            batch_success = True
+            processed_count = 0
 
-                def _hb() -> None:
-                    while not _hb_stop.wait(timeout=max(5, heartbeat_sec)):
-                        elapsed = int(time.time() - _batch_start)
-                        self.logger.info("Time entries: batch create in progress (elapsed=%ss)", elapsed)
+            self.logger.info(
+                "Using batch mode with chunk_size=%d for %d entries (%d chunks)",
+                chunk_size,
+                total_entries,
+                (total_entries + chunk_size - 1) // chunk_size,
+            )
 
-                _hb_thread = threading.Thread(target=_hb, daemon=True)
-                _hb_thread.start()
-                batch_result = self.op_client.batch_create_time_entries(entries_to_migrate)
-            except Exception as e:  # noqa: BLE001
-                self.logger.warning("Batch create failed: %s", e)
-                migration_summary["errors"].append(str(e))
-                # fall through to per-entry creation on batch failure
-            else:
-                _hb_stop.set()
-                created = int(batch_result.get("created", 0))
-                failed = int(batch_result.get("failed", 0))
-                migration_summary["successful_migrations"] += created
-                migration_summary["failed_migrations"] += failed
-                ids = [r.get("id") for r in batch_result.get("results", []) if r.get("success") and r.get("id")]
-                migration_summary["created_time_entry_ids"].extend(ids)
+            for chunk_start in range(0, total_entries, chunk_size):
+                chunk_end = min(chunk_start + chunk_size, total_entries)
+                chunk = entries_to_migrate[chunk_start:chunk_end]
+                chunk_num = chunk_start // chunk_size + 1
+                total_chunks = (total_entries + chunk_size - 1) // chunk_size
+
+                try:
+                    self.logger.info(
+                        "Processing batch chunk %d/%d (%d entries, %d-%d)",
+                        chunk_num,
+                        total_chunks,
+                        len(chunk),
+                        chunk_start,
+                        chunk_end - 1,
+                    )
+                    batch_result = self.op_client.batch_create_time_entries(chunk)
+                    created = int(batch_result.get("created", 0))
+                    failed = int(batch_result.get("failed", 0))
+                    migration_summary["successful_migrations"] += created
+                    migration_summary["failed_migrations"] += failed
+                    ids = [r.get("id") for r in batch_result.get("results", []) if r.get("success") and r.get("id")]
+                    migration_summary["created_time_entry_ids"].extend(ids)
+                    processed_count += len(chunk)
+
+                    self.logger.info(
+                        "Batch chunk %d/%d completed: %d created, %d failed (total: %d/%d)",
+                        chunk_num,
+                        total_chunks,
+                        created,
+                        failed,
+                        processed_count,
+                        total_entries,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    self.logger.warning("Batch chunk %d failed: %s - falling back to per-entry", chunk_num, e)
+                    migration_summary["errors"].append(f"Batch chunk {chunk_num} failed: {e}")
+                    batch_success = False
+                    # Process remaining entries via per-entry fallback
+                    entries_to_migrate = entries_to_migrate[chunk_start:]
+                    break
+
+            if batch_success:
                 processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
                 self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
                 self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
