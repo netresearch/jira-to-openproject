@@ -558,10 +558,10 @@ class TimeEntryMigrator:
             # Adaptive sizing configuration (timeout is 120s in batch_create_time_entries)
             batch_timeout = 120.0
             min_chunk_size = 100
-            max_chunk_size = 2000
+            max_chunk_size = 800  # Capped at 800 - larger sizes risk timeout
             # Thresholds for adaptive sizing (fraction of timeout)
-            fast_threshold = 0.25  # < 30s: increase chunk size
-            slow_threshold = 0.60  # > 72s: decrease chunk size
+            fast_threshold = 0.25  # < 30s: increase chunk size by 1.5x
+            slow_threshold = 0.50  # > 60s: decrease chunk size by 0.75x
 
             self.logger.info(
                 "Using adaptive batch mode: initial chunk_size=%d, range=[%d-%d], entries=%d",
@@ -603,11 +603,11 @@ class TimeEntryMigrator:
                     old_chunk_size = chunk_size
                     time_ratio = chunk_elapsed / batch_timeout
                     if time_ratio < fast_threshold and chunk_size < max_chunk_size:
-                        # Fast execution: increase chunk size (up to 2x, capped at max)
-                        chunk_size = min(chunk_size * 2, max_chunk_size)
+                        # Fast execution: increase chunk size by 1.5x (capped at max)
+                        chunk_size = min(int(chunk_size * 1.5), max_chunk_size)
                     elif time_ratio > slow_threshold and chunk_size > min_chunk_size:
-                        # Slow execution: decrease chunk size (down to 0.5x, capped at min)
-                        chunk_size = max(chunk_size // 2, min_chunk_size)
+                        # Slow execution: decrease chunk size by 0.75x (capped at min)
+                        chunk_size = max(int(chunk_size * 0.75), min_chunk_size)
 
                     size_change = ""
                     if chunk_size != old_chunk_size:
