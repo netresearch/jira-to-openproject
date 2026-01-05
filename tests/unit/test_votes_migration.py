@@ -33,6 +33,7 @@ class DummyJira:
 class DummyOp:
     def __init__(self) -> None:
         self.queries: list[str] = []
+        self.cf_values_set: list[dict] = []
 
     def get_custom_field_by_name(self, name: str):
         assert name == VOTES_CF_NAME
@@ -43,6 +44,10 @@ class DummyOp:
         if "cf.id" in script:
             return 702
         return True
+
+    def bulk_set_wp_custom_field_values(self, values: list[dict]):
+        self.cf_values_set.extend(values)
+        return {"updated": len(values), "failed": 0}
 
 
 @pytest.fixture(autouse=True)

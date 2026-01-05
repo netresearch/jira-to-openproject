@@ -20,6 +20,7 @@ class DummyJira:
 class DummyOp:
     def __init__(self) -> None:
         self.scripts: list[str] = []
+        self.cf_values_set: list[dict] = []
 
     def get_custom_field_by_name(self, name: str):
         assert name == LABELS_CF_NAME
@@ -30,6 +31,10 @@ class DummyOp:
         if "cf.id" in script:
             return 77
         return True
+
+    def bulk_set_wp_custom_field_values(self, values: list[dict]):
+        self.cf_values_set.extend(values)
+        return {"updated": len(values), "failed": 0}
 
 
 @pytest.fixture(autouse=True)
