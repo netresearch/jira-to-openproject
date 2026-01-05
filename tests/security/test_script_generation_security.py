@@ -263,7 +263,7 @@ def test_timestamp_script_valid_key_is_escaped(ts_migrator, clean_cache) -> None
     _verify_script_safety(script, jira_key)
 
     # Additional checks
-    assert "wp.created_at = DateTime.parse('2023-01-01T00:00:00Z')" in script
+    assert "wp.update_columns(created_at: DateTime.parse('2023-01-01T00:00:00Z'))" in script
     assert "WorkPackage.find(55)" in script
     assert "operations <<" in script
 
@@ -330,8 +330,8 @@ def test_timestamp_script_field_name_also_escaped(ts_migrator, clean_cache) -> N
         escaped_field = json.dumps(field_name)
         assert escaped_field in script, f"Field {field_name} not properly escaped"
 
-        # Also verify the field is used correctly in wp assignment
-        assert f"wp.{field_name} = DateTime.parse" in script
+        # Also verify the field is used correctly in wp update_columns call
+        assert f"wp.update_columns({field_name}: DateTime.parse" in script
 
 
 # ---------- Edge Cases and Regression Tests ----------
